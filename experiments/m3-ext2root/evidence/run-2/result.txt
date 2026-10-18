@@ -1,0 +1,16 @@
+mkfs e2fsck exit=0
+M2 guest qemu exit=0 wall_s=0.269
+M2 guest: complete
+after M2: e2fsck -fn exit=0 (koru-root: 416/512 files (0.2% non-contiguous), 2406/8192 blocks)
+after M2: debugfs cat /dod1 10000 bytes, equal to pattern; pattern sha256 8b2e9313cc19831e67483730ba6f6080c40a2472675635d8899410e94f6967ce
+M3 guest qemu exit=0 wall_s=22.014 (includes the scripted 2 s pauses)
+PASS M2 wrote /dod1, host e2fsck clean, debugfs equals pattern
+PASS M3 ls / lists dod1 and bin
+PASS M3 cat /dod1 shows the pattern
+PASS M3 sha256sum /dod1 equals host pattern sha256
+PASS M3 wc -c /dod1 = 10000
+PASS M3 pipeline
+PASS M3 exit 3 observed as init exit status 3
+PASS M3 no crash
+PASS disk unchanged by read-only M3 boot, e2fsck still clean
+M3 ACCEPTANCE PASS

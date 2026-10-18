@@ -1,0 +1,14 @@
+# ext4 image as root: refused at mount, image unchanged
+Booting from ROM..[    0.107721] ERR:  [appkoruos] <ext2fs_vfs.c @  288> koruext2: blkdev 0: not a supported ext2 (95)
+[    0.110333] ERR:  [libukboot] <boot.c @  403> Init function at 0x15c5e0 returned error -1
+sha256 before 2baefc86f595b3d1255aeec90171fcccc0d4fefd7d2ad9e9cddb54b7ae3115db
+sha256 after  2baefc86f595b3d1255aeec90171fcccc0d4fefd7d2ad9e9cddb54b7ae3115db
+
+# non-interactive timing: sh -c 'ls / >/dev/null; cat /dod1 >/dev/null; exit 3' on run-1's disk
+koru-os: init exited with status 3 koruext2: unmount: 14752 blocks in 461 requests, 39581 cache hits wall_s=0.415
+koru-os: init exited with status 3 koruext2: unmount: 14752 blocks in 461 requests, 39581 cache hits wall_s=0.399
+koru-os: init exited with status 3 koruext2: unmount: 14752 blocks in 461 requests, 39581 cache hits wall_s=0.391
+
+# fs read throughput vs pipe (run-1 disk)
+cat /bin/busybox > /dev/null: wall_s=0.364
+cat /bin/busybox | wc -c: wall_s=21.842

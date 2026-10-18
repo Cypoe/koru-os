@@ -16,6 +16,8 @@ build() { rm -f .config.m3-busybox_qemu-x86_64 .unikraft/build/config
 [ -d .unikraft/unikraft ] || build
 grep -q "koru-os B6" .unikraft/unikraft/lib/posix-process/clone.c || \
   patch -d .unikraft/unikraft -p1 < "$HERE/patches/unikraft-0.21-posix-process-vfork-fsbase.patch"
+grep -q "koru-os" .unikraft/unikraft/drivers/virtio/ring/virtio_ring.c || \
+  patch -d .unikraft/unikraft -p1 < "$HERE/patches/unikraft-0.21-virtio-ring-destroy-vmem.patch"
 grep -q "koru-os B6" .unikraft/apps/elfloader/elf_ctx.c || \
   patch -d .unikraft/apps/elfloader -p1 < "$HERE/patches/app-elfloader-empty-arg.patch"
 build

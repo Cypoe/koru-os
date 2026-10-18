@@ -1,0 +1,29 @@
+--- a/drivers/virtio/ring/virtio_ring.c	2026-10-18 20:21:42.790290900 +0200
++++ b/drivers/virtio/ring/virtio_ring.c	2026-10-18 20:21:42.790290900 +0200
+@@ -528,7 +528,26 @@
+ 	vrq = to_virtqueue_vring(vq);
+ 
+ 	/* Free the ring */
++#ifdef CONFIG_LIBUKVMEM
++	/* koru-os: the ring was mapped with uk_vma_map_dma() above, not
++	 * allocated from `a`; uk_free() on it faults (seen at unmount of a
++	 * virtio-blk-backed filesystem). Backport of the upstream staging fix:
++	 * unmap instead. Both virtio transports create rings with a 4 KiB
++	 * alignment (VIRTIO_PCI_VRING_ALIGN, VIRTIO_MMIO_VRING_ALIGN).
++	 */
++	{
++		__sz ring_size = UK_PAGING_PAGE_ALIGN_UP(
++			vring_size(vrq->vring.num, __PAGE_SIZE));
++		int rc = uk_vma_unmap(uk_vas_get_active(),
++				      (__vaddr_t)vrq->vring_mem, ring_size, 0);
++
++		if (unlikely(rc < 0))
++			uk_pr_err("Failed to unmap virtio ring %p: %d\n",
++				  vrq->vring_mem, rc);
++	}
++#else /* !CONFIG_LIBUKVMEM */
+ 	uk_free(a, vrq->vring_mem);
++#endif /* !CONFIG_LIBUKVMEM */
+ 
+ 	/* Free the virtqueue metadata */
+ 	uk_free(a, vrq);
