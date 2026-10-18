@@ -1,0 +1,13 @@
+Inode: 12   Type: regular    Mode:  0644   Flags: 0x0
+Generation: 0    Version: 0x00000000
+User:     0   Group:     0   Size: 10000
+File ACL: 0
+Links: 1   Blockcount: 20
+Fragment:  Address: 0    Number: 0    Size: 0
+ctime: 0x00000001 -- Thu Jan  1 01:00:01 1970
+atime: 0x00000001 -- Thu Jan  1 01:00:01 1970
+mtime: 0x00000001 -- Thu Jan  1 01:00:01 1970
+BLOCKS:
+(0-9):42-51
+TOTAL: 10
+

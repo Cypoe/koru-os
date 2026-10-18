@@ -1,0 +1,2 @@
+194176 /workspace/m2img/koruos/ext2/tests/.unikraft/build/koru_qemu-x86_64
+18584 /workspace/m2img/koruos/ext2/tests/libkoruapp.a

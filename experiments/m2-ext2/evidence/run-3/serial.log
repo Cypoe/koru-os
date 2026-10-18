@@ -1,0 +1,11 @@
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+02FC6DB0+02F06DB0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+ext2: mounted blocks=4096 free_blocks=4070 inodes=64 free_inodes=53
+ext2: created dod1 ino=12 blocks=10 first_block=26
+ext2: read back dod1 ino=12 bytes=10000 content=ok
+M2 guest: complete

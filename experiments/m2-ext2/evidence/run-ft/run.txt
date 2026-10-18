@@ -1,0 +1,7 @@
+before e2fsck exit=0
+qemu exit=0 wall_s=0.238 accel=tcg features=filetype,sparse_super
+after e2fsck -fn exit=0
+debugfs cat /dod1: 10000 bytes, equal to pattern
+free blocks 4054 -> 4044 (drop 10), free inodes 53 -> 52
+serial: M2 guest complete
+M2 PASS

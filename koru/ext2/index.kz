@@ -1,0 +1,325 @@
+// koruos/ext2: a minimal, allocating ext2 driver as a Koru lift (DESIGN-0001 M2, DoD-1).
+//
+// Scope, deliberately small and refused loudly outside it:
+//   - revision 1 ext2, 1 KiB blocks, 128-byte inodes, exactly one block group;
+//   - incompat features: none, or only FILETYPE; ro_compat: none or SPARSE_SUPER/LARGE_FILE
+//     (neither changes anything this driver writes in a one-group filesystem);
+//   - create: one regular file in the root directory, at most 12 blocks (direct only),
+//     the name must fit in the root directory's first block.
+// It allocates an inode and data blocks from the on-disk bitmaps and updates the group
+// descriptor and superblock free counts. The host checks the result with e2fsck/debugfs.
+//
+// Phantom states: mount mints <mounted!>; create/read need <!mounted> and re-mint it;
+// unmount discharges it (flush + ukblkdev stop/unconfigure).
+//
+// Block access copies the ukblkdev call sequence of koru-libs unikraft/blk @ ff5cb559
+// (get → configure → queue_configure → start, submit_one + finish_reqs). The blk lift
+// exposes no byte-level API another lift could call, so the sequence is repeated
+// here. That is debt, recorded in experiments/m2-ext2/README.md.
+
+const std = @import("std");
+
+const UkBlkdev = opaque {};
+const UkAlloc = opaque {};
+extern var _uk_alloc_head: ?*UkAlloc;
+extern fn uk_blkdev_get(id: c_uint) ?*UkBlkdev;
+extern fn uk_blkdev_configure(dev: *UkBlkdev, conf: *const BlkConf) c_int;
+extern fn uk_blkdev_queue_get_info(dev: *UkBlkdev, queue_id: u16, q_info: *QueueInfo) c_int;
+extern fn uk_blkdev_queue_configure(dev: *UkBlkdev, queue_id: u16, nb_desc: u16, conf: *const QueueConf) c_int;
+extern fn uk_blkdev_start(dev: *UkBlkdev) c_int;
+extern fn uk_blkdev_queue_finish_reqs(dev: *UkBlkdev, queue_id: u16) c_int;
+extern fn uk_blkdev_queue_submit_one(dev: *UkBlkdev, queue_id: u16, req: *BlkReq) c_int;
+extern fn uk_blkdev_stop(dev: *UkBlkdev) c_int;
+extern fn uk_blkdev_queue_unconfigure(dev: *UkBlkdev, queue_id: u16) c_int;
+extern fn uk_blkdev_unconfigure(dev: *UkBlkdev) c_int;
+extern fn malloc(size: usize) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) void;
+extern fn memalign(alignment: usize, size: usize) ?*anyopaque;
+
+const BlkConf = extern struct { nb_queues: u16 };
+const QueueInfo = extern struct { nb_max: u16, nb_min: u16, nb_align: u16, nb_is_power_of_two: c_int };
+const QueueConf = extern struct {
+    a: ?*UkAlloc,
+    callback: ?*const fn (*UkBlkdev, u16, ?*anyopaque) callconv(.c) void,
+    callback_cookie: ?*anyopaque,
+};
+const Cap = extern struct { sectors: usize, ssize: usize, mode: c_int, max_sectors_per_req: usize, ioalign: u16 };
+const BlkPub = extern struct { submit_one: ?*anyopaque, finish_reqs: ?*anyopaque, _data: ?*anyopaque, capabilities: Cap };
+const BlkReq = extern struct {
+    operation: c_int, start_sector: usize, nb_sectors: usize, aio_buf: ?*anyopaque,
+    cb: ?*const fn (*BlkReq, ?*anyopaque) callconv(.c) void, cb_cookie: ?*anyopaque, state: c_int, result: c_int,
+};
+comptime {
+    if (@sizeOf(Cap) != 40 or @offsetOf(BlkPub, "capabilities") != 24) @compileError("ukblkdev layout changed");
+    if (@sizeOf(BlkReq) != 56 or @offsetOf(BlkReq, "state") != 48) @compileError("uk_blkreq layout changed");
+}
+const OP_READ: c_int = 0;
+const OP_WRITE: c_int = 1;
+const OP_FFLUSH: c_int = 4;
+const REQ_FINISHED: c_int = 0;
+const REQ_UNFINISHED: c_int = 1;
+const STATUS_SUCCESS: c_int = 0x1;
+const BS: usize = 1024;
+
+const Fs = struct {
+    dev: *UkBlkdev,
+    buf: [*]u8, // one block, device-aligned staging
+    spb: usize, // sectors per block
+    sectors: usize,
+    sb: [BS]u8,
+    bgd: [BS]u8,
+    inodes_count: u32,
+    blocks_count: u32,
+    first_data_block: u32,
+    inodes_per_group: u32,
+    first_ino: u32,
+    filetype: bool,
+    block_bitmap: u32,
+    inode_bitmap: u32,
+    inode_table: u32,
+};
+
+fn rd32(b: []const u8, off: usize) u32 { return std.mem.readInt(u32, b[off..][0..4], .little); }
+fn rd16(b: []const u8, off: usize) u16 { return std.mem.readInt(u16, b[off..][0..2], .little); }
+fn wr32(b: []u8, off: usize, v: u32) void { std.mem.writeInt(u32, b[off..][0..4], v, .little); }
+fn wr16(b: []u8, off: usize, v: u16) void { std.mem.writeInt(u16, b[off..][0..2], v, .little); }
+
+fn xfer(fs: *Fs, op: c_int, block: u32, nb_sectors: usize) c_int {
+    var req = BlkReq{ .operation = op, .start_sector = @as(usize, block) * fs.spb, .nb_sectors = nb_sectors,
+        .aio_buf = @ptrCast(fs.buf), .cb = null, .cb_cookie = null, .state = REQ_UNFINISHED, .result = 0 };
+    const st = uk_blkdev_queue_submit_one(fs.dev, 0, &req);
+    if (st < 0) return st;
+    if ((st & STATUS_SUCCESS) == 0) return -5;
+    while (@atomicLoad(c_int, &req.state, .acquire) != REQ_FINISHED) {
+        const rc = uk_blkdev_queue_finish_reqs(fs.dev, 0);
+        if (rc < 0) return rc;
+    }
+    return req.result;
+}
+fn readBlock(fs: *Fs, block: u32, out: []u8) bool {
+    if (xfer(fs, OP_READ, block, fs.spb) != 0) return false;
+    @memcpy(out[0..BS], fs.buf[0..BS]);
+    return true;
+}
+fn writeBlock(fs: *Fs, block: u32, in: []const u8) bool {
+    @memcpy(fs.buf[0..BS], in[0..BS]);
+    return xfer(fs, OP_WRITE, block, fs.spb) == 0;
+}
+
+fn inodeLoc(fs: *const Fs, ino: u32) struct { block: u32, off: usize } {
+    const idx = ino - 1; // one group
+    const byte = @as(usize, idx) * 128;
+    return .{ .block = fs.inode_table + @as(u32, @intCast(byte / BS)), .off = byte % BS };
+}
+
+fn findInRoot(fs: *Fs, name: []const u8, dirblk: []u8) ?u32 {
+    var root: [BS]u8 = undefined;
+    const loc = inodeLoc(fs, 2);
+    if (!readBlock(fs, loc.block, &root)) return null;
+    const blk0 = rd32(&root, loc.off + 40);
+    if (!readBlock(fs, blk0, dirblk)) return null;
+    var p: usize = 0;
+    while (p < BS) {
+        const ino = rd32(dirblk, p);
+        const rec = rd16(dirblk, p + 4);
+        const nl: usize = if (fs.filetype) dirblk[p + 6] else rd16(dirblk, p + 6);
+        if (rec < 8) return null;
+        if (ino != 0 and nl == name.len and std.mem.eql(u8, dirblk[p + 8 .. p + 8 + nl], name)) return ino;
+        p += rec;
+    }
+    return null;
+}
+
+fn pattern(i: usize) u8 {
+    if (i % 64 == 63) return '\n';
+    return @intCast('a' + ((i * 7 + i / 1024) % 26));
+}
+
+~pub tor mount { id: u32 }
+| ok { fs: *Fs<mounted!>, blocks: u32, free_blocks: u32, free_inodes: u32, inodes: u32 }
+| refused string
+
+~proc mount|zig {
+    const raw = uk_blkdev_get(@intCast(id)) orelse return .{ .refused = "no block device" };
+    const pubp: *const BlkPub = @ptrCast(@alignCast(raw));
+    const cap = pubp.capabilities;
+    if (cap.ssize == 0 or BS % cap.ssize != 0) return .{ .refused = "sector size does not divide 1 KiB" };
+    const spb = BS / cap.ssize;
+    if (spb > cap.max_sectors_per_req) return .{ .refused = "device cannot transfer one block per request" };
+    const conf = BlkConf{ .nb_queues = 1 };
+    if (uk_blkdev_configure(raw, &conf) != 0) return .{ .refused = "uk_blkdev_configure failed" };
+    var qi = QueueInfo{ .nb_max = 0, .nb_min = 0, .nb_align = 0, .nb_is_power_of_two = 0 };
+    if (uk_blkdev_queue_get_info(raw, 0, &qi) != 0) return .{ .refused = "queue_get_info failed" };
+    const qc = QueueConf{ .a = _uk_alloc_head, .callback = null, .callback_cookie = null };
+    if (uk_blkdev_queue_configure(raw, 0, qi.nb_max, &qc) != 0) return .{ .refused = "queue_configure failed" };
+    if (uk_blkdev_start(raw) != 0) return .{ .refused = "uk_blkdev_start failed" };
+    const al: usize = if (cap.ioalign < 8) 8 else cap.ioalign;
+    const b = memalign(al, BS) orelse return .{ .refused = "out of memory (staging)" };
+    const m = malloc(@sizeOf(Fs)) orelse return .{ .refused = "out of memory (fs)" };
+    const fs: *Fs = @ptrCast(@alignCast(m));
+    fs.dev = raw;
+    fs.buf = @ptrCast(b);
+    fs.spb = spb;
+    fs.sectors = cap.sectors;
+    if (!readBlock(fs, 1, &fs.sb)) return .{ .refused = "superblock read failed" };
+    const sb = &fs.sb;
+    if (rd16(sb, 56) != 0xEF53) return .{ .refused = "not ext2 (bad magic)" };
+    if (rd32(sb, 24) != 0) return .{ .refused = "block size is not 1 KiB" };
+    if (rd32(sb, 76) != 1) return .{ .refused = "not revision 1" };
+    if (rd16(sb, 88) != 128) return .{ .refused = "inode size is not 128" };
+    const incompat = rd32(sb, 96);
+    const ro_compat = rd32(sb, 100);
+    if ((incompat & ~@as(u32, 0x2)) != 0) return .{ .refused = "unsupported incompat feature" };
+    if ((ro_compat & ~@as(u32, 0x3)) != 0) return .{ .refused = "unsupported ro_compat feature" };
+    fs.inodes_count = rd32(sb, 0);
+    fs.blocks_count = rd32(sb, 4);
+    fs.first_data_block = rd32(sb, 20);
+    const bpg = rd32(sb, 32);
+    fs.inodes_per_group = rd32(sb, 40);
+    fs.first_ino = rd32(sb, 84);
+    fs.filetype = (incompat & 0x2) != 0;
+    if (fs.blocks_count - fs.first_data_block > bpg or fs.inodes_count != fs.inodes_per_group)
+        return .{ .refused = "more than one block group" };
+    if (!readBlock(fs, fs.first_data_block + 1, &fs.bgd)) return .{ .refused = "group descriptor read failed" };
+    fs.block_bitmap = rd32(&fs.bgd, 0);
+    fs.inode_bitmap = rd32(&fs.bgd, 4);
+    fs.inode_table = rd32(&fs.bgd, 8);
+    return .{ .ok = .{ .fs = fs, .blocks = fs.blocks_count, .free_blocks = rd32(sb, 12), .free_inodes = rd32(sb, 16), .inodes = fs.inodes_count } };
+}
+
+~pub tor create { fs: *Fs<!mounted>, name: string, size: u32 }
+| ok { fs: *Fs<mounted!>, ino: u32, blocks: u32, first_block: u32 }
+| refused { fs: *Fs<mounted!>, reason: string }
+
+~proc create|zig {
+    const nblk: u32 = @intCast((@as(usize, size) + BS - 1) / BS);
+    if (size == 0 or nblk > 12) return .{ .refused = .{ .fs = fs, .reason = "size must be 1..12 KiB (direct blocks only)" } };
+    if (name.len == 0 or name.len > 255) return .{ .refused = .{ .fs = fs, .reason = "bad name length" } };
+    var dir: [BS]u8 = undefined;
+    if (findInRoot(fs, name, &dir) != null) return .{ .refused = .{ .fs = fs, .reason = "name exists" } };
+
+    // inode bitmap: first free inode >= first_ino
+    var ib: [BS]u8 = undefined;
+    if (!readBlock(fs, fs.inode_bitmap, &ib)) return .{ .refused = .{ .fs = fs, .reason = "inode bitmap read failed" } };
+    var ino: u32 = 0;
+    var i: u32 = fs.first_ino - 1;
+    while (i < fs.inodes_per_group) : (i += 1) {
+        if ((ib[i / 8] & (@as(u8, 1) << @intCast(i % 8))) == 0) { ino = i + 1; break; }
+    }
+    if (ino == 0) return .{ .refused = .{ .fs = fs, .reason = "no free inode" } };
+
+    // block bitmap: nblk free blocks (not necessarily contiguous)
+    var bb: [BS]u8 = undefined;
+    if (!readBlock(fs, fs.block_bitmap, &bb)) return .{ .refused = .{ .fs = fs, .reason = "block bitmap read failed" } };
+    var blocks: [12]u32 = [_]u32{0} ** 12;
+    var got: u32 = 0;
+    const nbits = fs.blocks_count - fs.first_data_block;
+    var j: u32 = 0;
+    while (j < nbits and got < nblk) : (j += 1) {
+        if ((bb[j / 8] & (@as(u8, 1) << @intCast(j % 8))) == 0) { blocks[got] = fs.first_data_block + j; got += 1; }
+    }
+    if (got < nblk) return .{ .refused = .{ .fs = fs, .reason = "not enough free blocks" } };
+
+    // root directory: split the last entry of the first block
+    const need: usize = (8 + name.len + 3) & ~@as(usize, 3);
+    var p: usize = 0;
+    var last: usize = 0;
+    while (p < BS) { last = p; const rec = rd16(&dir, p + 4); if (rec < 8) return .{ .refused = .{ .fs = fs, .reason = "corrupt directory" } }; p += rec; }
+    const last_nl: usize = if (fs.filetype) dir[last + 6] else rd16(&dir, last + 6);
+    const last_real: usize = (8 + last_nl + 3) & ~@as(usize, 3);
+    const last_rec: usize = rd16(&dir, last + 4);
+    if (last_rec < last_real + need) return .{ .refused = .{ .fs = fs, .reason = "root directory block full" } };
+
+    // 1. data blocks
+    var data: [BS]u8 = undefined;
+    var k: u32 = 0;
+    while (k < nblk) : (k += 1) {
+        @memset(&data, 0);
+        var q: usize = 0;
+        while (q < BS) : (q += 1) {
+            const off = @as(usize, k) * BS + q;
+            if (off < size) data[q] = pattern(off);
+        }
+        if (!writeBlock(fs, blocks[k], &data)) return .{ .refused = .{ .fs = fs, .reason = "data write failed" } };
+    }
+    // 2. inode
+    const loc = inodeLoc(fs, ino);
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return .{ .refused = .{ .fs = fs, .reason = "inode table read failed" } };
+    @memset(it[loc.off .. loc.off + 128], 0);
+    const base = loc.off;
+    wr16(&it, base + 0, 0o100644);
+    wr32(&it, base + 4, size);
+    wr32(&it, base + 8, 1); // atime
+    wr32(&it, base + 12, 1); // ctime
+    wr32(&it, base + 16, 1); // mtime
+    wr16(&it, base + 26, 1); // links
+    wr32(&it, base + 28, nblk * @as(u32, @intCast(BS / 512))); // i_blocks in 512 B units
+    k = 0;
+    while (k < nblk) : (k += 1) wr32(&it, base + 40 + @as(usize, k) * 4, blocks[k]);
+    if (!writeBlock(fs, loc.block, &it)) return .{ .refused = .{ .fs = fs, .reason = "inode write failed" } };
+    // 3. directory entry
+    wr16(&dir, last + 4, @intCast(last_real));
+    const e = last + last_real;
+    wr32(&dir, e, ino);
+    wr16(&dir, e + 4, @intCast(last_rec - last_real));
+    if (fs.filetype) { dir[e + 6] = @intCast(name.len); dir[e + 7] = 1; } else wr16(&dir, e + 6, @intCast(name.len));
+    @memcpy(dir[e + 8 .. e + 8 + name.len], name);
+    var rootino: [BS]u8 = undefined;
+    const rl = inodeLoc(fs, 2);
+    if (!readBlock(fs, rl.block, &rootino)) return .{ .refused = .{ .fs = fs, .reason = "root inode read failed" } };
+    if (!writeBlock(fs, rd32(&rootino, rl.off + 40), &dir)) return .{ .refused = .{ .fs = fs, .reason = "directory write failed" } };
+    // 4. bitmaps
+    ib[(ino - 1) / 8] |= @as(u8, 1) << @intCast((ino - 1) % 8);
+    k = 0;
+    while (k < nblk) : (k += 1) { const b = blocks[k] - fs.first_data_block; bb[b / 8] |= @as(u8, 1) << @intCast(b % 8); }
+    if (!writeBlock(fs, fs.inode_bitmap, &ib) or !writeBlock(fs, fs.block_bitmap, &bb)) return .{ .refused = .{ .fs = fs, .reason = "bitmap write failed" } };
+    // 5. counters: group descriptor, then superblock
+    wr16(&fs.bgd, 12, rd16(&fs.bgd, 12) - @as(u16, @intCast(nblk)));
+    wr16(&fs.bgd, 14, rd16(&fs.bgd, 14) - 1);
+    if (!writeBlock(fs, fs.first_data_block + 1, &fs.bgd)) return .{ .refused = .{ .fs = fs, .reason = "group descriptor write failed" } };
+    wr32(&fs.sb, 12, rd32(&fs.sb, 12) - nblk);
+    wr32(&fs.sb, 16, rd32(&fs.sb, 16) - 1);
+    if (!writeBlock(fs, 1, &fs.sb)) return .{ .refused = .{ .fs = fs, .reason = "superblock write failed" } };
+    if (xfer(fs, OP_FFLUSH, 0, 0) != 0) return .{ .refused = .{ .fs = fs, .reason = "flush failed" } };
+    return .{ .ok = .{ .fs = fs, .ino = ino, .blocks = nblk, .first_block = blocks[0] } };
+}
+
+~pub tor verify { fs: *Fs<!mounted>, name: string, size: u32 }
+| ok { fs: *Fs<mounted!>, ino: u32, bytes: u32 }
+| mismatch { fs: *Fs<mounted!>, reason: string }
+
+~proc verify|zig {
+    var dir: [BS]u8 = undefined;
+    const ino = findInRoot(fs, name, &dir) orelse return .{ .mismatch = .{ .fs = fs, .reason = "name not found" } };
+    const loc = inodeLoc(fs, ino);
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return .{ .mismatch = .{ .fs = fs, .reason = "inode read failed" } };
+    const fsize = rd32(&it, loc.off + 4);
+    if (fsize != size) return .{ .mismatch = .{ .fs = fs, .reason = "size differs" } };
+    var data: [BS]u8 = undefined;
+    var off: usize = 0;
+    var k: usize = 0;
+    while (off < fsize) : (k += 1) {
+        if (!readBlock(fs, rd32(&it, loc.off + 40 + k * 4), &data)) return .{ .mismatch = .{ .fs = fs, .reason = "data read failed" } };
+        var q: usize = 0;
+        while (q < BS and off < fsize) : ({ q += 1; off += 1; }) {
+            if (data[q] != pattern(off)) return .{ .mismatch = .{ .fs = fs, .reason = "content differs" } };
+        }
+    }
+    return .{ .ok = .{ .fs = fs, .ino = ino, .bytes = fsize } };
+}
+
+~pub tor unmount { fs: *Fs<!mounted> }
+| ok
+| failed string
+
+~proc unmount|zig {
+    const dev = fs.dev;
+    free(@ptrCast(fs.buf));
+    free(@ptrCast(fs));
+    if (uk_blkdev_stop(dev) != 0) return .{ .failed = "uk_blkdev_stop failed" };
+    if (uk_blkdev_queue_unconfigure(dev, 0) != 0) return .{ .failed = "queue_unconfigure failed" };
+    if (uk_blkdev_unconfigure(dev) != 0) return .{ .failed = "uk_blkdev_unconfigure failed" };
+    return .{ .ok = .{} };
+}
