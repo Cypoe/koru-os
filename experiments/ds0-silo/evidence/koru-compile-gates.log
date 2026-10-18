@@ -1,0 +1,7 @@
+control compiles: control_minimal.k
+REJECTED as expected: negative_call_unbound.k :: error[KORU030]: Phantom state mismatch: expected 'koruos.silo:bound' but got 'koruos.silo:minted!' for argument 'h'
+REJECTED as expected: negative_call_after_revoked.k :: error[KORU030]: Phantom state mismatch: expected 'koruos.silo:bound' but got 'koruos.silo:revoked!' for argument 'h'
+REJECTED as expected: negative_bind_twice.k :: error[KORU030]: Phantom state mismatch: expected 'koruos.silo:minted' but got 'koruos.silo:bound!' for argument 'h'
+AUTO-DISCHARGED as expected: autodischarge_silo_close.k (koruc emitted close)
+AUTO-DISCHARGED as expected: autodischarge_handle_release.k (koruc emitted release)
+DS0-compile PASS

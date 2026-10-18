@@ -1,0 +1,2 @@
+181120 /workspace/ds0img/koruos/silo/tests/.unikraft/build/koru_qemu-x86_64
+32336 /workspace/ds0img/koruos/silo/tests/libkoruapp.a

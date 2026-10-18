@@ -1,0 +1,198 @@
+// koruos/silo: the driver-silo membrane as a Koru lift (DESIGN-0001 §0.6, DS0).
+//
+// Phantom states on a handle:
+//   mint   mints  <minted!>                         (an authentic handle, bound to nothing)
+//   bind   needs  <!minted>  mints <bound!>         (bound to one exported driver row)
+//   call   needs  <!bound>   mints <bound!>         (dispatched, still bound)
+//                            or    <revoked!>       (silo restarted since bind)
+//   release needs <!minted|!bound>                  (handle returned to the membrane)
+//   discard needs <!revoked>                        (a revoked handle is dropped)
+// and on the silo:
+//   open   mints <open!>, close needs <!open>.
+// So a program cannot call through an unbound handle, cannot call through a revoked
+// one, and cannot leave a handle or a silo undischarged. Those are compile errors.
+//
+// What the type system cannot see is checked at run time and refused loudly:
+// rows outside the driver row set, rows outside the manifest, and forged
+// handles (keyed tag mismatch) or stale ones (epoch mismatch).
+
+const std = @import("std");
+
+extern fn malloc(size: usize) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) void;
+
+const driver_rows = [_][]const u8{
+    "blk.info",        "blk.read",         "blk.write",        "blk.flush",
+    "net.tx",          "net.rx",           "net.link",         "kms.version",
+    "kms.getcap",      "kms.getresources", "kms.getconnector", "kms.getencoder",
+    "kms.getcrtc",     "kms.create_dumb",  "kms.map_dumb",     "kms.destroy_dumb",
+    "kms.addfb2",      "kms.rmfb",         "kms.setcrtc",      "kms.page_flip",
+    "kms.atomic",      "kms.gem_close",    "kms.prime_export", "kms.event",
+    "input.caps",      "input.name",       "input.grab",       "input.event",
+};
+
+fn inDriverRowSet(id: []const u8) bool {
+    for (driver_rows) |r| if (std.mem.eql(u8, r, id)) return true;
+    return false;
+}
+
+const Silo = struct {
+    name: []const u8,
+    exports: []const u8, // comma-separated
+    epoch: u32,
+    next_slot: u32,
+    key: [32]u8,
+    refusals: u32,
+    dispatches: u32,
+
+    fn exportsRow(self: *const Silo, id: []const u8) bool {
+        var it = std.mem.splitScalar(u8, self.exports, ',');
+        while (it.next()) |e| if (e.len != 0 and std.mem.eql(u8, e, id)) return true;
+        return false;
+    }
+    fn tagFor(self: *const Silo, slot: u32, epoch: u32) u64 {
+        var msg: [8]u8 = undefined;
+        std.mem.writeInt(u32, msg[0..4], slot, .little);
+        std.mem.writeInt(u32, msg[4..8], epoch, .little);
+        var out: [32]u8 = undefined;
+        std.crypto.auth.hmac.sha2.HmacSha256.create(&out, &msg, &self.key);
+        return std.mem.readInt(u64, out[0..8], .little);
+    }
+};
+
+const Handle = struct {
+    silo: *Silo,
+    slot: u32,
+    epoch: u32,
+    tag: u64,
+    row: []const u8,
+};
+
+fn rdrand64() u64 {
+    var v: u64 = 0;
+    var ok: u8 = 0;
+    while (ok == 0) {
+        asm volatile ("rdrand %[v]\n\tsetc %[ok]"
+            : [v] "=r" (v), [ok] "=r" (ok)
+            :
+            : .{ .cc = true });
+    }
+    return v;
+}
+
+// ---------------------------------------------------------------- silo
+
+~pub tor open { name: string, exports: string }
+| ok *Silo<open!>
+| refused { reason: string, row: string }
+
+~proc open|zig {
+    var it = std.mem.splitScalar(u8, exports, ',');
+    while (it.next()) |e| {
+        if (e.len != 0 and !inDriverRowSet(e)) {
+            return .{ .refused = .{ .reason = "manifest names a row outside the driver row set", .row = e } };
+        }
+    }
+    const mem = malloc(@sizeOf(Silo)) orelse return .{ .refused = .{ .reason = "out of memory", .row = "" } };
+    const s: *Silo = @ptrCast(@alignCast(mem));
+    s.* = .{ .name = name, .exports = exports, .epoch = 1, .next_slot = 0, .key = undefined, .refusals = 0, .dispatches = 0 };
+    var i: usize = 0;
+    while (i < 4) : (i += 1) std.mem.writeInt(u64, s.key[i * 8 ..][0..8], rdrand64(), .little);
+    return .{ .ok = s };
+}
+
+~pub tor restart { silo: *Silo<!open> } -> *Silo<open!>
+
+~proc restart|zig {
+    silo.epoch +%= 1;
+    return silo;
+}
+
+~pub tor stats { silo: *Silo<!open> } -> { silo: *Silo<open!>, refusals: u32, dispatches: u32, epoch: u32 }
+
+~proc stats|zig {
+    return .{ .silo = silo, .refusals = silo.refusals, .dispatches = silo.dispatches, .epoch = silo.epoch };
+}
+
+~pub tor close { silo: *Silo<!open> }
+
+~proc close|zig {
+    free(@ptrCast(silo));
+}
+
+// ---------------------------------------------------------------- handles
+
+~pub tor mint { silo: *Silo<!open> }
+| ok { silo: *Silo<open!>, h: *Handle<minted!> }
+| exhausted *Silo<open!>
+
+~proc mint|zig {
+    const mem = malloc(@sizeOf(Handle)) orelse return .{ .exhausted = silo };
+    const h: *Handle = @ptrCast(@alignCast(mem));
+    const slot = silo.next_slot;
+    silo.next_slot += 1;
+    h.* = .{ .silo = silo, .slot = slot, .epoch = silo.epoch, .tag = silo.tagFor(slot, silo.epoch), .row = "" };
+    return .{ .ok = .{ .silo = silo, .h = h } };
+}
+
+~pub tor bind { h: *Handle<!minted>, row: string }
+| ok *Handle<bound!>
+| refused { h: *Handle<minted!>, reason: string, row: string, silo: string }
+
+~proc bind|zig {
+    const s = h.silo;
+    if (h.tag != s.tagFor(h.slot, h.epoch)) {
+        s.refusals += 1;
+        return .{ .refused = .{ .h = h, .reason = "forged_handle", .row = row, .silo = s.name } };
+    }
+    if (!inDriverRowSet(row)) {
+        s.refusals += 1;
+        return .{ .refused = .{ .h = h, .reason = "not_a_driver_row", .row = row, .silo = s.name } };
+    }
+    if (!s.exportsRow(row)) {
+        s.refusals += 1;
+        return .{ .refused = .{ .h = h, .reason = "not_in_manifest", .row = row, .silo = s.name } };
+    }
+    h.row = row;
+    return .{ .ok = h };
+}
+
+~pub tor call { h: *Handle<!bound> }
+| dispatched { h: *Handle<bound!>, row: string }
+| revoked { h: *Handle<revoked!>, row: string, silo: string }
+| refused { h: *Handle<revoked!>, reason: string, row: string, silo: string }
+
+~proc call|zig {
+    const s = h.silo;
+    if (h.tag != s.tagFor(h.slot, h.epoch)) {
+        s.refusals += 1;
+        return .{ .refused = .{ .h = h, .reason = "forged_handle", .row = h.row, .silo = s.name } };
+    }
+    if (h.epoch != s.epoch) {
+        s.refusals += 1;
+        return .{ .revoked = .{ .h = h, .row = h.row, .silo = s.name } };
+    }
+    s.dispatches += 1;
+    return .{ .dispatched = .{ .h = h, .row = h.row } };
+}
+
+// Test-only: corrupt the keyed tag the way a client fabricating a handle would.
+// It keeps the phantom state, so the forgery reaches the run-time check.
+~pub tor tamper { h: *Handle<!bound> } -> *Handle<bound!>
+
+~proc tamper|zig {
+    h.tag ^= 0x1;
+    return h;
+}
+
+~pub tor release { h: *Handle<!minted|!bound> }
+
+~proc release|zig {
+    free(@ptrCast(h));
+}
+
+~pub tor discard { h: *Handle<!revoked> }
+
+~proc discard|zig {
+    free(@ptrCast(h));
+}

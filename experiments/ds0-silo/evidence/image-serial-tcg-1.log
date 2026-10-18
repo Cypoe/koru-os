@@ -1,0 +1,17 @@
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+01F86E00+01EC6E00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+refused: blk.read silo=empty0 reason=not_in_manifest
+refused: kms.atomic silo=empty0 reason=not_in_manifest
+refused: linux.sys.mount silo=empty0 reason=not_a_driver_row
+empty0: refusals=3 dispatches=0
+refused: manifest silo=bad0 row=linux.sys.mount reason=manifest names a row outside the driver row set
+dispatched: blk.read silo=blk0
+refused: blk.read silo=blk0 reason=forged_handle
+revoked: blk.info silo=blk0 reason=epoch
+blk0: refusals=2 dispatches=1 epoch=2
+DS0 image: complete
