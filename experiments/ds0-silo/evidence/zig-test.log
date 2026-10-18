@@ -1,0 +1,8 @@
+2026-10-18 19:39:35 CEST
+0.15.2
+1/5 silo_test.test.DS0-1 empty manifest refuses every driver row and every other identity...OK
+2/5 silo_test.test.DS0-2 manifest may only name driver rows...OK
+3/5 silo_test.test.DS0-3 listed row dispatches, unlisted driver row is refused...OK
+4/5 silo_test.test.DS0-4 forged handles are refused...OK
+5/5 silo_test.test.DS0-5 silo restart revokes old handles (refused as revoked, not hung)...OK
+All 5 tests passed.
