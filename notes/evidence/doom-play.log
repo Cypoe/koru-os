@@ -1,0 +1,345 @@
+[2J[H        [0m . . . INITIALIZING PLEXUS SOVEREIGN SUBSTRATE (x86_64 SASOS) . . . ]
+  
+  
+  
+                 .  . .   .   .     .   .     . . .   .    . . .  .
+                .   .      . .   .     . .     . .      .     . .
+               .     .    .   . .       . .   .   .    .       . .
+                .   .      . .   .     . .     . .      .     . .
+                 .  . .   .   .     .   .     . . .   .    . . .  .
+  
+  
+  
+  
+  
+  
+  
+  
+  
+         >> Initializing Single Address Space (SASOS) 32MB physical arena...
+[2J[H        [0m . . . INITIALIZING PLEXUS SOVEREIGN SUBSTRATE (x86_64 SASOS) . . . ]
+  
+  
+  
+                 .  . .   .   .     .   .     . . .   .    . . .  .
+                .   .      . .   .     . .     . .      .     . .
+               .     .    .   . .       . .   .   .    .       . .
+                .   .      . .   .     . .     . .      .     . .
+                 .  . .   .   .     .   .     . . .   .    . . .  .
+  
+  
+  
+  
+  
+  
+  
+  
+  
+         >> Initializing Single Address Space (SASOS) 32MB physical arena...
+[2J[H        [0m . . . INITIALIZING PLEXUS SOVEREIGN SUBSTRATE (x86_64 SASOS) . . . ]
+  
+  
+  
+                ░▒▓   ░▒▓█   ░▒▓   ░▒▓█   ░▒▓█  ░▒   ░▒▓█  ░▒▓   ░▒▓
+               ░██▓░ ░████░ ░███░ ░████░ ░████░░██░ ░████░░███░ ░███░
+               ░██▓░ ░████░ ░███░ ░████░ ░████░░██░ ░████░░███░ ░███░
+                ░▒▓   ░▒▓█   ░▒▓   ░▒▓█   ░▒▓█  ░▒   ░▒▓█  ░▒▓   ░▒▓
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+         >> Initializing Single Address Space (SASOS) 32MB physical arena...
+[2J[H           [0m === PLEXUS SUBSTRATE // INVARIANT CARRIER MORPHISM ONLINE === ]
+   
+   
+   
+                 ░▒▓   ░▒▓█   ░▒▓   ░▒▓█   ░▒▓█  ░▒   ░▒▓█  ░▒▓   ░▒▓
+                ░██▓░ ░████░ ░███░ ░████░ ░████░░██░ ░████░░███░ ░███░
+                ░██▓░ ░████░ ░███░ ░████░ ░████░░██░ ░████░░███░ ░███░
+                 ░▒▓   ░▒▓█   ░▒▓   ░▒▓█   ░▒▓█  ░▒   ░▒▓█  ░▒▓   ░▒▓
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+          >> Initializing Single Address Space (SASOS) 32MB physical arena...
+[2J[H          [0m === PLEXUS SUBSTRATE // INVARIANT CARRIER MORPHISM ONLINE === ]
+  
+  
+  
+                ░▒▓   ░▒▓█   ░▒▓   ░▒▓█   ░▒▓█  ░▒   ░▒▓█  ░▒▓   ░▒▓
+               ░██▓░ ░████░ ░███░ ░████░ ░████░░██░ ░████░░███░ ░███░
+               ░██▓░ ░████░ ░███░ ░████░ ░████░░██░ ░████░░███░ ░███░
+                ░▒▓   ░▒▓█   ░▒▓   ░▒▓█   ░▒▓█  ░▒   ░▒▓█  ░▒▓   ░▒▓
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+       >> Proving Church-Rosser confluence: (K I) S -> I [0mVerified in 0-hop]...
+[2J[H          [0m === PLEXUS SUBSTRATE // INVARIANT CARRIER MORPHISM ONLINE === ]
+  
+  
+  
+       ____  __    _______  ____  _______   ______ _____  ______  ___  ______
+      / __ \/ /   / ____/ |/ / / / / ___/  / ____// ___/ / ____/ /   |/ ____/
+     / /_/ / /   / __/  |   / / / /\__ \  / /_    \__ \ / /_    / /| / /
+    / ____/ /___/ /___ /   /_/ /_/ /__/ / / __/   ___/ // __/   / ___ / /___
+   /_/   /_____/_____//_/|_|\____//____/ /_/     /____//_/     /_/  |_\____/
+  
+  
+  
+  
+  
+  
+  
+  
+  
+       >> Proving Church-Rosser confluence: (K I) S -> I [0mVerified in 0-hop]...
+[2J[H         [0m === PLEXUS SUBSTRATE // INVARIANT CARRIER MORPHISM ONLINE === ]
+ 
+ 
+ 
+      ____  __    _______  ____  _______   ______ _____  ______  ___  ______
+     / __ \/ /   / ____/ |/ / / / / ___/  / ____// ___/ / ____/ /   |/ ____/
+    / /_/ / /   / __/  |   / / / /\__ \  / /_    \__ \ / /_    / /| / /
+   / ____/ /___/ /___ /   /_/ /_/ /__/ / / __/   ___/ // __/   / ___ / /___
+  /_/   /_____/_____//_/|_|\____//____/ /_/     /____//_/     /_/  |_\____/
+ 
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+      >> Proving Church-Rosser confluence: (K I) S -> I [0mVerified in 0-hop]...
+[2J[H         [0m === PLEXUS SUBSTRATE // INVARIANT CARRIER MORPHISM ONLINE === ]
+ 
+ 
+ 
+      ____  __    _______  ____  _______   ______ _____  ______  ___  ______
+     / __ \/ /   / ____/ |/ / / / / ___/  / ____// ___/ / ____/ /   |/ ____/
+    / /_/ / /   / __/  |   / / / /\__ \  / /_    \__ \ / /_    / /| / /
+   / ____/ /___/ /___ /   /_/ /_/ /__/ / / __/   ___/ // __/   / ___ / /___
+  /_/   /_____/_____//_/|_|\____//____/ /_/     /____//_/     /_/  |_\____/
+ 
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+      >> Proving Church-Rosser confluence: (K I) S -> I [0mVerified in 0-hop]...
+[2J[H         [0m === PLEXUS SUBSTRATE // INVARIANT CARRIER MORPHISM ONLINE === ]
+ 
+ 
+ 
+      ____  __    _______  ____  _______   ______ _____  ______  ___  ______
+     / __ \/ /   / ____/ |/ / / / / ___/  / ____// ___/ / ____/ /   |/ ____/
+    / /_/ / /   / __/  |   / / / /\__ \  / /_    \__ \ / /_    / /| / /
+   / ____/ /___/ /___ /   /_/ /_/ /__/ / / __/   ___/ // __/   / ___ / /___
+  /_/   /_____/_____//_/|_|\____//____/ /_/     /____//_/     /_/  |_\____/
+ 
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+         >> Synthesizing PS/2 Keyboard & COM1 Hardware UART Multiplexer...
+[2J[H         [0m === PLEXUS SUBSTRATE // INVARIANT CARRIER MORPHISM ONLINE === ]
+ 
+ 
+ 
+      ██████╗ ██╗     ███████╗██╗  ██╗██╗   ██╗███████╗     ██████╗ ███████╗
+      ██╔══██╗██║     ██╔════╝╚██╗██╔╝██║   ██║██╔════╝    ██╔═══██╗██╔════╝
+      ██████╔╝██║     █████╗   ╚███╔╝ ██║   ██║███████╗    ██║   ██║███████╗
+      ██╔═══╝ ██║     ██╔══╝   ██╔██╗ ██║   ██║╚════██║    ██║   ██║╚════██║
+      ██║     ███████╗███████╗██╔╝ ██╗╚██████╔╝███████║    ╚██████╔╝███████║
+      ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+         >> Synthesizing PS/2 Keyboard & COM1 Hardware UART Multiplexer...
+[2J[H     +========================================================================+
+     |   [0m+] PLEXUS SOVEREIGN SUBSTRATE v0.4.0 -- ZERO-LIBC BARE HARDWARE    |
+     +========================================================================+
+ 
+      ██████╗ ██╗     ███████╗██╗  ██╗██╗   ██╗███████╗     ██████╗ ███████╗
+      ██╔══██╗██║     ██╔════╝╚██╗██╔╝██║   ██║██╔════╝    ██╔═══██╗██╔════╝
+      ██████╔╝██║     █████╗   ╚███╔╝ ██║   ██║███████╗    ██║   ██║███████╗
+      ██╔═══╝ ██║     ██╔══╝   ██╔██╗ ██║   ██║╚════██║    ██║   ██║╚════██║
+      ██║     ███████╗███████╗██╔╝ ██╗╚██████╔╝███████║    ╚██████╔╝███████║
+      ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+         >> Synthesizing PS/2 Keyboard & COM1 Hardware UART Multiplexer...
+[2J[H     +========================================================================+
+     |   [0m+] PLEXUS SOVEREIGN SUBSTRATE v0.4.0 -- ZERO-LIBC BARE HARDWARE    |
+     +========================================================================+
+ 
+      ██████╗ ██╗     ███████╗██╗  ██╗██╗   ██╗███████╗     ██████╗ ███████╗
+      ██╔══██╗██║     ██╔════╝╚██╗██╔╝██║   ██║██╔════╝    ██╔═══██╗██╔════╝
+      ██████╔╝██║     █████╗   ╚███╔╝ ██║   ██║███████╗    ██║   ██║███████╗
+      ██╔═══╝ ██║     ██╔══╝   ██╔██╗ ██║   ██║╚════██║    ██║   ██║╚════██║
+      ██║     ███████╗███████╗██╔╝ ██╗╚██████╔╝███████║    ╚██████╔╝███████║
+      ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+         >> Synthesizing PS/2 Keyboard & COM1 Hardware UART Multiplexer...
+[2J[H     +========================================================================+
+     |   [0m+] PLEXUS SOVEREIGN SUBSTRATE v0.4.0 -- ZERO-LIBC BARE HARDWARE    |
+     +========================================================================+
+ 
+      ██████╗ ██╗     ███████╗██╗  ██╗██╗   ██╗███████╗     ██████╗ ███████╗
+      ██╔══██╗██║     ██╔════╝╚██╗██╔╝██║   ██║██╔════╝    ██╔═══██╗██╔════╝
+      ██████╔╝██║     █████╗   ╚███╔╝ ██║   ██║███████╗    ██║   ██║███████╗
+      ██╔═══╝ ██║     ██╔══╝   ██╔██╗ ██║   ██║╚════██║    ██║   ██║╚════██║
+      ██║     ███████╗███████╗██╔╝ ██╗╚██████╔╝███████║    ╚██████╔╝███████║
+      ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+    >> SUBSTRATE ONLINE. Dropping into interactive combinator shell (plexsh)...
+[2J[H     +========================================================================+
+     |   [0m+] PLEXUS SOVEREIGN SUBSTRATE v0.4.0 -- ZERO-LIBC BARE HARDWARE    |
+     +========================================================================+
+ 
+      ██████╗ ██╗     ███████╗██╗  ██╗██╗   ██╗███████╗     ██████╗ ███████╗
+      ██╔══██╗██║     ██╔════╝╚██╗██╔╝██║   ██║██╔════╝    ██╔═══██╗██╔════╝
+      ██████╔╝██║     █████╗   ╚███╔╝ ██║   ██║███████╗    ██║   ██║███████╗
+      ██╔═══╝ ██║     ██╔══╝   ██╔██╗ ██║   ██║╚════██║    ██║   ██║╚════██║
+      ██║     ███████╗███████╗██╔╝ ██╗╚██████╔╝███████║    ╚██████╔╝███████║
+      ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+    >> SUBSTRATE ONLINE. Dropping into interactive combinator shell (plexsh)...
+[2J[H     +========================================================================+
+     |   [0m+] PLEXUS SOVEREIGN SUBSTRATE v0.4.0 -- ZERO-LIBC BARE HARDWARE    |
+     +========================================================================+
+ 
+      ██████╗ ██╗     ███████╗██╗  ██╗██╗   ██╗███████╗     ██████╗ ███████╗
+      ██╔══██╗██║     ██╔════╝╚██╗██╔╝██║   ██║██╔════╝    ██╔═══██╗██╔════╝
+      ██████╔╝██║     █████╗   ╚███╔╝ ██║   ██║███████╗    ██║   ██║███████╗
+      ██╔═══╝ ██║     ██╔══╝   ██╔██╗ ██║   ██║╚════██║    ██║   ██║╚════██║
+      ██║     ███████╗███████╗██╔╝ ██╗╚██████╔╝███████║    ╚██████╔╝███████║
+      ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+    >> SUBSTRATE ONLINE. Dropping into interactive combinator shell (plexsh)...
+[2J[H     +========================================================================+
+     |   [0m+] PLEXUS SOVEREIGN SUBSTRATE v0.4.0 -- ZERO-LIBC BARE HARDWARE    |
+     +========================================================================+
+ 
+      ██████╗ ██╗     ███████╗██╗  ██╗██╗   ██╗███████╗     ██████╗ ███████╗
+      ██╔══██╗██║     ██╔════╝╚██╗██╔╝██║   ██║██╔════╝    ██╔═══██╗██╔════╝
+      ██████╔╝██║     █████╗   ╚███╔╝ ██║   ██║███████╗    ██║   ██║███████╗
+      ██╔═══╝ ██║     ██╔══╝   ██╔██╗ ██║   ██║╚════██║    ██║   ██║╚════██║
+      ██║     ███████╗███████╗██╔╝ ██╗╚██████╔╝███████║    ╚██████╔╝███████║
+      ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+ 
+ 
+ 
+      ------------------------------------------------------------------------
+    [0mI] Identity Morphism: ACTIVE      |  [0mS] Symmetric Doubly-Stochastic: READY
+   [0mA] Admissible Recurrence: HOLONOMIC |  [0mR] Retraction Adjoint Space: ZERO-HOP
+      ------------------------------------------------------------------------
+ 
+    >> SUBSTRATE ONLINE. Dropping into interactive combinator shell (plexsh)...
+
+
+plex-os> doom
+[PLEXUS] Launching Guest Software Silo: DOOM Classic
+                            DOOM Shareware Startup v1.10                           
+V_Init: allocate screens.
+M_LoadDefaults: Load system defaults.
+Z_Init: Init zone memory allocation daemon. 
+W_Init: Init WADfiles.
+ adding ./doom1.wad
+===========================================================================
+                                Shareware!
+===========================================================================
+M_Init: Init miscellaneous info.
+R_Init: Init DOOM refresh daemon - [                   ]..
+InitTextures
+InitFlats........
+InitSprites
+InitColormaps
+R_InitData
+R_InitPointToAngle
+R_InitTables
+R_InitPlanes
+R_InitLightTables
+R_InitSkyMap
+R_InitTranslationsTables
+P_Init: Init Playloop state.
+I_Init: Setting up machine state.
+[PLEX] SFX/music silent (QEMU SB16 DMA stalls vCPU; deferred)
+D_CheckNetGame: Checking network game status.
+startskill 2  deathmatch: 0  startmap: 1  startepisode: 1
+player 1 of 1 (1 nodes)
+S_Init: Setting up sound.
+S_Init: default sfx volume 8
+HU_Init: Setting up heads up display.
+ST_Init: Init status bar.
+Demo is from a different game version!
+Demo is from a different game version!
+Demo is from a different game version!
+Demo is from a different game version!
+Demo is from a different game version!

@@ -1,0 +1,519 @@
+warning: unused variable: `is_route_reinforced`
+   --> crates/plex-net/src/node.rs:113:17
+    |
+113 |             let is_route_reinforced = flow_is_reinforced
+    |                 ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_route_reinforced`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `plex-net` (lib) generated 1 warning (run `cargo fix --lib -p plex-net` to apply 1 suggestion)
+   Compiling plex-daemon v0.4.0 (/workspace/plex-shell/crates/plex-daemon)
+   Compiling plex-shell v0.4.0 (/workspace/plex-shell/crates/plex-shell)
+warning: `plex-net` (lib test) generated 1 warning (1 duplicate)
+warning: unused variable: `list_nf`
+   --> crates/plex-core/src/bin/plex_language_bench.rs:147:10
+    |
+147 |     let (list_nf, steps) = reduce_to_nf(&list_ab, 100);
+    |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_list_nf`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `plex-core` (bin "plex_language_bench") generated 1 warning (run `cargo fix --bin "plex_language_bench" -p plex-core` to apply 1 suggestion)
+warning: `plex-core` (bin "plex_language_bench" test) generated 1 warning (1 duplicate)
+warning: unused import: `std::sync::mpsc`
+ --> crates/plex-daemon/src/webview.rs:9:5
+  |
+9 | use std::sync::mpsc;
+  |     ^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `Mutex` and `OnceLock`
+  --> crates/plex-daemon/src/webview.rs:10:17
+   |
+10 | use std::sync::{Mutex, OnceLock};
+   |                 ^^^^^  ^^^^^^^^
+
+warning: unused import: `std::time::Duration`
+  --> crates/plex-daemon/src/webview.rs:11:5
+   |
+11 | use std::time::Duration;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::paths`
+  --> crates/plex-daemon/src/webview.rs:13:5
+   |
+13 | use crate::paths;
+   |     ^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates/plex-daemon/src/store.rs:309:13
+    |
+309 |         let mut conn = self.conn.lock().unwrap();
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling plex-desktop v0.4.0 (/workspace/plex-shell/crates/plex-desktop)
+warning: `plex-daemon` (lib) generated 5 warnings (5 duplicates)
+warning: unused imports: `AnchorRatchet` and `QuineCipher`
+  --> crates/plex-shell/src/bin/plex-demo.rs:13:60
+   |
+13 | use plex_core::crypto::{KeyPair, PhiIdentity, PhiVerifier, QuineCipher, StructuralDelta, AnchorRatchet};
+   |                                                            ^^^^^^^^^^^                   ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `plex_core::math::OrdinalFactorizer`
+  --> crates/plex-shell/src/bin/plex-demo.rs:14:5
+   |
+14 | use plex_core::math::OrdinalFactorizer;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `SiloStatus`
+  --> crates/plex-shell/src/bin/plex-demo.rs:22:64
+   |
+22 | use plex_desktop::silos::manifest::{SiloManifest, SiloRuntime, SiloStatus};
+   |                                                                ^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates/plex-shell/src/bin/plex-demo.rs:292:9
+    |
+292 |     let mut proof = ProofNet {
+    |         ----^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `TerrainMap`
+ --> crates/plex-shell/src/map.rs:6:35
+  |
+6 | use plex_daemon::maps::{load_map, TerrainMap};
+  |                                   ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Stdout`
+  --> crates/plex-shell/src/map.rs:12:23
+   |
+12 | use std::io::{stdout, Stdout};
+   |                       ^^^^^^
+
+warning: `plex-daemon` (lib test) generated 5 warnings (run `cargo fix --lib -p plex-daemon --tests` to apply 5 suggestions)
+warning: use of deprecated method `ratatui::Frame::<'_>::size`: use .area() as it's the more correct name
+  --> crates/plex-shell/src/map.rs:28:26
+   |
+28 |                 .split(f.size());
+   |                          ^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: `plex-shell` (bin "plex-demo" test) generated 4 warnings (run `cargo fix --bin "plex-demo" -p plex-shell --tests` to apply 4 suggestions)
+warning: unused import: `SiloStatus`
+ --> crates/plex-shell/../../demos/demo_2_app_silos_rollback.rs:7:64
+  |
+7 | use plex_desktop::silos::manifest::{SiloManifest, SiloRuntime, SiloStatus};
+  |                                                                ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `plex-shell` (bin "demo-2-silos" test) generated 1 warning (run `cargo fix --bin "demo-2-silos" -p plex-shell --tests` to apply 1 suggestion)
+warning: `plex-shell` (bin "plexsh" test) generated 3 warnings (run `cargo fix --bin "plexsh" -p plex-shell --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running unittests src/lib.rs (target/debug/deps/plex_core-d8bf9a6d741ac49c)
+
+running 1 test
+test crypto::did::tests::golden_php_sodium_vector ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/bin/bench_koru_native.rs (target/debug/deps/bench_koru_native-e78b219d8e306bd9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/plex_hardware_bench.rs (target/debug/deps/plex_hardware_bench-8bedfcff238084f3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/plex_language_bench.rs (target/debug/deps/plex_language_bench-106ec66b3680a2ce)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_apt_and_quotient_synthesis.rs (target/debug/deps/test_apt_and_quotient_synthesis-5a451d2ebf8a7ea0)
+
+running 2 tests
+test test_automorphism_transport_across_symmetric_domains ... ok
+test test_generalized_apt_multi_context_synthesis ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_crypto_and_quine.rs (target/debug/deps/test_crypto_and_quine-b65fd0fb796878e6)
+
+running 3 tests
+test test_quine_cryptography_and_anchor_ratchet ... ok
+test test_phi_identity_is_did_backed_login ... ok
+test test_sovereign_identity_did_key_and_signing ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/test_formal_semantics_and_quotient_bench.rs (target/debug/deps/test_formal_semantics_and_quotient_bench-617e436efc04b231)
+
+running 4 tests
+test test_confluent_combinator_quotient_reductions ... ok
+test test_church_numeral_arithmetic_in_quotient_space ... ok
+test test_lexical_scopes_and_alpha_equivalence ... ok
+test test_grammar_serialization_and_invariant_conservation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_multikernel.rs (target/debug/deps/test_multikernel-9fc17c3552cf0010)
+
+running 4 tests
+test test_multikernel_capability_delegation ... ok
+test test_multikernel_silo_checkpoint_and_rollback ... ok
+test test_multikernel_hypervisor_standard_domains ... ok
+test test_multikernel_tensor_subgraph_tiering_and_intent ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_ordinal_factorization.rs (target/debug/deps/test_ordinal_factorization-9e3eb129a7abed32)
+
+running 3 tests
+test test_primality_testing ... ok
+test test_complex_multi_prime_powers ... ok
+test test_simd_factorization_of_massive_semiprimes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/test_plex_core.rs (target/debug/deps/test_plex_core-3781b3574f727f1b)
+
+running 8 tests
+test test_rust_bytechunk_roundtrip ... ok
+test test_rust_carrier_axioms ... ok
+test test_rust_lowerings_confluence ... ok
+test test_rust_pcc_micro_checker ... ok
+test test_rust_quotient_reduction ... ok
+test test_rust_tagged_word_bit_packing ... ok
+test test_rust_wasm_doom_binary_lowering ... ok
+test test_rust_cdc_wal_replication ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_ports_and_futamura.rs (target/debug/deps/test_ports_and_futamura-e58fb726cd1d8276)
+
+running 5 tests
+test test_mem_port_read_write_seek ... ok
+test test_complete_futamura_square_and_projections ... ok
+test test_pipe_port_fifo_streaming ... ok
+test test_two_level_protocol_interpreters ... ok
+test test_ring_port_unikernel_l1_aligned ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_unikernel.rs (target/debug/deps/test_unikernel-d0baa77fa85e2065)
+
+running 4 tests
+test test_direct_memory_descriptor ... ok
+test test_substrate_kernel_non_hierarchical_capability_addressing ... ok
+test test_upage_frame_cache_line_alignment ... ok
+test test_upage_ring_lock_free_producer_consumer ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_wasm_lowering.rs (target/debug/deps/test_wasm_lowering-62a240396acb5324)
+
+running 2 tests
+test test_wasm_realizer_lowering ... ok
+test test_wasm_linear_memory_operations ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_wire_and_hardware.rs (target/debug/deps/test_wire_and_hardware-329c3cc1aaf95b5f)
+
+running 3 tests
+test test_canonical_wire_protocol_roundtrip ... ok
+test test_hardware_simd_and_cuda_backends ... ok
+test test_wire_protocol_checksum_tamper_detection ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/plex_daemon-a7eb5d53c2881949)
+
+running 10 tests
+test http_api::tests::cors_localhost_only ... ok
+test http_api::tests::loopback_host_check ... ok
+test http_api::tests::snapshot_kind_parsing ... ok
+test snapshot::tests::base64_roundtrip_known ... ok
+test snapshot::tests::collect_images_and_replace_src ... ok
+test snapshot::tests::collect_stylesheets ... ok
+test snapshot::tests::extracts_article_and_title ... ok
+test snapshot::tests::normalize_kind_aliases ... ok
+test snapshot::tests::resolve_and_origin ... ok
+test keepalive::tests::restarts_short_lived_child ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/bin/plex-import-cyberbrain.rs (target/debug/deps/plex_import_cyberbrain-faf7e9a9047f2762)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/plexd.rs (target/debug/deps/plexd-39511f36f7477452)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_flow_manifest.rs (target/debug/deps/test_flow_manifest-d44ffcb7690c2a93)
+
+running 3 tests
+test test_flow_manifest_parity ... ok
+test test_scope_media_manifest_and_flow ... ok
+test test_cap_invoke_resolve_and_budget ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_plexd.rs (target/debug/deps/test_plexd-965e8558bb5ff04e)
+
+running 20 tests
+test test_caps_catalog_and_invoke ... ok
+test test_capability_redirection ... ok
+test test_doom_capability_integration ... FAILED
+test test_ephemeral_session_isolation ... ok
+test test_epics_management ... ok
+test test_event_bus ... ok
+test test_fuzzy_input_resolution ... ok
+test test_maps_export ... ok
+test test_paths_runtime_dirs ... ok
+test test_math_delegation ... ok
+test test_project_scoped_memory ... ok
+test test_record_open_response_shape ... ok
+test test_record_snapshot_kind_roundtrip ... ok
+test test_records_response_roundtrip ... ok
+test test_rag_search ... ok
+test test_records_save_list_search_link ... ok
+test test_run_job_emits_task_started_before_output ... ok
+test test_snapshot_and_set_path ... ok
+test test_store_and_resolver ... ok
+test test_terrain_landmarks_quarantine_trails ... ok
+
+failures:
+
+---- test_doom_capability_integration stdout ----
+
+thread 'test_doom_capability_integration' (83424) panicked at crates/plex-daemon/tests/test_plexd.rs:666:6:
+called `Result::unwrap()` on an `Err` value: "shareware.wad not found at \"C:\\\\Users\\\\fabi0\\\\repos\\\\isa-physics\\\\plex-doom\\\\ext\\\\shareware.wad\""
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    test_doom_capability_integration
+
+test result: FAILED. 19 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p plex-daemon --test test_plexd`
+     Running unittests src/lib.rs (target/debug/deps/plex_desktop-e78d812326dbf6cc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/plex_desktop-439cb533fac44a61)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_desktop.rs (target/debug/deps/test_desktop-70f660e09ac76344)
+
+running 9 tests
+test test_desktop_config_defaults ... ok
+test test_desktop_shell_and_compositor_bridge ... ok
+test test_overlay_geometry_centered_calculation ... ok
+test test_overlay_geometry_clamping ... ok
+test test_qt_projection_instantiation ... ok
+test test_selection_context_mock_and_attachment ... ok
+test test_silo_manager_lifecycle_update_and_atomic_rollback ... ok
+test test_doom_wasm_silo_manifest_and_launch ... ok
+test test_webview_projection_lifecycle_and_prompt_dispatch ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/plex_libs-e2c8e3a3423ecc57)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_libs.rs (target/debug/deps/test_libs-6a2a83b10f32e836)
+
+running 4 tests
+test test_anim_stream_parser ... ok
+test test_bitmap_font_glyph ... ok
+test test_color_format_conversion ... ok
+test test_wad_parsing_in_plex_libs ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/plex_net-7240c618d0a82c97)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/plex_net.rs (target/debug/deps/plex_net-7a57104f42aafea6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_cgi.rs (target/debug/deps/test_cgi-e479fa2b070bb3c8)
+
+running 3 tests
+test cgi_rejects_did_helper_ops ... ok
+test golden_signature_verifies_in_core ... ok
+test cgi_check_cap_signed_token ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/test_orca_and_intent.rs (target/debug/deps/test_orca_and_intent-9f311f4d69a8f262)
+
+running 2 tests
+test test_orca_bridge_discovery_and_pcc_verification ... ok
+test test_automatic_intent_resolution_and_systems_programming ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_production_stress_matrix.rs (target/debug/deps/test_production_stress_matrix-a6d2c156886aa743)
+
+running 5 tests
+test test_adversarial_proof_net_rejections ... ok
+test test_concurrent_causal_vector_clock_mesh ... ok
+test test_hypergraph_pathfinder_on_complex_cyclic_mesh ... ok
+test test_peer_node_full_real_intent_with_route_pricing_and_gap ... ok
+test test_ucan_privilege_escalation_and_path_traversal ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/test_scaling_and_shortcomings.rs (target/debug/deps/test_scaling_and_shortcomings-6fd406f6708af37d)
+
+running 4 tests
+test test_dynamic_discount_and_congestion_backpressure ... ok
+test test_plex_chat_structural_delta_compression_scaling ... ok
+test test_resource_intensity_differential_discounting ... ok
+test test_scaling_laws_and_topology_stress_bounds ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+     Running tests/test_secure_channel.rs (target/debug/deps/test_secure_channel-185d9e2dd3ce5ccc)
+
+running 1 test
+test test_secure_peer_channel_e2e_communication ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/debug/deps/plex_server-ebb81080fd8003fe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/server.rs (target/debug/deps/plex_http_server-c9318c0d7e354edc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_router.rs (target/debug/deps/test_router-4e77bcfb1ad47049)
+
+running 8 tests
+test test_router_api_eval ... ok
+test test_router_api_apt_synthesize ... ok
+test test_router_api_futamura_verify ... ok
+test test_router_api_ports_open ... ok
+test test_router_api_silos_and_kernel ... ok
+test test_router_fragments ... ok
+test test_router_full_shell_render ... ok
+test test_router_api_factor ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests ../../demos/demo_1_multi_node_mesh.rs (target/debug/deps/demo_1_mesh-e9f62a9b047c7775)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests ../../demos/demo_2_app_silos_rollback.rs (target/debug/deps/demo_2_silos-409bee064bf5b343)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests ../../demos/demo_3_computational_stress.rs (target/debug/deps/demo_3_stress-fbb3b9f24720f777)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/plex-demo.rs (target/debug/deps/plex_demo-251006a277e194aa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/plexsh-592251d7b7546483)
+
+running 1 test
+test tests::oneshot_interpreter_flags_are_not_interactive ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests plex_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests plex_daemon
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests plex_desktop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests plex_libs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests plex_net
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests plex_server
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `-p plex-daemon --test test_plexd`
