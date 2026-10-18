@@ -138,6 +138,53 @@ the L2 arm.
      (VGA text or fbcon) within a pixel tolerance.
 4. The L1 `strace -f` trace of this run is filed as the row list for DoD-2 (Appendix C.2).
 
+**M4 acceptance for the stand-in (fixed 2026-10-18, 20:40 CEST, before any L2 run).** M4 makes
+T-CYB concrete for the arm that passed M3 (Unikraft 0.21 + app-elfloader + `koruext2fs` root,
+TCG only). The parameters and checks below are frozen before measuring; a run passes only if
+every gated item holds, and M4 passes only with 3/3 runs.
+- **Program under test.** `/bin/ascii-animator` is the **STAND-IN**: a 100-line Rust `main.rs`
+  around the plex-libs `anim.rs` decoder (copied verbatim, sha256 `9b671ec2…`), built as a
+  static-PIE for `x86_64-unknown-linux-musl`. Its first output line names it `STAND-IN`, and
+  every frame carries a `STAND-IN frame i/N` trailer line. It is not boot-animator.
+- **Asset.** `/assets/80x24.anim` is plex-os `assets/boot.anim` (sha256 `b7de2964…`, 175 frames,
+  24 fps, frames 240 columns wide) re-cut to the leftmost 80 columns × 24 rows, which is the
+  window plex-os `cyberboot.rs` paints on its 80-column VGA screen. The re-cut is needed for a
+  second reason too (V): `anim.rs` parses `# FPS:` and `# FRAME` markers, while `boot.anim`
+  uses `fps:` and `[FRAME_n]`. Fed unchanged, `anim.rs` would see one 4,377-line frame.
+  Neither the asset nor `anim.rs` is committed; both are copied from the pinned plex-shell
+  checkout at build time and checked against their sha256.
+- **Init.** The kernel command line runs `/bin/busybox sh /etc/t-cyb-init` (hush). The script
+  starts `ascii-animator &`, runs `sleep 3` (k = 3 s of guest time, nominally 72 frames), sends
+  `kill -USR1`, `wait`s, prints `t-cyb-init: ascii-animator exit status S`, and exits with S.
+- **Gated checks** (lettering follows T-CYB):
+  - (a) the serial log contains `Detected TTY size: 80x24`. The run records which source gave
+    the size (`TIOCGWINSZ`, `$COLUMNS/$LINES`, or the 80×24 default). A default is acceptable
+    for M4 but is reported, because boot-animator proper reads `TIOCGWINSZ`.
+  - (b) at least n = 24 frame bodies appear, each byte-identical (after dropping `ESC[H`,
+    `ESC[K` and CR) to the corresponding re-cut asset frame, with trailers 1, 2, 3, … strictly
+    consecutive from frame 1, i.e. in asset order with no frame skipped or corrupted.
+  - (c) after the signal the raw log contains `ESC[2J ESC[1;1H` followed by the stand-in's
+    `SIGUSR1 after … exit 0` line; `t-cyb-init` reports exit status 0; the unikernel reports
+    `init exited with status 0`.
+  - (d) the refusal log is empty or lists only rows classified `refused-by-design`. On this
+    arm the refusal log is the set of `-ENOSYS` returns of the syscall shim, made visible by
+    a local patch that logs each one at error level as `koru-os: ENOSYS <name>`. A row is
+    `refused-by-design` only if the program's observable behaviour is unaffected (for
+    example a probe with a documented fallback), with the reason written down; any other
+    row fails the run.
+  - (x) no `Unikraft Crash`; the disk image is byte-identical before and after the boot; the
+    host `e2fsck -fn` stays clean.
+- **Not gated in M4: (e).** The display path on this arm is the serial console plus Unikraft
+  `vgacons`, which writes bytes into VGA text memory as CP437 cells and has no UTF-8 decoding.
+  The asset is UTF-8 shade blocks (`░▒▓█`). A screendump would therefore show mojibake, and
+  matching it against a rendering of frame *i* would test the encoding mismatch, not the
+  program. A screendump is taken mid-run and kept on the box as evidence (screendumps are not
+  committed). (e) stays **open** until a display path that decodes UTF-8 exists (fbcon or
+  virtio-gpu, Q16), and M4 is reported as "(a)–(d) pass, (e) open", never as a full T-CYB pass.
+- **L1 first.** The same binary and asset run on the build host (Linux 6.12.94+, the box) with
+  `SIGUSR1` after 1 s under `strace -f`. The syscall histogram is filed with the evidence as the
+  stand-in's DoD-2 row list.
+
 ### 0.3 Per-item mapping
 
 **DoD-1: real filesystem.**
@@ -307,7 +354,7 @@ means the test is first run against a Linux guest to produce the expected trace.
 | DS1 | LKL blk/fs silo | L2 + silo:lkl (host ops on Unikraft, Q25) | silo mounts ext4 from virtio-blk via `blk.*` rows and exposes `fs.*`; DoD-1 test (M2) passes through it | D |
 | M2 | real FS allocates blocks (**DoD-1**) | L2: vfscore + ext2 driver, **or** DS1 | guest creates `/dod1` of *N* blocks, writes, `fsync`s, halts; host `e2fsck -fn` clean, `debugfs -R 'cat /dod1'` equals pattern, free-block count dropped by ≥ *N* | **M (TCG), 2026-10-18**: minimal ext2 Koru lift (`koru/ext2`); 3/3 + 1 runs pass, e2fsck exit 0, free blocks −10, inodes −1 (`experiments/m2-ext2/`). Scope of the writer: one file, one group, direct blocks. Read path under vfscore since 2026-10-18 (`lib/koruext2fs`, host oracle 7/7; B7 closed) |
 | M3 | static busybox shell from the ext root | L2 `app-elfloader` (L1 trace first) | scripted serial session: `echo`, `ls /`, `cat /dod1`, `exit 3` → exit status 3 observed; refusal log empty or only by-design rows | **M (TCG), 2026-10-18, PASS 3/3**: M2 guest writes `/dod1` into an `mke2fs -d` busybox image, host `e2fsck -fn` clean; M3 guest mounts it through `koruext2fs` (vfscore, read-only) as `/` and runs `ls /`, `cat /dod1` (guest sha256 = pattern), a pipeline, `exit 3` → "init exited with status 3"; boot to exit 0.39–0.42 s wall (`experiments/m3-ext2root/`). Refusal-log clause N/A (no silo in this image). Fixed on the way: B6 (vfork FSBASE, empty argv), virtio ring destroy under LIBUKVMEM. Debt: root is read-only; `koru/ext2` (writer) and `ext2core.zig` (reader) duplicate parsing |
-| M4 | **T-CYB** (§0.2) | L2 (L1 trace first) | (a)–(e) of T-CYB | D; runs on the labelled stand-in until the newer boot-animator is pushed (Q18) |
+| M4 | **T-CYB** (§0.2) | L2 (L1 trace first) | (a)–(d) gated, (e) open; frozen parameters in §0.2 "M4 acceptance for the stand-in" | D; runs on the labelled stand-in until the newer boot-animator is pushed (Q18) |
 | M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | D |
 | DS2 | Kolibri driver silo, first driver | L2 + silo:kolibri (KolibriOS driver-service personality) | an unmodified KolibriOS `.sys` network or input driver (`RTL8139`/`pcnet32` on QEMU `rtl8139`/`pcnet`, or `ps2mouse4d`) loads in the silo. Its imports either bind to rows or are refused by name. `net.*` frames or `input.*` events cross the silo boundary (serial log) | D |
 | DS3 | GPU driver silo | silo:lkl `virtio_gpu` on `virtio-gpu-pci`, or silo:kolibri `vmwgfx` on `vmware-svga` | the silo exposes only the `kms.*` rows of Appendix C.3; M6 passes through it | D |

@@ -1,0 +1,17 @@
+[package]
+name = "ascii-animator-standin"
+version = "0.1.0"
+edition = "2021"
+description = "STAND-IN for /bin/ascii-animator (T-CYB, Q18): plex-libs anim.rs player, no dependencies"
+
+[[bin]]
+name = "ascii-animator"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = "s"
+panic = "abort"
+lto = true
+codegen-units = 1
