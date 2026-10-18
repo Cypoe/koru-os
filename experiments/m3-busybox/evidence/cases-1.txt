@@ -1,0 +1,42 @@
+== [RAN] echo M3-HELLO  (wall 0.423s)
+M3-HELLO
+== [RAN] uname -a  (wall 0.404s)
+Unikraft unikraft 5.15.148-Ijiraq 0.21.0 x86_64 GNU/Linux
+== [RAN] date; date; id  (wall 0.434s)
+Sun Oct 18 18:01:38 UTC 2026
+Sun Oct 18 18:01:38 UTC 2026
+uid=0 gid=0
+== [RAN] wc -c /bin/busybox  (wall 0.531s)
+2357096 /bin/busybox
+== [RAN] sha256sum /bin/busybox  (wall 0.437s)
+7089e5d21b6a8a315364973ded6686129e9471c4ca7920fd7e457c1d4f2abdb9  /bin/busybox
+== [RAN] mkdir /tmp/d && echo ok  (wall 0.387s)
+ok
+== [RAN] ls /  (wall 0.417s)
+[1;34mbin[m  [1;34mdev[m  [1;34mtmp[m
+== [RAN] ls /bin/a*  (wall 0.402s)
+[1;32m/bin/acpid[m      [1;32m/bin/adduser[m    [1;32m/bin/arp[m        [1;32m/bin/awk[m
+[1;32m/bin/add-shell[m  [1;32m/bin/adjtimex[m   [1;32m/bin/arping[m
+[1;32m/bin/addgroup[m   [1;32m/bin/arch[m       [1;32m/bin/ascii[m
+== [CRASH] ls /bin > /tmp/l; wc -l /tmp/l  (wall 0.364s)
+[    0.216593] CRIT: [libposix_process] <deliver.c @  428> Cannot deliver SIGSEGV for pf at 0x308
+[    0.217864] CRIT: Unikraft Crash - Ijiraq (0.21.0)
+[    0.217981] CRIT:     _      
+== [CRASH] ls -1 / > /tmp/o; cat /tmp/o  (wall 0.366s)
+[    0.215155] CRIT: [libposix_process] <deliver.c @  428> Cannot deliver SIGSEGV for pf at 0x308
+[    0.216275] CRIT: Unikraft Crash - Ijiraq (0.21.0)
+[    0.216389] CRIT:     _      
+== [CRASH] true | true  (wall 0.400s)
+[    0.239531] CRIT: [libposix_process] <deliver.c @  428> Cannot deliver SIGSEGV for pf at 0xf
+[    0.240665] CRIT: Unikraft Crash - Ijiraq (0.21.0)
+[    0.240780] CRIT:     _      
+== [CRASH] echo x | cat  (wall 0.420s)
+[    0.232657] CRIT: [libposix_process] <deliver.c @  428> Cannot deliver SIGSEGV for pf at 0xf
+[    0.234023] CRIT: Unikraft Crash - Ijiraq (0.21.0)
+[    0.234150] CRIT:     _      
+== [CRASH] seq 3 | wc -l  (wall 0.373s)
+[    0.225525] CRIT: [libposix_process] <deliver.c @  428> Cannot deliver SIGSEGV for pf at 0xf
+[    0.226889] CRIT: Unikraft Crash - Ijiraq (0.21.0)
+[    0.226984] CRIT:     _      
+== [RAN] cat /proc/version  (wall 0.398s)
+cat: can't open '/proc/version': No such file or directory

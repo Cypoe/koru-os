@@ -1,0 +1,11 @@
+kernel 3016688 B (embedded initrd)
+initramfs cpio 2410696 B
+busybox 2357096 B sha256 7089e5d21b6a8a315364973ded6686129e9471c4ca7920fd7e457c1d4f2abdb9
+applet symlinks 401 entries incl. busybox
+ ELF 64-bit LSB pie executable, x86-64, version 1 (GNU/Linux), static-pie linked, BuildID[sha1]=7c1758d148ff6d7dca029ff0c81f7e888bc9ab52, for GNU/Linux 3.2.0, stripped
+unikraft stable archive (0.21.0)
+libelf archive
+gcc (Debian 14.2.0-19) 14.2.0
+ldd (Debian GLIBC 2.41-12+deb13u4) 2.41
+app-elfloader: Kraftfile "version: stable"; remote refs/heads/stable was 6ecbcd08d85b4688112a3b275a9c8446cf59e25d at build time (ls-remote, 2026-10-18; identity with the fetched archive not verified)
+lib-libelf: Kraftfile "version: stable"; remote refs/heads/stable was c03d4ceb22a2b9e9799238f9c277a14284d313ad at build time (same caveat)
