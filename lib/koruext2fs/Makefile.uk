@@ -1,0 +1,5 @@
+# koru-os ext2 read path for vfscore. Included from the application's Makefile.uk
+# (see experiments/m3-busybox/app/Makefile.uk): $(KORUEXT2FS_DIR) must point here,
+# and libext2core.a must have been built by build-core.sh.
+APPKORUOS_SRCS-y += $(KORUEXT2FS_DIR)/ext2fs_vfs.c
+APPKORUOS_ALIBS-y += $(KORUEXT2FS_DIR)/build/libext2core.a

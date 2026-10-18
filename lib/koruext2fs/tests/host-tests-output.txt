@@ -1,0 +1,9 @@
+PASS 1024 8192 none: probe: bs=1024 groups=1 inodes=2048 incompat=0x0 WALK PASS n=310
+PASS 1024 8192 filetype: probe: bs=1024 groups=1 inodes=2048 incompat=0x2 WALK PASS n=310
+PASS 1024 40960 filetype,sparse_super: probe: bs=1024 groups=5 inodes=2080 incompat=0x2 WALK PASS n=310
+PASS 2048 20480 filetype,sparse_super,large_file: probe: bs=2048 groups=2 inodes=2048 incompat=0x2 WALK PASS n=310
+PASS 4096 4096 filetype,sparse_super,large_file: probe: bs=4096 groups=1 inodes=2048 incompat=0x2 WALK PASS n=310
+PASS 4096 12000 none: probe: bs=4096 groups=1 inodes=2048 incompat=0x0 WALK PASS n=310
+PASS ext4 refused: PROBE REFUSED errno=95
+ext4 image unchanged
+HOST TESTS 7/7
