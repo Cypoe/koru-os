@@ -65,3 +65,36 @@ reproduces, it is reported upstream; the alternative is a posix_spawn-style exec
 | `evidence/` | session and case logs, sizes, pins, relevant kconfig, kraft build tail |
 
 Sizes: kernel 3,016,688 B including the embedded 2,410,696 B cpio; busybox 2,357,096 B.
+
+## B6: root cause and fix (2026-10-18, about 20:10 CEST, M under TCG)
+
+The reproducer `b6-repro/vrepro.c` is a static-pie glibc program. It calls vfork, then in
+the child does one of nothing, open+dup2, pipe+dup2 or close, and then execv
+`busybox echo`. Before the fix, only the plain vfork → execv case ran; the other three
+crashed.
+
+`qemu -d int` shows a #GP at `__internal_syscall_cancel+0xd`. That instruction is
+`mov %fs:0x10,%rbx; mov 0x308(%rbx),%eax`: glibc 2.41 reads THREAD_SELF from its TCB.
+In the vfork child, `%fs` pointed at the **Unikraft** TLS instead of glibc's TCB.
+
+The cause is in `lib/posix-process/clone.c`. For CLONE_VFORK it sets
+`child->tlsp = child->uktlsp`, which the scheduler switch needs. Then
+`arch/x86_64/clone.c:clone_setup_child_ctx()` installs `child->tlsp` as the child's
+*userland* FSBASE whenever it is non-zero. A plain execv in the child works only because
+it never touches `%fs`. The upstream `stable` and `staging` branches have the same code
+(checked 2026-10-18).
+
+The fix is `patches/unikraft-0.21-posix-process-vfork-fsbase.patch`: for CLONE_VFORK,
+build the child's return context with `tlsp` hidden, so the child keeps the parent's
+userland FSBASE, then restore `tlsp`.
+
+The second bug showed up once pipelines got further. hush on NOMMU re-execs itself for
+builtins inside pipelines and passes empty argv strings. app-elfloader then hits
+`UK_ASSERT(len)` in `infoblk_push`. The fix is `patches/app-elfloader-empty-arg.patch`:
+an empty string is pushed as a lone NUL.
+
+After both patches, `evidence/cases-2-b6-fixed.txt` shows all 23 cases running with no
+crash. That includes pipelines (`echo hello | tr a-z A-Z | wc -c` → 6), redirected
+external commands, command substitution, `sh -c "exit 3"; echo rc=$?` → `rc=3`, and all
+four vrepro modes. `build-image.sh` applies the patches idempotently after kraft's first
+fetch.

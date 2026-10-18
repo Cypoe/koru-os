@@ -1,0 +1,60 @@
+== [RAN] echo M3-HELLO  (wall 0.411s)
+M3-HELLO
+== [RAN] uname -a  (wall 0.401s)
+Unikraft unikraft 5.15.148-Ijiraq 0.21.0 x86_64 GNU/Linux
+== [RAN] date; date; id  (wall 0.415s)
+Sun Oct 18 18:08:44 UTC 2026
+Sun Oct 18 18:08:44 UTC 2026
+uid=0 gid=0
+== [RAN] wc -c /bin/busybox  (wall 0.475s)
+2357096 /bin/busybox
+== [RAN] sha256sum /bin/busybox  (wall 0.420s)
+7089e5d21b6a8a315364973ded6686129e9471c4ca7920fd7e457c1d4f2abdb9  /bin/busybox
+== [RAN] mkdir /tmp/d && echo ok  (wall 0.385s)
+ok
+== [RAN] ls /  (wall 0.398s)
+[1;34mbin[m  [1;34mdev[m  [1;34mtmp[m
+== [RAN] ls /bin/a*  (wall 0.383s)
+[1;32m/bin/acpid[m      [1;32m/bin/adduser[m    [1;32m/bin/arp[m        [1;32m/bin/awk[m
+[1;32m/bin/add-shell[m  [1;32m/bin/adjtimex[m   [1;32m/bin/arping[m
+[1;32m/bin/addgroup[m   [1;32m/bin/arch[m       [1;32m/bin/ascii[m
+== [RAN] ls /bin > /tmp/l; wc -l /tmp/l  (wall 0.423s)
+402 /tmp/l
+== [RAN] ls -1 / > /tmp/o; cat /tmp/o  (wall 0.397s)
+bin
+dev
+tmp
+== [RAN] true | true  (wall 0.416s)
+
+== [RAN] echo x | cat  (wall 0.420s)
+x
+== [RAN] seq 3 | wc -l  (wall 0.403s)
+3
+== [RAN] cat /proc/version  (wall 0.384s)
+cat: can't open '/proc/version': No such file or directory
+== [RAN] true | true; echo rc=$?  (wall 0.416s)
+rc=0
+== [RAN] echo hello | tr a-z A-Z | wc -c  (wall 0.414s)
+6
+== [RAN] x=$(echo sub); echo got:$x  (wall 0.406s)
+got:sub
+== [RAN] ls /bin | grep -c .  (wall 0.455s)
+402
+== [RAN] sh -c "exit 3"; echo rc=$?  (wall 0.403s)
+rc=3
+== [RAN] /bin/vrepro 0  (wall 0.413s)
+vrepro mode 0
+child-ok
+[plain] waitpid=3 exited=1 status=0
+== [RAN] /bin/vrepro 1  (wall 0.412s)
+vrepro mode 1
+[redirect] waitpid=3 exited=1 status=0
+[redirect] file: child-ok
+== [RAN] /bin/vrepro 2  (wall 0.417s)
+vrepro mode 2
+[pipe] parent read 9: child-ok
+[pipe] waitpid=3 exited=1 status=0
+== [RAN] /bin/vrepro 3  (wall 0.392s)
+vrepro mode 3
+child-ok
+[close] waitpid=3 exited=1 status=0

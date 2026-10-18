@@ -1,0 +1,23 @@
+--- a/lib/posix-process/clone.c	2026-10-18 20:06:51.046290900 +0200
++++ b/lib/posix-process/clone.c	2026-10-18 20:06:51.046290900 +0200
+@@ -392,6 +392,20 @@
+ 		    t, t->name ? child->name : "<unnamed>",
+ 		    child, child->name ? child->name : "<unnamed>", ret);
+ 
++#if CONFIG_LIBPOSIX_PROCESS_MULTIPROCESS
++	if (flags & CLONE_VFORK) {
++		/* koru-os B6: a vfork child resumes in the parent's userland
++		 * and must keep the parent's userland FSBASE (e.g., glibc's
++		 * TCB at %fs:0x10). child->tlsp is the Unikraft TLS (needed
++		 * for the scheduler switch); hide it while the child's return
++		 * context is built, so clone_setup_child_ctx() copies the
++		 * parent's FSBASE instead of installing the Unikraft TLS.
++		 */
++		child->tlsp = 0;
++		clone_setup_child_ctx(execenv, child, (__uptr)stack);
++		child->tlsp = child->uktlsp;
++	} else
++#endif /* CONFIG_LIBPOSIX_PROCESS_MULTIPROCESS */
+ 	clone_setup_child_ctx(execenv, child, (__uptr)stack);
+ 
+ 	uk_thread_set_runnable(child);

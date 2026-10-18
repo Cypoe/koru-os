@@ -1,0 +1,13 @@
+--- a/elf_ctx.c	2026-10-18 20:07:41.814290900 +0200
++++ b/elf_ctx.c	2026-10-18 20:07:41.814290900 +0200
+@@ -106,7 +106,9 @@
+ 	UK_ASSERT(ctx);
+ 	UK_ASSERT(ctx->sp);
+ 	UK_ASSERT(buf);
+-	UK_ASSERT(len);
++	/* koru-os B6: empty argv/envp strings are valid (len == 0);
++	 * hush on NOMMU re-execs itself with empty arguments.
++	 */
+ 
+ 	ctx->sp -= len + 1;
+ 	memcpy((void *)ctx->sp, buf, len);

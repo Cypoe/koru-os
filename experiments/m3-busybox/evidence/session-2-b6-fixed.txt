@@ -1,0 +1,26 @@
+Booting from ROM..Powered by Unikraft Ijiraq (0.21.0)
+~ # eecchhoo  MM33--HHEELLLLOO
+
+M3-HELLO
+~ # uunnaammee  --aa
+
+Unikraft unikraft 5.15.148-Ijiraq 0.21.0 x86_64 GNU/Linux
+~ # eecchhoo  $$((((66**77))))
+
+42
+~ # eecchhoo  kkoorruu  >>  //ttmmpp//ff;;  ccaatt  //ttmmpp//ff
+
+koru
+~ # mmkkddiirr  //ttmmpp//dd  &&&&  eecchhoo  mmkkddiirr--ookk
+
+mkdir-ok
+~ # iidd
+
+uid=0 gid=0
+~ # sshhaa225566ssuumm  //bbiinn//bbuussyybbooxx
+
+7089e5d21b6a8a315364973ded6686129e9471c4ca7920fd7e457c1d4f2abdb9  /bin/busybox
+~ # eecchhoo  xx  ||  ccaatt
+
+x
+~ # qemu-system-x86_64: terminating on signal 15 from pid 224015 (timeout)

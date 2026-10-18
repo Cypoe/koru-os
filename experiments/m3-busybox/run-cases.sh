@@ -22,4 +22,13 @@ true | true
 echo x | cat
 seq 3 | wc -l
 cat /proc/version
+true | true; echo rc=$?
+echo hello | tr a-z A-Z | wc -c
+x=$(echo sub); echo got:$x
+ls /bin | grep -c .
+sh -c "exit 3"; echo rc=$?
+/bin/vrepro 0
+/bin/vrepro 1
+/bin/vrepro 2
+/bin/vrepro 3
 CASES
