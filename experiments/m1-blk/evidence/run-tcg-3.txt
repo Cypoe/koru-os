@@ -1,0 +1,9 @@
+qemu exit=0 wall_s=0.26 accel=tcg
+cmp s0: equal
+cmp s1: equal
+cmp rest: equal
+serial: lifecycle complete
+871c79ca1d5c953d87946ce1e4e98d4097f0685ba6a37ee00903b4e09a12df80  /workspace/m1/unikraft/blk/tests/.unikraft/build/koru_qemu-x86_64
+44cea300367f8fadc12e029ddb1bbbeade58c84800f41c874db31687a4cb9da5  disk-before.img
+82f5f1aa56ef49d1263fea06aa9afc54e789ab0841e4a7806210084188435882  disk.img
+M1 PASS

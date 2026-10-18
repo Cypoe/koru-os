@@ -1,0 +1,11 @@
+Toolchain for M1, set up on the box 2026-10-18 ~19:33-19:36 CEST (Europe/Berlin).
+zig            0.15.2  zig-x86_64-linux-0.15.2.tar.xz sha256 02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239 (ziglang.org index)
+korulang/koru  3d81f837f63dc9eb0b5a5a6f96e17e09f3cc0aeb  (koruc built with 'zig build', 80,139,384 B binary)
+koru-libs      ff5cb559e1c00431a1bb36024871c760a9bdcbe9  (unikraft/ tree copied whole, depth kept)
+kraftkit       0.12.15 (3e55f74c57579b4169b3f2271a695b0b8b9966a3), kraft_0.12.15_linux_amd64.tar.gz checksum OK vs kraftkit_0.12.15_checksums.txt
+unikraft       core/unikraft:stable as pulled by kraft: archive refs-heads-stable.tar.gz sha256 a2b62fbd38c0cc5b43b930270e64f8f2fc872fba19354e68124785b0398da5b4;
+               image reports "Ijiraq (0.21.0)"; remote refs/heads/stable = 7351f8b563c9e6773da9fdd5bacde6ac91e32112 at 19:3x CEST (archive-to-commit identity not verified)
+gcc            gcc (Debian 14.2.0-19) 14.2.0
+qemu           QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+host           Linux 6.12.94+, Intel(R) Xeon(R) Processor, 8 vCPU
+apt            make flex bison libncurses-dev socat e2fsprogs strace (installed for this work)

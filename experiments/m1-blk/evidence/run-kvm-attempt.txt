@@ -1,0 +1,10 @@
+qemu exit=124 wall_s=60.006 accel=kvm
+cmp s0: equal
+expect-s1.bin got-s1.bin differ: byte 1, line 1
+cmp s1: DIFFERENT
+cmp rest: equal
+serial: lifecycle complete MISSING
+871c79ca1d5c953d87946ce1e4e98d4097f0685ba6a37ee00903b4e09a12df80  /workspace/m1/unikraft/blk/tests/.unikraft/build/koru_qemu-x86_64
+44cea300367f8fadc12e029ddb1bbbeade58c84800f41c874db31687a4cb9da5  disk-before.img
+44cea300367f8fadc12e029ddb1bbbeade58c84800f41c874db31687a4cb9da5  disk.img
+M1 FAIL

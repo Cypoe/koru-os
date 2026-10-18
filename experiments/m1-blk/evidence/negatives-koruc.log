@@ -1,0 +1,12 @@
+== io_skipped_health_check.k
+Error: error: undefined symbol: uk_blkdev_get
+error: undefined symbol: uk_blkdev_configure
+error: undefined symbol: uk_blkdev_queue_get_info
+== negative_device_never_discharged.k
+error[KORU030]: Resource 'dev' obligation <attached!> was not discharged. Call: configure
+== negative_read_after_stop.k
+error[KORU030]: Phantom state mismatch: expected '!unikraft.blk:running|!unikraft.blk:used' but got 'unikraft.blk:stopped!' for argument 'dev'
+== negative_release_skips_queue_close.k
+error[KORU030]: Phantom state mismatch: expected 'unikraft.blk:drained' but got 'unikraft.blk:stopped!' for argument 'dev'
+== negative_stop_without_transfer.k
+error[KORU030]: Phantom state mismatch: expected 'unikraft.blk:used' but got 'unikraft.blk:running!' for argument 'dev'
