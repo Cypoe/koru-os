@@ -179,6 +179,17 @@ the L2 arm.
   `posix-eventfd`, `posix-timerfd`, `posix-unixsocket`, `posix-mmap`.
 - **Absent:** no virtio-gpu and no virtio-input driver.
 
+**M2 route decision (2026-10-18, about 19:55 CEST).** The minimal ext2 driver is a
+Koru lift over `ukblkdev` (`koru/ext2`). Reasons:
+- No `unikraft/lib-lwext4` is reachable. Upstream lwext4 @ `58bcf89a` is GPL-2.0 by
+  default, so under R-SILO-1 it could only run inside a silo.
+- `unikraft/lib-fatfs` is an empty initial commit.
+- The LKL silo (DS1) needs a Unikraft host port that does not exist (Q25).
+
+The lift allocates real inodes and blocks, and the host's e2fsck and debugfs accept the
+result. It is deliberately narrow: one file, one group, direct blocks, and no vfscore
+yet. vfscore integration is the next step for M3.
+
 **DoD-2: real shell and real programs.**
 - **Arm.** L2 (`app-elfloader`), reference L1.
 - **Exists (C, Unikraft docs and catalog):**
@@ -286,9 +297,9 @@ means the test is first run against a Linux guest to produce the expected trace.
 |---|---|---|---|---|
 | M0 | cyberboot on bare metal | plex-os i686 | serial shows `plexus_boot.anim` frames, then `plex-os>` | **M** (`plexos-serial.log`) |
 | M1 | Koru-built Unikraft image reads and writes a sector | L2 native (koru-libs `unikraft/blk`) | guest writes pattern *P* to sector *s*; host `cmp` of `disk.img` at *s* equals *P*; serial shows the read-back bytes | **M (TCG), 2026-10-18**: 3/3 runs pass host `cmp`, image 194,176 B, 0.24–0.26 s wall (`experiments/m1-blk/`) |
-| DS0 | silo contract and refusal harness | L2 | a silo with an empty row manifest boots. Every call into it is refused and logged as `refused: <identity> silo=<id>`. A call with a forged or expired handle is refused. The host-side log check finds no `ENOSYS` without a refusal entry | host model **M** (5/5 zig tests, `experiments/ds0-silo/`); in-image D |
+| DS0 | silo contract and refusal harness | L2 | a silo with an empty row manifest boots. Every call into it is refused and logged as `refused: <identity> silo=<id>`. A call with a forged or expired handle is refused. The host-side log check finds no `ENOSYS` without a refusal entry | host model **M** (5/5 zig tests); **in-image M (TCG)**: `koruos/silo` Koru lift, 3/3 runs equal `expected.txt`; compile gates reject call-unbound, call-after-revoked, bind-twice (KORU030); leaks are auto-discharged by koruc, not rejected (`experiments/ds0-silo/`) |
 | DS1 | LKL blk/fs silo | L2 + silo:lkl (host ops on Unikraft, Q25) | silo mounts ext4 from virtio-blk via `blk.*` rows and exposes `fs.*`; DoD-1 test (M2) passes through it | D |
-| M2 | real FS allocates blocks (**DoD-1**) | L2: vfscore + ext2 driver, **or** DS1 | guest creates `/dod1` of *N* blocks, writes, `fsync`s, halts; host `e2fsck -fn` clean, `debugfs -R 'cat /dod1'` equals pattern, free-block count dropped by ≥ *N* | D |
+| M2 | real FS allocates blocks (**DoD-1**) | L2: vfscore + ext2 driver, **or** DS1 | guest creates `/dod1` of *N* blocks, writes, `fsync`s, halts; host `e2fsck -fn` clean, `debugfs -R 'cat /dod1'` equals pattern, free-block count dropped by ≥ *N* | **M (TCG), 2026-10-18**: minimal ext2 Koru lift (`koru/ext2`); 3/3 + 1 runs pass, e2fsck exit 0, free blocks −10, inodes −1 (`experiments/m2-ext2/`). Scope: one file, one group, direct blocks, no vfscore yet |
 | M3 | static busybox shell from the ext root | L2 `app-elfloader` (L1 trace first) | scripted serial session: `echo`, `ls /`, `cat /dod1`, `exit 3` → exit status 3 observed; refusal log empty or only by-design rows | D |
 | M4 | **T-CYB** (§0.2) | L2 (L1 trace first) | (a)–(e) of T-CYB | D; runs on the labelled stand-in until the newer boot-animator is pushed (Q18) |
 | M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | D |
