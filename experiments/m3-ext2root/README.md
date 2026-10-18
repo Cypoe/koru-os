@@ -1,6 +1,6 @@
 # M3 acceptance: busybox from the ext2 root (Unikraft 0.21.0, QEMU TCG)
 
-Status: **PASS 3/3 (M, TCG, 2026-10-18 between 20:35 and 20:40 CEST).**
+Status: **PASS 3/3 (M, TCG, 2026-10-18, runs 20:25–20:27 CEST).**
 `run-acceptance.sh` drives one disk image through two unikernels.
 
 1. **Host.** `mke2fs -t ext2 -b 1024 -I 128 -N 512 -O none -d root` builds an 8 MiB image

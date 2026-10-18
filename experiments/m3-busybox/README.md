@@ -1,7 +1,8 @@
 # M3 (started): static busybox on app-elfloader, Unikraft 0.21.0, QEMU TCG
 
-Status: **partial (M, TCG, 2026-10-18 about 20:00 CEST).** The M3 acceptance in
-DESIGN-0001 §0.4 is not met yet.
+Status: **superseded.** This was the partial M3 with an initrd root (about 20:00 CEST). B6 is fixed below;
+the full M3 acceptance from the ext2 root is in `experiments/m3-ext2root/` (PASS 3/3). The original status line
+read: the M3 acceptance in DESIGN-0001 §0.4 is not met yet.
 
 ## What runs (measured)
 
