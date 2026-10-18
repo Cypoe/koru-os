@@ -169,6 +169,16 @@ the L2 arm.
   `ftruncate`, `fallocate` (refusable). They bind to vfscore ops, which bind to the
   ext2 driver, which binds to `unikraft/blk` transfers (Appendix C.1).
 
+**Unikraft 0.21.0 core library list (V, as pulled by kraft 0.12.15, 2026-10-18).**
+- **Filesystems:** `vfscore`, `ramfs`, `9pfs`, `devfs`, `ukfs-ramfs`, `ukfs-devfs`,
+  `ukfs-virtiofs`, plus `drivers/virtio/fs`. There is **no ext2/ext4 or FAT** in the
+  core tree. `virtiofs` is a host bridge like 9P and does not satisfy DoD-1. Whether an
+  external lib provides ext or FAT is still open (Q16).
+- **Other relevant libraries:** `posix-tty` (serial and tty), `drivers/input/ukps2`
+  (PS/2 only), and `syscall_shim`, `posix-process`, `posix-futex`, `posix-poll`,
+  `posix-eventfd`, `posix-timerfd`, `posix-unixsocket`, `posix-mmap`.
+- **Absent:** no virtio-gpu and no virtio-input driver.
+
 **DoD-2: real shell and real programs.**
 - **Arm.** L2 (`app-elfloader`), reference L1.
 - **Exists (C, Unikraft docs and catalog):**
@@ -275,8 +285,8 @@ means the test is first run against a Linux guest to produce the expected trace.
 | M | slice | arm | acceptance test (pass condition) | status |
 |---|---|---|---|---|
 | M0 | cyberboot on bare metal | plex-os i686 | serial shows `plexus_boot.anim` frames, then `plex-os>` | **M** (`plexos-serial.log`) |
-| M1 | Koru-built Unikraft image reads and writes a sector | L2 native (koru-libs `unikraft/blk`) | guest writes pattern *P* to sector *s*; host `cmp` of `disk.img` at *s* equals *P*; serial shows the read-back bytes | C (README demo), not reproduced |
-| DS0 | silo contract and refusal harness | L2 | a silo with an empty row manifest boots. Every call into it is refused and logged as `refused: <identity> silo=<id>`. A call with a forged or expired handle is refused. The host-side log check finds no `ENOSYS` without a refusal entry | D |
+| M1 | Koru-built Unikraft image reads and writes a sector | L2 native (koru-libs `unikraft/blk`) | guest writes pattern *P* to sector *s*; host `cmp` of `disk.img` at *s* equals *P*; serial shows the read-back bytes | **M (TCG), 2026-10-18**: 3/3 runs pass host `cmp`, image 194,176 B, 0.24–0.26 s wall (`experiments/m1-blk/`) |
+| DS0 | silo contract and refusal harness | L2 | a silo with an empty row manifest boots. Every call into it is refused and logged as `refused: <identity> silo=<id>`. A call with a forged or expired handle is refused. The host-side log check finds no `ENOSYS` without a refusal entry | host model **M** (5/5 zig tests, `experiments/ds0-silo/`); in-image D |
 | DS1 | LKL blk/fs silo | L2 + silo:lkl (host ops on Unikraft, Q25) | silo mounts ext4 from virtio-blk via `blk.*` rows and exposes `fs.*`; DoD-1 test (M2) passes through it | D |
 | M2 | real FS allocates blocks (**DoD-1**) | L2: vfscore + ext2 driver, **or** DS1 | guest creates `/dod1` of *N* blocks, writes, `fsync`s, halts; host `e2fsck -fn` clean, `debugfs -R 'cat /dod1'` equals pattern, free-block count dropped by ≥ *N* | D |
 | M3 | static busybox shell from the ext root | L2 `app-elfloader` (L1 trace first) | scripted serial session: `echo`, `ls /`, `cat /dod1`, `exit 3` → exit status 3 observed; refusal log empty or only by-design rows | D |
@@ -1214,8 +1224,11 @@ or 9P reader.
     quickshell (§0.3).
 21. **LKL as a binding source.** *Closed (Fabian, DRAFT 5):* accepted, inside the
     slim driver-silo model only (§0.6, R-SILO-1..5).
-22. **Box resources.** *Closed (2026-10-18):* `/dev/kvm` access was granted to the box user.
-
+22. **Box resources.** *Updated 2026-10-18 ~19:37 CEST.* `/dev/kvm` is now
+    `crw-rw-rw-`, but creating a vCPU oopses the box kernel (`kvm_spurious_fault` in
+    `vmx_vcpu_create`, 6.12.94+). The same oops was already in the log before this
+    work. QEMU with `-accel kvm` produces no output, so KVM is unusable and all
+    measurements are TCG. Who can fix nested VMX on the box host?
 23. **`agents-design` integration.** Fabian's `agents-design` exists only as prose on his
     PC and is not available here. When it is, how does it shape the Koru-native
     declarative-UI track and the QML exemplar? This is an open item, not a DoD gate.
