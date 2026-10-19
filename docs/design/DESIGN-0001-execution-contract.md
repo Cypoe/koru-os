@@ -360,7 +360,7 @@ means the test is first run against a Linux guest to produce the expected trace.
 | M2 | real FS allocates blocks (**DoD-1**) | L2: vfscore + ext2 driver, **or** DS1 | guest creates `/dod1` of *N* blocks, writes, `fsync`s, halts; host `e2fsck -fn` clean, `debugfs -R 'cat /dod1'` equals pattern, free-block count dropped by ≥ *N* | **M (TCG), 2026-10-18**: minimal ext2 Koru lift (`koru/ext2`); 3/3 + 1 runs pass, e2fsck exit 0, free blocks −10, inodes −1 (`experiments/m2-ext2/`). Scope of the writer: one file, one group, direct blocks. Read path under vfscore since 2026-10-18 (`lib/koruext2fs`, host oracle 7/7; B7 closed) |
 | M3 | static busybox shell from the ext root | L2 `app-elfloader` (L1 trace first) | scripted serial session: `echo`, `ls /`, `cat /dod1`, `exit 3` → exit status 3 observed; refusal log empty or only by-design rows | **M (TCG), 2026-10-18, PASS 3/3**: M2 guest writes `/dod1` into an `mke2fs -d` busybox image, host `e2fsck -fn` clean; M3 guest mounts it through `koruext2fs` (vfscore, read-only) as `/` and runs `ls /`, `cat /dod1` (guest sha256 = pattern), a pipeline, `exit 3` → "init exited with status 3"; boot to exit 0.39–0.42 s wall (`experiments/m3-ext2root/`). Refusal-log clause N/A (no silo in this image). Fixed on the way: B6 (vfork FSBASE, empty argv), virtio ring destroy under LIBUKVMEM. Debt: root is read-only; `koru/ext2` (writer) and `ext2core.zig` (reader) duplicate parsing |
 | M4 | **T-CYB** (§0.2) | L2 (L1 trace first) | (a)–(d) gated, (e) open; frozen parameters in §0.2 "M4 acceptance for the stand-in" | **M (stand-in): (a)–(d) PASS 3/3 under TCG, 2026-10-19 12:55 CEST; (e) open** (`experiments/m4-cyb/README.md`); needed fixes B9, B10. Full T-CYB still waits for boot-animator (Q18) and a UTF-8 display path |
-| M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | D |
+| M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | D; stage M5a frozen below §0.4 |
 | DS2 | Kolibri driver silo, first driver | L2 + silo:kolibri (KolibriOS driver-service personality) | an unmodified KolibriOS `.sys` network or input driver (`RTL8139`/`pcnet32` on QEMU `rtl8139`/`pcnet`, or `ps2mouse4d`) loads in the silo. Its imports either bind to rows or are refused by name. `net.*` frames or `input.*` events cross the silo boundary (serial log) | D |
 | DS3 | GPU driver silo | silo:lkl `virtio_gpu` on `virtio-gpu-pci`, or silo:kolibri `vmwgfx` on `vmware-svga` | the silo exposes only the `kms.*` rows of Appendix C.3; M6 passes through it | D |
 | DS4 | input driver silo | silo:lkl `virtio_input` (evdev) or silo:kolibri `usbhid`/`ps2` translated to `input.*` | M7 passes through it | D |
@@ -376,6 +376,45 @@ screendumps. That twin is filed as oracle evidence and is never counted as a pas
 Order of risk: M2 and M3 are bounded engineering. M5 is gated by `fork` (Q19). DS1 and
 DS3 are gated by the LKL host port onto Unikraft and by device access from inside a
 silo (Q25). DS3 is the largest item in this note, and its size is unknown.
+
+**M5a acceptance: dynamic linking (fixed 2026-10-19, 13:15 CEST, before any acceptance run).**
+M5a is the first half of M5. It runs on the M3/M4 arm (Unikraft 0.21 + app-elfloader +
+`koruext2fs`, TCG only). It proves that app-elfloader's `PT_INTERP` side-load runs real
+dynamically linked programs from the ext2 root, under both dynamic loaders. Probes before
+this freeze found B12: every `execve()`d program got a 64 KiB stack, and GNU `wc` overflowed
+it. The arm is therefore rebuilt with `CONFIG_STACK_SIZE_PAGE_ORDER=7` (512 KiB).
+- **Image.** The init shell is `/bin/busybox` 1.37.0 built as a **dynamically linked** glibc
+  PIE, the same config as M3 minus `-static-pie`. The image also holds:
+  - `/lib64/ld-linux-x86-64.so.2`, plus `libc.so.6`, `libm.so.6`, `libresolv.so.2`,
+    `libselinux.so.1`, `libcap.so.2` and `libpcre2-8.so.0` from the build host (Debian 13,
+    glibc 2.41);
+  - `/lib/ld-musl-x86_64.so.1` (Debian musl 1.2.5);
+  - GNU coreutils `ls`, `wc`, `sha256sum`, `sort` and `head` from the build host, under
+    `/usr/bin`;
+  - two small test programs, `hello-musl` and `hello-glibc` (dynamic PIE);
+  - a data file `/etc/m5-data`.
+
+  Nothing in the image is committed.
+- **Session.** The kernel runs `/bin/busybox sh` interactively on the serial console. A
+  scripted session types each command after an `echo M5-Tn` marker; `exit 5` ends it.
+- **Gated checks.** Expected values are computed on the host from the same files.
+  - (m1) musl: `hello-musl a b` prints its line with `argc=3`, and the shell sees exit
+    status 42;
+  - (m2) glibc: `hello-glibc a` prints its line with `argc=2`, and the shell sees 42;
+  - (m3) GNU `ls /` lists exactly the host's `ls -1` of the image root;
+  - (m4) GNU `ls / | wc -l` prints the host count;
+  - (m5) the dynamic busybox shell runs a pipeline of dynamic busybox applets:
+    `ls / | wc -l` prints the same count;
+  - (m6) GNU `sha256sum /etc/m5-data` equals the host hash;
+  - (m7) GNU `sort /etc/m5-data | head -3` equals the host output;
+  - (m8) `exit 5` is reported as `init exited with status 5`;
+  - (d) every refusal-log row is in `experiments/m5-dyn/refused-by-design.txt` (rule as
+    in M4);
+  - (x) no `Unikraft Crash`; the disk is byte-identical before and after; `e2fsck -fn`
+    stays clean.
+- **Regression.** M3 acceptance and M4 (a)–(d) each pass 3/3 on the same kernel.
+- **Out of scope for M5a.** A musl-built busybox, `dlopen`, threads, and the remaining
+  DESIGN M5 wording (an `ash` with `fork`; hush is NOMMU/vfork, Q19).
 
 ### 0.5 Biggest risks
 
