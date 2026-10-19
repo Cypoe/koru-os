@@ -1,0 +1,37 @@
+ok   E1 begin/done: 
+ok   E2 fork refused: 
+ok   E3 empty bag: exit status 0: 
+ok   E4 empty bag: no child: lines: 
+ok   E5 grants: child sees fd/1 and TERM: 
+ok   E6 address-space grant refused: 
+ok   E7 path /etc/passwd refused for child: 
+ok   E8 revoke: epoch marked and write refused: 
+ok   E9 replace from parent refused: 
+ok   E10 detach: 
+ok   E11 posix_spawn compat lines: 
+ok   E12 vfork+execve compat + roster 0: 
+ok   E0 no CRIT/crash: 
+ok   M child CR3 activate: 
+ok   M hw parent-heap fault: 
+ok   M hw attenuation: 
+ok   M ELF run on child CR3 exits 0: 
+ok   G2 directmap slot stripped from child PT: 
+ok   G2 census: no undeclared parent-heap frame in any child PT: 74 censuses
+ok   G2 non-image leftovers stripped: 
+ok   G2 derive-time child PT = kernel image + grants only: 
+ok   G2 alias readable in parent (positive control): 
+ok   G2 alias faults under child CR3 (hw): 
+ok   G3 parent-heap-read -> SIGSEGV (status 139): 139
+ok   G3 parent-heap-write -> SIGSEGV (status 139): 139
+ok   G3 dm-alias-read -> SIGSEGV (status 139): 139
+ok   G3 fw-identity-read -> SIGSEGV (status 139): 139
+ok   G3 vga-identity-read -> SIGSEGV (status 139): 139
+ok   G3 ro-grant-write -> SIGSEGV (status 139): 139
+ok   G3 after-sleep-parent-heap -> SIGSEGV (status 139): 139
+ok   G3 ro-grant-read positive control (exit 0, value 0xa5): 
+ok   G3 only the positive control survived: 
+ok   G3 after-sleep child resumed on its CR3: 
+ok   G3 kill-with-reason lines (7) with classes: ['parent-mapped-ungranted', 'parent-mapped-ungranted', 'directmap-alias', 'parent-mapped-ungranted', 'parent-mapped-ungranted', 'parent-mapped-ungranted', 'parent-mapped-ungranted']
+ok   G3 signaled status seen by parent wait: 
+ok   G3 no stock SIGSEGV crash / kernel-context fault: 
+SPAWN-ELF PASS

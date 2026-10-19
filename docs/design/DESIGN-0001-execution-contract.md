@@ -2240,6 +2240,16 @@ and 5 need debugger iterations.
   created, so no behaviour change. M9+STAGE2 3/3, M3–M8b/M7b 3/3
   (`experiments/m9-hyprland/evidence/r1-step1/BOARD.txt`). Fixed on the way: malformed sched
   patch; `run-m9.sh` relative-init fallback (earlier evidence unaffected, init identical).
+- **Step 2 done (2026-10-19 ~23:40), shadow mode.** M9 kernel `5e799873…`: execve of a
+  process carrying spawn-compat's `KORU_CHILD_ROLE=foot` marker derives a domain (no
+  grants, `hyprland.children/foot`), binds the thread and builds the child PT plus an
+  ownership ledger fed by ukvmem map/unmap/set_attr hooks. **CR3 is never activated** in
+  this step (activation needs step 3's resolver): this is the measured boundary. Per run:
+  census undeclared 0 at derive and commit, 10 VMAs at execve, 151 owned maps,
+  Hyprland's maps unattributed, foot's wl_shm memfds (0x3e8000/0x3b4000) owned. M9+STAGE2+
+  `check-r1.py` 3/3, spawn-elf 3/3, m-spawn-mmu 3/3, M3–M8b/M7b 3/3
+  (`experiments/m9-hyprland/evidence/r1-step2/BOARD.txt`). Fixed: `uk_thread->priv`
+  collided with posix-timerfd → binding table. One exploratory boot disclosed, not counted.
 
 **Threat model, stated plainly.** Today's Spawn isolation is **fault isolation, not
 adversarial isolation.** Children run in **ring 0**: kernel `.data`/`.bss` stay RW in

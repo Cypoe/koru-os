@@ -46,6 +46,9 @@ struct ksp_mmu_domain {
 	 * metadata (thread/uktls/ectx/auxsp). Census reports anything else. */
 	struct { __vaddr_t va; __sz len; const char *label; } decl[16];
 	unsigned ndecl;
+	/* R1: shadow = PT + ownership maintained, CR3 never activated (step 2). */
+	int shadow;
+	unsigned nthreads;	/* bound threads (binding table, not t->priv) */
 };
 
 int ksp_mmu_derive(struct ksp_mmu_domain *d, struct uk_vas *parent_vas,
@@ -69,6 +72,11 @@ void ksp_mmu_destroy(struct ksp_mmu_domain *d);
 
 /* Bind a thread to a domain for always-on sched CR3 switch (4b). NULL = parent. */
 void ksp_mmu_bind_thread(struct uk_thread *t, struct ksp_mmu_domain *d);
+/* Domain of a thread (koruspawn binding table; uk_thread->priv is NOT used:
+ * posix-timerfd and others own it). NULL = parent. */
+struct ksp_mmu_domain *ksp_mmu_thread_dom(struct uk_thread *t);
+/* Called when the last bound thread of a domain terminates (weak). */
+void ksp_mmu_domain_orphaned(struct ksp_mmu_domain *d);
 /* Before ctx_switch: drop to parent PT so heap-backed thread ctx is reachable.
  * After ctx_switch (on resume): enter next thread's PT. First entry of a new
  * thread must also call ksp_mmu_activate (see child entry stubs). */

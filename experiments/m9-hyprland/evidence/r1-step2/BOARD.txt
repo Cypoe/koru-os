@@ -1,0 +1,32 @@
+R1 step 2 (2026-10-19, Europe/Berlin CEST; TCG only): foot gets its own domain at execve
+(SHADOW mode: domain + child PT + ownership ledger, CR3 never activated).
+Kernel m7-input_qemu-x86_64 sha256 5e799873acfc... (m7-input/build-image.sh, KORU_SPAWN_MMU=1
+KORU_SPAWN_DOM=1 defaults). New: lib/koruspawn/m9dom.c; patches
+experiments/m-spawn-mmu/patches/unikraft-0.21-vmem-owner-hooks.patch (lib/ukvmem: weak
+ksp_vmem_mapped/unmapped/attr after rc==0) and unikraft-0.21-execve-domain-hooks.patch
+(lib/posix-process execve: weak ksp_execve_begin/commit/abort).
+
+Policy: spawn-compat's hyprland.children entry injects KORU_CHILD_ROLE=foot; execve of a
+process carrying it derives a domain (no grants) and binds the thread. Marker can only ADD
+isolation; a domain is inherited across exec, never dropped.
+
+Gate
+  M9 + Q30 STAGE2 + check-r1.py step 2   3/3   run-{1,2,3}/ (check.txt, check-stage2.txt, check-r1.txt)
+    per run: 1 domain (/usr/bin/foot, hyprland.children/foot), census undeclared 0 at derive
+    and at commit, ledger at execve 10 VMAs / 0x136000 B (ELF images + stack), 151 owned
+    maps, Hyprland's own maps unattributed (11), wl_shm memfd slots 0x3e8000 + 0x3b4000
+    present as foot-owned VMAs, CR3 never activated, no child fault.
+  spawn-elf (kernel 5fd3c908...)          3/3   experiments/spawn-elf/evidence/r1-step2/
+  m-spawn-mmu gaps (kernel 249d0c0c...)   3/3   experiments/m-spawn-mmu/evidence/r1-step2/
+    (mmu.c/mmu.h changed: both re-run)
+  M3 M4 M5a M6 M7 M8a M8b M7b 3/3 each (24/24)  regress-m3-m8b-m7b.txt
+
+Fix found on the way: mmu.c stored the domain in uk_thread->priv, which posix-timerfd owns
+for its timer threads (foot uses timerfd). Replaced by a 64-slot binding table plus a
+uk_thread_inittab term hook that unbinds and destroys an orphaned domain. Step 1 was not
+affected (hooks returned early). mlog's stdout echo is compiled out in M9 (it wrote into the
+current process's fd 1).
+
+Disclosure: one exploratory boot (/workspace/r1s2-probe, earlier build 77653684 without the
+summary lines) is NOT counted; same facts, R1.7 could not be evaluated there.
+Shots (*.ppm), serial.raw and snap.bin are not committed (size; checked by check.py in-run).

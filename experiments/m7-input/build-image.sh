@@ -25,8 +25,14 @@ cp "$REPO"/lib/korumemfd/*.c "$REPO/lib/korumemfd/Makefile.uk" korumemfd/ # M9
 # KORU_SPAWN_MMU=0 rebuilds the pre-R1 kernel.
 if [ "${KORU_SPAWN_MMU:-1}" = 1 ]; then
   mkdir koruspawn && cp "$REPO/lib/koruspawn/mmu.c" "$REPO/lib/koruspawn/mmu.h" koruspawn/
+  M9DOM=""
+  if [ "${KORU_SPAWN_DOM:-1}" = 1 ]; then # R1 step 2+: execve domains (m9dom.c)
+    cp "$REPO/lib/koruspawn/m9dom.c" koruspawn/
+    M9DOM='APPKORUOS_SRCS-$(CONFIG_LIBUKPAGING) += $(KORUSPAWN_DIR)/m9dom.c'
+  fi
   printf '%s\n' '# staged by build-image.sh (KORU_SPAWN_MMU=1)' \
-    'APPKORUOS_SRCS-$(CONFIG_LIBUKPAGING) += $(KORUSPAWN_DIR)/mmu.c' \
+    'APPKORUOS_SRCS-$(CONFIG_LIBUKPAGING) += $(KORUSPAWN_DIR)/mmu.c' "$M9DOM" \
+    'APPKORUOS_CFLAGS-y += -DKORU_MLOG_NO_STDOUT' \
     'APPKORUOS_CINCLUDES-y += -I$(KORUSPAWN_DIR)' > koruspawn/Makefile.m9.uk
 fi
 if [ ! -d .unikraft/unikraft ]; then
@@ -67,6 +73,10 @@ if [ "${KORU_SPAWN_MMU:-1}" = 1 ]; then
   PM="$REPO/experiments/m-spawn-mmu/patches"
   ap $U $U/lib/uksched/include/uk/sched_impl.h "$PM/unikraft-0.21-sched-cr3-switch.patch" "M-SPAWN-MMU"
   ap $U $U/plat/native/arch/x86_64/except.c "$PM/unikraft-0.21-except-cr3-hooks.patch" "KORU_EXC_ENTER"
+  if [ "${KORU_SPAWN_DOM:-1}" = 1 ]; then # R1 step 2+
+    ap $U $U/lib/ukvmem/vmem.c "$PM/unikraft-0.21-vmem-owner-hooks.patch" "ksp_vmem_mapped"
+    ap $U $U/lib/posix-process/execve.c "$PM/unikraft-0.21-execve-domain-hooks.patch" "ksp_execve_begin"
+  fi
 fi
 rm -f .config.m7-input_qemu-x86_64 .unikraft/build/config
 UK_CFLAGS="-std=gnu17" kraft build --arch x86_64 --plat qemu --no-prompt --log-type basic

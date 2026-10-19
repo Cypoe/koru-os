@@ -1,0 +1,10 @@
+PASS R1.1 exactly one domain, created at execve of /usr/bin/foot by policy hyprland.children/foot -- [('1', '/usr/bin/foot', 'hyprland.children/foot', '0x72dfc000', 'shadow')]
+PASS R1.2 no refused domain
+PASS R1.3 derive census: no undeclared parent-heap alias -- ['0']
+PASS R1.4 execve commit census undeclared=0 -- [('0', 'shadow')]
+PASS R1.5 ledger at execve owns the loaded images + stack (>=5 VMAs) -- m9dom: ledger dom=1 phase=execve vmas=10 bytes=0x136000
+PASS R1.6 post-start mappings of foot attributed (>=100 owned maps) -- owned maps=151
+PASS R1.7 parent (Hyprland) mapped while the domain lived and was NOT attributed -- last unattributed_maps=11
+PASS R1.8 foot's wl_shm buffers (memfd slots >=1 MiB) appear as foot-owned VMAs -- slots=['0x3e8000', '0x3b4000']
+PASS R2.9 shadow mode: CR3 never activated, no child faults
+R1 STEP 2 PASS

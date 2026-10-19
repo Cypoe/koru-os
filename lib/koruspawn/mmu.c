@@ -107,7 +107,10 @@ static void mlog(const char *fmt, ...)
 	buf[n++] = '\n';
 	buf[n] = '\0';
 	uk_pr_err("%s", buf);
+#ifndef KORU_MLOG_NO_STDOUT
+	/* not in M9: stdout there is fd 1 of whichever process is current */
 	fputs(buf, stdout);
+#endif
 }
 
 struct uk_pagetable *ksp_mmu_parent_pt(void)
@@ -453,7 +456,7 @@ int ksp_mmu_activate(struct ksp_mmu_domain *d)
 {
 	int rc;
 
-	if (!d || !d->live)
+	if (!d || !d->live || d->shadow)
 		return -EINVAL;
 	{
 		unsigned long irqf = uk_lcpu_save_irqf();
@@ -490,13 +493,79 @@ int ksp_mmu_deactivate(struct ksp_mmu_domain *d)
 	return 0;
 }
 
+/* Thread -> domain binding. Kept here, not in uk_thread->priv, which other
+ * libraries own (posix-timerfd stores its timer node there). Cooperative
+ * scheduler, one CPU: callers are thread context or IRQ-disabled. */
+#define KSP_MAX_BIND 64
+static struct { struct uk_thread *t; struct ksp_mmu_domain *d; } g_bind[KSP_MAX_BIND];
+
+struct ksp_mmu_domain *ksp_mmu_thread_dom(struct uk_thread *t)
+{
+	unsigned i;
+
+	if (!t)
+		return NULL;
+	for (i = 0; i < KSP_MAX_BIND; i++)
+		if (g_bind[i].t == t)
+			return g_bind[i].d;
+	return NULL;
+}
+
+void ksp_mmu_domain_orphaned(struct ksp_mmu_domain *d) __attribute__((weak));
+
 void ksp_mmu_bind_thread(struct uk_thread *t, struct ksp_mmu_domain *d)
 {
+	unsigned i, freei = KSP_MAX_BIND;
+
 	if (!t)
 		return;
-	t->priv = d;
+	for (i = 0; i < KSP_MAX_BIND; i++) {
+		if (g_bind[i].t == t) {
+			struct ksp_mmu_domain *old = g_bind[i].d;
+
+			if (old == d)
+				return;
+			g_bind[i].t = NULL;
+			g_bind[i].d = NULL;
+			if (old && old->nthreads && --old->nthreads == 0 &&
+			    ksp_mmu_domain_orphaned)
+				ksp_mmu_domain_orphaned(old);
+			break;
+		}
+	}
+	if (!d) {
+		mlog("mmu: unbind thread=%p", (void *)t);
+		return;
+	}
+	for (i = 0; i < KSP_MAX_BIND; i++)
+		if (!g_bind[i].t) {
+			freei = i;
+			break;
+		}
+	if (freei == KSP_MAX_BIND) {
+		mlog("mmu: bind thread=%p REFUSED (table full)", (void *)t);
+		return;
+	}
+	g_bind[freei].t = t;
+	g_bind[freei].d = d;
+	d->nthreads++;
 	mlog("mmu: bind thread=%p domain=%p", (void *)t, (void *)d);
 }
+
+/* A terminating thread drops its binding (a recycled uk_thread must never
+ * inherit a stale domain). */
+static int ksp_mmu_thread_init(struct uk_thread *child __unused,
+			       struct uk_thread *parent __unused)
+{
+	return 0;
+}
+
+static void ksp_mmu_thread_term(struct uk_thread *child)
+{
+	if (ksp_mmu_thread_dom(child))
+		ksp_mmu_bind_thread(child, NULL);
+}
+UK_THREAD_INIT_PRIO(ksp_mmu_thread_init, ksp_mmu_thread_term, UK_PRIO_LATEST);
 
 void ksp_mmu_sched_switch(struct uk_thread *next)
 {
@@ -526,8 +595,8 @@ void ksp_mmu_sched_arrive(void)
 	t = uk_thread_current();
 	if (!t)
 		return;
-	d = (struct ksp_mmu_domain *)t->priv;
-	if (!d || !d->live)
+	d = ksp_mmu_thread_dom(t);
+	if (!d || !d->live || d->shadow)
 		return;
 	if (g_active_dom == d)
 		return;
@@ -670,7 +739,7 @@ static void ksp_mmu_syscall_exit(struct uk_syscall_exit_ctx *ctx)
 	(void)ctx;
 	if (!t)
 		return;
-	d = (struct ksp_mmu_domain *)t->priv;
+	d = ksp_mmu_thread_dom(t);
 	if (d && d->live && d->sys_left) {
 		d->sys_left = 0;
 		ksp_mmu_sched_arrive();

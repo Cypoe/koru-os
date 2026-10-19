@@ -1,0 +1,4 @@
+128-byte inodes cannot handle dates beyond 2038 and are deprecated
+image blocks=410072
+qemu exit=0 wall_s=54.046
+snap bytes=3072

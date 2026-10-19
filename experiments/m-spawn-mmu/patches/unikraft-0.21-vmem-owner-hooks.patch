@@ -1,0 +1,75 @@
+--- a/lib/ukvmem/vmem.c
++++ b/lib/ukvmem/vmem.c
+@@ -504,7 +504,7 @@
+ 	vmem_vma_unmap_and_free(end);
+ }
+ 
+-int uk_vma_unmap(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
++static int __koru_uk_vma_unmap(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
+ 		 unsigned long flags)
+ {
+ 	struct uk_vma *vma_start = __NULL, *vma_end;
+@@ -601,7 +601,7 @@
+ 	return 0;
+ }
+ 
+-int uk_vma_map(struct uk_vas *vas, __vaddr_t *vaddr, __sz len,
++static int __koru_uk_vma_map(struct uk_vas *vas, __vaddr_t *vaddr, __sz len,
+ 	       unsigned long attr, unsigned long flags, const char *name,
+ 	       const struct uk_vma_ops *ops, void *args)
+ {
+@@ -835,7 +835,7 @@
+ 	vmem_vma_try_merge_with_prev(end);
+ }
+ 
+-int uk_vma_set_attr(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
++static int __koru_uk_vma_set_attr(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
+ 		    unsigned long attr, unsigned long flags)
+ {
+ 	struct uk_vma *vma_start = __NULL, *vma_end;
+@@ -1132,3 +1132,45 @@
+ 				UK_PAGING_PAGE_FLAG_SIZE(lvl) | flags, &mapx);
+ }
+ #endif /* CONFIG_LIBUKPAGING */
++
++/* koru-os M-SPAWN-MMU R1: VMA ownership hooks. Weak and undefined unless
++ * lib/koruspawn (m9dom.c) is linked; called only after a successful operation
++ * so a domain's ledger never records a failed map. */
++void ksp_vmem_mapped(struct uk_vas *vas, __vaddr_t va, __sz len,
++		     unsigned long attr, const char *name) __attribute__((weak));
++void ksp_vmem_unmapped(struct uk_vas *vas, __vaddr_t va, __sz len)
++	__attribute__((weak));
++void ksp_vmem_attr(struct uk_vas *vas, __vaddr_t va, __sz len,
++		   unsigned long attr) __attribute__((weak));
++
++int uk_vma_map(struct uk_vas *vas, __vaddr_t *vaddr, __sz len,
++	       unsigned long attr, unsigned long flags, const char *name,
++	       const struct uk_vma_ops *ops, void *args)
++{
++	int rc = __koru_uk_vma_map(vas, vaddr, len, attr, flags, name, ops,
++				   args);
++
++	if (rc == 0 && ksp_vmem_mapped)
++		ksp_vmem_mapped(vas, *vaddr, len, attr, name);
++	return rc;
++}
++
++int uk_vma_unmap(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
++		 unsigned long flags)
++{
++	int rc = __koru_uk_vma_unmap(vas, vaddr, len, flags);
++
++	if (rc == 0 && ksp_vmem_unmapped)
++		ksp_vmem_unmapped(vas, vaddr, len);
++	return rc;
++}
++
++int uk_vma_set_attr(struct uk_vas *vas, __vaddr_t vaddr, __sz len,
++		    unsigned long attr, unsigned long flags)
++{
++	int rc = __koru_uk_vma_set_attr(vas, vaddr, len, attr, flags);
++
++	if (rc == 0 && ksp_vmem_attr)
++		ksp_vmem_attr(vas, vaddr, len, attr);
++	return rc;
++}
