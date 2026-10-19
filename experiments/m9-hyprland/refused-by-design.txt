@@ -1,5 +1,5 @@
 # M9 (h5): refusal-log rows accepted as refused-by-design (same rule and format as M7:
-# <name><TAB><reason>; rows not listed fail the run). Written 2026-10-19 17:50 CEST from the
+# <name><TAB><reason>; rows not listed fail the run). Written 2026-10-19 17:42 CEST (commit 5f94950) from the
 # uncounted rehearsals (/workspace/m9r3, m9r4), before any counted acceptance run.
 brk	glibc malloc falls back to mmap when brk is refused; all programs allocate normally (M3-M8b)
 rseq	glibc 2.35+ runs without rseq when the kernel refuses it (__rseq_size stays 0)

@@ -1,0 +1,1 @@
+kernel sha256 595f8c052016e5a8ead7b6c44bc953c9006bd86b902244e305e0035aa5a9f369 (m7-input_qemu-x86_64 built from 5f94950 by experiments/m7-input/build-image.sh, W=/workspace/m9k4)

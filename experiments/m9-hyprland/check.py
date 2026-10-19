@@ -3,7 +3,7 @@
 Usage: check.py <run dir> <refused-by-design.txt>
 Run dir from run-m9.sh: serial.log, shot-foot.ppm (screendump after the exec dispatch, once
 foot is mapped), shot.ppm (final), snap.bin (korusnap stream). Decisions fixed 2026-10-19
-17:50 CEST before the first counted run (see DESIGN-0001):
+17:42 CEST (commit 5f94950) before the first counted run (see DESIGN-0001):
   h1: the socket is evidenced by Hyprland's "Hypr socket started at $XDG_RUNTIME_DIR/hypr/<sig>/
       .socket.sock" plus hyprctl connecting to it (koru-os unix sockets have no fs node), and the
       monitors JSON lists the bochs connector (korukms names it Virtual-1, 1280x800).

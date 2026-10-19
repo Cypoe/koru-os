@@ -1,0 +1,11 @@
+128-byte inodes cannot handle dates beyond 2038 and are deprecated
+mkfs e2fsck exit=0 (koru-root: 488/2048 files (10.9% non-contiguous), 215507/262144 blocks)
+qemu exit=0 wall_s=26.273 (boot to poweroff)
+PASS (c1) kmscube: EGL 1.5 Mesa, llvmpipe, >=3 progress lines, 149 frames, exit 0, 150 flips: 6 progress lines, last ('149', '10.417711', '14.302567')
+PASS (c2) two screendumps 1 s apart: 1280x800, grey background, cube 5-50 %, not black, differ >= 1 %: 1280x800 non-grey [200455, 197743] black [1, 0] differing 206261
+PASS (c3) refusal log classified: 19 rows, names ['REFUSED DRM_IOCTL_MODE_ADDFB2 format 0x34325258 flags 0x2', 'STUBBED __uk_syscall_r_prctl', 'STUBBED __uk_syscall_r_sched_getaffinity', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'rseq', 'set_robust_list']
+PASS (c4) Mesa messages only the classified ones: ['MESA-LOADER: failed to retrieve device information', 'kmsro: driver missing']
+PASS (x) no Unikraft Crash, init exit 0
+CHECKS PASS
+PASS (x) disk unchanged, e2fsck clean
+M8b RUN PASS

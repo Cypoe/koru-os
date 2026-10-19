@@ -1,0 +1,9 @@
+PASS (h1) compositor running: IPC socket under $XDG_RUNTIME_DIR/hypr/ and monitors lists the bochs connector: socket yes, monitors ['Virtual-1']
+FAIL (h2a) frozen trigger hyprctl dispatch exec foot returns ok: [   18.196955] ERR:  [libposix_process] <clone.c @  216> CLONE_VM not set: Multiple address spaces are not supported; error: =[C]:-1: Failed to start process; rc=7
+PASS (h2b) screendump shows the foot window (bounding box): box 1238x758 at 22,22 cover 0.92 fill 1.00
+PASS (h3) /tmp/dod3 recovered by the host from korusnap == b'DOD3\n': b'DOD3\n'
+PASS (h4) hyprctl -j clients lists class foot: ['foot']
+PASS (h5) refusal log classified: 215 rows, 17 names
+PASS (x) no Unikraft Crash
+PASS (x) disk policy: root mounted read-only, snapshot written
+CHECKS FAIL
