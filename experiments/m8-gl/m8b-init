@@ -1,0 +1,7 @@
+# M8b init (koru-os and L1): unmodified kmscube on /dev/dri/card0 (GBM surface, legacy KMS).
+# kmscube's legacy loop select()s on stdin too and quits when it becomes readable, so stdin
+# is an idle pipe (as for modetest in M6); kmscube ends by its frame count.
+echo "m8b-init: start"
+export MESA_SHADER_CACHE_DISABLE=true
+sleep ${KMSCUBE_SLEEP:-60} | /usr/bin/kmscube -D /dev/dri/card0 -c ${KMSCUBE_FRAMES:-120}
+echo "m8b-init: kmscube exit status $?"

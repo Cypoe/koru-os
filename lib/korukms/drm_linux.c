@@ -5,6 +5,9 @@
  * Serves the legacy-KMS and dumb-buffer subset of the DRM uAPI on top of the
  * kms.* rows (kms_rows.h). One CRTC, one encoder, one connector, one primary
  * plane; XRGB8888 dumb buffers carved out of the provider's kms.vram.
+ * M8b adds legacy page flip with DRM_MODE_PAGE_FLIP_EVENT: the flip takes effect at
+ * once (no vblank wait; there is no vblank interrupt on bochs-display) and its
+ * DRM_EVENT_FLIP_COMPLETE is read() from the fd, with poll/select/epoll readiness.
  * Every ioctl outside the subset is refused loudly:
  *   koru-os: REFUSED linux.ioctl.<name> (kms)
  * and returns the errno a Linux driver without that feature returns.
@@ -19,6 +22,13 @@
 #include <vfscore/file.h>
 #include <vfscore/vnode.h>
 #include <vfscore/dentry.h>
+#include <vfscore/uio.h>
+#include <vfscore/eventpoll.h>
+#include <sys/epoll.h>
+#include <fcntl.h>
+#include <uk/list.h>
+#include <uk/wait.h>
+#include <uk/plat/time.h>
 #include "kms_rows.h"
 #include "drm_uapi.h"
 
@@ -44,7 +54,19 @@ static struct {
 	uint32_t crtc_fb, crtc_x, crtc_y;
 	int mode_valid;
 	struct drm_mode_modeinfo mode;
+	/* M8b: pending DRM events (flip complete), read() by the client */
+	struct kms_vblank_event { uint32_t type, length; uint64_t user_data;
+		uint32_t tv_sec, tv_usec, sequence, crtc_id; } evq[8];
+	unsigned int ev_head, ev_tail;
+	uint32_t flip_seq;
+	unsigned long flips;
+	struct uk_waitq wq;
+	struct uk_list_head ecbs;
 } K;
+_Static_assert(sizeof(((struct kms_vblank_event *)0)[0]) == 32, "drm_event_vblank");
+#define DRM_EVENT_FLIP_COMPLETE 0x02
+#define DRM_MODE_PAGE_FLIP_EVENT 0x01
+struct kms_page_flip { uint32_t crtc_id, fb_id, flags, reserved; uint64_t user_data; };
 
 static const char *drm_nr_name(unsigned nr)
 {
@@ -466,6 +488,55 @@ static int kms_ioctl(struct device *dev __unused, unsigned long cmd, void *arg)
 		f->used = 0;
 		return 0;
 	}
+	case DRM_NR_MODE_PAGE_FLIP: {
+		struct kms_page_flip *pf = arg;
+		struct drm_mode_crtc c;
+		struct uk_list_head *it;
+		struct fb *f;
+		__nsec t;
+		int rc;
+
+		if (pf->crtc_id != ID_CRTC)
+			return ENOENT;
+		if (pf->flags & ~DRM_MODE_PAGE_FLIP_EVENT) {
+			char w[24];
+
+			snprintf(w, sizeof(w), "flags 0x%x", pf->flags);
+			return refuse(cmd, w, EINVAL);
+		}
+		if (!K.mode_valid)
+			return EINVAL;	/* Linux: CRTC not active */
+		f = fb_get(pf->fb_id);
+		if (!f)
+			return ENOENT;
+		if (f->w < K.mode.hdisplay || f->h < K.mode.vdisplay)
+			return EINVAL;
+		if ((pf->flags & DRM_MODE_PAGE_FLIP_EVENT)
+		    && K.ev_head - K.ev_tail >= 8)
+			return EBUSY;	/* events not read: like a flip still pending */
+		memset(&c, 0, sizeof(c));
+		c.crtc_id = ID_CRTC; c.fb_id = f->id; c.x = 0; c.y = 0;
+		c.mode = K.mode; c.mode_valid = 1;
+		rc = do_setcrtc(&c);
+		if (rc)
+			return rc;
+		K.flips++; K.flip_seq++;
+		if (pf->flags & DRM_MODE_PAGE_FLIP_EVENT) {
+			struct kms_vblank_event *e = &K.evq[K.ev_head % 8];
+
+			t = ukplat_monotonic_clock();
+			*e = (struct kms_vblank_event){ DRM_EVENT_FLIP_COMPLETE,
+				sizeof(*e), pf->user_data, t / 1000000000ULL,
+				(t % 1000000000ULL) / 1000, K.flip_seq, ID_CRTC };
+			K.ev_head++;
+			uk_waitq_wake_up(&K.wq);
+			uk_list_for_each(it, &K.ecbs)
+				eventpoll_signal(uk_list_entry(it, struct eventpoll_cb,
+							       cb_link),
+						 EPOLLIN | EPOLLRDNORM);
+		}
+		return 0;
+	}
 	case DRM_NR_MODE_DIRTYFB: {
 		struct drm_mode_fb_dirty_cmd *d = arg;
 
@@ -481,6 +552,45 @@ static int kms_ioctl(struct device *dev __unused, unsigned long cmd, void *arg)
 	}
 }
 
+static int kms_read(struct device *dev __unused, struct uio *uio, int ioflags)
+{
+	int rc;
+
+	if (K.ev_head == K.ev_tail) {
+		if (ioflags & O_NONBLOCK)
+			return EAGAIN;
+		uk_waitq_wait_event(&K.wq, K.ev_head != K.ev_tail);
+	}
+	/* Linux drm_read: whole events only; EINVAL if the first does not fit */
+	if (uio->uio_resid < (ssize_t)sizeof(K.evq[0]))
+		return EINVAL;
+	while (K.ev_head != K.ev_tail
+	       && uio->uio_resid >= (ssize_t)sizeof(K.evq[0])) {
+		rc = vfscore_uiomove(&K.evq[K.ev_tail % 8], sizeof(K.evq[0]), uio);
+		if (rc)
+			return rc;
+		K.ev_tail++;
+	}
+	return 0;
+}
+
+static void kms_ecb_unregister(struct eventpoll_cb *ecb)
+{
+	uk_list_del(&ecb->cb_link);
+}
+
+static int kms_poll(struct device *dev __unused, unsigned int *revents,
+		    struct eventpoll_cb *ecb)
+{
+	*revents = (K.ev_head != K.ev_tail ? (EPOLLIN | EPOLLRDNORM) : 0)
+		   | EPOLLOUT | EPOLLWRNORM;
+	if (ecb && !ecb->unregister) {
+		ecb->unregister = kms_ecb_unregister;
+		uk_list_add_tail(&ecb->cb_link, &K.ecbs);
+	}
+	return 0;
+}
+
 static int kms_open(struct device *dev __unused, int mode __unused)
 {
 	return 0;
@@ -488,15 +598,20 @@ static int kms_open(struct device *dev __unused, int mode __unused)
 
 static int kms_close(struct device *dev __unused)
 {
+	K.ev_tail = K.ev_head;	/* Linux drops a closing client's pending events */
+	if (K.flips)
+		uk_pr_err("koru-os: INFO kms: card0 closed after %lu page flips\n",
+			  K.flips);
 	return 0;
 }
 
 static struct devops kms_devops = {
 	.open = kms_open,
 	.close = kms_close,
-	.read = (devop_read_t)devop_eperm,
+	.read = kms_read,
 	.write = (devop_write_t)devop_eperm,
 	.ioctl = kms_ioctl,
+	.poll = kms_poll,	/* M8b; needs the M7 devfs poll patch */
 };
 
 static struct driver kms_drv = {
@@ -514,6 +629,8 @@ int kms_rows_bind(struct kms_provider *p)
 	K.p = p;
 	K.next_handle = 1;
 	K.next_fb = FB_ID_BASE;
+	uk_waitq_init(&K.wq);
+	UK_INIT_LIST_HEAD(&K.ecbs);
 	rc = device_create(&kms_drv, "dri/card0", D_CHR, &K.dev);
 	if (rc)
 		return -rc;

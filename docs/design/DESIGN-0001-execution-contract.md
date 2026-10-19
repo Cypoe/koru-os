@@ -366,7 +366,7 @@ means the test is first run against a Linux guest to produce the expected trace.
 | DS4 | input driver silo | silo:lkl `virtio_input` (evdev) or silo:kolibri `usbhid`/`ps2` translated to `input.*` | M7 passes through it | D |
 | M6 | KMS scanout of a dumb buffer | L2 + DS3 (L1 trace first); M6 uses a native provider instead ("M6 decision" below, Q28) | libdrm `modetest -s <conn>:<mode>` (or equivalent) draws a test pattern; screendump pixel check at known coordinates; frozen parameters in "M6 acceptance" below | **M (native provider): PASS 3/3 under TCG, 2026-10-19 13:36 CEST**: `kmsdumb` (raw ioctls, two dumb buffers, two `SETCRTC`) and unmodified libdrm `modetest -M korukms -s Virtual-1:1024x768`; all three screendumps 0 of 786,432 pixels off the independent references, and byte-identical to the L1 `bochs-drm` twin; M3/M4/M5a regressions 3/3 (`experiments/m6-kms/README.md`). Not through DS3 (Q28); no atomic, properties or vblank events yet |
 | M7 | input | L2 + DS4; M7 uses a native provider instead ("M7 decision" below, Q28) | QMP `input-send-event` key events appear in `libinput debug-events` on serial; split into M7a (evdev uAPI, frozen in "M7a acceptance") and M7b (libinput) | **M7a (native i8042 provider): PASS 3/3 under TCG, 2026-10-19 13:57 CEST**: 54/54 evdump events and unmodified `evtest` events equal the derived sequence and the L1 `atkbd` twin; M3/M4/M5a/M6 regressions 3/3 (`experiments/m7-input/README.md`). **M7b open** (B15: no sysfs/udev for libinput). Not through DS4 (Q28) |
-| M8 | GL on KMS | L2 + DS3 + Mesa llvmpipe/`kms_swrast` in userspace | `kmscube` runs; two screendumps 1 s apart differ, and both are non-black; split into M8a (offscreen EGL/GBM, frozen in "M8a acceptance") and M8b (kmscube) | **M8a: PASS 3/3 under TCG, 2026-10-19 14:15 CEST**: unmodified Mesa 25.0.7 llvmpipe (LLVM 19.1.7) renders offscreen via EGL surfaceless and via EGL on GBM over `/dev/dri/card0`; frame hashes equal the L1 twin's, probe pixels as derived (`experiments/m8-gl/README.md`). **M8b (kmscube) open**: GBM scanout, page flip and flip events not served yet |
+| M8 | GL on KMS | L2 + DS3 + Mesa llvmpipe/`kms_swrast` in userspace | `kmscube` runs; two screendumps 1 s apart differ, and both are non-black; split into M8a (offscreen EGL/GBM, frozen in "M8a acceptance") and M8b (kmscube) | **M8a: PASS 3/3 under TCG, 2026-10-19 14:15 CEST**: unmodified Mesa 25.0.7 llvmpipe (LLVM 19.1.7) renders offscreen via EGL surfaceless and via EGL on GBM over `/dev/dri/card0`; frame hashes equal the L1 twin's, probe pixels as derived (`experiments/m8-gl/README.md`). M8b (kmscube) frozen 14:24 |
 | M9 | **DoD-3**: Hyprland + foot | L2 + DS3 + DS4 | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | D |
 | M10 | **DoD-4**: QML exemplar | same as M9 | a quickshell bar on a layer-shell surface is visible in a screendump; editing its QML changes the next screendump without a restart | D |
 
@@ -592,6 +592,43 @@ compiled-in `/usr/lib/x86_64-linux-gnu/{gbm,dri}` paths; GBM has no pbuffer conf
 - **Not in M8a.** M8b (`kmscube`, GBM scanout surfaces, page flip and its events), DS3,
   llvmpipe with rasterizer threads (needs a second vCPU), the Mesa shader cache
   (`MESA_SHADER_CACHE_DISABLE=true`), GL desktop profiles, virgl.
+
+**M8b acceptance: `kmscube` on KMS (fixed 2026-10-19, 14:24 CEST, before any acceptance run).**
+This is the table's M8 criterion. Probe boots before this freeze found: kmscube's legacy loop
+`select()`s on stdin as well and quits when it is readable (the serial console always is), so
+stdin is an idle pipe, as for modetest in M6; and the M6 personality had no page flip.
+- **Arm.** The M7a arm with `lib/korukms` extended (`drm_linux.c`): legacy
+  `DRM_IOCTL_MODE_PAGE_FLIP` with `DRM_MODE_PAGE_FLIP_EVENT`, `read()` of
+  `DRM_EVENT_FLIP_COMPLETE` (whole 32-byte events, `O_NONBLOCK`), and poll/select readiness on
+  `/dev/dri/card0` (through the M7 devfs poll patch). The flip takes effect at once and its
+  event is queued at once: bochs-display has no vblank interrupt, so there is no 60 Hz pacing.
+  Built by `experiments/m7-input/build-image.sh` with `W=/workspace/m8kclean`.
+- **Program.** Debian `kmscube` 0.0.0~git20210103 unmodified (with its gstreamer and libpng
+  dependencies from Debian 13), on the M8a GL userland (`mkroot.sh … <kmscube root>`):
+  `sleep 25 | kmscube -D /dev/dri/card0 -c 150` from `/etc/m8b-init`, smooth-shaded cube on a
+  GBM surface (`kms_swrast`, llvmpipe), legacy `SETCRTC` then one page flip per frame.
+- **Screendumps.** `shots.py`: QMP `screendump` 1 s after kmscube's first `Rendered` line and
+  again 1 s later.
+- **Gated checks** (`experiments/m8-gl/check-m8b.py`):
+  - (c1) EGL 1.5, vendor Mesa Project, renderer `llvmpipe (LLVM 19.1.7, …)`, `Using modifier`,
+    at least 3 `Rendered` lines, the last one at 149 frames, exit status 0, and the personality
+    reports 150 page flips at close;
+  - (c2) both screendumps are 1280×800 (the EDID preferred mode, also chosen on L1), grey
+    background 80 80 80 at (0,0), 5–50 % non-grey pixels (the cube), under 1 % black pixels,
+    and the two differ in at least 1 % of the pixels (the cube turned);
+  - (c3) every refusal-log row is in `refused-by-design.txt` (new: `ADDFB2` with
+    `DRM_MODE_FB_MODIFIERS`, refused with `EINVAL` as on L1 `bochs-drm`; kmscube falls back);
+  - (c4) the only Mesa messages are the two classified in M8a; (x) no crash, init exit 0, disk
+    unchanged, `e2fsck` clean.
+- **Regression.** The kernel changed (`drm_linux.c`), so M3, M4 (a)–(d), M5a, M6, M7a and M8a
+  each run 3/3 on it.
+- **L1 twin (oracle, not a pass).** Same userland, same command and `shots.py` on Debian
+  6.12.113 + `bochs-drm` (`run-l1-m8b.sh`), first run 2026-10-19 14:24 CEST: the same mode and
+  messages (`Modifiers failed!` too), 149 frames, (c2) holds on its screendumps; 150
+  `pselect6` and 327 `ioctl` calls. Known difference: Linux paces flips to vblank and reaches
+  about 20 fps, koru-os about 14 fps under the same TCG (not gated).
+- **Not in M8b.** Vblank pacing and `DRM_IOCTL_WAIT_VBLANK`, atomic KMS, modifiers, DS3,
+  multi-threaded llvmpipe.
 
 ### 0.5 Biggest risks
 

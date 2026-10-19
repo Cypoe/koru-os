@@ -1,0 +1,12 @@
+#!/bin/busybox sh
+# M8b L1 oracle init (Linux 6.12 Debian kernel, bochs-drm), same kmscube invocation.
+/bin/busybox --install -s /bin
+mount -t devtmpfs dev /dev; mount -t proc proc /proc; mount -t sysfs sys /sys
+for m in $(cat /modorder.txt); do insmod /ko/$m.ko || echo "l1-init: insmod $m failed"; done
+sleep 1
+export MESA_SHADER_CACHE_DISABLE=true
+echo "m8b-init: start"
+sleep 25 | strace -f -c -o /tmp/s.txt /usr/bin/kmscube -D /dev/dri/card0 -c 150
+echo "m8b-init: kmscube exit status $?"
+echo "==== STRACE-C kmscube"; cat /tmp/s.txt; echo "==== END kmscube"
+poweroff -f
