@@ -40,8 +40,8 @@ ok = b1 >= 0 and b2 > b1 and L[b1 + 1] == "out: hello via c/libc/1/fputs" and L[
 res["N2 foreign -> canonical -> export, two names one interface"] = (ok, f"bound lines {b1},{b2}")
 
 # N3: unbound NIDs refused loudly by the layer, nothing runs
-u1 = idx(r"^refused: foreign=c/libc/1/puts nid=\S+ arm=unikraft/qemu-x86_64 phase=link missing=correspondence row offered=\[none\]$")
-u2 = idx(r"^refused: foreign=c/libc/2/fputs nid=\S+ arm=unikraft/qemu-x86_64 phase=link missing=correspondence row offered=\[c/libc/1/fputs\]$")
+u1 = idx(r"^refused: foreign=c/libc/1/puts nid=\S+ arm=unikraft/qemu-x86_64 phase=link missing=correspondence row offered=\[none\] via=probe$")
+u2 = idx(r"^refused: foreign=c/libc/2/fputs nid=\S+ arm=unikraft/qemu-x86_64 phase=link missing=correspondence row offered=\[c/libc/1/fputs\] via=probe$")
 nb = idx(r"^bound: foreign=c/libc/1/clock_gettime")
 quiet = u1 >= 0 and u2 > u1 and nb > u2 and not any(l.startswith("out") for l in L[u1:nb])
 res["N3 unbound NID: loud refusal, no call"] = (quiet, f"refusals at {u1},{u2}; no out line before {nb}")

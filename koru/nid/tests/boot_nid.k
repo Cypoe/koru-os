@@ -56,10 +56,10 @@ std/io:print.ln("nid: begin")
                                     | stale s |> std/io:print.ln("FAIL call w stale") |> koruos/nid:release(s.b) |> koruos/nid:release(ca.b) |> koruos/nid:close(w.t)
                                     | ok cw |> std/io:print.ln("call: n={{ cw.n:d }}")
                                         // (4) unbound NIDs: unknown name, and a known name at another version
-                                        |> koruos/nid:resolve(w.t, foreign: "c/libc/1/puts")
+                                        |> koruos/nid:probe(w.t, foreign: "c/libc/1/puts")
                                         | bound x |> std/io:print.ln("FAIL bound puts") |> koruos/nid:release(x.b) |> koruos/nid:release(cw.b) |> koruos/nid:release(ca.b) |> koruos/nid:close(x.t)
                                         | refused un1 |> std/io:print.ln("unbound: foreign={{ un1.foreign:s }} nid={{ un1.nid:s }} phase={{ un1.phase:s }} missing={{ un1.missing:s }} offered=[{{ un1.offered:s }}]")
-                                            |> koruos/nid:resolve(un1.t, foreign: "c/libc/2/fputs")
+                                            |> koruos/nid:probe(un1.t, foreign: "c/libc/2/fputs")
                                             | bound x |> std/io:print.ln("FAIL bound fputs@2") |> koruos/nid:release(x.b) |> koruos/nid:release(cw.b) |> koruos/nid:release(ca.b) |> koruos/nid:close(x.t)
                                             | refused un2 |> std/io:print.ln("unbound: foreign={{ un2.foreign:s }} nid={{ un2.nid:s }} phase={{ un2.phase:s }} missing={{ un2.missing:s }} offered=[{{ un2.offered:s }}]")
                                                 // (5) the clock through its foreign name

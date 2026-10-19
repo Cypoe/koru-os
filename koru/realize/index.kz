@@ -201,8 +201,56 @@
         rw.print("resource: {s} -> {s}\n", .{ r.iface, r.resources }) catch return;
     };
 
+    // ---- link phase: koruos/nid binding chain at build time (§11.7)
+    var linkrefs = std.ArrayListUnmanaged(u8){};
+    defer linkrefs.deinit(allocator);
+    var uses_nid = false;
+    for (used.items) |u| if (std.mem.eql(u8, u.module, "koruos.nid")) {
+        uses_nid = true;
+    };
+    if (uses_nid) {
+        var exs = std.ArrayListUnmanaged(NidExport){};
+        defer exs.deinit(allocator);
+        for (program.items) |item| {
+            if (item != .module_decl) continue;
+            if (!std.mem.eql(u8, item.module_decl.logical_name, "koruos.nid") and !std.mem.endsWith(u8, item.module_decl.logical_name, "nid")) continue;
+            var inside = false;
+            for (item.module_decl.items) |mi| {
+                if (mi != .host_line) continue;
+                const line = mi.host_line.content;
+                if (std.mem.indexOf(u8, line, "const exports = [_]Export{") != null) {
+                    inside = true;
+                    continue;
+                }
+                if (!inside) continue;
+                if (std.mem.startsWith(u8, std.mem.trim(u8, line, " "), "};")) {
+                    inside = false;
+                    continue;
+                }
+                const a = nidField(line, "artifact") orelse continue;
+                const s = nidField(line, "symbol") orelse continue;
+                const r = nidField(line, "realizes") orelse continue;
+                exs.append(allocator, .{ .artifact = a, .symbol = s, .realizes = r }) catch return;
+            }
+        }
+        rw.writeAll("\n## link: foreign import -> NID -> row -> interface -> export (koruos/nid, evaluated at build time)\n") catch return;
+        for (exs.items) |e| rw.print("export: {s}:{s} realizes {s} (from koru/nid/index.kz, the table linked into the image)\n", .{ e.artifact, e.symbol, e.realizes }) catch return;
+        if (exs.items.len == 0) {
+            refusals += 1;
+            linkrefs.writer(allocator).print("refused: koruos/nid used but its export table was not found in the module phase=configure\n", .{}) catch return;
+        }
+        var ctx = NidCtx{ .al = allocator, .rep = &report, .refs = &linkrefs, .exs = exs.items };
+        for (program.items) |item| {
+            if (item != .flow) continue;
+            nidWalk(&ctx, item.flow.body, null);
+        }
+        rw.print("link: opens={d} predictions={d} required-import refusals={d}\n", .{ ctx.opens, ctx.predictions, ctx.refusals }) catch return;
+        refusals += ctx.refusals;
+    }
+
     // ---- 3. author lines: policy overrides, refused if they contradict a derived line
     rw.writeAll("\n## table 3: missing / contradicted -> refusal\n") catch return;
+    rw.writeAll(linkrefs.items) catch return;
     const keyOf = struct {
         fn go(l: []const u8) []const u8 {
             const i = std.mem.indexOfAny(u8, l, ":=") orelse return l;
@@ -279,3 +327,264 @@
 }
 
 const std = @import("std");
+
+// ------------------------------------------------------------ link phase (DESIGN-0001 §11.7)
+//
+// For programs that use koruos/nid, realize evaluates the binding chain at build time:
+// every `koruos/nid:open` with a literal manifest is admitted against the export table
+// that the koruos/nid module itself compiles into the image (read from its host lines, so
+// there is one source), and every REQUIRED `koruos/nid:resolve` with a literal foreign
+// name is resolved against the lexically enclosing table. A required import that cannot
+// bind is a table-3 refusal: no Kraftfile, so no image. `probe` (optional) and every
+// outcome are reported as predictions, which the run later checks against the image.
+// Run-time-only facts (generations, stale bindings) are not predicted.
+
+const NidExport = struct { artifact: []const u8, symbol: []const u8, realizes: []const u8 };
+const NidRow = struct { foreign: []const u8, nid: u64, iface: []const u8, ex: usize, occluded: bool };
+const NidTable = struct {
+    id: u32,
+    ok: bool,
+    reason: []const u8 = "",
+    bits: u32 = 64,
+    rows: [32]NidRow = undefined,
+    n: u32 = 0,
+};
+
+fn nidHash(comptime domain: []const u8, s: []const u8) u64 {
+    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    h.update(domain);
+    h.update(s);
+    var d: [32]u8 = undefined;
+    h.final(&d);
+    return std.mem.readInt(u64, d[0..8], .big);
+}
+fn nidMask(bits: u32, v: u64) u64 {
+    if (bits >= 64) return v;
+    return v >> @intCast(64 - bits) << @intCast(64 - bits);
+}
+fn nidRender(v: u64, out: *[11]u8) []const u8 {
+    var b: [8]u8 = undefined;
+    std.mem.writeInt(u64, &b, v, .big);
+    _ = std.base64.url_safe_no_pad.Encoder.encode(out, &b);
+    return out;
+}
+fn nidField(line: []const u8, comptime key: []const u8) ?[]const u8 {
+    const k = "." ++ key ++ " = \"";
+    const i = std.mem.indexOf(u8, line, k) orelse return null;
+    const rest = line[i + k.len ..];
+    const j = std.mem.indexOfScalar(u8, rest, '"') orelse return null;
+    return rest[0..j];
+}
+fn nidFindExport(exs: []const NidExport, spec: []const u8) ?usize {
+    const c = std.mem.indexOfScalar(u8, spec, ':') orelse return null;
+    for (exs, 0..) |e, i| if (std.mem.eql(u8, e.artifact, spec[0..c]) and std.mem.eql(u8, e.symbol, spec[c + 1 ..])) return i;
+    return null;
+}
+fn nidNsName(f: []const u8) struct { ns: []const u8, name: []const u8 } {
+    var it = std.mem.splitScalar(u8, f, '/');
+    const a = it.next() orelse "";
+    const b = it.next() orelse "";
+    const li = std.mem.lastIndexOfScalar(u8, f, '/') orelse 0;
+    return .{ .ns = f[0..@min(f.len, a.len + 1 + b.len)], .name = f[li + 1 ..] };
+}
+
+// The same admission rules as koruos/nid:open (koru/nid/index.kz); the run cross-checks them.
+fn nidOpen(id: u32, manifest: []const u8, bits: u32, exs: []const NidExport) NidTable {
+    var t = NidTable{ .id = id, .ok = true, .bits = bits };
+    var it = std.mem.splitScalar(u8, manifest, ';');
+    while (it.next()) |l0| {
+        const l = std.mem.trim(u8, l0, " ");
+        if (l.len == 0) continue;
+        var f = std.mem.tokenizeScalar(u8, l, ' ');
+        const verb = f.next() orelse "";
+        const foreign = f.next() orelse "";
+        const arrow = f.next() orelse "";
+        const iface = f.next() orelse "";
+        const arrow2 = f.next() orelse "";
+        const spec = f.next() orelse "";
+        const ex = nidFindExport(exs, spec);
+        var why: []const u8 = "";
+        if (!(std.mem.eql(u8, verb, "create") or std.mem.eql(u8, verb, "evolve")) or !std.mem.eql(u8, arrow, "->") or !std.mem.eql(u8, arrow2, "=>") or std.mem.count(u8, foreign, "/") != 3 or std.mem.indexOfScalar(u8, iface, '@') == null or f.next() != null) {
+            why = "malformed row";
+        } else if (t.n == t.rows.len) {
+            why = "too many rows";
+        } else if (ex == null) {
+            why = "provider export not in this realization";
+        } else if (!std.mem.eql(u8, exs[ex.?].realizes, iface)) {
+            why = "provider export realizes another interface";
+        }
+        const nid = nidMask(bits, nidHash("koruos.nid.v1|", foreign));
+        var parent: ?u32 = null;
+        if (why.len == 0) {
+            var i: u32 = 0;
+            while (i < t.n) : (i += 1) {
+                const r = &t.rows[i];
+                if (r.nid != nid) continue;
+                if (!std.mem.eql(u8, r.foreign, foreign)) {
+                    why = "nid collision";
+                    break;
+                }
+                if (r.occluded) continue;
+                if (std.mem.eql(u8, verb, "create")) {
+                    why = "create would overwrite a bound foreign name (use evolve)";
+                    break;
+                }
+                if (std.mem.eql(u8, r.iface, iface) and r.ex == ex.?) {
+                    why = "evolve without change";
+                    break;
+                }
+                parent = i;
+            }
+            if (why.len == 0 and std.mem.eql(u8, verb, "evolve") and parent == null) why = "evolve without a parent row";
+        }
+        if (why.len != 0) {
+            t.ok = false;
+            t.reason = why;
+            return t;
+        }
+        if (parent) |p| t.rows[p].occluded = true;
+        t.rows[t.n] = .{ .foreign = foreign, .nid = nid, .iface = iface, .ex = ex.?, .occluded = false };
+        t.n += 1;
+    }
+    return t;
+}
+
+const NidCtx = struct {
+    al: std.mem.Allocator,
+    rep: *std.ArrayListUnmanaged(u8),
+    refs: *std.ArrayListUnmanaged(u8),
+    exs: []const NidExport,
+    opens: u32 = 0,
+    refusals: u32 = 0,
+    predictions: u32 = 0,
+};
+
+fn nidArg(i: anytype, name: []const u8) ?[]const u8 {
+    for (i.args) |a| if (std.mem.eql(u8, a.name, name)) {
+        const v = a.value;
+        if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"' and std.mem.indexOf(u8, v, "{{") == null) return v[1 .. v.len - 1];
+        return null;
+    };
+    return null;
+}
+
+fn nidWalk(c: *NidCtx, cont: anytype, table: ?*const NidTable) void {
+    const here: ?*const NidTable = table;
+    var tbuf: NidTable = undefined;
+    var inv_opt: ?@TypeOf(cont.node.?.invocation) = null;
+    if (cont.node) |n| switch (n) {
+        .invocation => |i| inv_opt = i,
+        .label_with_invocation => |l| inv_opt = l.invocation,
+        else => {},
+    };
+    var kind: enum { other, open, resolve, probe, retarget } = .other;
+    if (inv_opt) |i| {
+        if (i.path.module_qualifier) |mq| if (std.mem.eql(u8, mq, "koruos.nid") and i.path.segments.len > 0) {
+            const seg = i.path.segments[0];
+            if (std.mem.eql(u8, seg, "open")) kind = .open else if (std.mem.eql(u8, seg, "resolve")) kind = .resolve else if (std.mem.eql(u8, seg, "probe")) kind = .probe else if (std.mem.eql(u8, seg, "retarget")) kind = .retarget;
+        };
+    }
+    var nb: [11]u8 = undefined;
+    switch (kind) {
+        .open => {
+            const i = inv_opt.?;
+            const id = c.opens;
+            c.opens += 1;
+            const man = nidArg(i, "manifest");
+            var bits: u32 = 64;
+            for (i.args) |a| if (std.mem.eql(u8, a.name, "nid_bits")) {
+                bits = std.fmt.parseInt(u32, a.value, 10) catch 64;
+            };
+            if (man) |m| {
+                tbuf = nidOpen(id, m, bits, c.exs);
+                c.predictions += 1;
+                if (tbuf.ok) c.rep.writer(c.al).print("predict: open #{d} bits={d} -> ok rows={d}\n", .{ id, bits, tbuf.n }) catch {} else c.rep.writer(c.al).print("predict: open #{d} bits={d} -> refused reason={s}\n", .{ id, bits, tbuf.reason }) catch {};
+            } else {
+                tbuf = .{ .id = id, .ok = false, .reason = "manifest not a literal (run-time admission only)" };
+                c.rep.writer(c.al).print("predict: open #{d} -> unknown (manifest not a literal)\n", .{id}) catch {};
+            }
+            // only the `ok` arm holds the table
+            for (cont.continuations) |cc| nidWalk(c, cc, if (std.mem.eql(u8, cc.branch, "ok")) &tbuf else null);
+            return;
+        },
+        .resolve, .probe => {
+            const i = inv_opt.?;
+            const required = kind == .resolve;
+            const how: []const u8 = if (required) "resolve" else "probe";
+            const foreign = nidArg(i, "foreign");
+            if (foreign == null) {
+                if (required) {
+                    c.refusals += 1;
+                    c.refs.writer(c.al).print("refused: required import with a non-literal foreign name cannot be checked at build time phase=configure (use probe)\n", .{}) catch {};
+                }
+            } else if (here == null or !here.?.ok) {
+                const f = foreign.?;
+                const why: []const u8 = if (here == null) "no enclosing koruos/nid:open" else here.?.reason;
+                c.predictions += 1;
+                c.rep.writer(c.al).print("predict: {s} foreign={s} -> refused table={s}\n", .{ how, f, why }) catch {};
+                if (required) {
+                    c.refusals += 1;
+                    c.refs.writer(c.al).print("refused: foreign={s} arm=unikraft/qemu-x86_64 phase=configure missing=table ({s}) via=resolve (required)\n", .{ f, why }) catch {};
+                }
+            } else {
+                const t = here.?;
+                const f = foreign.?;
+                const nid = nidMask(t.bits, nidHash("koruos.nid.v1|", f));
+                const nids = nidRender(nid, &nb);
+                var hit: ?u32 = null;
+                var collide = false;
+                var off = std.ArrayListUnmanaged(u8){};
+                defer off.deinit(c.al);
+                const me = nidNsName(f);
+                var k: u32 = 0;
+                while (k < t.n) : (k += 1) {
+                    const r = t.rows[k];
+                    if (r.occluded) continue;
+                    if (r.nid == nid) {
+                        if (std.mem.eql(u8, r.foreign, f)) hit = k else collide = true;
+                    } else {
+                        const o = nidNsName(r.foreign);
+                        if (std.mem.eql(u8, o.ns, me.ns) and std.mem.eql(u8, o.name, me.name)) off.writer(c.al).print("{s}{s}", .{ if (off.items.len == 0) "" else " ", r.foreign }) catch {};
+                    }
+                }
+                if (hit != null and collide) hit = null;
+                c.predictions += 1;
+                if (hit) |h| {
+                    const r = t.rows[h];
+                    c.rep.writer(c.al).print("predict: {s} foreign={s} nid={s} table=#{d} -> bound row {d} interface={s} export={s}:{s}\n", .{ how, f, nids, t.id, h, r.iface, c.exs[r.ex].artifact, c.exs[r.ex].symbol }) catch {};
+                } else {
+                    const missing: []const u8 = if (collide) "unique nid (collides with a row for another foreign name)" else "correspondence row";
+                    const offered: []const u8 = if (off.items.len == 0) "none" else off.items;
+                    c.rep.writer(c.al).print("predict: {s} foreign={s} nid={s} table=#{d} -> refused missing={s} offered=[{s}]\n", .{ how, f, nids, t.id, missing, offered }) catch {};
+                    if (required) {
+                        c.refusals += 1;
+                        c.refs.writer(c.al).print("refused: foreign={s} nid={s} arm=unikraft/qemu-x86_64 phase=configure missing={s} offered=[{s}] via=resolve (required)\n", .{ f, nids, missing, offered }) catch {};
+                    }
+                }
+            }
+        },
+        .retarget => if (here != null and here.?.ok) {
+            const i = inv_opt.?;
+            const iface = nidArg(i, "iface") orelse "";
+            const to = nidArg(i, "to") orelse "";
+            const ex = nidFindExport(c.exs, to);
+            c.predictions += 1;
+            if (ex == null or !std.mem.eql(u8, c.exs[ex.?].realizes, iface)) {
+                c.rep.writer(c.al).print("predict: retarget {s} to={s} -> refused\n", .{ iface, to }) catch {};
+            } else {
+                tbuf = here.?.*;
+                var n: u32 = 0;
+                var k: u32 = 0;
+                while (k < tbuf.n) : (k += 1) if (!tbuf.rows[k].occluded and std.mem.eql(u8, tbuf.rows[k].iface, iface)) {
+                    tbuf.rows[k].ex = ex.?;
+                    n += 1;
+                };
+                c.rep.writer(c.al).print("predict: retarget {s} to={s} -> ok rows={d}\n", .{ iface, to, n }) catch {};
+                for (cont.continuations) |cc| nidWalk(c, cc, if (std.mem.eql(u8, cc.branch, "ok")) &tbuf else here);
+                return;
+            }
+        },
+        .other => {},
+    }
+    for (cont.continuations) |cc| nidWalk(c, cc, here);
+}

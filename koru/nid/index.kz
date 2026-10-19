@@ -19,6 +19,9 @@
 // - A row is admitted only if its provider export is linked into this realization and the
 //   export declares that it realizes exactly that interface revision.
 // - An unbound NID is a loud refusal with the fixed shape of §3.4, phase=link; nothing runs.
+//   `resolve` is a REQUIRED import: koruos/realize evaluates it at build time (DESIGN-0001
+//   §11.7) and refuses the build, before an image exists, if it cannot bind. `probe` is an
+//   OPTIONAL lookup whose refusal is a run-time branch the program handles.
 // - Live bindings carry the row's generation. `retarget` re-points an interface's rows to
 //   another export (the AnyPS5/shadPS4 precedent: same NIDs, new provider, call sites
 //   untouched) and bumps the generation; an old binding is then refused at use (`stale`),
@@ -225,11 +228,11 @@ fn nsOf(foreign: []const u8) []const u8 { // scheme/ns
     return .{ .ok = t };
 }
 
-~pub tor resolve { t: *Table<!open>, foreign: string }
-| bound { t: *Table<open!>, b: *Binding<live!> }
-| refused { t: *Table<open!>, foreign: string, nid: string, arm: string, phase: string, missing: string, offered: string }
+// Shared by resolve (a REQUIRED import: koruos/realize refuses the build if it cannot bind)
+// and probe (an OPTIONAL lookup: an unbound name is a run-time refusal the program handles).
+const Lookup = struct { hit: ?u32, missing: []const u8, nids: []const u8, offered: []const u8 };
 
-~proc resolve|zig {
+fn lookup(t: *Table, foreign: []const u8) Lookup {
     const S = struct {
         var nidbuf: [11]u8 = undefined;
         var offered: [256]u8 = undefined;
@@ -239,32 +242,55 @@ fn nsOf(foreign: []const u8) []const u8 { // scheme/ns
     var off = std.io.fixedBufferStream(&S.offered);
     const w = off.writer();
     var hit: ?u32 = null;
-    var collide: ?u32 = null;
+    var collide = false;
     var i: u32 = 0;
     while (i < t.n) : (i += 1) {
         const r = &t.rows[i];
         if (r.occluded_by >= 0) continue;
         if (r.nid == nid) {
-            if (std.mem.eql(u8, r.foreign, foreign)) hit = i else collide = i;
+            if (std.mem.eql(u8, r.foreign, foreign)) hit = i else collide = true;
         } else if (std.mem.eql(u8, nsOf(r.foreign), nsOf(foreign)) and std.mem.eql(u8, nameOf(r.foreign), nameOf(foreign))) {
             w.print("{s}{s}", .{ if (off.pos == 0) "" else " ", r.foreign }) catch {};
         }
     }
-    if (hit) |h| {
-        const mem = malloc(@sizeOf(Binding)) orelse return .{ .refused = .{ .t = t, .foreign = foreign, .nid = nids, .arm = arm_name, .phase = "link", .missing = "memory", .offered = "none" } };
-        const b: *Binding = @ptrCast(@alignCast(mem));
-        const r = &t.rows[h];
-        b.* = .{ .t = t, .row = h, .generation = r.generation };
-        t.outstanding += 1;
-        var ib: [11]u8 = undefined;
-        logln("bound: foreign={s} nid={s} -> row {d} -> interface={s} iid={s} -> export={s}:{s} gen={d} arm={s}", .{ foreign, nids, h, r.iface, render(r.iid, &ib), r.ex.artifact, r.ex.symbol, r.generation, arm_name });
-        return .{ .bound = .{ .t = t, .b = b } };
-    }
+    if (hit != null and collide) hit = null;
+    const missing: []const u8 = if (collide) "unique nid (collides with a row for another foreign name)" else "correspondence row";
+    return .{ .hit = hit, .missing = missing, .nids = nids, .offered = if (off.pos == 0) "none" else off.getWritten() };
+}
+
+fn mintBinding(t: *Table, foreign: []const u8, h: u32, nids: []const u8, how: []const u8) ?*Binding {
+    const mem = malloc(@sizeOf(Binding)) orelse return null;
+    const b: *Binding = @ptrCast(@alignCast(mem));
+    const r = &t.rows[h];
+    b.* = .{ .t = t, .row = h, .generation = r.generation };
+    t.outstanding += 1;
+    var ib: [11]u8 = undefined;
+    logln("bound: foreign={s} nid={s} -> row {d} -> interface={s} iid={s} -> export={s}:{s} gen={d} arm={s} via={s}", .{ foreign, nids, h, r.iface, render(r.iid, &ib), r.ex.artifact, r.ex.symbol, r.generation, arm_name, how });
+    return b;
+}
+
+~pub tor resolve { t: *Table<!open>, foreign: string }
+| bound { t: *Table<open!>, b: *Binding<live!> }
+| refused { t: *Table<open!>, foreign: string, nid: string, arm: string, phase: string, missing: string, offered: string }
+
+~proc resolve|zig {
+    const l = lookup(t, foreign);
+    if (l.hit) |h| if (mintBinding(t, foreign, h, l.nids, "resolve")) |b| return .{ .bound = .{ .t = t, .b = b } };
     t.refusals += 1;
-    const missing: []const u8 = if (collide != null) "unique nid (collides with a row for another foreign name)" else "correspondence row";
-    const offered: []const u8 = if (off.pos == 0) "none" else off.getWritten();
-    logln("refused: foreign={s} nid={s} arm={s} phase=link missing={s} offered=[{s}]", .{ foreign, nids, arm_name, missing, offered });
-    return .{ .refused = .{ .t = t, .foreign = foreign, .nid = nids, .arm = arm_name, .phase = "link", .missing = missing, .offered = offered } };
+    logln("refused: foreign={s} nid={s} arm={s} phase=link missing={s} offered=[{s}] via=resolve", .{ foreign, l.nids, arm_name, l.missing, l.offered });
+    return .{ .refused = .{ .t = t, .foreign = foreign, .nid = l.nids, .arm = arm_name, .phase = "link", .missing = l.missing, .offered = l.offered } };
+}
+
+~pub tor probe { t: *Table<!open>, foreign: string }
+| bound { t: *Table<open!>, b: *Binding<live!> }
+| refused { t: *Table<open!>, foreign: string, nid: string, arm: string, phase: string, missing: string, offered: string }
+
+~proc probe|zig {
+    const l = lookup(t, foreign);
+    if (l.hit) |h| if (mintBinding(t, foreign, h, l.nids, "probe")) |b| return .{ .bound = .{ .t = t, .b = b } };
+    t.refusals += 1;
+    logln("refused: foreign={s} nid={s} arm={s} phase=link missing={s} offered=[{s}] via=probe", .{ foreign, l.nids, arm_name, l.missing, l.offered });
+    return .{ .refused = .{ .t = t, .foreign = foreign, .nid = l.nids, .arm = arm_name, .phase = "link", .missing = l.missing, .offered = l.offered } };
 }
 
 ~pub tor call { b: *Binding<!live>, arg: string }
