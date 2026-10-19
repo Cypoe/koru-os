@@ -49,5 +49,9 @@ ap .unikraft/apps/elfloader .unikraft/apps/elfloader/elf_load.c "$P9/app-elfload
 ap $U $U/lib/posix-fdtab/fdtab.c "$P9/unikraft-0.21-posix-fdtab-scm-refs.patch" "koru-os M9"
 ap $U $U/lib/posix-unixsocket/unixsock.c "$P9/unikraft-0.21-posix-unixsocket-scm-rights.patch" "koru-os M9"
 ap $U $U/lib/devfs/devfs_vnops.c "$P9/unikraft-0.21-devfs-truncate-size.patch" "koru-os M9"
+ap $U $U/lib/posix-poll/epoll.c "$P9/unikraft-0.21-posix-poll-epoll-sigmask.patch" "koru-os M9"
+ap $U $U/lib/posix-poll/poll.c "$P9/unikraft-0.21-posix-poll-ppoll-sigmask.patch" "koru-os M9"
+ap $U $U/lib/vfscore/main.c "$P9/unikraft-0.21-vfscore-devshm.patch" "koru-os M9"
+ap $U $U/lib/posix-mmap/mmap.c "$P9/unikraft-0.21-posix-mmap-device-refusal.patch" "a device that refuses"
 rm -f .config.m7-input_qemu-x86_64 .unikraft/build/config
 UK_CFLAGS="-std=gnu17" kraft build --arch x86_64 --plat qemu --no-prompt --log-type basic

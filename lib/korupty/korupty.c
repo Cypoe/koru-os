@@ -241,6 +241,8 @@ static int pty_ioctl(int is_slave, unsigned long cmd, void *arg)
 	case 0x540E: /* TIOCSCTTY */
 	case 0x5422: /* TIOCNOTTY */
 	case 0x40045431: /* TIOCSPTLCK */
+	case 0x5421: /* FIONBIO: vfscore's F_SETFL O_NONBLOCK; rd() reads the file flags */
+	case 0x5452: /* FIOASYNC */
 		return 0;
 	case 0x5410: /* TIOCSPGRP: the foreground process group */
 		P.fg = *(int *)arg;

@@ -1,0 +1,35 @@
+--- a/lib/vfscore/main.c
++++ b/lib/vfscore/main.c
+@@ -113,6 +113,9 @@
+ 
+ struct task *main_task;	/* we only have a single process */
+ 
++long koruos_shm_open(const char *name, int oflags, int mode) __attribute__((weak)); /* koru-os M9 */
++long koruos_shm_unlink(const char *name) __attribute__((weak));
++
+ UK_LLSYSCALL_R_DEFINE(int, openat, int, dirfd, const char *, pathname,
+ 		      int, flags, int, mode)
+ {
+@@ -127,6 +130,10 @@
+ 	if (error)
+ 		goto out_error;
+ 
++	/* koru-os M9: POSIX shm lives in lib/korumemfd */
++	if (koruos_shm_open && !strncmp(path, "/dev/shm/", 9))
++		return koruos_shm_open(path + 9, flags, mode);
++
+ 	mode = apply_umask(mode);
+ 	error = sys_open(path, flags, mode, &fp);
+ 	if (error)
+@@ -1377,6 +1384,11 @@
+ 	if ((error = taskat_conv(t, dirfd, pathname, path)) != 0)
+ 		goto out_error;
+ 
++	/* koru-os M9: POSIX shm lives in lib/korumemfd */
++	if (koruos_shm_unlink && !(flags & AT_REMOVEDIR) &&
++	    !strncmp(path, "/dev/shm/", 9))
++		return koruos_shm_unlink(path + 9);
++
+ 	if (flags & AT_REMOVEDIR)
+ 		error = sys_rmdir(path);
+ 	else

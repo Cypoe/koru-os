@@ -9,7 +9,7 @@
  
  #include <uk/assert.h>
  #include <uk/essentials.h>
-@@ -15,6 +17,123 @@
+@@ -15,11 +17,137 @@
  
  #include "unixsock-bind.h"
  
@@ -21,12 +21,13 @@
 + * receiver without control room loses them (MSG_CTRUNC), as on Linux.
 + */
 +int koruos_fdtab_ref(int fd, void **ref, int *flags);
++long uk_syscall_r_getpid(void);
 +int koruos_fdtab_install(void *ref, int flags, int cloexec);
 +void koruos_fdtab_unref(void *ref, int flags);
 +#define KSCM_PIPES 64
 +#define KSCM_FDS 64
 +static struct kscm_q {
-+	const struct uk_file *pipe;
++	const void *pipe;	/* pipe node, NULL = free */
 +	void *ref[KSCM_FDS];
 +	int fl[KSCM_FDS];
 +	unsigned h, t;
@@ -36,14 +37,17 @@
 +{
 +	struct kscm_q *fr = NULL;
 +
++	/* keyed by the pipe node: the sender holds the write end, the
++	 * receiver the read end, and both ends share the node
++	 */
 +	for (int i = 0; i < KSCM_PIPES; i++) {
-+		if (kscm[i].pipe == pipe)
++		if (kscm[i].pipe == pipe->node)
 +			return &kscm[i];
 +		if (!fr && !kscm[i].pipe)
 +			fr = &kscm[i];
 +	}
 +	if (create && fr) {
-+		fr->pipe = pipe;
++		fr->pipe = pipe->node;
 +		fr->h = fr->t = 0;
 +		return fr;
 +	}
@@ -120,6 +124,10 @@
 +	}
 +	if (!n)
 +		return;
++	/* The header is cleared first: libc's cmsghdr has a 4-byte cmsg_len
++	 * plus padding, Linux userspace (glibc) reads a size_t
++	 */
++	memset(c, 0, sizeof(*c));
 +	c->cmsg_level = SOL_SOCKET;
 +	c->cmsg_type = SCM_RIGHTS;
 +	c->cmsg_len = CMSG_LEN(n * sizeof(int));
@@ -133,7 +141,92 @@
  
  struct unix_listenmsg {
  	const struct uk_file *rpipe;
-@@ -736,6 +855,8 @@
+ 	const struct uk_file *wpipe;
+ 	posix_sock *remote;
++	int pid; /* koru-os M9: connecting process, for SO_PEERCRED */
+ };
+ 
+ struct unix_listenq {
+@@ -55,6 +183,7 @@
+ 	};
+ 	struct unix_addr_entry bind;
+ 	posix_sock *remote;
++	int own_pid, peer_pid; /* koru-os M9: SO_PEERCRED */
+ };
+ 
+ #define _SOCK_CONNECTION(t) ((t) == SOCK_STREAM || (t) == SOCK_SEQPACKET)
+@@ -345,6 +474,7 @@
+ 	uk_file_acquire_weak(sv[1]);
+ 	d0->remote = sv[1];
+ 	d1->remote = sv[0];
++	d0->peer_pid = d1->peer_pid = (int)uk_syscall_r_getpid(); /* koru-os M9 */
+ }
+ 
+ static
+@@ -373,6 +503,12 @@
+ 	/* Reserve 1 accept entry */
+ 	while (!uk_compare_exchange_n(&data->listen.count,
+ 					  &prev, prev - 1));
++	/* koru-os M9: drop POLLIN once the queue is drained, else a level
++	 * triggered epoll keeps reporting the listener and a blocking
++	 * accept4() hangs the caller (Hyprland's main loop).
++	 */
++	if (prev == 1)
++		posix_sock_event_clear(file, UKFD_POLLIN);
+ 
+ 	/* New socket obj */
+ 	acc = unix_sock_alloc(d, data->type);
+@@ -391,6 +527,7 @@
+ 	acc->rpipe = data->listen.q[i].rpipe;
+ 	acc->wpipe = data->listen.q[i].wpipe;
+ 	acc->remote = data->listen.q[i].remote;
++	acc->peer_pid = data->listen.q[i].pid; /* koru-os M9 */
+ 	acc->flags |= UNIXSOCK_CONN;
+ 
+ 	if (addr)
+@@ -507,6 +644,17 @@
+ 		case SO_PEEK_OFF:
+ 			val = -1;
+ 			break;
++		case SO_PEERCRED: { /* koru-os M9: libwayland-server needs it */
++			struct { int pid; unsigned int uid, gid; } cr = { data->peer_pid, 0, 0 }; /* struct ucred */
++
++			if (!(data->flags & UNIXSOCK_CONN))
++				return -ENOTCONN;
++			if (unlikely(*optlen < sizeof(cr)))
++				return -EINVAL;
++			memcpy(optval, &cr, sizeof(cr));
++			*optlen = sizeof(cr);
++			return 0;
++		}
+ 		case SO_TYPE:
+ 			val = data->type;
+ 			break;
+@@ -617,6 +765,7 @@
+ 	/* Take weakref on self & put in listenq */
+ 	uk_file_acquire_weak(file);
+ 	lmsg->remote = file;
++	lmsg->pid = (int)uk_syscall_r_getpid(); /* koru-os M9 */
+ 	/* Update POLLIN on target */
+ 	posix_sock_event_set(target, EPOLLIN);
+ 	/* Wunlock target sock */
+@@ -626,6 +775,7 @@
+ 	data->rpipe = pipes[0][0];
+ 	data->wpipe = pipes[1][1];
+ 	data->remote = target;
++	data->peer_pid = td->own_pid; /* koru-os M9 */
+ 	data->flags |= UNIXSOCK_CONN;
+ 	/* Poll self (to register events & mark connected) */
+ 	unix_socket_poll_setup(file);
+@@ -721,6 +871,7 @@
+ 		if (unlikely(!q))
+ 			return -ENOMEM;
+ 		data->listen = UNIX_LISTENQ(backlog, q);
++		data->own_pid = (int)uk_syscall_r_getpid(); /* koru-os M9 */
+ 		data->flags |= UNIXSOCK_LISTEN;
+ 	} else {
+ 		/* Not conformant; will implement backlog resizing if needed */
+@@ -736,6 +887,8 @@
  	struct unix_sock_data *data = posix_sock_get_data(file);
  	ssize_t ret;
  
@@ -142,7 +235,7 @@
  	if (unlikely(flags)) {
  		uk_pr_warn("Unsupported recv flags: %x\n", flags);
  		return -ENOSYS;
-@@ -750,6 +871,11 @@
+@@ -750,6 +903,11 @@
  	uk_file_rlock(data->rpipe);
  	ret = uk_file_read(data->rpipe, msg->msg_iov, msg->msg_iovlen, 0, 0);
  	uk_file_runlock(data->rpipe);
@@ -154,7 +247,7 @@
  	/* Get remote addr */
  	if (msg->msg_name) {
  		if (_SOCK_CONNECTION(data->type))
-@@ -797,7 +923,7 @@
+@@ -797,7 +955,7 @@
  	const struct uk_file *wpipe;
  	ssize_t ret;
  
@@ -163,7 +256,7 @@
  		uk_pr_warn("Unsupported send flags: %x\n", flags);
  		return -ENOSYS;
  	}
-@@ -845,10 +971,11 @@
+@@ -845,10 +1003,11 @@
  				? -ECONNREFUSED : -ENOTCONN);
  
  	uk_file_wlock(wpipe);

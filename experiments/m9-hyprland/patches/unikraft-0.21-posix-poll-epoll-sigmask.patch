@@ -1,0 +1,40 @@
+--- a/lib/posix-poll/epoll.c
++++ b/lib/posix-poll/epoll.c
+@@ -9,6 +9,7 @@
+ #endif
+ 
+ #include <errno.h>
++#include <signal.h>
+ 
+ #include <uk/atomic.h>
+ #include <uk/assert.h>
+@@ -27,6 +28,8 @@
+ #include <vfscore/eventpoll.h>
+ #endif /* CONFIG_LIBVFSCORE */
+ 
++long uk_syscall_r_rt_sigprocmask(long how, long set, long oset, long sz); /* koru-os M9 */
++
+ static const char EPOLL_VOLID[] = "epoll_vol";
+ 
+ #define EPOLL_FNAME "epollfd"
+@@ -569,8 +572,18 @@
+ 	if (unlikely(maxevents <= 0))
+ 		return -EINVAL;
+ 	if (unlikely(sigmask)) {
+-		uk_pr_warn_once("STUB: epoll_pwait no sigmask support\n");
+-		return -ENOSYS;
++		/* koru-os M9: swap the mask around the wait (not atomic
++		 * with respect to a signal arriving at the swap itself)
++		 */
++		sigset_t old;
++		int r;
++
++		if (uk_syscall_r_rt_sigprocmask(SIG_SETMASK, (long)sigmask,
++						(long)&old, 8))
++			return -EINVAL;
++		r = uk_sys_epoll_pwait2(epf, events, maxevents, timeout, NULL, 0);
++		uk_syscall_r_rt_sigprocmask(SIG_SETMASK, (long)&old, 0, 8);
++		return r;
+ 	}
+ 
+ 	list = (struct epoll_entry **)epf->node;

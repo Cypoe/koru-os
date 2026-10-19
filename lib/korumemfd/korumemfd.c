@@ -14,6 +14,11 @@
  * re-create the pool), seals (fcntl F_ADD_SEALS/F_GET_SEALS stay EINVAL), hole punching.
  * The frames of a closed memfd are not freed while mappings may exist (no munmap
  * tracking): a leak per closed memfd, bounded by KM_SLOTS slots.
+ *
+ * POSIX shm (shm_open/shm_unlink, i.e. open/unlink of /dev/shm/NAME, which Hyprland uses
+ * for its keymap rw/ro fd pair) is served by the same slots: the vfscore patch
+ * unikraft-0.21-vfscore-devshm.patch routes those paths here. A named slot keeps its
+ * name until shm_unlink; the same object reopened read-only shares the vnode and frames.
  */
 #include <errno.h>
 #include <string.h>
@@ -43,6 +48,7 @@ static struct km {
 	__paddr_t pa;
 	__vaddr_t kva;
 	size_t size;	/* bytes of memory (page multiple), 0 = none yet */
+	char name[64];	/* POSIX shm name, "" = anonymous memfd or unlinked */
 } M[KM_SLOTS];
 static size_t K_total;
 
@@ -127,7 +133,7 @@ static int km_close(struct device *dev)
 {
 	struct km *m = km_of(dev);
 
-	if (m && m->opens && !--m->opens && !m->size) {
+	if (m && m->opens && !--m->opens && !m->size && !m->name[0]) {
 		m->used = 0;	/* never had memory: the slot can be reused */
 		if (m->vp)
 			m->vp->v_size = 0;
@@ -166,11 +172,48 @@ int koruos_memfd_mmap(struct vfscore_file *f, off_t offset, size_t len, __paddr_
 #define MFD_NOEXEC_SEAL 8U
 #define MFD_EXEC 0x10U
 
-UK_SYSCALL_R_DEFINE(int, memfd_create, const char *, name, unsigned int, flags)
+static long km_open_slot(int i, int oflags)
 {
 	char path[40];
-	long fd;
 	struct vfscore_file *f;
+	long fd;
+
+	snprintf(path, sizeof(path), "/dev/.korumemfd%d", i);
+	fd = uk_syscall_r_open((long)path, (long)(oflags & (O_ACCMODE | O_CLOEXEC | O_NONBLOCK)), 0);
+	if (fd < 0)
+		return fd;
+	f = vfscore_get_file((int)fd);
+	if (f) {
+		struct vnode *vp = f->f_dentry ? f->f_dentry->d_vnode : NULL;
+
+		if (!M[i].vp) {
+			M[i].vp = vp;
+			if (vp)
+				vp->v_size = 0;
+		}
+		fdrop(f);
+	}
+	return fd;
+}
+
+static int km_free_slot(void)
+{
+	int i;
+
+	for (i = 0; i < KM_SLOTS && M[i].used; i++)
+		;
+	if (i == KM_SLOTS || !M[i].dev)
+		return -EMFILE;
+	M[i].used = 1;
+	M[i].size = 0;
+	M[i].vp = NULL;
+	M[i].name[0] = 0;
+	return i;
+}
+
+UK_SYSCALL_R_DEFINE(int, memfd_create, const char *, name, unsigned int, flags)
+{
+	long fd;
 	int i;
 
 	if (flags & ~(MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_NOEXEC_SEAL | MFD_EXEC)) {
@@ -178,26 +221,68 @@ UK_SYSCALL_R_DEFINE(int, memfd_create, const char *, name, unsigned int, flags)
 		return -EINVAL;
 	}
 	(void)name;
-	for (i = 0; i < KM_SLOTS && M[i].used; i++)
-		;
-	if (i == KM_SLOTS || !M[i].dev)
-		return -EMFILE;
-	M[i].used = 1;
-	M[i].size = 0;
-	snprintf(path, sizeof(path), "/dev/.korumemfd%d", i);
-	fd = uk_syscall_r_open((long)path, (long)(O_RDWR | ((flags & MFD_CLOEXEC) ? O_CLOEXEC : 0)), 0);
-	if (fd < 0) {
+	if ((i = km_free_slot()) < 0)
+		return i;
+	fd = km_open_slot(i, O_RDWR | ((flags & MFD_CLOEXEC) ? O_CLOEXEC : 0));
+	if (fd < 0)
 		M[i].used = 0;
+	return fd;
+}
+
+static int km_find(const char *name)
+{
+	for (int i = 0; i < KM_SLOTS; i++)
+		if (M[i].used && M[i].name[0] && !strcmp(M[i].name, name))
+			return i;
+	return -1;
+}
+
+/* open("/dev/shm/NAME"): called by the vfscore patch with NAME */
+long koruos_shm_open(const char *name, int oflags, int mode __unused)
+{
+	int i;
+	long fd;
+
+	if (!name[0] || strchr(name, '/') || strlen(name) >= sizeof(M[0].name))
+		return -EINVAL;
+	i = km_find(name);
+	if (i >= 0 && (oflags & O_CREAT) && (oflags & O_EXCL))
+		return -EEXIST;
+	if (i < 0) {
+		if (!(oflags & O_CREAT))
+			return -ENOENT;
+		if ((i = km_free_slot()) < 0)
+			return i;
+		strcpy(M[i].name, name);
+	}
+	fd = km_open_slot(i, oflags);
+	if (fd < 0) {
+		if (!M[i].opens && !M[i].size) {
+			M[i].used = 0;
+			M[i].name[0] = 0;
+		}
 		return fd;
 	}
-	f = vfscore_get_file((int)fd);
-	if (f) {
-		M[i].vp = f->f_dentry ? f->f_dentry->d_vnode : NULL;
+	if ((oflags & O_TRUNC) && !M[i].size && M[i].vp)
+		M[i].vp->v_size = 0;
+	return fd;
+}
+
+/* unlink("/dev/shm/NAME") */
+long koruos_shm_unlink(const char *name)
+{
+	int i = km_find(name);
+
+	if (i < 0)
+		return -ENOENT;
+	M[i].name[0] = 0;
+	if (!M[i].opens && !M[i].size) {
+		M[i].used = 0;
 		if (M[i].vp)
 			M[i].vp->v_size = 0;
-		fdrop(f);
+		M[i].vp = NULL;
 	}
-	return fd;
+	return 0;
 }
 
 static int km_init(struct uk_init_ctx *ictx __unused)

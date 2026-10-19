@@ -1,0 +1,24 @@
+--- a/lib/posix-mmap/mmap.c
++++ b/lib/posix-mmap/mmap.c
+@@ -183,14 +183,19 @@
+ 		switch (uk_fdtab_shim_get(fd, &sf)) {
+ 		case UK_SHIM_LEGACY:
+ #if CONFIG_LIBVFSCORE
+-			if (koruos_dev_mmap(sf.vfile, offset, len,
+-					    &koruos_dma_args.paddr) == 0) {
++			rc = koruos_dev_mmap(sf.vfile, offset, len,
++					     &koruos_dma_args.paddr);
++			if (rc == 0) {
+ 				vargs = &koruos_dma_args;
+ 				vops = &uk_vma_dma_ops;
+ 				vflags &= ~UK_VMA_FILE_SHARED;
+ 				fdrop(sf.vfile);
+ 				break;
+ 			}
++			if (rc != -ENODEV) {	/* a device that refuses: no copy fallback */
++				fdrop(sf.vfile);
++				return rc;
++			}
+ 			vfscore_vma_args.fd = fd;
+ 			vfscore_vma_args.offset = offset;
+ 			vargs = &vfscore_vma_args;

@@ -1,8 +1,13 @@
 --- a/lib/devfs/devfs_vnops.c
 +++ b/lib/devfs/devfs_vnops.c
-@@ -315,7 +315,15 @@
+@@ -313,11 +313,23 @@
+ #define devfs_rename	((vnop_rename_t)vfscore_vop_einval)
+ #define devfs_mkdir	((vnop_mkdir_t)vfscore_vop_einval)
  #define devfs_rmdir	((vnop_rmdir_t)vfscore_vop_einval)
- #define devfs_setattr	((vnop_setattr_t)vfscore_vop_eperm)
+-#define devfs_setattr	((vnop_setattr_t)vfscore_vop_eperm)
++/* koru-os M9: chmod/fchmod of a device node is accepted and ignored (wlroots-style
++ * shm pairs fchmod(rw_fd, 0) a POSIX shm object, lib/korumemfd) */
++#define devfs_setattr	((vnop_setattr_t)vfscore_vop_nullop)
  #define devfs_inactive	((vnop_inactive_t)vfscore_vop_nullop)
 -#define devfs_truncate	((vnop_truncate_t)vfscore_vop_nullop)
 +/* koru-os M9: ftruncate() records the size in the vnode (memfds, lib/korumemfd);
@@ -15,5 +20,10 @@
 +	return 0;
 +}
  #define devfs_link	((vnop_link_t)vfscore_vop_eperm)
- #define devfs_fallocate ((vnop_fallocate_t)vfscore_vop_nullop)
+-#define devfs_fallocate ((vnop_fallocate_t)vfscore_vop_nullop)
++/* koru-os M9: no fallocate on device nodes (foot probes FALLOC_FL_PUNCH_HOLE on its memfd
++ * and, if it "works", maps a 128 GiB pool) */
++#define devfs_fallocate ((vnop_fallocate_t)vfscore_vop_eperm)
  #define devfs_readlink	((vnop_readlink_t)vfscore_vop_nullop)
+ #define devfs_symlink	((vnop_symlink_t)vfscore_vop_nullop)
+ /* koru-os M7: dispatch poll to the device if it implements it; otherwise keep

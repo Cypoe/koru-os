@@ -1,0 +1,30 @@
+--- a/lib/posix-poll/poll.c
++++ b/lib/posix-poll/poll.c
+@@ -5,6 +5,8 @@
+  */
+ 
+ #include <poll.h>
++#include <signal.h>
++long uk_syscall_r_rt_sigprocmask(long how, long set, long oset, long sz); /* koru-os M9 */
+ 
+ #include <uk/essentials.h>
+ #include <uk/posix-poll.h>
+@@ -47,8 +49,16 @@
+ 	if (timeout && uk_time_spec_to_nsec(timeout) < 0)
+ 		return -EINVAL;
+ 	if (unlikely(sigmask)) {
+-		uk_pr_warn_once("STUB: ppoll no sigmask support\n");
+-		return -ENOSYS;
++		/* koru-os M9: swap the mask around the wait (not atomic) */
++		sigset_t old;
++		int r;
++
++		if (uk_syscall_r_rt_sigprocmask(SIG_SETMASK, (long)sigmask,
++						(long)&old, 8))
++			return -EINVAL;
++		r = uk_sys_ppoll(fds, nfds, timeout, NULL, 0);
++		uk_syscall_r_rt_sigprocmask(SIG_SETMASK, (long)&old, 0, 8);
++		return r;
+ 	}
+ 
+ 	ef = uk_epollfile_create();

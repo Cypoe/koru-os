@@ -1,0 +1,14 @@
+export HOME=/tmp XDG_CACHE_HOME=/tmp/cache XDG_RUNTIME_DIR=/tmp/xdg PATH=/usr/bin:/bin LIBSEAT_BACKEND=noop LANG=C.UTF-8 SHELL=/bin/sh
+mkdir -p /tmp/cache /tmp/xdg; chmod 700 /tmp/xdg
+echo "m9-init: start"
+/usr/bin/Hyprland --i-am-really-stupid -c /etc/m9-hyprland.lua > /tmp/hl.out 2>&1 &
+i=0; while [ $i -lt 150 ] && ! grep -q 'Running on WAYLAND_DISPLAY' /tmp/hl.out; do sleep 1; i=$((i+1)); done
+echo "m9-init: compositor ready after ${i}s"
+exec 3<>/dev/korupty0
+/bin/sh -i < /dev/korupty0s > /dev/korupty0s 2>&1 &
+WAYLAND_DEBUG=1 WAYLAND_DISPLAY=wayland-1 /usr/bin/foot --pty=/dev/korupty0 > /tmp/foot.out 2>&1 &
+sleep 60
+echo "m9-init: foot log"; head -c 6000 /tmp/foot.out; echo; tail -c 3000 /tmp/foot.out
+echo "m9-init: hyprland log"; wc -l /tmp/hl.out; grep -n -i -e client -e 'protocol' -e error -e 'wl_' -e ikeyboard -e shm -e keymap /tmp/hl.out | grep -v -e XCursor -e eglQuery -e initMgpu -e 'renderer state' | tail -40
+echo "m9-init: end"
+sleep 40
