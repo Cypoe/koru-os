@@ -1,0 +1,5 @@
+# koru-os M6: kms rows, bochs-display provider, Linux DRM personality.
+# Included from an application's Makefile.uk with KORUKMS_DIR set.
+APPKORUOS_SRCS-y += $(KORUKMS_DIR)/bochs.c
+APPKORUOS_SRCS-y += $(KORUKMS_DIR)/drm_linux.c
+APPKORUOS_CINCLUDES-y += -I$(KORUKMS_DIR)

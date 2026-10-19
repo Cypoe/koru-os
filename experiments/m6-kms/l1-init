@@ -1,0 +1,15 @@
+#!/bin/busybox sh
+# M6 L1 oracle init (Linux 6.12 Debian kernel, bochs-drm), same programs as on koru-os.
+/bin/busybox --install -s /bin
+mount -t devtmpfs dev /dev; mount -t proc proc /proc; mount -t sysfs sys /sys
+for m in $(cat /modorder.txt); do insmod /ko/$m.ko || echo "l1-init: insmod $m failed"; done
+sleep 1
+ls -l /dev/dri
+echo "l1-init: start"
+strace -f -o /tmp/kmsdumb.strace /bin/kmsdumb 1024x768 3
+echo "l1-init: kmsdumb exit status $?"
+sleep 4 | strace -f -o /tmp/modetest.strace /usr/bin/modetest -M bochs-drm -s Virtual-1:1024x768
+echo "l1-init: modetest exit status $?"
+for f in kmsdumb modetest; do echo "==== STRACE $f"; cat /tmp/$f.strace; echo "==== END $f"; done
+echo "l1-init: done"
+poweroff -f

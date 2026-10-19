@@ -1,0 +1,189 @@
+--- a/lib/devfs/devfs_vnops.c
++++ b/lib/devfs/devfs_vnops.c
+@@ -78,6 +78,8 @@
+ 
+ 	if (!strcmp(path, "/"))	/* root ? */
+ 		return 0;
++	if (vp->v_type == VDIR)	/* koru-os M6: one-level subdirectory */
++		return 0;
+ 
+ 	if (vp->v_flags & VPROTDEV) {
+ 		uk_pr_debug("%s: failed to open protected device.\n", __func__);
+@@ -103,6 +105,8 @@
+ 
+ 	if (!strcmp(fp->f_dentry->d_path, "/"))	/* root ? */
+ 		return 0;
++	if (vp->v_type == VDIR)	/* koru-os M6 */
++		return 0;
+ 
+ 	return device_close((struct device *)vp->v_data);
+ }
+@@ -131,12 +135,21 @@
+ 	return error;
+ }
+ 
++/*
++ * koru-os M6: devfs names may carry one '/', e.g. "dri/card0", so that
++ * /dev/dri/card0 exists (libdrm opens only that path). A lookup in the root
++ * that matches the part before the '/' returns a directory vnode whose
++ * v_data is the prefix; a lookup in that directory matches "<prefix>/<name>".
++ */
+ static int
+ devfs_lookup(struct vnode *dvp, const char *name, struct vnode **vpp)
+ {
+ 	struct devinfo info;
+ 	struct vnode *vp;
+-	int error;
++	const char *prefix = (dvp->v_flags & VROOT) ? NULL : dvp->v_data;
++	char full[MAXDEVNAME];
++	size_t nlen;
++	int error, isdir = 0;
+ 
+ 	uk_pr_debug("%s:%s\n", __func__, name);
+ 
+@@ -144,6 +157,13 @@
+ 
+ 	if (*name == '\0')
+ 		return ENOENT;
++	if (prefix) {
++		if (snprintf(full, sizeof(full), "%s/%s", prefix, name)
++		    >= (int)sizeof(full))
++			return ENOENT;
++		name = full;
++	}
++	nlen = strlen(name);
+ 
+ 	error = 0;
+ 	info.cookie = 0;
+@@ -154,6 +174,11 @@
+ 
+ 		if (!strncmp(info.name, name, MAXDEVNAME))
+ 			break;
++		if (!prefix && !strncmp(info.name, name, nlen)
++		    && info.name[nlen] == '/') {
++			isdir = 1;
++			break;
++		}
+ 	}
+ 	if (vfscore_vget(dvp->v_mount, inode_count++, &vp)) {
+ 		/* found in cache */
+@@ -162,13 +187,23 @@
+ 	}
+ 	if (!vp)
+ 		return ENOMEM;
++	vp->v_flags = 0;
++	if (isdir) {
++		vp->v_type = VDIR;
++		vp->v_data = strndup(name, nlen);
++		if (!vp->v_data)
++			return ENOMEM;
++		vp->v_mode = (mode_t)(S_IRUSR | S_IXUSR);
++		*vpp = vp;
++		return 0;
++	}
+ 	vp->v_type = (info.flags & D_CHR) ? VCHR : VBLK;
+ 	/* vfscore_vget does not initialize v_flags and this may cause
+ 	 * devfs_open to fail at the vp->v_flags & VPROTDEV check
+ 	 */
+-	vp->v_flags = 0;
+ 	if (info.flags & D_TTY)
+ 		vp->v_flags |= VISTTY;
++	vp->v_data = (void *)info.id; /* koru-os M6: for getattr (st_rdev) */
+ 
+ 	vp->v_mode = (mode_t)(S_IRUSR | S_IWUSR);
+ 
+@@ -181,31 +216,62 @@
+  * @vp: vnode of the directory.
+  */
+ static int
+-devfs_readdir(struct vnode *vp __unused, struct vfscore_file *fp,
++devfs_readdir(struct vnode *vp, struct vfscore_file *fp,
+ 	      struct dirent64 *dir)
+ {
+-	struct devinfo info;
+-	int error, i;
++	/* koru-os M6: list one directory level. The root shows names without
++	 * a '/' plus each subdirectory once; a subdirectory shows the part
++	 * after "<prefix>/".
++	 */
++	const char *prefix = (vp->v_type == VDIR && !(vp->v_flags & VROOT))
++			     ? vp->v_data : NULL;
++	size_t plen = prefix ? strlen(prefix) : 0;
++	struct devinfo info, prev;
++	const char *name, *slash;
++	int error, i, isdir, dup;
+ 
+ 	uk_pr_debug("%s: offset=%li\n", __func__, fp->f_offset);
+ 
+ 	i = 0;
+-	error = 0;
+ 	info.cookie = 0;
+-	do {
++	for (;;) {
+ 		error = device_info(&info);
+ 		if (error)
+ 			return ENOENT;
+-	} while (i++ != fp->f_offset);
++		name = info.name;
++		isdir = 0;
++		if (prefix) {
++			if (strncmp(name, prefix, plen) || name[plen] != '/')
++				continue;
++			name += plen + 1;
++		} else if ((slash = strchr(name, '/'))) {
++			/* show the subdirectory at its first device only */
++			dup = 0;
++			prev.cookie = 0;
++			while (!device_info(&prev) && prev.cookie < info.cookie)
++				if (!strncmp(prev.name, name, slash - name + 1)) {
++					dup = 1;
++					break;
++				}
++			if (dup)
++				continue;
++			isdir = (int)(slash - name);
++		}
++		if (i++ == fp->f_offset)
++			break;
++	}
+ 
+ 	dir->d_type = 0;
+-	if (info.flags & D_CHR)
++	if (isdir)
++		dir->d_type = DT_DIR;
++	else if (info.flags & D_CHR)
+ 		dir->d_type = DT_CHR;
+ 	else if (info.flags & D_BLK)
+ 		dir->d_type = DT_BLK;
+-	strlcpy((char *)&dir->d_name, info.name, sizeof(dir->d_name));
++	strlcpy((char *)&dir->d_name, name, sizeof(dir->d_name));
++	if (isdir)
++		dir->d_name[isdir] = '\0';
+ 	dir->d_fileno = fp->f_offset;
+-//	dir->d_namlen = strlen(dir->d_name);
+ 
+ 	uk_pr_debug("%s: %s\n", __func__, dir->d_name);
+ 	fp->f_offset++;
+@@ -225,6 +291,10 @@
+ {
+ 	attr->va_nodeid = vnode->v_ino;
+ 	attr->va_size = vnode->v_size;
++	/* koru-os M6 */
++	attr->va_mode = vnode->v_mode;
++	if ((vnode->v_type == VCHR || vnode->v_type == VBLK) && vnode->v_data)
++		attr->va_rdev = ((struct device *)vnode->v_data)->rdev;
+ 	return 0;
+ }
+ 
+--- a/lib/devfs/include/devfs/device.h
++++ b/lib/devfs/include/devfs/device.h
+@@ -126,6 +126,9 @@
+ 	int refcnt;
+ 	/* Private storage */
+ 	void *private_data;
++	/* koru-os M6: st_rdev reported by stat() (e.g. makedev(226, 0) for
++	 * dri/card0); 0 if the driver does not set it */
++	dev_t rdev;
+ };
+ 
+ /**

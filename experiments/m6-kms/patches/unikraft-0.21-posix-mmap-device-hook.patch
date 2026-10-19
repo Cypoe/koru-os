@@ -1,0 +1,55 @@
+--- a/lib/posix-mmap/mmap.c
++++ b/lib/posix-mmap/mmap.c
+@@ -36,6 +36,22 @@
+ 
+ #define VALID_PROT_MASK		(PROT_READ | PROT_WRITE | PROT_EXEC)
+ 
++#if CONFIG_LIBPOSIX_FDTAB && CONFIG_LIBVFSCORE
++/* koru-os M6: device memory mappings (DRM dumb buffers). A device driver
++ * may claim an mmap() of one of its vfscore files by returning 0 and the
++ * physical base of [offset, offset + len). The mapping is then a direct
++ * physical (DMA-type) VMA instead of a copy-on-fault file VMA. The default
++ * claims nothing.
++ */
++__attribute__((weak)) int koruos_dev_mmap(struct vfscore_file *f __unused,
++					  off_t offset __unused,
++					  size_t len __unused,
++					  __paddr_t *paddr __unused)
++{
++	return -ENODEV;
++}
++#endif
++
+ static inline unsigned long prot_to_attr(int prot)
+ {
+ 	unsigned long attr = UK_PAGING_PAGE_ATTR_PROT_NONE;
+@@ -64,6 +80,7 @@
+ #if CONFIG_LIBPOSIX_FDTAB
+ #if CONFIG_LIBVFSCORE
+ 	struct uk_vma_file_args vfscore_vma_args;
++	struct uk_vma_dma_args koruos_dma_args; /* koru-os M6 */
+ #endif /* CONFIG_LIBVFSCORE */
+ #if CONFIG_LIBPOSIX_FDIO
+ 	struct uk_fdio_vma_args fdio_vma_args;
+@@ -166,6 +183,14 @@
+ 		switch (uk_fdtab_shim_get(fd, &sf)) {
+ 		case UK_SHIM_LEGACY:
+ #if CONFIG_LIBVFSCORE
++			if (koruos_dev_mmap(sf.vfile, offset, len,
++					    &koruos_dma_args.paddr) == 0) {
++				vargs = &koruos_dma_args;
++				vops = &uk_vma_dma_ops;
++				vflags &= ~UK_VMA_FILE_SHARED;
++				fdrop(sf.vfile);
++				break;
++			}
+ 			vfscore_vma_args.fd = fd;
+ 			vfscore_vma_args.offset = offset;
+ 			vargs = &vfscore_vma_args;
+--- a/lib/posix-mmap/exportsyms.uk
++++ b/lib/posix-mmap/exportsyms.uk
+@@ -4,3 +4,4 @@
+ madvise
+ mlock
+ msync
++koruos_dev_mmap

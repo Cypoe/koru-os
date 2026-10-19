@@ -1,0 +1,6 @@
+$(eval $(call addlib,appkoruos))
+APPKORUOS_SRCS-y += $(APPKORUOS_BASE)/exitstatus.c
+KORUEXT2FS_DIR := $(APPKORUOS_BASE)/koruext2fs
+include $(KORUEXT2FS_DIR)/Makefile.uk
+KORUKMS_DIR := $(APPKORUOS_BASE)/korukms
+include $(KORUKMS_DIR)/Makefile.uk

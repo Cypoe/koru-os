@@ -1,0 +1,12 @@
+#!/bin/busybox sh
+# M6 init (DESIGN-0001 §0.4 "M6 acceptance"): raw-ioctl dumb-buffer modeset, then libdrm modetest.
+echo "m6-init: start"
+ls -l /dev/dri
+/bin/kmsdumb 1024x768 3
+a=$?
+echo "m6-init: kmsdumb exit status $a"
+sleep 4 | /usr/bin/modetest -M korukms -s Virtual-1:1024x768
+b=$?
+echo "m6-init: modetest exit status $b"
+[ $a = 0 ] && [ $b = 0 ] && exit 0
+exit 1
