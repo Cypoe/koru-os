@@ -1,0 +1,359 @@
+// koruos/spawn: the dissected Spawn model of DESIGN-0001 §8.6, first measured skeleton, in
+// koru-libs shape (its home is koru-libs; it lives under koru-os until Q33 lets it move,
+// nothing is pushed to Cypoe/koru-libs).
+//
+// Covered here: reserve, grant, seal, start, wait, reap, abandon, and the refusals of §8.6.2:
+//   - rights are EMPTY by default: a child sees only what is granted, plus the listed ambient
+//     set {memory within its budget, monotonic clock, exit, yield};
+//   - a grant attenuates a handle the parent holds; verbs beyond the parent's (over-grant),
+//     a handle the parent does not hold, or a bag beyond the authority's max_bag are refused;
+//   - address-space copy (F2) and "continue at the caller's instruction pointer" are refused
+//     on every arm and cannot be granted; `fork` exists only to refuse loudly;
+//   - reserve needs a spawn authority that names the image (F9) and has a free child slot;
+//   - identities {instance, generation} are minted at reserve and never reused (F1);
+//   - seal checks the image's imports against bag + ambient and emits the manifest;
+//   - start mints <running!> only on evidence that the child's entry executed.
+// Not yet (later steps of §8.6): replace, detach, revoke, nested attenuation, the Unikraft
+// provider (posix-process), the Linux compat layer. Rung honesty (§8.6.2): one address space,
+// cooperative; the bag is enforced at the seam (ChildCtx), not by hardware. A child image here
+// is an entry function linked into this image and runs to completion inside `start`.
+//
+// Phantom states: reserve mints <staged!>; grant <!staged> -> <staged!>; seal <!staged> ->
+// <sealed!> | refused <staged!>; start <!sealed> -> <running!> | stalled <sealed!>;
+// wait <!running> -> <exited!>; reap <!exited>; abandon <!staged|!sealed>.
+
+const std = @import("std");
+
+extern fn malloc(size: usize) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) void;
+extern fn ukplat_monotonic_clock() u64;
+const C = struct {
+    extern var stdout: ?*anyopaque;
+    extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) c_int;
+};
+
+pub const arm_name = "unikraft/qemu-x86_64";
+pub const rung = "0/1 (one address space; enforced at the seam)";
+
+fn logln(comptime f: []const u8, a: anytype) void {
+    var b: [1024]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, f ++ "\n", a) catch return;
+    _ = C.fputs(s.ptr, C.stdout);
+}
+
+fn verbsWithin(want: []const u8, have: []const u8) bool {
+    var it = std.mem.splitScalar(u8, want, '+');
+    while (it.next()) |v| {
+        if (v.len == 0) continue;
+        var ok = false;
+        var h = std.mem.splitScalar(u8, have, '+');
+        while (h.next()) |x| if (std.mem.eql(u8, x, v)) {
+            ok = true;
+        };
+        if (!ok) return false;
+    }
+    return true;
+}
+fn listHas(list: []const u8, sep: u8, item: []const u8) bool {
+    var it = std.mem.splitScalar(u8, list, sep);
+    while (it.next()) |x| if (std.mem.eql(u8, std.mem.trim(u8, x, " "), item)) return true;
+    return false;
+}
+
+// ------------------------------------------------------------ the parent's authority
+
+// A handle the parent holds: name, verbs, and (for env handles) a value. Spec, ';'-separated:
+//   handle <name> <verbs> [value]  |  spawn <img>|<img>...  |  max_bag <n>  |  max_children <n>
+const Held = struct { name: []const u8, verbs: []const u8, value: []const u8 };
+pub const Authority = struct {
+    instance: u32,
+    held: [16]Held,
+    nheld: u32,
+    images: []const u8,
+    max_bag: u32,
+    max_children: u32,
+    children: u32,
+};
+var authorities: [4]Authority = undefined;
+var nauth: u32 = 0;
+
+var roster: u32 = 0;
+var next_instance: u32 = 2; // instance 1 is the boot program (the first parent)
+
+~pub tor authority { spec: string }
+| ok *Authority
+| refused string
+
+~proc authority|zig {
+    if (nauth == authorities.len) return .{ .refused = "authority table full" };
+    const a = &authorities[nauth];
+    a.* = .{ .instance = 1, .held = undefined, .nheld = 0, .images = "", .max_bag = 0, .max_children = 0, .children = 0 };
+    var it = std.mem.splitScalar(u8, spec, ';');
+    while (it.next()) |l0| {
+        const l = std.mem.trim(u8, l0, " ");
+        if (l.len == 0) continue;
+        var f = std.mem.tokenizeScalar(u8, l, ' ');
+        const k = f.next() orelse "";
+        if (std.mem.eql(u8, k, "handle")) {
+            if (a.nheld == a.held.len) return .{ .refused = "too many handles" };
+            a.held[a.nheld] = .{ .name = f.next() orelse "", .verbs = f.next() orelse "", .value = f.next() orelse "" };
+            a.nheld += 1;
+        } else if (std.mem.eql(u8, k, "spawn")) {
+            a.images = f.next() orelse "";
+        } else if (std.mem.eql(u8, k, "max_bag")) {
+            a.max_bag = std.fmt.parseInt(u32, f.next() orelse "0", 10) catch 0;
+        } else if (std.mem.eql(u8, k, "max_children")) {
+            a.max_children = std.fmt.parseInt(u32, f.next() orelse "0", 10) catch 0;
+        } else return .{ .refused = "malformed authority line" };
+    }
+    nauth += 1;
+    logln("authority: holder={d} handles={d} spawn=[{s}] max_bag={d} max_children={d}", .{ a.instance, a.nheld, a.images, a.max_bag, a.max_children });
+    var i: u32 = 0;
+    while (i < a.nheld) : (i += 1) logln("authority: holds {s} verbs={s}", .{ a.held[i].name, a.held[i].verbs });
+    return .{ .ok = a };
+}
+
+// ------------------------------------------------------------ children and the seam
+
+const Grant = struct {
+    as: []const u8, // how the child names it (fd/1, env/TERM, ...)
+    from: []const u8, // the parent's handle
+    verbs: []const u8, // attenuated
+    value: []const u8,
+    granted_by: u32,
+    why: []const u8,
+};
+
+pub const Child = struct {
+    instance: u32,
+    generation: u32,
+    image: *const Image,
+    auth: *Authority,
+    parent: u32,
+    budget: u64,
+    bag: [8]Grant,
+    nbag: u32,
+    entered: bool,
+    status: i32,
+    seam_refusals: u32,
+};
+
+// The seam: the ONLY way a child image reaches anything. Ambient: clock, exit (return), yield.
+pub const ChildCtx = struct {
+    c: *Child,
+    pub fn enter(self: *ChildCtx) void {
+        self.c.entered = true; // the evidence `start` waits for
+    }
+    fn find(self: *ChildCtx, as: []const u8, verb: []const u8) ?*const Grant {
+        var i: u32 = 0;
+        while (i < self.c.nbag) : (i += 1) {
+            const g = &self.c.bag[i];
+            if (std.mem.eql(u8, g.as, as)) {
+                if (verbsWithin(verb, g.verbs)) return g;
+                self.c.seam_refusals += 1;
+                logln("refused: child={d}.{d} use={s} verb={s} granted={s} phase=run (verb not in bag)", .{ self.c.instance, self.c.generation, as, verb, g.verbs });
+                return null;
+            }
+        }
+        self.c.seam_refusals += 1;
+        logln("refused: child={d}.{d} use={s} verb={s} phase=run (not in bag)", .{ self.c.instance, self.c.generation, as, verb });
+        return null;
+    }
+    pub fn write(self: *ChildCtx, as: []const u8, text: []const u8) bool {
+        _ = self.find(as, "write") orelse return false;
+        logln("child={d}.{d} {s}: {s}", .{ self.c.instance, self.c.generation, as, text });
+        return true;
+    }
+    pub fn read(self: *ChildCtx, as: []const u8) ?[]const u8 {
+        const g = self.find(as, "read") orelse return null;
+        return g.value;
+    }
+    pub fn clock(self: *ChildCtx) u64 { // ambient
+        _ = self;
+        return ukplat_monotonic_clock();
+    }
+    pub fn census(self: *ChildCtx) void {
+        logln("census: child={d}.{d} bag={d}", .{ self.c.instance, self.c.generation, self.c.nbag });
+        var i: u32 = 0;
+        while (i < self.c.nbag) : (i += 1) logln("census: child={d}.{d} sees {s} verbs={s}", .{ self.c.instance, self.c.generation, self.c.bag[i].as, self.c.bag[i].verbs });
+    }
+};
+
+// ------------------------------------------------------------ images linked into this image
+
+const Image = struct {
+    name: []const u8,
+    imports: []const u8, // ','-separated child-side names the image needs (checked at seal)
+    entry: *const fn (ctx: *ChildCtx) i32,
+};
+
+// census: reports what it sees, then tries fd/1 and env/TERM (granted or not).
+fn censusMain(ctx: *ChildCtx) i32 {
+    ctx.enter();
+    ctx.census();
+    const wrote = ctx.write("fd/1", "hello from a spawned child");
+    const term = ctx.read("env/TERM");
+    _ = ctx.read("fd/1"); // read is never granted on fd/1 in the test: a verb refusal when fd/1 exists
+    logln("census: child={d}.{d} wrote={s} TERM={s} clock_ok={s}", .{ ctx.c.instance, ctx.c.generation, if (wrote) "yes" else "no", term orelse "(none)", if (ctx.clock() > 0) "yes" else "no" });
+    return @intCast(ctx.c.nbag);
+}
+// greedy: needs a store it is not granted; seal must refuse it.
+fn greedyMain(ctx: *ChildCtx) i32 {
+    ctx.enter();
+    return 0;
+}
+// inert: never executes its entry evidence; start must stall.
+fn inertMain(ctx: *ChildCtx) i32 {
+    _ = ctx;
+    return 0;
+}
+const images = [_]Image{
+    .{ .name = "census", .imports = "", .entry = censusMain },
+    .{ .name = "greedy", .imports = "store/ring", .entry = greedyMain },
+    .{ .name = "inert", .imports = "", .entry = inertMain },
+};
+
+// ------------------------------------------------------------ tors
+
+~pub tor census { } -> u32
+
+~proc census|zig {
+    return roster;
+}
+
+// F2, loud: there is no fork. This tor exists so a caller that asks gets the row.
+~pub tor fork { a: *Authority } -> string
+
+~proc fork|zig {
+    logln("refused: fork by holder={d} reason=address-space copy is not grantable (F2) phase=run arm={s} offered=reserve+grant+seal+start", .{ a.instance, arm_name });
+    return "address-space copy is not grantable (F2)";
+}
+
+~pub tor reserve { a: *Authority, image: string, budget: u64 }
+| staged *Child<staged!>
+| refused { reason: string, image: string }
+
+~proc reserve|zig {
+    var why: []const u8 = "";
+    var img: ?*const Image = null;
+    for (&images) |*im| if (std.mem.eql(u8, im.name, image)) {
+        img = im;
+    };
+    if (std.mem.eql(u8, image, "@caller")) {
+        why = "no second context: continuing at the caller's instruction pointer is not grantable (F2)";
+    } else if (!listHas(a.images, '|', image)) {
+        why = "image not in the spawn authority (F9)";
+    } else if (img == null) {
+        why = "image not linked into this realization";
+    } else if (a.children >= a.max_children) {
+        why = "spawn authority has no free child slot (max_children)";
+    }
+    if (why.len != 0) {
+        logln("refused: reserve image={s} holder={d} reason={s} phase=reserve", .{ image, a.instance, why });
+        return .{ .refused = .{ .reason = why, .image = image } };
+    }
+    const mem = malloc(@sizeOf(Child)) orelse return .{ .refused = .{ .reason = "out of memory", .image = image } };
+    const c: *Child = @ptrCast(@alignCast(mem));
+    c.* = .{ .instance = next_instance, .generation = 1, .image = img.?, .auth = a, .parent = a.instance, .budget = budget, .bag = undefined, .nbag = 0, .entered = false, .status = -1, .seam_refusals = 0 };
+    next_instance += 1; // never reused (F1)
+    a.children += 1;
+    roster += 1;
+    logln("spawn: reserve child={d}.{d} image={s} parent={d} budget={d} bag=0 (empty by default) roster={d}", .{ c.instance, c.generation, image, a.instance, budget, roster });
+    return .{ .staged = c };
+}
+
+~pub tor grant { c: *Child<!staged>, handle: string, verbs: string, as: string }
+| ok *Child<staged!>
+| refused { c: *Child<staged!>, reason: string }
+
+~proc grant|zig {
+    const a = c.auth;
+    var why: []const u8 = "";
+    var held: ?*const Held = null;
+    var i: u32 = 0;
+    while (i < a.nheld) : (i += 1) if (std.mem.eql(u8, a.held[i].name, handle)) {
+        held = &a.held[i];
+    };
+    if (std.mem.eql(u8, handle, "address-space")) {
+        why = "address-space copy is not grantable (F2)";
+    } else if (held == null) {
+        why = "parent does not hold this handle";
+    } else if (!verbsWithin(verbs, held.?.verbs)) {
+        why = "over-grant: verbs exceed the parent's (amplification)";
+    } else if (c.nbag >= a.max_bag or c.nbag == c.bag.len) {
+        why = "bag full (max_bag)";
+    }
+    if (why.len != 0) {
+        logln("refused: grant child={d}.{d} handle={s} verbs={s} as={s} reason={s} phase=grant", .{ c.instance, c.generation, handle, verbs, as, why });
+        return .{ .refused = .{ .c = c, .reason = why } };
+    }
+    c.bag[c.nbag] = .{ .as = as, .from = handle, .verbs = verbs, .value = held.?.value, .granted_by = a.instance, .why = "explicit" };
+    c.nbag += 1;
+    logln("spawn: grant child={d}.{d} as={s} from={s} verbs={s} (parent holds {s}) granted_by={d} why=explicit", .{ c.instance, c.generation, as, handle, verbs, held.?.verbs, a.instance });
+    return .{ .ok = c };
+}
+
+~pub tor seal { c: *Child<!staged> }
+| sealed *Child<sealed!>
+| refused { c: *Child<staged!>, missing: string }
+
+~proc seal|zig {
+    var it = std.mem.splitScalar(u8, c.image.imports, ',');
+    while (it.next()) |imp| {
+        if (imp.len == 0) continue;
+        var ok = false;
+        var i: u32 = 0;
+        while (i < c.nbag) : (i += 1) if (std.mem.eql(u8, c.bag[i].as, imp)) {
+            ok = true;
+        };
+        if (!ok) {
+            logln("refused: seal child={d}.{d} image={s} missing={s} phase=seal (not in bag, not ambient)", .{ c.instance, c.generation, c.image.name, imp });
+            return .{ .refused = .{ .c = c, .missing = imp } };
+        }
+    }
+    logln("manifest: child={d}.{d} image={s} parent={d} rung={s} bag={d} ambient=memory<={d},clock,exit,yield", .{ c.instance, c.generation, c.image.name, c.parent, rung, c.nbag, c.budget });
+    var i: u32 = 0;
+    while (i < c.nbag) : (i += 1) logln("manifest: child={d}.{d} grant as={s} from={s} verbs={s} granted_by={d} why={s}", .{ c.instance, c.generation, c.bag[i].as, c.bag[i].from, c.bag[i].verbs, c.bag[i].granted_by, c.bag[i].why });
+    return .{ .sealed = c };
+}
+
+~pub tor start { c: *Child<!sealed> }
+| running *Child<running!>
+| stalled { c: *Child<sealed!>, reason: string }
+
+~proc start|zig {
+    var ctx = ChildCtx{ .c = c };
+    c.status = c.image.entry(&ctx);
+    if (!c.entered) {
+        logln("spawn: start child={d}.{d} stalled (no evidence the entry executed)", .{ c.instance, c.generation });
+        return .{ .stalled = .{ .c = c, .reason = "no evidence the entry executed" } };
+    }
+    logln("spawn: start child={d}.{d} entered=yes seam_refusals={d}", .{ c.instance, c.generation, c.seam_refusals });
+    return .{ .running = c };
+}
+
+~pub tor wait { c: *Child<!running> } -> { c: *Child<exited!>, status: i32 }
+
+~proc wait|zig {
+    logln("spawn: exited child={d}.{d} status={d}", .{ c.instance, c.generation, c.status });
+    return .{ .c = c, .status = c.status };
+}
+
+fn retire(c: *Child, how: []const u8) void {
+    c.auth.children -= 1;
+    roster -= 1;
+    logln("spawn: {s} child={d}.{d} released bag={d} roster={d}", .{ how, c.instance, c.generation, c.nbag, roster });
+    free(@ptrCast(c));
+}
+
+~pub tor reap { c: *Child<!exited> }
+
+~proc reap|zig {
+    retire(c, "reap");
+}
+
+~pub tor abandon { c: *Child<!staged|!sealed> }
+
+~proc abandon|zig {
+    retire(c, "abandon (no evidence it ran)");
+}
