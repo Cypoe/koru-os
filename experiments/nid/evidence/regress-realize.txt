@@ -1,0 +1,15 @@
+Regression after koru/realize gained the koruos.nid row: ../realize/run-counted.sh, 2026-10-19 19:14:44-19:16:59 CEST, TCG
+slice-config.txt: R2/R3 PASS
+silo-config.txt: R2/R3 PASS
+slice-stack.txt: verdict: FITS (conservative 76544 B <= 131072 B)
+silo-stack.txt: verdict: FITS (conservative 74216 B <= 131072 B)
+slice-compile-gates: SLICE-compile PASS
+slice run 1: SLICE-A PASS
+ds0 run 1: DS0-image PASS
+slice run 2: SLICE-A PASS
+ds0 run 2: DS0-image PASS
+slice run 3: SLICE-A PASS
+ds0 run 3: DS0-image PASS
+realize negatives: R6 PASS
+2417146342324eafe655f01964ad70ebafdd16ee43f143b7f774a4de4374a36d  /workspace/nidreg/slice/koruos/slice/tests/.unikraft/build/koru_qemu-x86_64
+bcdd32a0838a4c340f6550d107ac577111c059b59f6752d8d028e66bf83bf6cb  /workspace/nidreg/silo/koruos/silo/tests/.unikraft/build/koru_qemu-x86_64

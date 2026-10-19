@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance); 19:05: obligation-derived kconfig (`koruc … realize gen`) measured, §11.1 result) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance); 19:05: obligation-derived kconfig (`koruc … realize gen`) measured, §11.1 result; 19:17: NID binding layer `koruos/nid` N1–N10 3/3 PASS, regressions 3/3, §11.6, Q3 answered by work) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -1068,9 +1068,12 @@ Per the matrix's own §4 precedent, a row is a claim about the tree. The terms m
 | `bridge` / `session` (`std/bridge`) | durable REPL / session environment with a capability scope | the session is itself an obligation (`<session!>`, discharged only by `close`) | yes (`koru_std/bridge*.kz`) |
 | `platform namespace` | target / platform layer (HAL) | path alias beside `std` (`unikraft`); a miss is a loud "module not found" | yes (`src/config.zig` comment) |
 | `platform arm` | target backend / port | one substrate's realization of the same interfaces; avoids the `arm` collision | not yet in tree (koru-os) |
-| `correspondence row` | symbol-resolution record plus provenance (linker / NID table) | persistent: foreign name ↔ minted interface ↔ provider, with lineage and evidence | not yet in tree (koru-os) |
-| `live binding` | resolved PLT/GOT entry / capability handle | ephemeral: carries instance, generation and an obligation lifetime | not yet in tree (koru-os) |
-| `generation` | epoch / incarnation number | a stale generation is refused at use, never redirected | not yet in tree (koru-os) |
+| `correspondence row` | symbol-resolution record plus provenance (linker / NID table) | persistent: foreign name ↔ minted interface ↔ provider, with lineage and evidence | **in tree** (koru-os `koru/nid/index.kz` `Row`, 2026-10-19) |
+| `live binding` | resolved PLT/GOT entry / capability handle | ephemeral: carries instance, generation and an obligation lifetime | **in tree** (`koruos/nid` `*Binding<live!>`, minted by `resolve`, discharged by `release`) |
+| `generation` | epoch / incarnation number | a stale generation is refused at use, never redirected | **in tree** (`koruos/nid` `call` → `\| stale`, bumped by `retarget`) |
+| `NID` | symbol hash / name id (PS4/PS5 NID, ELF `DT_GNU_HASH` key) | koru-os: 64-bit sha256 prefix of `scheme/ns/version/name` under a versioned domain; a comparison key, never authority; collisions refused | in tree (`koruos/nid`) |
+| `retarget` | relink / symbol interposition (AnyPS5 re-link) | re-points an interface's rows to another provider export; NIDs and call sites unchanged; bumps the generation | in tree (`koruos/nid:retarget`) |
+| `occlude` (row) | supersede / shadow (version shadowing) | the `evolve` verb's effect on the parent row: it stays, listed, unresolvable | in tree (`koruos/nid` `occluded_by`; matches koru-distill `Occludes:`) |
 | `evidence class` (V/M/C/D) | provenance level / assurance level | verified-now, measured, carried-over, design-only | not yet in tree (koru-os) |
 
 ### 2.3 The concordance as the third matrix, and the verification-path gate
@@ -2072,7 +2075,7 @@ confluence as the term-level anchor. Neither is a proof about addresses.
 | `Ring { ring_id, offset }` | a live binding to a mutable shared ring: the counted, epoch-checked side (§8.5, Q2) | `std/channel` custody / transit (V) | none yet | none (no rings in plex-os) |
 | `Tensor { field_name, node_id }` | associative rung B (§9): later, clear-text first | none | none | none |
 
-**An unbound NID fails loudly.** `resolve` returning nothing is the refusal hook (§3.4).
+**An unbound NID fails loudly.** `resolve` returning nothing is the refusal hook (§3.4). *Measured 2026-10-19 (`koruos/nid`, N3/N4): an unbound NID is refused by the layer with the fixed shape, and `create` over an existing row is refused rather than overwritten.*
 `bind` must never silently overwrite an existing binding, as plex-core's `bind_address` does
 today (`notes/plex-os-study.md` §3).
 
@@ -2376,7 +2379,7 @@ Evidence: `experiments/slice-a/evidence/`.
 
 1. Concordance registration (§2.3): every koru-os term cited or added.
 2. Obligation-derived kconfig (§11.1). *2026-10-19 19:05: S1, S2 and R6 met, S4 partly, S3 and the RAM floor owed (§11.1 result).*
-3. The NID binding layer: rows, admission and refusal (§3.2–§3.6, §11.2, Slice A S9–S11).
+3. The NID binding layer: rows, admission and refusal (§3.2–§3.6, §11.2, Slice A S9–S11). *2026-10-19 19:16: `koruos/nid` N1–N10 3/3 PASS under TCG, regressions 3/3 (§11.6).*
 4. **SASOS ascent** over one address space (§6.1a), with the **counting wall as a measured
    spike** inside it. The design is closed (§8.5); the measurement is the work.
 5. Protection bits.
@@ -2406,6 +2409,62 @@ still Q37, and Q30 is untouched.
 - KolibriOS translation
 - plex-os platform arm rows beyond `PlexGuestBoot` as a documented row
 
+
+### 11.6 The NID binding layer (result, 2026-10-19 19:13–19:17 CEST, M under TCG)
+
+`koru/nid/index.kz` (`koruos/nid`, koru-libs shape) makes the binding chain of §3.0
+executable:
+
+```
+foreign import (scheme/ns/version/name) --NID--> correspondence row --> canonical interface (name@rev) --> provider export (artifact:symbol, linked here)
+```
+
+**Rows** are asserted in a manifest; equality between foreign names is never inferred
+(§3.2). In the test, `c/libc/1/fputs` and `linux/x86_64/1/write` are two rows onto one
+`koruos.console.write@1`. A row is admitted only if its export is linked into this image
+**and** declares that it realizes exactly that revision, a reduced §3.6 descriptor check.
+
+**The verbs:**
+
+- `open`: mints the table;
+- `resolve`: mints a `*Binding<live!>`, or refuses with `phase=link`, `missing=correspondence
+  row` and the offered near misses;
+- `call`: goes through the binding; refused `stale` if the generation moved;
+- `retarget`: re-points an interface's rows to another export with NIDs unchanged, bumping
+  the generation (the AnyPS5/shadPS4 precedent);
+- `release` and `close`: `close` prints table 1 and the refusal count.
+
+`create` on a bound foreign name is refused. `evolve` occludes its parent row and keeps it.
+
+**Result:**
+
+- N1–N10 and R hold 3/3 on one image (`ecdecd9d…`, 209,584 B; `experiments/nid/README.md`).
+  The host recomputes all 35 printed ids independently.
+- Regressions: Slice A and DS0, 3/3 each.
+- The kconfig is derived by `koruos/realize`, which gained the `koruos.nid` row.
+
+**Findings:**
+
+- **Auto-discharge order.** koruc auto-discharges a never-released binding (B5 rule) but
+  emits the `release` **after** the explicit `close`. `close` therefore detects
+  `outstanding=1` and keeps the table instead of freeing it under the binding. That is a
+  runtime guard against an ordering the phantom checker does not see; the lift has to carry
+  it.
+- **Stack bound.** The conservative bound (87,592 B) exceeds the rows' declared sum
+  (86,016 B) by 1.5 KB, entirely through the charge for indirect calls. It stays inside the
+  25 % margin and the derived 128 KiB. The direct-edge demand is 76,368 B.
+- **Narrow descriptor.** Of §3.6, only the interface revision is checked. Layout, effects and
+  authority are Slice A's `resolve` (S9–S11) and are not yet joined to NID rows.
+
+**Not yet:**
+
+- rows in `std/store` with `ref(T)` (they live in a fixed array here);
+- artifact hashes on exports (Slice A has them; this lift names artifacts only);
+- signed rows (Q3 item 4);
+- the cross-image handle of §8.4;
+- the link phase proper. Resolution runs at boot inside the image; a build-time pass
+  that refuses before an image exists is the next step, through `koruos/realize` table 3.
+
 ---
 
 ## 12. Open questions
@@ -2424,7 +2483,12 @@ still Q37, and Q30 is untouched.
    (DMA buffers, rings)? *(Still open: this is the one gap §8.5 does not settle. A DMA buffer
    or ring is mutable and shared, so it falls under the counted, epoch-checked side, and its
    reclamation grace period with a device as holder is unmeasured.)*
-3. **NID derivation.**
+3. **NID derivation.** *Answered by work, 2026-10-19 (M, `experiments/nid/`); Fabian may
+   overrule:* a hash, two of them. The foreign NID is the first 8 bytes of
+   `sha256("koruos.nid.v1|" + scheme/ns/version/name)` and the interface id the same over
+   `"koruos.iid.v1|" + name@rev`, both shown as 11 base64url characters. Collisions are
+   refused at open and at resolve (N6). Authority is not in the hash: only a minted binding
+   grants a call (§8.4). Still open: who signs rows (item 4).
    - Does koru-os adopt a hash of the minted interface name and contract revision, or
      an opaque id assigned at mint?
    - The PS4 salted SHA-1 truncation is a precedent, not a requirement.
