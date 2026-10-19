@@ -11,8 +11,10 @@ if [ ! -d .unikraft/unikraft ]; then
   mkdir -p .unikraft
   cp -a "$W_SRC/.unikraft/unikraft" "$W_SRC/.unikraft/libs" .unikraft/
 fi
+P="$HERE/patches/unikraft-0.21-sched-cr3-switch.patch"
+grep -q ksp_mmu_sched_switch .unikraft/unikraft/lib/uksched/include/uk/sched_impl.h 2>/dev/null || \
+  patch -d .unikraft/unikraft -p1 < "$P"
 rm -f .config.m-spawn-mmu_qemu-x86_64 .unikraft/build/config
-# force rebuild of app
 rm -f .unikraft/build/appkoruos/*.o 2>/dev/null || true
 UK_CFLAGS="-std=gnu17" kraft build --arch x86_64 --plat qemu --no-prompt --log-type basic
 ls -la .unikraft/build/m-spawn-mmu_qemu-x86_64

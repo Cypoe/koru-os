@@ -45,3 +45,7 @@ depends on view timing. Migrating would re-freeze Slice A. The mapping is record
 Disclosed: an exploratory build and one boot (`/workspace/sp1`) were made while writing the
 checker, which was then dry-run on that log after its `abandon` wording was patched in text
 (that run is not counted).
+
+## M-SPAWN-MMU gaps (2026-10-19)
+
+Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **ready for Fabian review**, not accepted. ELF child-CR3 remaining (see DESIGN-0001 M-SPAWN-MMU row).

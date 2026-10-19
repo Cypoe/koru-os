@@ -1,0 +1,31 @@
+--- a/lib/uksched/include/uk/sched_impl.h
++++ b/lib/uksched/include/uk/sched_impl.h
+@@ -97,6 +97,11 @@
+  */
+ unsigned int uk_sched_thread_gc(struct uk_sched *sched);
+ 
++/* koru-os M-SPAWN-MMU: weak hooks; leave before heap TLS/ctx, arrive after. */
++void ksp_mmu_sched_switch(struct uk_thread *next) __attribute__((weak));
++void ksp_mmu_sched_arrive(void) __attribute__((weak));
++
+ static inline
+ void uk_sched_thread_switch(struct uk_thread *next)
+ {
+ 	struct uk_thread *prev;
+ 
++	if (ksp_mmu_sched_switch)
++		ksp_mmu_sched_switch(next);
++
+ 	prev = uk_pcpuvar_current_get(__uk_sched_thread_current);
+ 
+ 	UK_ASSERT(prev);
+@@ -129,7 +134,9 @@
+ 	 * typically on a timer IRQ, so then ECTX saving/restoring is definetely
+ 	 * necessary.
+ 	 */
+-	ukarch_ctx_switch(&prev->ctx, &next->ctx);
++	ukarch_ctx_switch(&prev->ctx, &next->ctx);
++	if (ksp_mmu_sched_arrive)
++		ksp_mmu_sched_arrive();
+ }
+ 

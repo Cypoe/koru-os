@@ -32,3 +32,7 @@ explicit rights bag. QEMU TCG only.
 
 PASS = E0-E12 in 3/3 boots of one image. M9 / Hyprland untouched (Q30).
 Concordance terms proposed only.
+
+## M-SPAWN-MMU gaps (2026-10-19)
+
+Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **ready for Fabian review**, not accepted. ELF child-CR3 remaining (see DESIGN-0001 M-SPAWN-MMU row).

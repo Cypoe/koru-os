@@ -1,0 +1,11 @@
+ok   PASS gap1 fault: child cannot read parent heap
+ok   PASS gap1 fault: ungranted secret
+ok   PASS gap1 attenuation RO write faults
+ok   PASS gap1 own ambient heap writable
+ok   PASS gap2 zero-grant: parent heap fault
+ok   PASS gap2 derive empty bag
+ok   PASS gap3 isolation A
+ok   PASS gap3 isolation B
+ok   PASS gap3 stress switches
+ok   M-SPAWN-MMU GAPS PASS
+M-SPAWN-MMU GAPS PASS

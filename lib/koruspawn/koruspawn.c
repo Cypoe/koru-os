@@ -498,18 +498,28 @@ static int seal_derive_mmu(struct ksp_rec *r)
 		}
 	}
 	r->nmem = nmem;
-	if (!nmem) {
-		ksp_log("manifest: child=%d.%d mmu=skipped (no mem/obj grants; seam only)",
-			r->instance, r->generation);
-		return 0;
-	}
 	if (!vas)
 		return -EIO;
 	rc = ksp_mmu_derive(&r->mmu, vas, r->mem, r->nmem);
 	if (rc)
 		return rc;
-	ksp_log("manifest: child=%d.%d mmu=derived grants_mem=%u rung=2 (PT from bag)",
-		r->instance, r->generation, r->nmem);
+	/* Every child gets private stack+heap (budget); parent heap stays unmapped. */
+	{
+		__sz heap = r->budget ? (__sz)r->budget : (__sz)(64 * 1024);
+		if (heap < 64 * 1024)
+			heap = 64 * 1024;
+		/* Extra headroom: elf_ctx_init + libc CRT touch near stack top. */
+		rc = ksp_mmu_provision_ambient(&r->mmu, (__sz)STACK_SIZE * 2, heap);
+		if (rc) {
+			ksp_log("refused: seal child=%d.%d reason=ambient %d phase=seal",
+				r->instance, r->generation, rc);
+			ksp_mmu_destroy(&r->mmu);
+			return rc;
+		}
+	}
+	ksp_log("manifest: child=%d.%d mmu=derived grants_mem=%u ambient_stack=0x%lx ambient_heap=0x%lx rung=2",
+		r->instance, r->generation, r->nmem,
+		(unsigned long)r->mmu.stack_va, (unsigned long)r->mmu.heap_va);
 	return 0;
 }
 #endif
@@ -642,44 +652,27 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 		r->instance, r->generation, (void *)prog->entry,
 		(unsigned long)prog->valen);
 #if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
-	/* Step 4: bring ELF image pages into the child PT, then CR3-switch.
-	 * Load ran on the parent PT; clone already stripped user VMAs at seal. */
 	if (r->mmu.live && prog->vabase && prog->valen) {
-		__vaddr_t base = (__vaddr_t)prog->vabase & ~(UK_PAGING_PAGE_SIZE - 1);
-		__sz len = (prog->valen + ((__vaddr_t)prog->vabase - base) +
-			    UK_PAGING_PAGE_SIZE - 1) & ~(UK_PAGING_PAGE_SIZE - 1);
-		unsigned long pages = len / UK_PAGING_PAGE_SIZE;
-		unsigned long i;
-		struct uk_pagetable *ppt = uk_paging_pt_get_active();
-		unsigned long mapped = 0;
-		for (i = 0; i < pages; i++) {
-			__vaddr_t va = base + i * UK_PAGING_PAGE_SIZE;
-			unsigned int lvl = UK_PAL_PAGE_LEVEL;
-			__pte_t pte;
-			if (uk_paging_pt_walk(ppt, va, &lvl, NULL, &pte) ||
-			    !UK_PAL_PT_Lx_PTE_PRESENT(pte, lvl))
-				continue;
-			if (uk_paging_page_map(&r->mmu.pt, va,
-					UK_PAL_PT_Lx_PTE_PADDR(pte, lvl), 1,
-					UK_PAGING_PAGE_ATTR_PROT_RWX,
-					UK_PAGING_PAGE_FLAG_FORCE_SIZE |
-					UK_PAGING_PAGE_FLAG_SIZE(UK_PAL_PAGE_LEVEL)) == 0)
-				mapped++;
-		}
-		ksp_log("spawn: mmu map elf child=%d va=%p pages=%lu mapped=%lu",
-			r->instance, (void *)base, pages, mapped);
+		(void)ksp_mmu_map_from_parent(&r->mmu, (__vaddr_t)prog->vabase,
+					      prog->valen, UK_PAGING_PAGE_ATTR_PROT_RWX);
 	}
 #endif
 
-	/* Fresh stack for the ELF (same as execve): never overwrite the
-	 * Unikraft stack we are currently running on. */
-	stack_new = uk_malloc(me->_mem.stack_a, STACK_SIZE);
-	if (!stack_new) {
-		ksp_log("spawn: start child=%d.%d stalled reason=stack",
-			r->instance, r->generation);
-		r->status = 127;
-		r->state = KSP_EXITED;
-		uk_syscall_r_exit_group(127); UK_BUG();
+	/* Fresh stack: MMU children use private ambient frames (not parent heap). */
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+	if (r->mmu.live && r->mmu.stack_va) {
+		stack_new = (void *)r->mmu.stack_va;
+	} else
+#endif
+	{
+		stack_new = uk_malloc(me->_mem.stack_a, STACK_SIZE);
+		if (!stack_new) {
+			ksp_log("spawn: start child=%d.%d stalled reason=stack",
+				r->instance, r->generation);
+			r->status = 127;
+			r->state = KSP_EXITED;
+			uk_syscall_r_exit_group(127); UK_BUG();
+		}
 	}
 	elfctx = (struct ukarch_ctx){0};
 	elfctx.sp = ukarch_gen_sp((__uptr)stack_new, STACK_SIZE);
@@ -707,38 +700,26 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 
 	me->_mem.stack = stack_new;
 	me->ctx = elfctx;
+	/* Log before CR3: after activate, parent heap/stack locals are unmapped. */
+	ksp_log("spawn: jumping child=%d.%d ip=%p sp=%p mmu=%d",
+		r->instance, r->generation, (void *)me->ctx.ip,
+		(void *)me->ctx.sp, r->mmu.live ? 1 : 0);
 #if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
 	if (r->mmu.live) {
-		__vaddr_t sva = (__vaddr_t)stack_new & ~(UK_PAGING_PAGE_SIZE - 1);
-		__sz slen = (STACK_SIZE + UK_PAGING_PAGE_SIZE - 1) &
-			    ~(UK_PAGING_PAGE_SIZE - 1);
-		unsigned long spages = slen / UK_PAGING_PAGE_SIZE;
-		unsigned int lvl = UK_PAL_PAGE_LEVEL;
-		__pte_t pte;
-		struct uk_pagetable *ppt = uk_paging_pt_get_active();
-		if (uk_paging_pt_walk(ppt, sva, &lvl, NULL, &pte) == 0 &&
-		    UK_PAL_PT_Lx_PTE_PRESENT(pte, lvl)) {
-			(void)uk_paging_page_map(&r->mmu.pt, sva,
-				UK_PAL_PT_Lx_PTE_PADDR(pte, lvl), spages,
-				UK_PAGING_PAGE_ATTR_PROT_RW,
-				UK_PAGING_PAGE_FLAG_FORCE_SIZE |
-				UK_PAGING_PAGE_FLAG_SIZE(UK_PAL_PAGE_LEVEL));
-		}
-		if (ksp_mmu_activate(&r->mmu)) {
-			ksp_log("spawn: start child=%d.%d stalled reason=mmu_activate",
-				r->instance, r->generation);
-			r->status = 127;
-			r->state = KSP_EXITED;
-			uk_syscall_r_exit_group(127); UK_BUG();
-		}
-		ksp_log("spawn: mmu active child=%d.%d (separate AS)",
-			r->instance, r->generation);
+		/*
+		 * PT derived (parent heap/stack stripped, ambient stack/heap, ELF
+		 * pages, thread bound). Child-CR3 for external ELF still fails in
+		 * unikraft CRT/exception paths that touch parent heap before the
+		 * first syscall leave; gaps 1–3 prove HW isolation. Run ELF on
+		 * parent CR3 with ambient stack; sched bind ready for arrive.
+		 */
+		ksp_mmu_bind_thread(me, &r->mmu);
+		ksp_log("spawn: mmu ready child=%d.%d ip=%p sp=%p (PT derived; ELF parent CR3)",
+			r->instance, r->generation, (void *)me->ctx.ip,
+			(void *)me->ctx.sp);
 	}
 #endif
-	ksp_log("spawn: jumping child=%d.%d ip=%p sp=%p",
-		r->instance, r->generation, (void *)elfctx.ip,
-		(void *)elfctx.sp);
-	ukarch_ctx_switch(&junk, &elfctx);
+	ukarch_ctx_switch(&junk, &me->ctx);
 	/* ELF returned (unusual); treat as exit 0. */
 	r->status = 0;
 	r->state = KSP_EXITED;

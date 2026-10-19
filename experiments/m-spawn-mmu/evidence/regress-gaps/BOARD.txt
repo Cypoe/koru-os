@@ -1,0 +1,14 @@
+# M-SPAWN-MMU gaps regression board (2026-10-19 21:48 CEST, Europe/Berlin)
+# accel=tcg (no KVM). Tip includes gap1–3 close (ambient VMA, sched leave/arrive, syscall CR3 pair).
+
+M-SPAWN-MMU GAPS: PASS 3/3 (experiments/m-spawn-mmu/evidence/gaps-accept/run-{1,2,3}/)
+spawn-elf: SPAWN-ELF PASS 3/3 (experiments/spawn-elf/evidence/run-{1,2,3}/) — seal always derives PT (rung=2); ELF runs on parent CR3 (child-CR3 CRT gap, see DESIGN)
+spawn skeleton: SPAWN PASS 3/3
+NID: NID PASS 3/3 (kernel /workspace/nlc … d6ab5c53…)
+Slice A: SLICE-A PASS 3/3
+M3–M8b/M7b: PASS 3/3 each (regress-gaps/mladder + m7b; M9 kernel 595f8c05… unchanged)
+M9 + STAGE2: not re-run this session (harness root/QMP flake on box; prior accept-q30s2 3/3; M9 kernel unchanged)
+
+Remaining gaps (honest):
+- External ELF child-CR3: unikraft CRT/exception still needs parent-heap pages before first syscall leave; PT is derived+bound; HW isolation proven in gaps harness.
+- Q33 open → code stays local (Cypoe/koru-os only when pushing).

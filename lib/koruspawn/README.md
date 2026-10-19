@@ -30,3 +30,7 @@ per-child page table from `mem:` / `obj:` grants (`ksp_grant_mem`). Revoke
 unmaps + TLB flush. Verb `cow` is the dissected-fork AS-copy grant.
 Without mem grants, behaviour stays seam-only (rung 0/1). See
 `experiments/m-spawn-mmu/`.
+
+## M-SPAWN-MMU gaps (2026-10-19)
+
+Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **ready for Fabian review**, not accepted. ELF child-CR3 remaining (see DESIGN-0001 M-SPAWN-MMU row).
