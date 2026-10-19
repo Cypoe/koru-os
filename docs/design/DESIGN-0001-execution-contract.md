@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:00: M4 stand-in (a)–(d) 3/3, §0.4) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -138,7 +138,7 @@ the L2 arm.
      (VGA text or fbcon) within a pixel tolerance.
 4. The L1 `strace -f` trace of this run is filed as the row list for DoD-2 (Appendix C.2).
 
-**M4 acceptance for the stand-in (fixed 2026-10-18, 20:40 CEST, before any L2 run).** M4 makes
+**M4 acceptance for the stand-in (fixed 2026-10-18, 20:35 CEST, before any L2 run).** M4 makes
 T-CYB concrete for the arm that passed M3 (Unikraft 0.21 + app-elfloader + `koruext2fs` root,
 TCG only). The parameters and checks below are frozen before measuring; a run passes only if
 every gated item holds, and M4 passes only with 3/3 runs.
@@ -360,7 +360,7 @@ means the test is first run against a Linux guest to produce the expected trace.
 | M2 | real FS allocates blocks (**DoD-1**) | L2: vfscore + ext2 driver, **or** DS1 | guest creates `/dod1` of *N* blocks, writes, `fsync`s, halts; host `e2fsck -fn` clean, `debugfs -R 'cat /dod1'` equals pattern, free-block count dropped by ≥ *N* | **M (TCG), 2026-10-18**: minimal ext2 Koru lift (`koru/ext2`); 3/3 + 1 runs pass, e2fsck exit 0, free blocks −10, inodes −1 (`experiments/m2-ext2/`). Scope of the writer: one file, one group, direct blocks. Read path under vfscore since 2026-10-18 (`lib/koruext2fs`, host oracle 7/7; B7 closed) |
 | M3 | static busybox shell from the ext root | L2 `app-elfloader` (L1 trace first) | scripted serial session: `echo`, `ls /`, `cat /dod1`, `exit 3` → exit status 3 observed; refusal log empty or only by-design rows | **M (TCG), 2026-10-18, PASS 3/3**: M2 guest writes `/dod1` into an `mke2fs -d` busybox image, host `e2fsck -fn` clean; M3 guest mounts it through `koruext2fs` (vfscore, read-only) as `/` and runs `ls /`, `cat /dod1` (guest sha256 = pattern), a pipeline, `exit 3` → "init exited with status 3"; boot to exit 0.39–0.42 s wall (`experiments/m3-ext2root/`). Refusal-log clause N/A (no silo in this image). Fixed on the way: B6 (vfork FSBASE, empty argv), virtio ring destroy under LIBUKVMEM. Debt: root is read-only; `koru/ext2` (writer) and `ext2core.zig` (reader) duplicate parsing |
 | M4 | **T-CYB** (§0.2) | L2 (L1 trace first) | (a)–(d) gated, (e) open; frozen parameters in §0.2 "M4 acceptance for the stand-in" | **M (stand-in): (a)–(d) PASS 3/3 under TCG, 2026-10-19 12:55 CEST; (e) open** (`experiments/m4-cyb/README.md`); needed fixes B9, B10. Full T-CYB still waits for boot-animator (Q18) and a UTF-8 display path |
-| M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | D; stage M5a frozen below §0.4 |
+| M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | **M5a (M): PASS 3/3 under TCG, 2026-10-19 13:06 CEST**: musl and glibc `ld.so`, GNU coreutils 9.7, dynamic busybox shell pipeline; M3 and M4 regressions 3/3 on the same kernel (`experiments/m5-dyn/README.md`); needed fix B12. Open: musl-built busybox, `dlopen`, threads, `fork` (Q19) |
 | DS2 | Kolibri driver silo, first driver | L2 + silo:kolibri (KolibriOS driver-service personality) | an unmodified KolibriOS `.sys` network or input driver (`RTL8139`/`pcnet32` on QEMU `rtl8139`/`pcnet`, or `ps2mouse4d`) loads in the silo. Its imports either bind to rows or are refused by name. `net.*` frames or `input.*` events cross the silo boundary (serial log) | D |
 | DS3 | GPU driver silo | silo:lkl `virtio_gpu` on `virtio-gpu-pci`, or silo:kolibri `vmwgfx` on `vmware-svga` | the silo exposes only the `kms.*` rows of Appendix C.3; M6 passes through it | D |
 | DS4 | input driver silo | silo:lkl `virtio_input` (evdev) or silo:kolibri `usbhid`/`ps2` translated to `input.*` | M7 passes through it | D |
@@ -377,7 +377,7 @@ Order of risk: M2 and M3 are bounded engineering. M5 is gated by `fork` (Q19). D
 DS3 are gated by the LKL host port onto Unikraft and by device access from inside a
 silo (Q25). DS3 is the largest item in this note, and its size is unknown.
 
-**M5a acceptance: dynamic linking (fixed 2026-10-19, 13:15 CEST, before any acceptance run).**
+**M5a acceptance: dynamic linking (fixed 2026-10-19, 13:02 CEST, before any acceptance run).**
 M5a is the first half of M5. It runs on the M3/M4 arm (Unikraft 0.21 + app-elfloader +
 `koruext2fs`, TCG only). It proves that app-elfloader's `PT_INTERP` side-load runs real
 dynamically linked programs from the ext2 root, under both dynamic loaders. Probes before

@@ -11,5 +11,5 @@ set_robust_list	glibc ignores the failure; only robust process-shared mutexes wo
 # once per call site), before any acceptance run. Names of stubbed rows carry the prefix
 # "STUBBED " and the kernel symbol of the stub.
 STUBBED __uk_syscall_r_prctl	busybox set_task_comm() calls prctl(PR_GET_NAME/PR_SET_NAME); the stub returns 0 without effect, so only the task name shown by ps is unchanged; no M4 check depends on it
-# Added 2026-10-19 12:57 CEST after acceptance set 1 (12:54 CEST, 3/3 FAIL on (d) for this row only).
+# Added 2026-10-19 12:55 CEST after acceptance set 1 (12:54 CEST, 3/3 FAIL on (d) for this row only).
 STUBBED uk_posix_clone_sysvsem	clone-handler stub for CLONE_SYSVSEM; fires once at t~0.116 s, before the ELF loader starts any user program, so it is kernel-internal; Unikraft 0.21 has no semget/semop syscalls, so there are no System V semaphores to share

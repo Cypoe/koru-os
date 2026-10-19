@@ -39,7 +39,7 @@ itself produced no refusal row.
 
 **Set 1 (12:54 CEST) failed (d) 3/3.** It was the first run with the stubbed-call log, and
 `STUBBED uk_posix_clone_sysvsem` was not yet classified. Everything else passed. The row was
-classified at 12:57 CEST, and set 2 was then run unchanged. Both sets are in `evidence/`.
+classified at 12:55 CEST, and set 2 was then run unchanged. Both sets are in `evidence/`.
 
 ## (e) screendump
 A mid-run QEMU `screendump` (720×400 VGA text) was taken in every run and kept on the box. As

@@ -5,7 +5,7 @@ rseq	glibc 2.35+ runs without rseq when the kernel refuses it (__rseq_size stays
 set_robust_list	glibc ignores the failure; no program here uses robust process-shared mutexes
 STUBBED __uk_syscall_r_prctl	busybox set_task_comm() (PR_GET_NAME/PR_SET_NAME); only the ps task name is affected
 STUBBED uk_posix_clone_sysvsem	kernel-internal at init-process creation; no System V semaphore syscalls exist to share
-# Added 2026-10-19 ~13:25 CEST after the uncounted trial boot, before any acceptance run.
+# Added 2026-10-19 ~13:04 CEST after the uncounted trial boot, before any acceptance run.
 statx	glibc falls back to fstatat/newfstatat when statx is refused; GNU ls listings are correct (m3)
 STUBBED __uk_syscall_r_sched_getaffinity	the stub reports CPU0 only, which is the truth on this 1-vCPU guest; GNU sort uses it to pick its thread count
 prlimit64 resource 5	RLIMIT_RSS is refused with -EINVAL; GNU sort then sizes its buffer from physical memory; output verified (m7)

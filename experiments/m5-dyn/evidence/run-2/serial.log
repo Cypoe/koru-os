@@ -1,0 +1,93 @@
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFC6DB0+0EF06DB0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=4 blocks=32768 free=19030 inodes=1024 free=584
+[    0.115895] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.141751] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.188530] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.188829] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.196072] ERR:  [libposix_process] <deprecated.c @  302> koru-os: STUBBED __uk_syscall_r_prctl()
+[    0.197328] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+~ # eecchhoo  MM55--TT11;;  //bbiinn//hheelllloo--mmuussll  aa  bb;;  eecchhoo  rrcc==$$??
+
+M5-T1
+[    3.868627] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    3.868857] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+M5 hello from /bin/hello-musl, argc=3, getenv(PATH)=/bin
+rc=42
+~ # eecchhoo  MM55--TT22;;  //bbiinn//hheelllloo--gglliibbcc  aa;;  eecchhoo  rrcc==$$??
+
+M5-T2
+[    6.858939] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    6.891661] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    6.892338] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    6.899882] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+M5 hello from /bin/hello-glibc, argc=2, getenv(PATH)=/bin
+rc=42
+~ # eecchhoo  MM55--TT33;;  //uussrr//bbiinn//llss  //
+
+M5-T3
+[    9.858934] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    9.909656] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    9.910336] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    9.918844] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    9.925059] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+bin  dev  etc  lib  lib64  lost+found  tmp  usr
+~ # eecchhoo  MM55--TT44;;  //uussrr//bbiinn//llss  //  ||  //uussrr//bbiinn//wwcc  --ll
+
+M5-T4
+[   12.859832] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   12.914553] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[   12.915385] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[   12.922845] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   12.928251] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[   12.941602] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   12.978157] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[   12.978814] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[   12.986774] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+8
+~ # eecchhoo  MM55--TT55;;  llss  //  ||  wwcc  --ll
+
+M5-T5
+[   15.870160] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   15.918201] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[   15.918866] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[   15.929435] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   15.950230] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   15.999087] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[   15.999824] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[   16.010649] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+8
+~ # eecchhoo  MM55--TT66;;  //uussrr//bbiinn//sshhaa225566ssuumm  //eettcc//mm55--ddaattaa
+
+M5-T6
+[   18.860335] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   18.987264] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[   18.987943] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[   18.998377] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+f8cf211acfb9b9ea720cbe63093e802858c8c7037c23618f66e447a48bdba4f3  /etc/m5-data
+~ # eecchhoo  MM55--TT77;;  //uussrr//bbiinn//ssoorrtt  //eettcc//mm55--ddaattaa  ||  //uussrr//bbiinn//hheeaadd  --33
+
+M5-T7
+[   21.864225] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   21.901116] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[   21.901973] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[   21.910039] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   21.915934] ERR:  [libuksched] <sched.c @  434> koru-os: STUBBED __uk_syscall_r_sched_getaffinity()
+[   21.917762] ERR:  [libposix_process] <deprecated.c @  326> Unsupported resource 5
+[   21.941661] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[   21.977775] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[   21.978458] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[   21.988124] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+002b4b4c line 436
+003e181a line 490
+00745130 line 52
+~ # eexxiitt  55
+
+koru-os: init exited with status 5
+koruext2: unmount: 68256 blocks in 2133 requests, 202113 cache hits
