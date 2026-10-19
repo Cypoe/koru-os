@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -1059,6 +1059,31 @@ Per the matrix's own §4 precedent, a row is a claim about the tree. The terms m
 
 ## 3. The execution contract
 
+### 3.0 Layering
+
+*Folded in 2026-10-19 about 18:30 CEST from design material Fabian supplied (authoritative guidance; the wording here is this note's).*
+
+```
+Koru program / semantic object
+        │
+        ▼
+Koru execution contract        imports, effects, resources, lifecycle, session
+        │
+        ▼
+Substrate projection           Linux-hosted  |  native kernel  |  other host
+```
+
+The contract is the middle layer and the only one a program depends on. A substrate is a
+projection of the contract, never a substitute for it: the platform arms (§4) and the Linux-ABI
+routes L1–L3 (§0.1) are projections. Each **required interface** resolves to four things:
+
+1. an interface identifier;
+2. a contract and its version;
+3. an **authorized** provider (authorization is part of resolution, not something checked
+   afterwards);
+4. a target-specific entry point or adapter.
+
+
 ### 3.1 Identity is not location
 
 A pointer is a memoized resolution, not an identity. The precedent is PS4/PS5
@@ -1084,6 +1109,15 @@ identities are kept apart:
 A NID-style hash is the **mechanism** that makes identity cheap to compare at link or
 load time. It is **not the contract**. The contract is the minted interface plus its
 lineage.
+
+The three identities map onto three kinds of record, and none of them stands in for another:
+
+| identity | question | record |
+|---|---|---|
+| interface | which operation and contract | the **NID discipline**: the minted name and contract revision of a row (§3.2) |
+| artifact | which exact implementation bytes | build and content hashes (image, object, library) |
+| evidence | what supports the claim of satisfaction | verification receipts: test runs, measurements, proofs, reviews, each with provenance (§3.2 `evidence`) |
+
 
 ### 3.2 Correspondence rows (persistent)
 
@@ -1159,6 +1193,62 @@ For every build, on every platform arm, resolution emits three tables:
 3. `missing obligation -> explicit refusal`
 
 A build with a non-empty table 3 does not produce an image.
+
+### 3.6 The interface descriptor and binding admission
+
+*Folded in 2026-10-19 about 18:30 CEST from design material Fabian supplied (authoritative guidance; the wording here is this note's).*
+
+A name and a version are not enough to bind. Beyond the row fields of §3.2, an interface
+descriptor states:
+
+| field | what it fixes |
+|---|---|
+| calling convention and target data layout | ABI, struct layout, endianness, alignment, pointer width per target |
+| ownership, borrowing, lifetime | who owns each argument and result, what is borrowed and for how long, which obligations a call mints or discharges (phantom states) |
+| permitted effects and required authority | what the provider may do (I/O, allocation, blocking, spawning), and which rung-1 authority (§8.4) the caller must hold |
+| failure and cancellation | the branch vocabulary for failure, what a cancelled call leaves behind, and whether the call can be retried |
+| reentrancy and concurrency | whether the provider may be re-entered or called concurrently, and from which contexts (thread, interrupt, cooperative yield) |
+| contract version and available evidence | the revision this descriptor belongs to, and the evidence (§3.1) that a given provider artifact meets it |
+
+**Binding is admission.** A binding (§3.3) is minted only if the caller's requirements and the
+provider's descriptor match on every field. A mismatch is a refusal **before execution**, at the
+earliest phase that knows it (§3.4), with the fixed refusal shape. Any change to a descriptor field
+is a new contract revision (evolve, §3.2), never an edit in place.
+
+### 3.7 Two obligations: validated compilation and correct providers
+
+*Folded in 2026-10-19 about 18:30 CEST from design material Fabian supplied (authoritative guidance; the wording here is this note's).*
+
+Following the CompCert distinction (C), two results are kept as separate obligations with
+separate evidence:
+
+1. **Compilation validation:** the generated code faithfully implements the Koru source
+   (translation validation, a verified compiler, or tests of the compiler).
+2. **Provider correctness:** the external provider behind an FFI row (a C library, a syscall,
+   a Unikraft lift, a driver silo) actually behaves as its interface descriptor says.
+
+"The generated code was validated" never silently becomes "the external service behaves
+correctly". A provider row carries its own evidence, or it is listed in the TCB manifest (§8.4,
+FFI rule). A validated caller of an unevidenced provider is reported as exactly that.
+
+### 3.8 Memoized resolution and its invalidation
+
+*Folded in 2026-10-19 about 18:30 CEST from design material Fabian supplied (authoritative guidance; the wording here is this note's).*
+
+A live binding is a memoized resolution (§3.1). The following invalidate the **binding** (the
+generation or epoch moves, and the next use is refused or re-resolved explicitly, §3.3):
+
+- reloading or unloading a provider;
+- restarting it;
+- changing the substrate (another platform arm, another image).
+
+None of them destroys the interface **identity** or the historical correspondence: rows and
+their lineage stay, and old evidence remains attached to the artifact it was produced for.
+
+**Exported variables** are interfaces too, but they resolve to a **storage location** with a
+lifetime and access rules (read, write, atomic, which context), not necessarily to a callable
+entry. Their binding is invalidated by the same events, and a stale location is refused like a
+stale entry.
 
 ---
 
@@ -1279,6 +1369,42 @@ The `koru-libs/metal` library is Apple Metal plus AppKit, not bare metal.
 - **Protection domains are page tables, swapped deliberately.** `unikraft/paging` (V)
   shows a running Koru unikernel switching CR3 safely. The cost is real: a deep clone
   needs `-m 256M` where 64M fails (repo-measured).
+
+### 6.1a One address-space regime
+
+*Folded in 2026-10-19 about 18:30 CEST from design material Fabian supplied (authoritative guidance; the wording here is this note's).*
+
+There is **one** coherent address-space regime per image. Allocations, mappings, permissions
+and reclamation all obey it, and no subsystem keeps a private second model. Four things that
+are easy to conflate stay distinct (as in §6.1):
+
+- **object identity:** which object, stable across moves and reloads (§3.1);
+- **virtual location:** where it is mapped now (a memoized resolution, §3.8);
+- **permission to access it:** a rung-1 handle (§8.4), and hardware-enforced from rung 2;
+- **physical residency:** whether and where backing pages exist.
+
+**The terabyte-reservation trap.** Metadata must scale with **allocated regions, populated
+translation structures and resident data**, never with every page of the hypothetical address
+universe. These are five different costs and are accounted separately:
+
+| cost | scales with |
+|---|---|
+| a large address namespace | nothing (it is a number) |
+| an OS reservation | one region record per reservation |
+| populated page tables | the mapped ranges, not the reserved ones |
+| committed backing | the commitment budget |
+| resident physical pages | what has actually been touched |
+
+Starting rules (D; vmem already meets the first two on Unikraft, V §6.1):
+
+1. sparse region metadata (one record per region, not per page);
+2. lazy backing and lazy mapping;
+3. explicit commitment budgets, charged at `commit`, refused when exhausted;
+4. no eager per-page bookkeeping for untouched ranges;
+5. transactional updates to the region and protection model: a multi-step change (split, remap,
+   permission change) is applied completely or not at all;
+6. a defined failure when backing cannot be provided (a refusal branch at commit or a defined
+   fault outcome), never a silent overcommit.
 
 ### 6.2 What is proven and what is not
 
@@ -1632,7 +1758,7 @@ if there are at least two.
 - a lease longer than the parent's own;
 - reusing a child identity.
 
-**What the rung means here (honesty).** On rung 0 and 1 (Unikraft today: one address space, one
+**What the rung means here (honesty; see also 8.6.8 and §6.1a).** On rung 0 and 1 (Unikraft today: one address space, one
 page table, cooperative scheduler) the bag is enforced **at the binding seam**: the syscall shim,
 the fd table and path resolution. A child that ignores the seam can still read any memory of the
 image, and nothing preempts a child that spins (B22). So on these rungs Spawn is a
@@ -1768,6 +1894,29 @@ claim, D design). L1 (hosted Linux) is an oracle and trace source only and never
 Nothing in this section has been written as code. Nothing has been pushed to `Cypoe/koru-libs`:
 it is another remote, and this work's push authorisation covers `Cypoe/koru-os` only. Upstream
 (Unikraft, korulang, hyprwm, foot) is untouched.
+
+#### 8.6.8 Relation to the execution contract and the address-space regime
+
+*Folded in 2026-10-19 about 18:30 CEST from design material Fabian supplied (authoritative guidance; the wording here is this note's).*
+
+- **The bag draws on interface descriptors.** Every grant names a row whose interface
+  descriptor (§3.6) fixes the permitted effects and the required authority. A grant can carry at
+  most the authority that descriptor allows **and** that the parent holds from an authorized
+  provider (§3.0). The seal check (8.6.2) is binding admission (§3.6) applied to the child's
+  imports.
+- **Spawn and replace invalidate bindings, not identities** (§3.8). `replace` moves the
+  child's generation. Its old bindings are refused, and the child's identity and lineage stay.
+- **Address-space copy stays non-grantable** (F2). In the one address-space regime (§6.1a) a
+  copy would create a second, unaccounted model of the same objects.
+  - A child gets **its own regions** under the parent's commitment budget: the bag's page budget
+    is a commitment budget (§6.1a rule 3).
+  - The child shares only frozen regions (§6.4) or explicitly granted mutable ones.
+- **Rungs.** On rung 0/1 a child's virtual location is reachable and only the binding seam
+  checks permission (8.6.2, "honesty"). **Rung 2 protection domains are where virtual location
+  and permission to access become hardware-enforced**, as separate facts (§6.1a), for each child.
+- **Two obligations hold for children too** (§3.7). That `unikraft/spawn` compiles and passes
+  its gates is evidence about the lift. It is not evidence that a Linux program in a Spawn child
+  behaves.
 
 ## 9. Associative memory: a clear-text model first, tensors later
 
@@ -2074,6 +2223,14 @@ or 9P reader.
 34. **Ambient set and rung.** Is the ambient set right: memory within budget, the monotonic
     clock, `exit` and yield? Does Spawn on rung 0/1 count for DoD purposes as a provenance
     boundary (§8.6.2), with containment of a hostile child deferred to rung 2?
+35. **Descriptor fields vs phases.** Which fields of the interface descriptor (§3.6) can
+    `koruc` check at compile time, and which only at configure, link or run time? This matters
+    most for reentrancy and concurrency, and for cancellation. Where does a Linux-ABI row (a
+    syscall) get its descriptor from: hand-written, or derived from traces?
+36. **Transactional region updates on Unikraft.** Can vmem and `unikraft/paging` apply a
+    multi-step change (split, remap, protection change) atomically under the cooperative
+    scheduler, or does §6.1a rule 5 need a journal or a two-phase protocol? Also: what is the
+    defined failure when commit cannot be backed (§6.1a rule 6)?
 
 ---
 
