@@ -1,0 +1,341 @@
+// koruos/nid: the NID binding layer (DESIGN-0001 §3.1–§3.4, §8.7, §11.5 item 3), in
+// koru-libs shape (to move with the other lifts once Q33 settles their home).
+//
+// The binding chain of §3.0, made executable:
+//
+//   foreign import  --NID-->  correspondence row  -->  canonical interface  -->  provider export
+//   scheme/ns/ver/name         (asserted, never        minted name @ rev          artifact:symbol,
+//                              inferred)                                          linked into THIS image
+//
+// - NID (Q3, answered by this code): nid = first 8 bytes of
+//   sha256("koruos.nid.v1|" ++ scheme/ns/version/name), shown as 11 base64url characters.
+//   The canonical interface id is the same hash over "koruos.iid.v1|" ++ name@rev.
+//   A NID is a cheap comparison key, not authority: only a binding minted here grants a call.
+//   Collisions are refused (at open and at resolve), never resolved by first-come.
+// - Rows are asserted in a manifest: `<verb> <scheme>/<ns>/<ver>/<name> -> <iface>@<rev> =>
+//   <artifact>:<symbol>`, ';'-separated. verb = create | evolve. `create` on a foreign name
+//   that already has a row is refused (no silent overwrite). `evolve` occludes the parent row
+//   and keeps it (evolve, don't mutate).
+// - A row is admitted only if its provider export is linked into this realization and the
+//   export declares that it realizes exactly that interface revision.
+// - An unbound NID is a loud refusal with the fixed shape of §3.4, phase=link; nothing runs.
+// - Live bindings carry the row's generation. `retarget` re-points an interface's rows to
+//   another export (the AnyPS5/shadPS4 precedent: same NIDs, new provider, call sites
+//   untouched) and bumps the generation; an old binding is then refused at use (`stale`),
+//   never redirected.
+//
+// Phantom states: open mints <open!>; resolve needs <!open>, returns it, and mints <live!>
+// or refuses; call needs <!live> and returns it; release needs <!live>; close needs <!open>
+// and reports outstanding bindings loudly.
+
+const std = @import("std");
+
+extern fn malloc(size: usize) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) void;
+extern fn ukplat_monotonic_clock() u64;
+const C = struct {
+    extern var stdout: ?*anyopaque;
+    extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) c_int;
+};
+
+pub const arm_name = "unikraft/qemu-x86_64";
+
+fn logln(comptime f: []const u8, a: anytype) void {
+    var b: [1024]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, f ++ "\n", a) catch return;
+    _ = C.fputs(s.ptr, C.stdout);
+}
+
+// ------------------------------------------------------------ provider exports
+
+const Export = struct {
+    artifact: []const u8,
+    symbol: []const u8,
+    realizes: []const u8, // name@rev, the export's own claim (its descriptor, reduced)
+    f: *const fn (arg: []const u8) i64,
+};
+
+fn com1Write(arg: []const u8) i64 {
+    logln("out: {s}", .{arg});
+    return @intCast(arg.len);
+}
+fn tagWrite(arg: []const u8) i64 {
+    logln("out[tag]: {s}", .{arg});
+    return @intCast(arg.len);
+}
+fn com1WriteV2(arg: []const u8) i64 {
+    logln("out2: {s}", .{arg});
+    return @intCast(arg.len);
+}
+fn ukClock(arg: []const u8) i64 {
+    _ = arg;
+    return @intCast(ukplat_monotonic_clock());
+}
+
+// The realization's export table: what is linked into this image. A manifest may name
+// anything; only these exist here.
+const exports = [_]Export{
+    .{ .artifact = "console_com1_v1", .symbol = "write", .realizes = "koruos.console.write@1", .f = com1Write },
+    .{ .artifact = "console_tag_v1", .symbol = "write", .realizes = "koruos.console.write@1", .f = tagWrite },
+    .{ .artifact = "console_com1_v2", .symbol = "write", .realizes = "koruos.console.write@2", .f = com1WriteV2 },
+    .{ .artifact = "clock_uk_v1", .symbol = "now", .realizes = "koruos.clock.monotonic@1", .f = ukClock },
+};
+
+fn findExport(spec: []const u8) ?*const Export {
+    const c = std.mem.indexOfScalar(u8, spec, ':') orelse return null;
+    for (&exports) |*e| if (std.mem.eql(u8, e.artifact, spec[0..c]) and std.mem.eql(u8, e.symbol, spec[c + 1 ..])) return e;
+    return null;
+}
+
+// ------------------------------------------------------------ NIDs
+
+fn hash64(comptime domain: []const u8, s: []const u8) u64 {
+    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    h.update(domain);
+    h.update(s);
+    var d: [32]u8 = undefined;
+    h.final(&d);
+    return std.mem.readInt(u64, d[0..8], .big);
+}
+
+fn render(v: u64, out: *[11]u8) []const u8 {
+    var b: [8]u8 = undefined;
+    std.mem.writeInt(u64, &b, v, .big);
+    _ = std.base64.url_safe_no_pad.Encoder.encode(out, &b);
+    return out;
+}
+
+// ------------------------------------------------------------ rows and bindings
+
+const Row = struct {
+    verb: []const u8,
+    foreign: []const u8,
+    nid: u64,
+    iface: []const u8,
+    iid: u64,
+    ex: *const Export,
+    occluded_by: i32,
+    generation: u32,
+};
+
+pub const Table = struct {
+    rows: [32]Row,
+    n: u32,
+    bits: u32,
+    outstanding: u32,
+    refusals: u32,
+};
+
+pub const Binding = struct {
+    t: *Table,
+    row: u32,
+    generation: u32,
+};
+
+fn mask(t: *const Table, v: u64) u64 {
+    if (t.bits >= 64) return v;
+    return v >> @intCast(64 - t.bits) << @intCast(64 - t.bits);
+}
+
+fn nameOf(foreign: []const u8) []const u8 {
+    const i = std.mem.lastIndexOfScalar(u8, foreign, '/') orelse return foreign;
+    return foreign[i + 1 ..];
+}
+fn nsOf(foreign: []const u8) []const u8 { // scheme/ns
+    var it = std.mem.splitScalar(u8, foreign, '/');
+    const a = it.next() orelse return "";
+    const b = it.next() orelse return "";
+    return foreign[0 .. a.len + 1 + b.len];
+}
+
+~pub tor open { manifest: string, nid_bits: u32 }
+| ok *Table<open!>
+| refused { reason: string, at: string, other: string }
+
+~proc open|zig {
+    const mem = malloc(@sizeOf(Table)) orelse return .{ .refused = .{ .reason = "out of memory", .at = "", .other = "" } };
+    const t: *Table = @ptrCast(@alignCast(mem));
+    t.* = .{ .rows = undefined, .n = 0, .bits = nid_bits, .outstanding = 0, .refusals = 0 };
+    var it = std.mem.splitScalar(u8, manifest, ';');
+    while (it.next()) |l0| {
+        const l = std.mem.trim(u8, l0, " ");
+        if (l.len == 0) continue;
+        var f = std.mem.tokenizeScalar(u8, l, ' ');
+        const verb = f.next() orelse "";
+        const foreign = f.next() orelse "";
+        const arrow = f.next() orelse "";
+        const iface = f.next() orelse "";
+        const arrow2 = f.next() orelse "";
+        const spec = f.next() orelse "";
+        var why: []const u8 = "";
+        var other: []const u8 = "";
+        const ex = findExport(spec);
+        if (!(std.mem.eql(u8, verb, "create") or std.mem.eql(u8, verb, "evolve")) or !std.mem.eql(u8, arrow, "->") or !std.mem.eql(u8, arrow2, "=>") or std.mem.count(u8, foreign, "/") != 3 or std.mem.indexOfScalar(u8, iface, '@') == null or f.next() != null) {
+            why = "malformed row";
+        } else if (t.n == t.rows.len) {
+            why = "too many rows";
+        } else if (ex == null) {
+            why = "provider export not in this realization";
+            other = spec;
+        } else if (!std.mem.eql(u8, ex.?.realizes, iface)) {
+            why = "provider export realizes another interface";
+            other = ex.?.realizes;
+        }
+        const nid = mask(t, hash64("koruos.nid.v1|", foreign));
+        var parent: ?u32 = null;
+        if (why.len == 0) {
+            var i: u32 = 0;
+            while (i < t.n) : (i += 1) {
+                const r = &t.rows[i];
+                if (r.nid != nid) continue;
+                if (!std.mem.eql(u8, r.foreign, foreign)) {
+                    why = "nid collision";
+                    other = r.foreign;
+                    break;
+                }
+                if (r.occluded_by >= 0) continue;
+                if (std.mem.eql(u8, verb, "create")) {
+                    why = "create would overwrite a bound foreign name (use evolve)";
+                    other = r.iface;
+                    break;
+                }
+                if (std.mem.eql(u8, r.iface, iface) and r.ex == ex.?) {
+                    why = "evolve without change";
+                    other = r.iface;
+                    break;
+                }
+                parent = i;
+            }
+            if (why.len == 0 and std.mem.eql(u8, verb, "evolve") and parent == null) why = "evolve without a parent row";
+        }
+        if (why.len != 0) {
+            logln("refused: row=\"{s}\" reason={s} other={s} phase=configure", .{ l, why, if (other.len == 0) "none" else other });
+            free(mem);
+            return .{ .refused = .{ .reason = why, .at = l, .other = other } };
+        }
+        if (parent) |p| t.rows[p].occluded_by = @intCast(t.n);
+        t.rows[t.n] = .{ .verb = verb, .foreign = foreign, .nid = nid, .iface = iface, .iid = hash64("koruos.iid.v1|", iface), .ex = ex.?, .occluded_by = -1, .generation = 1 };
+        var a: [11]u8 = undefined;
+        var b: [11]u8 = undefined;
+        logln("row {d}: {s} foreign={s} nid={s} -> interface={s} iid={s} -> export={s}:{s}{s}", .{ t.n, verb, foreign, render(nid, &a), iface, render(t.rows[t.n].iid, &b), ex.?.artifact, ex.?.symbol, if (parent != null) " (occludes a parent row)" else "" });
+        if (parent) |p| logln("occluded: row {d} by row {d}", .{ p, t.n });
+        t.n += 1;
+    }
+    logln("table: open rows={d} nid_bits={d}", .{ t.n, t.bits });
+    return .{ .ok = t };
+}
+
+~pub tor resolve { t: *Table<!open>, foreign: string }
+| bound { t: *Table<open!>, b: *Binding<live!> }
+| refused { t: *Table<open!>, foreign: string, nid: string, arm: string, phase: string, missing: string, offered: string }
+
+~proc resolve|zig {
+    const S = struct {
+        var nidbuf: [11]u8 = undefined;
+        var offered: [256]u8 = undefined;
+    };
+    const nid = mask(t, hash64("koruos.nid.v1|", foreign));
+    const nids = render(nid, &S.nidbuf);
+    var off = std.io.fixedBufferStream(&S.offered);
+    const w = off.writer();
+    var hit: ?u32 = null;
+    var collide: ?u32 = null;
+    var i: u32 = 0;
+    while (i < t.n) : (i += 1) {
+        const r = &t.rows[i];
+        if (r.occluded_by >= 0) continue;
+        if (r.nid == nid) {
+            if (std.mem.eql(u8, r.foreign, foreign)) hit = i else collide = i;
+        } else if (std.mem.eql(u8, nsOf(r.foreign), nsOf(foreign)) and std.mem.eql(u8, nameOf(r.foreign), nameOf(foreign))) {
+            w.print("{s}{s}", .{ if (off.pos == 0) "" else " ", r.foreign }) catch {};
+        }
+    }
+    if (hit) |h| {
+        const mem = malloc(@sizeOf(Binding)) orelse return .{ .refused = .{ .t = t, .foreign = foreign, .nid = nids, .arm = arm_name, .phase = "link", .missing = "memory", .offered = "none" } };
+        const b: *Binding = @ptrCast(@alignCast(mem));
+        const r = &t.rows[h];
+        b.* = .{ .t = t, .row = h, .generation = r.generation };
+        t.outstanding += 1;
+        var ib: [11]u8 = undefined;
+        logln("bound: foreign={s} nid={s} -> row {d} -> interface={s} iid={s} -> export={s}:{s} gen={d} arm={s}", .{ foreign, nids, h, r.iface, render(r.iid, &ib), r.ex.artifact, r.ex.symbol, r.generation, arm_name });
+        return .{ .bound = .{ .t = t, .b = b } };
+    }
+    t.refusals += 1;
+    const missing: []const u8 = if (collide != null) "unique nid (collides with a row for another foreign name)" else "correspondence row";
+    const offered: []const u8 = if (off.pos == 0) "none" else off.getWritten();
+    logln("refused: foreign={s} nid={s} arm={s} phase=link missing={s} offered=[{s}]", .{ foreign, nids, arm_name, missing, offered });
+    return .{ .refused = .{ .t = t, .foreign = foreign, .nid = nids, .arm = arm_name, .phase = "link", .missing = missing, .offered = offered } };
+}
+
+~pub tor call { b: *Binding<!live>, arg: string }
+| ok { b: *Binding<live!>, n: i64 }
+| stale { b: *Binding<live!>, held: u32, now: u32 }
+
+~proc call|zig {
+    const r = &b.t.rows[b.row];
+    if (r.generation != b.generation) {
+        logln("stale: row {d} interface={s} binding gen={d} row gen={d}: refused at use, not redirected", .{ b.row, r.iface, b.generation, r.generation });
+        return .{ .stale = .{ .b = b, .held = b.generation, .now = r.generation } };
+    }
+    const n = r.ex.f(arg);
+    return .{ .ok = .{ .b = b, .n = n } };
+}
+
+~pub tor retarget { t: *Table<!open>, iface: string, to: string }
+| ok { t: *Table<open!>, rows: u32, generation: u32 }
+| refused { t: *Table<open!>, reason: string }
+
+~proc retarget|zig {
+    const ex = findExport(to) orelse {
+        logln("refused: retarget {s} to={s} reason=provider export not in this realization phase=configure", .{ iface, to });
+        return .{ .refused = .{ .t = t, .reason = "provider export not in this realization" } };
+    };
+    if (!std.mem.eql(u8, ex.realizes, iface)) {
+        logln("refused: retarget {s} to={s} reason=export realizes {s} phase=configure", .{ iface, to, ex.realizes });
+        return .{ .refused = .{ .t = t, .reason = "provider export realizes another interface" } };
+    }
+    var n: u32 = 0;
+    var g: u32 = 0;
+    var i: u32 = 0;
+    while (i < t.n) : (i += 1) {
+        const r = &t.rows[i];
+        if (r.occluded_by >= 0 or !std.mem.eql(u8, r.iface, iface)) continue;
+        r.ex = ex;
+        r.generation += 1;
+        g = r.generation;
+        n += 1;
+    }
+    logln("retarget: interface={s} -> export={s}:{s} rows={d} gen={d} (NIDs unchanged)", .{ iface, ex.artifact, ex.symbol, n, g });
+    return .{ .ok = .{ .t = t, .rows = n, .generation = g } };
+}
+
+~pub tor release { b: *Binding<!live> }
+
+~proc release|zig {
+    b.t.outstanding -= 1;
+    free(@ptrCast(b));
+}
+
+// close prints the resolution tables of §3.5 for this table, and refuses loudly to hide
+// outstanding bindings (they are reported; the memory is not freed under them).
+~pub tor close { t: *Table<!open> }
+
+~proc close|zig {
+    var i: u32 = 0;
+    while (i < t.n) : (i += 1) {
+        const r = &t.rows[i];
+        var a: [11]u8 = undefined;
+        if (r.occluded_by >= 0) {
+            logln("table1: {s} nid={s} -> {s} -> {s}:{s} OCCLUDED by row {d}", .{ r.foreign, render(r.nid, &a), r.iface, r.ex.artifact, r.ex.symbol, r.occluded_by });
+        } else {
+            logln("table1: {s} nid={s} -> {s} -> {s}:{s} gen={d}", .{ r.foreign, render(r.nid, &a), r.iface, r.ex.artifact, r.ex.symbol, r.generation });
+        }
+    }
+    logln("table3: refusals={d}", .{t.refusals});
+    if (t.outstanding != 0) {
+        logln("close: LEAK outstanding={d} (table kept)", .{t.outstanding});
+        return;
+    }
+    logln("close: outstanding=0", .{});
+    free(@ptrCast(t));
+}
