@@ -1,0 +1,2 @@
+image blocks=409515
+qemu exit=0 wall_s=124.114
