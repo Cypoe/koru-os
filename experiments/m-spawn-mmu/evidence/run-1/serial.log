@@ -1,0 +1,36 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+06FC6E00+06F06E00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM..Powered by Unikraft Ijiraq (0.21.0)
+[    0.103059] ERR:  [appkoruos] <main.c @   23> m-spawn-mmu: begin
+m-spawn-mmu: begin
+[    0.104108] ERR:  [appkoruos] <main.c @   23> secret_va=0x1000089000
+secret_va=0x1000089000
+[    0.104370] ERR:  [appkoruos] <main.c @   23> secret_pa=0x56000 parent_present=1
+secret_pa=0x56000 parent_present=1
+[    0.104891] ERR:  [appkoruos] <main.c @   23> pt_clone ok (dissected fork AS copy is explicit here)
+pt_clone ok (dissected fork AS copy is explicit here)
+[    0.105168] ERR:  [appkoruos] <main.c @   23> child_present_after_clone=1
+child_present_after_clone=1
+[    0.105794] ERR:  [appkoruos] <main.c @   23> child_present_after_unmap=0
+child_present_after_unmap=0
+[    0.106019] ERR:  [appkoruos] <main.c @   23> parent_present_after_child_unmap=1
+parent_present_after_child_unmap=1
+[    0.106574] ERR:  [appkoruos] <main.c @   23> child_nofault_bytes=0
+child_nofault_bytes=0
+[    0.106760] ERR:  [appkoruos] <main.c @   23> PASS fault-on-violation (ungranted secret)
+PASS fault-on-violation (ungranted secret)
+[    0.107019] ERR:  [appkoruos] <main.c @   23> grant_map ok (explicit AS share of secret frame)
+grant_map ok (explicit AS share of secret frame)
+[    0.108127] ERR:  [appkoruos] <main.c @   23> child_nofault_after_grant=25
+child_nofault_after_grant=25
+[    0.108700] ERR:  [appkoruos] <main.c @   23> PASS explicit grant readable
+PASS explicit grant readable
+[    0.109269] ERR:  [appkoruos] <main.c @   23> PASS parent secret intact
+PASS parent secret intact
+[    0.110688] ERR:  [appkoruos] <main.c @   23> M-SPAWN-MMU STEP1 PASS
+M-SPAWN-MMU STEP1 PASS

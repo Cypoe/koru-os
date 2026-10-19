@@ -1,0 +1,2 @@
+$(eval $(call addlib,appkoruos))
+APPKORUOS_SRCS-y += $(APPKORUOS_BASE)/main.c

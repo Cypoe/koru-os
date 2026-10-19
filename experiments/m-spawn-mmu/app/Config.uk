@@ -1,0 +1,4 @@
+config APPKORUOS
+	bool
+	default y
+	select LIBUKNOFAULT

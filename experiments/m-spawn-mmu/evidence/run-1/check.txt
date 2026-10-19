@@ -1,0 +1,8 @@
+ok   pt_clone
+ok   unmap drops child PTE
+ok   parent keeps PTE
+ok   fault-on-violation
+ok   explicit grant
+ok   parent intact
+ok   no CRIT
+M-SPAWN-MMU STEP1 PASS

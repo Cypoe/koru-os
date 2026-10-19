@@ -1,0 +1,12 @@
+# M-SPAWN-MMU step 1 board (2026-10-19 20:55 CEST, Europe/Berlin)
+# accel=tcg (no KVM)
+
+kernel sha256: b6294756dfd93f484a52a9bfdb54cb78c9cdf42aee77f681d99873aef5ff2c2e
+
+run-1: M-SPAWN-MMU STEP1 PASS
+run-2: M-SPAWN-MMU STEP1 PASS
+run-3: M-SPAWN-MMU STEP1 PASS
+
+Measured: pt_clone; child unmap of secret; fault-on-violation via uk_nofault;
+explicit grant remap; parent intact.
+Design still open: Spawn bag wiring, CoW grant verb, posix multi-AS, Q33 move.
