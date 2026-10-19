@@ -1,0 +1,14 @@
+#!/bin/busybox sh
+# M7 L1 oracle init (Linux 6.12 Debian kernel, i8042 + atkbd built in, evdev.ko).
+/bin/busybox --install -s /bin
+mount -t devtmpfs dev /dev; mount -t proc proc /proc; mount -t sysfs sys /sys
+insmod /ko/evdev.ko || echo "l1-init: insmod evdev failed"
+sleep 1
+for e in /sys/class/input/event*; do echo "l1-init: $(basename $e) $(cat $e/device/name)"; done
+EV=/dev/input/$(for e in /sys/class/input/event*; do grep -q "AT Translated" $e/device/name && basename $e; done)
+ls -l /dev/input
+echo "l1-init: start $EV"
+strace -o /tmp/evdump.strace /bin/evdump $EV
+echo "l1-init: evdump exit status $?"
+echo "==== STRACE evdump"; cat /tmp/evdump.strace; echo "==== END evdump"
+/usr/bin/evtest $EV

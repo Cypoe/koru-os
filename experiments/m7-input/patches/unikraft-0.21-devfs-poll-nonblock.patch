@@ -1,0 +1,61 @@
+--- a/lib/devfs/devfs_vnops.c
++++ b/lib/devfs/devfs_vnops.c
+@@ -112,9 +112,12 @@
+ }
+ 
+ static int
+-devfs_read(struct vnode *vp, struct vfscore_file *fp __unused,
++devfs_read(struct vnode *vp, struct vfscore_file *fp,
+ 			struct uio *uio, int ioflags)
+ {
++	/* koru-os M7: hand O_NONBLOCK of the open file to the driver */
++	if (fp && (fp->f_flags & O_NONBLOCK))
++		ioflags |= O_NONBLOCK;
+ 	return device_read((struct device *)vp->v_data, uio, ioflags);
+ }
+ 
+@@ -317,7 +320,20 @@
+ #define devfs_fallocate ((vnop_fallocate_t)vfscore_vop_nullop)
+ #define devfs_readlink	((vnop_readlink_t)vfscore_vop_nullop)
+ #define devfs_symlink	((vnop_symlink_t)vfscore_vop_nullop)
+-#define devfs_poll	((vnop_poll_t)vfscore_vop_nullop)
++/* koru-os M7: dispatch poll to the device if it implements it; otherwise keep
++ * the old behaviour (no events reported).
++ */
++static int
++devfs_poll(struct vnode *vp, unsigned int *revents, struct eventpoll_cb *ecb)
++{
++	struct device *dev = (struct device *)vp->v_data;
++
++	if (vp->v_type == VDIR || !dev)
++		return 0;
++	if (!dev->driver || !dev->driver->devops || !dev->driver->devops->poll)
++		return 0;
++	return dev->driver->devops->poll(dev, revents, ecb);
++}
+ 
+ /*
+  * vnode operations
+--- a/lib/devfs/include/devfs/device.h
++++ b/lib/devfs/include/devfs/device.h
+@@ -75,6 +75,12 @@
+ typedef int (*devop_read_t)(struct device *, struct uio *, int);
+ typedef int (*devop_write_t)(struct device *, struct uio *, int);
+ typedef int (*devop_ioctl_t)(struct device *, unsigned long, void *);
++/* koru-os M7: readiness for poll/select/epoll (vfscore eventpoll shim).
++ * Same contract as vnop_poll_t: set *revents, register ecb on first call.
++ */
++struct eventpoll_cb;
++typedef int (*devop_poll_t)(struct device *, unsigned int *,
++			    struct eventpoll_cb *);
+ 
+ /*
+  * Device operations
+@@ -88,6 +94,7 @@
+ 	devop_read_t	read;
+ 	devop_write_t	write;
+ 	devop_ioctl_t	ioctl;
++	devop_poll_t	poll;	/* koru-os M7: optional */
+ };
+ 
+ #define	dev_noop_open	((devop_open_t)devop_noop)

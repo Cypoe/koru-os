@@ -485,6 +485,75 @@ readdir listed the root inside `/dev/dri`. The L1 twin ran once before the freez
 - **Not in M6.** DS3 and R-SILO-4 (no silo yet), atomic KMS and properties, page-flip and
   vblank events, PRIME, cursor planes, virtio-gpu, more than one DRM client.
 
+**M7 decision: where the input driver lives, and what M7 can claim now (2026-10-19, 13:55
+CEST).** The table names "L2 + DS4" and `libinput debug-events`. M7 is split:
+- **Provider.** As in M6, the `input.*` rows (`lib/koruinput/input_rows.h`) are bound to a
+  **native koru-os provider**, here the i8042 PS/2 keyboard of the QEMU i440fx machine
+  (`lib/koruinput/ps2kbd.c`), and DS4 stays open. The §0.6 reasoning of the M6 decision holds
+  unchanged (native, non-foreign code; the rows are the seam; DS4 depends on Q25). DS4 itself
+  names "silo:kolibri `ps2`" as one option, so PS/2 is a device the DoD already expects.
+  `virtio-input` natively is unreachable for the same reason as virtio-gpu (B13: the Unikraft
+  0.21 virtio-pci transport is legacy only; virtio-input is a virtio 1.0 device).
+- **Personality.** Linux evdev on `/dev/input/event0` (char 13:64,
+  `lib/koruinput/evdev_linux.c`): `read()` of `struct input_event`, `O_NONBLOCK`, poll/select/
+  epoll readiness, the identity and bitmap ioctls, `EVIOCGRAB`, `EVIOCSCLOCKID`.
+- **M7a (this step)**: the evdev uAPI, measured with a koru-os probe and with Debian's
+  unmodified `evtest`, against the L1 `atkbd` twin. **M7b (open)**: the table's
+  `libinput debug-events`. libinput, also with `--device`, resolves the device through libudev
+  (`/sys/dev/char/13:64`, udev properties), and koru-os has no sysfs or udev view yet (B15).
+  Hyprland needs that view as well (libinput's udev backend, libseat), so it is a DoD-3 item
+  of its own and is not faked here. M7 is reported as "M7a PASS, M7b open" until then.
+- Whether DoD-3 accepts native providers for GPU *and* input is the same question as Q28;
+  Q28 now covers both.
+
+**M7a acceptance: evdev key input (fixed 2026-10-19, 13:55 CEST, before any acceptance run).**
+Probe boots before this freeze found and fixed: vfscore (legacy) epoll entries in
+Unikraft 0.21 never set `epf`, so the first `eventpoll_signal()` from any vfscore driver
+dereferenced NULL (patch `unikraft-0.21-posix-poll-legacy-epf.patch`, B14); the set 1 decoder
+dropped `0xaa` (LeftShift break) as a BAT code; `MSC_SCAN` for 0xE0 keys now reports
+`code | 0x80` as Linux `atkbd` does. The L1 twin ran once before the freeze (below).
+- **Arm.** The M6 arm plus `lib/koruinput` and two patches (`experiments/m7-input/patches/`:
+  devfs poll dispatch and `O_NONBLOCK` to device read; the posix-poll `epf` fix). QEMU
+  i440fx with its i8042, `-vga none -device bochs-display`, TCG only. The host injects keys
+  with QMP `input-send-event` (qcodes), one press/release chord every 0.4 s
+  (`experiments/m7-input/drive.py`).
+- **Programs.** From the ext2 root under the M3 hush (`/etc/m7-init`), glibc 2.41:
+  - `/bin/evdump` (koru-os probe, `experiments/m7-input/evdump.c`): `O_NONBLOCK` read on the
+    empty queue, identity and bitmap ioctls, the `EVIOCGRAB` sequence, `READY`, then
+    `poll()` + `read()` until `KEY_ESC` is released. Host sequence: k, o, r, u, shift+1,
+    enter, up, esc;
+  - `/usr/bin/evtest` from Debian `evtest` 1.35, unmodified, `evtest /dev/input/event0`
+    (select + read loop). Host sequence after `Testing ...`: a, b. The host then quits QEMU.
+  Nothing of this is committed except `evdump.c`.
+- **Gated checks** (`experiments/m7-input/check.py`):
+  - (i1) `ls -l /dev/input` shows `event0` as a character device 13, 64;
+  - (i2) evdump: `O_NONBLOCK` read returns `EAGAIN`; version 0x010001; bus 0x0011; EV bits
+    exactly `SYN KEY MSC LED REP`; `KEY_A`, `KEY_ENTER`, `KEY_UP`, `KEY_ESC`,
+    `KEY_LEFTSHIFT` set; `EVIOCGREP` 250/33; no key down; `EVIOCGRAB` 1 → 0, again →
+    `-EBUSY`, 0 → 0, again → `-EINVAL`;
+  - (i3) evdump's event list equals, triple by triple (type, code, value), the 54 events
+    derived from the host sequence and the set 1 table in check.py (`MSC_SCAN`, `EV_KEY`,
+    `SYN_REPORT` per press and release; shift is held across 1), and the summary is
+    `keys 18 syns 18 msc 18 ... nonmonotonic 0 esc yes`, exit status 0;
+  - (i4) evtest prints `Input driver version is 1.0.1`, the device ID line
+    `bus 0x11 vendor 0x1 product 0x1 version 0xab41`, lists `EV_KEY` with `KEY_ESC`, then
+    after `Testing ...` exactly these 12 events in order (6 per key) (`MSC_SCAN 1e`,
+    `KEY_A 1`, `SYN`, `MSC_SCAN 1e`, `KEY_A 0`, `SYN`, same for `30`/`KEY_B`);
+  - (i5) every refusal-log row is in `experiments/m7-input/refused-by-design.txt`;
+  - (i6) the close statistics line reports 0 dropped events and 0 ring drops;
+  - (x) no `Unikraft Crash`; the disk is byte-identical across the boot; `e2fsck -fn` clean.
+- **Regression.** M3, M4 (a)–(d), M5a and M6 each pass 3/3 on the M7 kernel.
+- **L1 twin (oracle, not a pass).** The same `evdump` (under `strace`) and `evtest` binaries on
+  Debian `linux-image-6.12.113+deb13-amd64` (i8042 and `atkbd` built in, `evdev.ko`), the same
+  `drive.py` (`run-l1.sh`). First run 2026-10-19 13:52 CEST: all 54 evdump triples and the
+  evtest event lines as in (i3)/(i4). Known, accepted differences: name
+  `AT Translated Set 2 keyboard`; `atkbd` declares 145 key codes (set 2 table with media keys),
+  koru-os 107 (set 1 make codes 0x01–0x58, the 0xE0 navigation block, Pause); Linux ioctls
+  return byte counts where koru-os returns 0 (devfs ioctl returns an errno only; evtest and
+  libevdev test `< 0`).
+- **Not in M7a.** libinput (M7b, B15), DS4, the aux port (mouse), LED writes, software
+  autorepeat, keymaps, more than one concurrent reader, `EVIOCGMASK`/`SMASK`, `EVIOCREVOKE`.
+
 ### 0.5 Biggest risks
 
 1. **GPU and input drivers in a silo.** LKL's supported hosts are POSIX and Windows
@@ -1425,6 +1494,8 @@ or 9P reader.
 28. **Native KMS provider and DoD-3.** M6 binds `kms.*` to a native koru-os
     `bochs-display` provider (§0.4 "M6 decision"). Does DoD-3 accept a native koru driver
     for the GPU, or must the display path go through a driver silo (DS3) for DoD-3 to count?
+    Since M7 the same question covers input: the `input.*` rows are bound to a native i8042
+    PS/2 keyboard provider (§0.4 "M7 decision"), not to DS4.
 
 ---
 

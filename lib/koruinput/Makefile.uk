@@ -1,0 +1,5 @@
+# koru-os M7: input rows, native i8042 PS/2 keyboard provider, Linux evdev personality.
+# Included from an application's Makefile.uk with KORUINPUT_DIR set.
+APPKORUOS_SRCS-y += $(KORUINPUT_DIR)/ps2kbd.c
+APPKORUOS_SRCS-y += $(KORUINPUT_DIR)/evdev_linux.c
+APPKORUOS_CINCLUDES-y += -I$(KORUINPUT_DIR)

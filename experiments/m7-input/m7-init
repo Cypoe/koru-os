@@ -1,0 +1,7 @@
+# M7 init (koru-os): evdev probe, then unmodified evtest (last; the host quits QEMU).
+echo "m7-init: start"
+ls -l /dev/input
+/bin/evdump /dev/input/event0
+echo "m7-init: evdump exit status $?"
+/usr/bin/evtest /dev/input/event0
+echo "m7-init: evtest exit status $?"

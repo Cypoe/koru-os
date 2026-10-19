@@ -1,0 +1,10 @@
+--- a/lib/posix-poll/epoll.c
++++ b/lib/posix-poll/epoll.c
+@@ -318,6 +318,7 @@
+ 
+ 	*ent = (struct epoll_entry){
+ 		.next = NULL,
++		.epf = epf,	/* koru-os M7: was unset; eventpoll_signal() needs it */
+ 		.legacy = 1,
+ 		.fd = fd,
+ 		.vf = vf,
