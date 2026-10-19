@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance); 19:05: obligation-derived kconfig (`koruc … realize gen`) measured, §11.1 result; 19:17: NID binding layer `koruos/nid` N1–N10 3/3 PASS, regressions 3/3, §11.6, Q3 answered by work; 19:27: build-time resolution via realize table 3, L1–L4 PASS, §11.7; 19:37: Spawn skeleton S1–S11 3/3, §8.6.7a; 20:00: replace/detach/revoke/nested + Unikraft provider + loud compat, external ELF child E0–E12 3/3, skeleton S1–S13 3/3, §8.6.7b) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance); 19:05: obligation-derived kconfig (`koruc … realize gen`) measured, §11.1 result; 19:17: NID binding layer `koruos/nid` N1–N10 3/3 PASS, regressions 3/3, §11.6, Q3 answered by work; 19:27: build-time resolution via realize table 3, L1–L4 PASS, §11.7; 19:37: Spawn skeleton S1–S11 3/3, §8.6.7a; 20:00: replace/detach/revoke/nested + Unikraft provider + loud compat, external ELF child E0–E12 3/3, skeleton S1–S13 3/3, §8.6.7b; 20:05: Spawn lib acceptance conditional (Fabian), MMU follow-up M-SPAWN-MMU recorded, DoD-2 reformulated per Q19; 20:22: M9 PASS 3/3 under TCG via Q30 stage 1 spawn-compat (h2a), B20 closed for M9) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -249,6 +249,28 @@ acceptance (`experiments/m3-ext2root/`). The writer is still the Koru lift; merg
 the two parsers is debt.
 
 **DoD-2: real shell and real programs.**
+
+*Reformulated 2026-10-19 ~20:05 CEST per Q19, on top of the **conditionally accepted**
+Spawn lib (§8.6.7b). The previous wording is kept below as superseded.*
+
+- **Arm.** L2 (`app-elfloader` + `lib/koruspawn` loud compat), reference L1 (oracle only).
+- **Acceptance (current).** A real shell and real programs are launched **via Spawn**
+  with an **explicit rights bag**. Wholesale POSIX `fork` is **refused** (F2), or is
+  available only as a **dissected grant** (address-space copy/CoW never ambient; today
+  seam-level, later MMU per M-SPAWN-MMU). `posix_spawn` / `vfork+execve` go through the
+  loud compat layer (`spawn-compat:` lines, §8.6.4). T-CYB and the busybox/dyn program
+  rows still apply; they count when the programs are Spawn children (or compat-spawned)
+  with a recorded bag, not when they rely on silent inheritance.
+- **Exists (M under TCG, conditional).** Spawn skeleton S1–S13; external ELF child
+  E0–E12 (`experiments/spawn-elf/`); M5a dynamic programs on the same arm. Seam
+  enforcement only until M-SPAWN-MMU.
+- **Missing / risk.** M-SPAWN-MMU (hardware caps and dissected fork); a spawn-only
+  interactive shell without the `--pty` foot workaround; `/bin/ascii-animator` (Q18).
+- **Rows.** `proc.*`, `sig.*`, `tty.*`, `mm.*` and `ev.*` (Appendix C.2), plus Spawn
+  grant/manifest rows.
+
+<details><summary>Superseded DoD-2 wording (DRAFT 4–5, before Q19 reformulation)</summary>
+
 - **Arm.** L2 (`app-elfloader`), reference L1.
 - **Exists (C, Unikraft docs and catalog):**
   - `app-elfloader` runs unmodified static and dynamic Linux ELF binaries through
@@ -272,6 +294,9 @@ the two parsers is debt.
   - `/bin/ascii-animator` is missing (Q18).
 - **Rows.** `proc.*`, `sig.*`, `tty.*`, `mm.*` and `ev.*` groups (Appendix C.2), taken
   from the T-CYB and busybox traces.
+
+</details>
+
 
 **DoD-3: Hyprland plus a terminal.**
 - **Arm.** L2/L3 with a **GPU driver silo** and an **input driver silo** (§0.6). L1 only
@@ -360,14 +385,15 @@ means the test is first run against a Linux guest to produce the expected trace.
 | M2 | real FS allocates blocks (**DoD-1**) | L2: vfscore + ext2 driver, **or** DS1 | guest creates `/dod1` of *N* blocks, writes, `fsync`s, halts; host `e2fsck -fn` clean, `debugfs -R 'cat /dod1'` equals pattern, free-block count dropped by ≥ *N* | **M (TCG), 2026-10-18**: minimal ext2 Koru lift (`koru/ext2`); 3/3 + 1 runs pass, e2fsck exit 0, free blocks −10, inodes −1 (`experiments/m2-ext2/`). Scope of the writer: one file, one group, direct blocks. Read path under vfscore since 2026-10-18 (`lib/koruext2fs`, host oracle 7/7; B7 closed) |
 | M3 | static busybox shell from the ext root | L2 `app-elfloader` (L1 trace first) | scripted serial session: `echo`, `ls /`, `cat /dod1`, `exit 3` → exit status 3 observed; refusal log empty or only by-design rows | **M (TCG), 2026-10-18, PASS 3/3**: M2 guest writes `/dod1` into an `mke2fs -d` busybox image, host `e2fsck -fn` clean; M3 guest mounts it through `koruext2fs` (vfscore, read-only) as `/` and runs `ls /`, `cat /dod1` (guest sha256 = pattern), a pipeline, `exit 3` → "init exited with status 3"; boot to exit 0.39–0.42 s wall (`experiments/m3-ext2root/`). Refusal-log clause N/A (no silo in this image). Fixed on the way: B6 (vfork FSBASE, empty argv), virtio ring destroy under LIBUKVMEM. Debt: root is read-only; `koru/ext2` (writer) and `ext2core.zig` (reader) duplicate parsing |
 | M4 | **T-CYB** (§0.2) | L2 (L1 trace first) | (a)–(d) gated, (e) open; frozen parameters in §0.2 "M4 acceptance for the stand-in" | **M (stand-in): (a)–(d) PASS 3/3 under TCG, 2026-10-19 12:55 CEST; (e) open** (`experiments/m4-cyb/README.md`); needed fixes B9, B10. Full T-CYB still waits for boot-animator (Q18) and a UTF-8 display path |
-| M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | **M5a (M): PASS 3/3 under TCG, 2026-10-19 13:06 CEST**: musl and glibc `ld.so`, GNU coreutils 9.7, dynamic busybox shell pipeline; M3 and M4 regressions 3/3 on the same kernel (`experiments/m5-dyn/README.md`); needed fix B12. Open: musl-built busybox, `dlopen`, threads, `fork` (Q19) |
+| M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | **M5a (M): PASS 3/3 under TCG, 2026-10-19 13:06 CEST**: musl and glibc `ld.so`, GNU coreutils 9.7, dynamic busybox shell pipeline; M3 and M4 regressions 3/3 on the same kernel (`experiments/m5-dyn/README.md`); needed fix B12. Open: musl-built busybox, `dlopen`, threads; `fork` clause superseded by Spawn (DoD-2 reformulated 20:05; M-SPAWN-MMU owed for unconditional caps) |
+| M-SPAWN-MMU | MMU-enforced Spawn caps + dissected fork (follow-up to conditional Spawn-lib acceptance) | L2 + rung 2 (`unikraft/paging`) | per-child page tables; object ≠ vaddr ≠ permission ≠ residency; CoW/share only as an explicit grant; hostile child cannot read ungranted parent pages (M under TCG) | **D / open** (named 2026-10-19 ~20:05; §8.6.7c) |
 | DS2 | Kolibri driver silo, first driver | L2 + silo:kolibri (KolibriOS driver-service personality) | an unmodified KolibriOS `.sys` network or input driver (`RTL8139`/`pcnet32` on QEMU `rtl8139`/`pcnet`, or `ps2mouse4d`) loads in the silo. Its imports either bind to rows or are refused by name. `net.*` frames or `input.*` events cross the silo boundary (serial log) | D |
 | DS3 | GPU driver silo | silo:lkl `virtio_gpu` on `virtio-gpu-pci`, or silo:kolibri `vmwgfx` on `vmware-svga` | the silo exposes only the `kms.*` rows of Appendix C.3; M6 passes through it | D |
 | DS4 | input driver silo | silo:lkl `virtio_input` (evdev) or silo:kolibri `usbhid`/`ps2` translated to `input.*` | M7 passes through it | D |
 | M6 | KMS scanout of a dumb buffer | L2 + DS3 (L1 trace first); M6 uses a native provider instead ("M6 decision" below, Q28) | libdrm `modetest -s <conn>:<mode>` (or equivalent) draws a test pattern; screendump pixel check at known coordinates; frozen parameters in "M6 acceptance" below | **M (native provider): PASS 3/3 under TCG, 2026-10-19 13:36 CEST**: `kmsdumb` (raw ioctls, two dumb buffers, two `SETCRTC`) and unmodified libdrm `modetest -M korukms -s Virtual-1:1024x768`; all three screendumps 0 of 786,432 pixels off the independent references, and byte-identical to the L1 `bochs-drm` twin; M3/M4/M5a regressions 3/3 (`experiments/m6-kms/README.md`). Not through DS3 (Q28); no atomic, properties or vblank events yet |
 | M7 | input | L2 + DS4; M7 uses a native provider instead ("M7 decision" below, Q28) | QMP `input-send-event` key events appear in `libinput debug-events` on serial; split into M7a (evdev uAPI) and M7b (libinput) | **M7a PASS 3/3** (13:57). **M7b PASS 3/3 under TCG, 2026-10-19 15:07 CEST**: unmodified Debian `libinput debug-events --device /dev/input/event0` (1.28.1) over the kernel sysfs view (`lib/korusysfs`) and libudev-zero; 18 KEYBOARD_KEY lines = derived = L1 (udevd and libudev-zero twins); M3/M4/M5a/M6/M7a/M8a/M8b regressions 3/3 (`experiments/m7b-libinput/README.md`). B15 resolved. Not through DS4 (Q28) |
 | M8 | GL on KMS | L2 + DS3 + Mesa llvmpipe/`kms_swrast` in userspace | `kmscube` runs; two screendumps 1 s apart differ, and both are non-black; split into M8a (offscreen EGL/GBM, frozen in "M8a acceptance") and M8b (kmscube) | **M8a: PASS 3/3 under TCG, 2026-10-19 14:15 CEST**: unmodified Mesa 25.0.7 llvmpipe (LLVM 19.1.7) renders offscreen via EGL surfaceless and via EGL on GBM over `/dev/dri/card0`; frame hashes equal the L1 twin's, probe pixels as derived (`experiments/m8-gl/README.md`). **M8b: PASS 3/3 under TCG, 2026-10-19 14:26 CEST**: unmodified Debian `kmscube` on `/dev/dri/card0` (GBM surface, `kms_swrast`/llvmpipe, legacy page flips with flip events), 149 frames at 13–14 fps, two screendumps 1 s apart differ in ~206,000 of 1,024,000 pixels, cube visible; L1 `bochs-drm` twin alike at ~20 fps; M3/M4/M5a/M6/M7a/M8a regressions 3/3 on the M8b kernel. Native KMS provider, not DS3 (Q28); no vblank pacing |
-| M9 | **DoD-3**: Hyprland + foot | L2 + native `bochs-display` and i8042 providers (Q28 closed 15:55: native first; DS3/DS4 as a later milestone of their own) | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | **counted 17:43–17:47 CEST: not passed as frozen**: (h1), (h2b), (h3), (h4), (h5), (x) 3/3; (h2a) `hyprctl dispatch exec foot` fails 3/3 (no fork, B20). **M9 open** (Q29 ruled 18:20: not passed, (h2) not amended; met only via Spawn, §8.6, Q30). foot runs as a window via `foot --pty` + `lib/korupty` (B21); regressions M3–M8b and M7b 3/3 on the M9 kernel |
+| M9 | **DoD-3**: Hyprland + foot | L2 + native `bochs-display` and i8042 providers (Q28 closed 15:55: native first; DS3/DS4 as a later milestone of their own) | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | **M (TCG), PASS 3/3, 2026-10-19 20:19–20:22 CEST**: (h1)–(h5)+(x) all PASS 3/3. (h2a) via Q30 stage 1: `LD_PRELOAD=libhypr-spawn-compat.so` interposes Hyprland `fork` inside `spawnRawProc` → `posix_spawnp` of `/usr/bin/foot --pty=/dev/korupty0` (Hyprland-launched; init `--pty` workaround off). Loud `spawn-compat:` lines in `/tmp/hl.out`. B20 closed for M9 (h2a); B21 still uses korupty for foot's shell. M-SPAWN-MMU still open. Evidence `experiments/m9-hyprland/evidence/accept-h2a-run-{1,2,3}/`. Kernel unchanged from prior M9 (`595f8c05…`); regressions M3–M8b/M7b not re-run this turn |
 | M10 | **DoD-4**: QML exemplar | same as M9 | a quickshell bar on a layer-shell surface is visible in a screendump; editing its QML changes the next screendump without a restart | D |
 
 Every row above has an **L1 twin run** that produces the reference trace and
@@ -2029,23 +2055,53 @@ The acceptance (`experiments/spawn/ACCEPTANCE.md`) was frozen in `8dae7ec` befor
 - **Regressions:** Slice A, DS0 and NID+L1 pass 3/3.
 - **Rung 0/1:** the child is an entry in the same image and runs to completion inside `start`, and the bag is enforced at the `ChildCtx` seam, not by the MMU.
 - **Slice A** keeps its supervisor stand-in. The mapping is in `experiments/spawn/README.md`.
-- **Still open:** M9 is not passed, Q30 and Q33 stay open, and Q19 → DoD-2 stays closed as ruled ("only after Spawn-lib acceptance"). Spawn-lib acceptance by Fabian is still pending. This skeleton is not that acceptance.
+- **Still open (at skeleton time):** M9, Q30, Q33. *(Superseded at 20:05: Spawn lib conditionally accepted; DoD-2 reformulated; M-SPAWN-MMU owed.)*
 - **Concordance:** the new terms are proposed only.
 
 #### 8.6.7b Result: Unikraft provider + loud compat + external ELF (2026-10-19, M under TCG)
 
+**Acceptance: conditional (Fabian 2026-10-19), pending MMU follow-up.** Fabian's note on
+`dcf7b75`: *"jain, vorerst markiere als Folge-Task, dass fork und caps über MMU laufen"*
+(yes for now; record as a follow-up that fork and caps run over the MMU). The measured
+seam-level Spawn lib (S1–S13, E0–E12) stands; it is **not** an unconditional pass. The
+named follow-up is **M-SPAWN-MMU** (§8.6.7c, §11.5 item, ladder).
+
 - **Koru lift** (`koru/spawn`): `replace` (rights die unless `across_exec`), `detach`,
-  `revoke` (epoch, §8.5), nested attenuation (`authority-of`). S1–S13 PASS 3/3.
+  `revoke` (epoch, §8.5), nested attenuation (`authority-of`). S1–S13 PASS 3/3 (seam).
 - **Unikraft provider** (`lib/koruspawn`) + **ELF load fork** (`lib/koruelf`, Q32): an
   external static-pie ELF is started via Spawn with an explicit rights bag. E0–E12 PASS
   3/3 under TCG (`experiments/spawn-elf/`).
 - **Loud compat** (§8.6.4): `spawn-compat:` lines for `posix_spawn`, `vfork+execve`,
-  `fork` (refused), `execve`→`replace`. Fork stays refused (F2).
-- **Seam:** proxy fds check verbs and epoch; vfscore `task_conv`/`taskat_conv` call
-  `koru_vfs_path_gate` (patch; weak declaration, strong definition in koruspawn).
-- **Not done:** M9 / Hyprland (Q30), moving the provider to koru-libs (Q33), the fd
-  census via `fcntl` as the sole evidence class (the child prints its own census).
+  `fork` (refused), `execve`→`replace`. Fork stays refused (F2) at the seam.
+- **Seam (rung 0/1):** proxy fds check verbs and epoch; vfscore path gate. Rights are
+  **not** yet hardware-enforced.
+- **Follow-up (required for unconditional acceptance):** M-SPAWN-MMU (§8.6.7c).
+- **Still open beside that:** Q30 stage 2 (supervisor) optional; moving the provider to koru-libs (Q33). M9 (h2a) met via stage 1 spawn-compat (20:22).
 - **Concordance:** new terms proposed only.
+
+#### 8.6.7c Follow-up milestone M-SPAWN-MMU (named, open)
+
+*Recorded 2026-10-19 ~20:05 CEST from Fabian's conditional acceptance of the Spawn lib.*
+
+**Goal.** Caps and a dissected fork enforced by the MMU, not only at software seams.
+
+1. **Per-child address-space / page-table regime** consistent with the sparse
+   address-space section (§6.1a): object ≠ vaddr ≠ permission ≠ residency are separate
+   facts. Each Spawn child gets a protection domain (rung 2, §8.4) whose page table maps
+   only granted regions; unmapped force is a hardware fault, not a seam log line.
+2. **Dissected fork whose address-space copy / CoW is an explicit, non-ambient grant**
+   enforced via the MMU. Fork is never wholesale and never inherits all rights. The F2
+   refusal of ambient address-space copy stays; a grant that names a CoW/share of a
+   specific region is the only way a second context sees those pages, and the MMU
+   installs that mapping.
+3. **Evidence class.** M under TCG: a hostile or buggy child that bypasses the binding
+   seam cannot read a parent page that was not granted; a revoked region's next access
+   faults; a dissected-fork grant of region R appears in the child's page table and
+   nowhere else without a further grant.
+
+**Not claimed by the conditional acceptance.** The seam-level provider remains the
+measured path for M9 stage 1 until M-SPAWN-MMU lands.
+
 
 #### 8.6.8 Relation to the execution contract and the address-space regime
 
@@ -2424,11 +2480,15 @@ Evidence: `experiments/slice-a/evidence/`.
 - protection domains over one VAS (rung 2, §8.4);
 - a runtime supervisor matching `std/supervisor` semantics (§2.2: today a compile-time retry
   fold with no runtime object; Q38);
-- provenance for shared regions (who granted, under which epoch; §8.6.2 grants).
+- provenance for shared regions (who granted, under which epoch; §8.6.2 grants);
+- **M-SPAWN-MMU** (named 2026-10-19 ~20:05; §8.6.7c, ladder): MMU-enforced Spawn caps and a
+  dissected fork (per-child page tables; object ≠ vaddr ≠ permission ≠ residency; CoW/share
+  only as an explicit grant). Required for **unconditional** Spawn-lib acceptance after the
+  conditional acceptance of the seam-level lib.
 
 **Relation to Slice A and M9.** Items 1–3 are Slice A's prerequisites, and Slice A sits inside
-them. Spawn's supervisor (§8.6) is the runtime-supervisor item. The order of Slice A vs M9 is
-still Q37, and Q30 is untouched.
+them. Spawn's supervisor (§8.6) is the runtime-supervisor item. M9 PASS 3/3 via Q30 stage 1
+spawn-compat (20:22 CEST); stage 2 remains optional.
 
 **Out of scope for the slice:**
 
@@ -2608,10 +2668,14 @@ The lift distinguishes two lookups:
     bags. `vfork`/`execve` stay only as a thin, loud compatibility layer under it (§8.6.4). Still
     open for Fabian: hush (NOMMU/vfork) is the DoD-2 shell in M5a. Does "spawn-only shell"
     settle DoD-2, given that `ash` with `fork` is no longer a goal?
-    ***Closed 2026-10-19 by Fabian:*** *DoD-2 is reformulated only after the Spawn lib has passed
-    its acceptance, not now. Until then the DoD-2 wording (§0) and the M5 row stay as written,
-    M5 stays open on its `fork` clause, and no milestone counts a spawn-only shell as DoD-2.
-    The reformulation is a task for the Spawn-lib acceptance (§8.6, Q30).*
+    ***Closed 2026-10-19 by Fabian (first ruling):*** *DoD-2 is reformulated only after the Spawn lib has passed its acceptance, not then.*
+    ***Follow-through 2026-10-19 ~20:05 CEST:*** Spawn lib acceptance is **conditional**
+    (Fabian on `dcf7b75`; §8.6.7b). DoD-2 is now reformulated in §0 on that conditional
+    acceptance: real shell and programs via Spawn with explicit rights; fork refused or only
+    via a dissected grant. Unconditional caps wait on **M-SPAWN-MMU**. The superseded DoD-2
+    wording remains visible under a details block in §0.
+
+
 20. **QML required?** *Closed (Fabian, DRAFT 5):* QML is one example. It is the
     canonical exemplar for DoD-4; HTML fragments and components are separate tracks.
     Note: the Hyprland compositor itself needs no Qt, and noctalia v5 dropped
@@ -2650,14 +2714,16 @@ The lift distinguishes two lookups:
     (input) providers. The silo variant (DS3 for the GPU, DS4 for input) becomes a milestone of
     its own after M9; it is not a DoD-3 requirement.
 29. **M9 (h2) needs Hyprland to start foot, which needs fork.** *Ruled 2026-10-19 about
-    18:20 CEST by Fabian:* M9 is not passed and stays open, and (h2) is **not** amended. A Spawn
-    design comes first (§8.6). (h2) is met only when the frozen trigger starts foot through Spawn
-    (§8.6.5, stage 1 or 2), measured 3/3.
-30. **Which Spawn stage closes M9 (h2)?** Is stage 1 enough, or must (h2) wait for stage 2?
-    Stage 1 is: `posix_spawn` in the patched hyprutils/Hyprland executor and in foot, running
-    through the compat layer that mints Spawn children. Stage 2 is: Hyprland holds no spawn
-    authority and asks a supervisor. Related: are small patches to hyprutils, Hyprland and foot
-    acceptable, given that fork-as-vfork is rejected (§8.6.5)?
+    18:20 CEST by Fabian:* (h2) is **not** amended. *Follow-through 20:22 CEST:* M9 PASS 3/3 under
+    TCG via Q30 stage 1 spawn-compat (Hyprland-launched foot). (h2) met through the loud compat
+    path (§8.6.5 stage 1), not by amending the frozen check.
+30. **Which Spawn stage closes M9 (h2)?** *Answered by work, 2026-10-19 20:22 CEST:*
+    **Stage 1 is enough for M9 (h2a).** Chosen path: `LD_PRELOAD=libhypr-spawn-compat.so`
+    interposes `fork` inside Hyprland `CExecutor::spawnRawProc` → `posix_spawnp` of a simple
+    argv (loud `spawn-compat:` lines); Hyprland's exec path is direct `fork`+`/bin/sh -c`, not
+    hyprutils. Foot is launched as `/usr/bin/foot --pty=/dev/korupty0` (B21 shell path). M9
+    PASS 3/3 under TCG (`experiments/m9-hyprland/evidence/accept-h2a-run-*`). Stage 2
+    (supervisor) remains optional; M-SPAWN-MMU remains the hardware-caps follow-up.
 31. **`posix-inherit` default in the compat layer.** Should the compat layer be POSIX-faithful
     (every non-`CLOEXEC` fd becomes a recorded grant) or listed-only (a policy row names what a
     given image's children may inherit, and the rest is dropped with a row)? The draft allows
