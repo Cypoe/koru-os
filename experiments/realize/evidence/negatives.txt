@@ -1,0 +1,4 @@
+AS EXPECTED: control_rowed.k exit=0 :: resource: stack -> CONFIG_STACK_SIZE_PAGE_ORDER=5 (131072 B) -> declared demand 81920 B + 25 % = 102400 B
+AS EXPECTED: negative_unrowed.k exit=1 :: refused: interface=rzfix.unrowed:census arm=unikraft/qemu-x86_64 phase=configure missing=realize row offered=none
+AS EXPECTED: negative_contradict.k exit=1 :: refused: author line CONFIG_LIBUKSCHEDCOOP: 'y' contradicts derived CONFIG_LIBUKSCHEDCOOP=n phase=configure
+R6 PASS

@@ -1,0 +1,11 @@
+image: /workspace/rzc/silo/koruos/silo/tests/.unikraft/build/koru_qemu-x86_64.dbg
+root: ukplat_entry2; functions: 456, reachable directly: 82
+largest frames: koru_main=71072, crypto.sha2.Sha2x32(.{ 1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225 },256).round=2288, uk_print_console_write=480, output_emitted.koru_koruos.koru_silo.Silo.tagFor=480, _uk_printk=288, snprintf=224
+demand, direct edges only: 74216 B
+indirect call sites reachable: 18; each charged 1664 B (largest acyclic demand among 305 address-taken functions: multiboot_entry)
+demand, conservative: 74216 B
+worst chain: ukplat_entry2(16) -> uk_boot_entry(112) -> do_main(48) -> main(16) -> koru_main(71072) -> output_emitted.koru_koruos.koru_silo.bind_event.handler(112) -> output_emitted.koru_koruos.koru_silo.Silo.tagFor(480) -> crypto.sha2.Sha2x32(.{ 1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225 },256).update(72) -> crypto.sha2.Sha2x32(.{ 1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225 },256).round(2288)
+recursion cycles cut: 0
+root address-taken (excluded as indirect target): True
+derived stack: 131072 B
+verdict: FITS (conservative 74216 B <= 131072 B)

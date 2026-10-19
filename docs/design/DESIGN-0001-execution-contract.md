@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance)) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance); 19:05: obligation-derived kconfig (`koruc … realize gen`) measured, §11.1 result) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -2263,6 +2263,42 @@ The slice does not need a bootloader or a wholesale port first.
 - **S5.** Image size and RAM floor are measured on the box and recorded as M. The
   164,544 B / 2 MB baseline is C until reproduced.
 
+**Result, 2026-10-19 19:00–19:05 CEST (M, TCG; `experiments/realize/`, checks frozen in
+`c2f4de7` before the counted runs).** The comptime command `koruc <boot.k> realize gen`
+(`koru/realize/index.kz`, koru-libs shape) walks the program's flows, collects every used
+`module:tor`, maps each through a row table (interface → kconfig + stack demand + resources,
+with evidence) and writes `Kraftfile`, `Makefile.uk` and `realize.txt` (the three tables of
+§3.5). An interface with no row, or an author line that contradicts a derived line, is a
+`refused:` line with no Kraftfile written. The input was Slice A and DS0 (print plus the
+`koruos/slice` or `koruos/silo` lift; no 9P program yet). Per criterion:
+
+- **S1: met.** Both derived images pass their frozen checks 3/3 (Slice A S9–S14 and x; DS0
+  `expected.txt`), with the allocator lines now derived rather than author-written.
+- **S2: met, but the 99 KB is not reproduced.** No program imports a scheduler, so realize
+  picks `CONFIG_LIBUKBOOT_INITNOSCHED=y` and `CONFIG_LIBUKSCHEDCOOP=n`. Both hold in the
+  resolved `.config`, and the image has 0 `uk_sched_*`, `*schedcoop*` and `uk_thread_*`
+  symbols (the pinned builds have 20). BUILD.md's "silently ignored `'n'`" comes from the
+  `INITSCHED` choice selecting the scheduler; choosing `INITNOSCHED` removes it. The saving
+  is 4,304 B of file and about 4.7 KB of `.text` per image, not 99 KB, because
+  `OPTIMIZE_DEADELIM` already drops most of the unreferenced scheduler code. The 99 KB
+  stays C for builds without dead-code elimination.
+- **S3: not done.** The `.eh_frame` cost and the `/DISCARD/` attempt are still owed.
+- **S4: partly met.** The order is computed from declared row demands
+  (runtime 16 KiB + print 64 KiB + lift 4 KiB, + 25 %), so it comes out as **order 5 (128 KiB)**
+  instead of the pinned 6. It is then checked against a measured static bound,
+  `stack-demand.py`. That bound follows direct edges from `ukplat_entry2` (the first function
+  on the boot stack, which `plat/kvm/x86/setup.c` sizes with `__STACK_SIZE`), counts every
+  push and the largest `sub rsp`, and charges each indirect call the largest demand of any
+  address-taken function. It gives 76,544 B (Slice A) and 74,216 B (DS0), and both fit. In
+  Slice A, `koru_main` holds 72,024 B of that, with the print buffer inlined. The order-4
+  probe (64 KiB, not counted) is refused by the bound, and booting it anyway crashes at
+  0.10 s (`rip 0`). The order is not yet derived *from* the measured bound; the rows declare
+  and the bound verifies.
+- **S5: image size measured, RAM floor not.** Slice A: 197,504 → 193,200 B. DS0:
+  181,120 → 176,816 B (`experiments/realize/evidence/sizes.txt`). The RAM floor is still owed.
+- **Refusals (R6):** an unrowed lift and a contradicting author line are both refused with
+  no Kraftfile written, and the control is accepted.
+
 ### 11.2 One binding refusal
 
 The same program is built with `unikraft/ninep` imported but no 9P transport row for
@@ -2339,7 +2375,7 @@ Evidence: `experiments/slice-a/evidence/`.
 *Recorded 2026-10-19 about 18:40 CEST from Fabian's whitepaper analysis (ch.06/08 of `Cypoe/plex-shell` @ `f34e473f`, now readable through GitHub). Decisions are Fabian's, or a synthesis he endorsed by pasting it; the wording here is this note's.*
 
 1. Concordance registration (§2.3): every koru-os term cited or added.
-2. Obligation-derived kconfig (§11.1).
+2. Obligation-derived kconfig (§11.1). *2026-10-19 19:05: S1, S2 and R6 met, S4 partly, S3 and the RAM floor owed (§11.1 result).*
 3. The NID binding layer: rows, admission and refusal (§3.2–§3.6, §11.2, Slice A S9–S11).
 4. **SASOS ascent** over one address space (§6.1a), with the **counting wall as a measured
    spike** inside it. The design is closed (§8.5); the measurement is the work.

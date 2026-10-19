@@ -1,4 +1,4 @@
-# Obligation-derived Unikraft kconfig: acceptance (frozen 2026-10-19 about 19:02 CEST)
+# Obligation-derived Unikraft kconfig: acceptance (frozen 2026-10-19 19:00 CEST, commit `c2f4de7`; counted runs 19:00:56–19:03:08)
 
 DESIGN-0001 §11.1 (S1–S5), §11.5 item 2. Before this, koru-libs' `unikraft gen` wrote a
 hand-pinned Kraftfile (`CONFIG_STACK_SIZE_PAGE_ORDER` 6, the scheduler always in, the

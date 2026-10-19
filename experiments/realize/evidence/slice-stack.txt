@@ -1,0 +1,11 @@
+image: /workspace/rzc/slice/koruos/slice/tests/.unikraft/build/koru_qemu-x86_64.dbg
+root: ukplat_entry2; functions: 478, reachable directly: 93
+largest frames: koru_main=72024, output_emitted.koru_koruos.koru_slice.resolve_event.handler=1568, output_emitted.koru_koruos.koru_slice.load_event.handler=1392, output_emitted.koru_koruos.koru_slice.oneTick=1272, output_emitted.koru_koruos.koru_slice.seal_event.handler=1264, output_emitted.koru_koruos.koru_slice.grant_event.handler=1240
+demand, direct edges only: 74888 B
+indirect call sites reachable: 34; each charged 1664 B (largest acyclic demand among 316 address-taken functions: multiboot_entry)
+demand, conservative: 76544 B
+worst chain: ukplat_entry2(16) -> uk_boot_entry(112) -> do_main(48) -> main(16) -> koru_main(72024) -> output_emitted.koru_koruos.koru_slice.abandon_event.handler(1136) -> output_emitted.koru_koruos.koru_slice.dropBag(1216) -> Io.Writer.printValue__anon_3873(16) -> Io.Writer.printIntAny__anon_5270(120) -> Io.Writer.alignBufferOptions(64) -> Io.Writer.splatByteAll(112) -> <indirect: 1664>
+recursion cycles cut: 0
+root address-taken (excluded as indirect target): True
+derived stack: 131072 B
+verdict: FITS (conservative 76544 B <= 131072 B)

@@ -1,0 +1,4 @@
+fb3366cf84407a6e64aaddf2eae6053945734b73995503ff1157a54efbad0380  /workspace/rzc/slice/koruos/slice/tests/.unikraft/build/koru_qemu-x86_64
+193200 B
+   text	   data	    bss	    dec	    hex	filename
+ 166364	   6920	 241664	 414948	  654e4	/workspace/rzc/slice/koruos/slice/tests/.unikraft/build/koru_qemu-x86_64.dbg

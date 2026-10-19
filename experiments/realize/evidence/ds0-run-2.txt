@@ -1,0 +1,3 @@
+qemu exit=0 wall_s=0.285 accel=tcg
+aee7cddff0f2d57d6a4cae1bf1539d54ab00b8c528617bb2a5c8c8d375494751  /workspace/rzc/silo/koruos/silo/tests/.unikraft/build/koru_qemu-x86_64
+DS0-image PASS

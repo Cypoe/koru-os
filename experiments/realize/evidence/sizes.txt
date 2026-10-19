@@ -1,0 +1,6 @@
+pinned (koru-libs unikraft gen, order 6, scheduler in):
+  7a0c15019b739648… 197504 B, text 171060 B, sched symbols 20  /workspace/slk/koruos/slice/tests/.unikraft/build/koru_qemu-x86_64
+  f23b92cdc6f0ec50… 181120 B, text 162564 B, sched symbols 20  /workspace/sl-ds0/koruos/silo/tests/.unikraft/build/koru_qemu-x86_64
+derived (realize gen, order 5, no scheduler):
+  fb3366cf84407a6e… 193200 B, text 166364 B, sched symbols 0  /workspace/rzc/slice/koruos/slice/tests/.unikraft/build/koru_qemu-x86_64
+  aee7cddff0f2d57d… 176816 B, text 157904 B, sched symbols 0  /workspace/rzc/silo/koruos/silo/tests/.unikraft/build/koru_qemu-x86_64
