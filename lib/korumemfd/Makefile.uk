@@ -1,0 +1,4 @@
+# koru-os M9: memfd_create(2) for wl_shm (foot) and keymaps (Hyprland).
+# Included from an application's Makefile.uk with KORUMEMFD_DIR set.
+APPKORUOS_SRCS-y += $(KORUMEMFD_DIR)/korumemfd.c
+UK_PROVIDED_SYSCALLS-y += memfd_create-2

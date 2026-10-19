@@ -1,0 +1,3 @@
+# koru-os M9: one pseudo-terminal pair with a minimal Linux line discipline.
+# Included from an application's Makefile.uk with KORUPTY_DIR set.
+APPKORUOS_SRCS-y += $(KORUPTY_DIR)/korupty.c

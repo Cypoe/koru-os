@@ -943,12 +943,20 @@ int kms_rows_bind(struct kms_provider *p)
 }
 
 /* posix-mmap hook (patch unikraft-0.21-posix-mmap-device-hook) */
+__attribute__((weak)) int koruos_memfd_mmap(struct vfscore_file *f, off_t offset,
+					    size_t len, __paddr_t *paddr);
 int koruos_dev_mmap(struct vfscore_file *f, off_t offset, size_t len,
 		    __paddr_t *paddr)
 {
 	struct vnode *vp;
 	uint64_t o;
 
+	if (koruos_memfd_mmap) {	/* M9: lib/korumemfd, if linked */
+		int rc = koruos_memfd_mmap(f, offset, len, paddr);
+
+		if (rc != -ENODEV)
+			return rc;
+	}
 	if (!K.p || !f || !f->f_dentry || !(vp = f->f_dentry->d_vnode))
 		return -ENODEV;
 	if (vp->v_type == VCHR && dmabuf_slot(vp->v_data) >= 0) {

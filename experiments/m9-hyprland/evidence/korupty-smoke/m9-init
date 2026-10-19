@@ -1,0 +1,10 @@
+export PATH=/bin:/usr/bin
+echo "m9-init: start"
+exec 3<>/dev/korupty0
+/bin/sh -i < /dev/korupty0s > /dev/korupty0s 2>&1 &
+sleep 2
+printf 'echo DOD3 > /tmp/dod3\r' >&3
+sleep 2
+dd bs=4096 count=1 <&3 2>/dev/null | od -c | head -20
+echo "dod3: $(cat /tmp/dod3)"
+echo "m9-init: end"

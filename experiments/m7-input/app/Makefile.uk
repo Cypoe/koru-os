@@ -10,3 +10,7 @@ KORUSYSFS_DIR := $(APPKORUOS_BASE)/korusysfs
 include $(KORUSYSFS_DIR)/Makefile.uk
 KORUSNAP_DIR := $(APPKORUOS_BASE)/korusnap
 include $(KORUSNAP_DIR)/Makefile.uk
+KORUPTY_DIR := $(APPKORUOS_BASE)/korupty
+include $(KORUPTY_DIR)/Makefile.uk
+KORUMEMFD_DIR := $(APPKORUOS_BASE)/korumemfd
+include $(KORUMEMFD_DIR)/Makefile.uk

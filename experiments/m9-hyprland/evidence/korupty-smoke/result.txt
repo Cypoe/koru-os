@@ -1,0 +1,3 @@
+image blocks=35600
+qemu exit=0 wall_s=5.527
+snap none

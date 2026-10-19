@@ -1,0 +1,40 @@
+--- a/lib/posix-fdtab/fdtab.c
++++ b/lib/posix-fdtab/fdtab.c
+@@ -619,6 +619,37 @@
+ 	return fd;
+ }
+ 
++/* koru-os M9: SCM_RIGHTS over AF_UNIX (posix-unixsocket). Take a counted reference
++ * to the open file behind `fd` in the active table, and later install such a
++ * reference as a new descriptor in the (receiver's) active table. Works for
++ * vfscore (legacy) and posix-fd files alike.
++ */
++int koruos_fdtab_ref(int fd, void **ref, int *flags)
++{
++	struct fdval v = _fdtab_get(active_fdtab, fd);
++
++	if (!v.p)
++		return -EBADF;
++	*ref = v.p;
++	*flags = v.flags & ~UK_FDTAB_CLOEXEC;
++	return 0;
++}
++
++int koruos_fdtab_install(void *ref, int flags, int cloexec)
++{
++	const void *entry = fdtab_encode(ref, flags | (cloexec ? UK_FDTAB_CLOEXEC : 0));
++	int fd = uk_fmap_put(&active_fdtab->fmap, entry, 0);
++
++	if (fd >= UK_FDTAB_SIZE)
++		return -ENFILE; /* reference left to the caller */
++	return fd;
++}
++
++void koruos_fdtab_unref(void *ref, int flags)
++{
++	file_rel(ref, flags);
++}
++
+ int uk_sys_dup(int oldfd)
+ {
+ 	return uk_sys_dup_min(oldfd, 0, 0);

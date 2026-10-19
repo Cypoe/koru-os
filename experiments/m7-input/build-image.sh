@@ -12,13 +12,15 @@ P="$REPO/experiments/m3-busybox/patches"; P6="$REPO/experiments/m6-kms/patches";
 export PATH=/workspace/tc/zig-x86_64-linux-0.15.2:/workspace/tc/kraft:$PATH
 mkdir -p "$W" && cd "$W"
 cp "$HERE/app/Kraftfile" "$HERE/app/Makefile.uk" "$HERE/app/Config.uk" "$HERE/app/exitstatus.c" .
-rm -rf koruext2fs korukms koruinput korusysfs korusnap && mkdir koruext2fs korukms koruinput korusysfs korusnap
+rm -rf koruext2fs korukms koruinput korusysfs korusnap korupty korumemfd && mkdir koruext2fs korukms koruinput korusysfs korusnap korupty korumemfd
 "$REPO/lib/koruext2fs/build-core.sh" >/dev/null
 cp -r "$REPO/lib/koruext2fs/ext2fs_vfs.c" "$REPO/lib/koruext2fs/Makefile.uk" "$REPO/lib/koruext2fs/build" koruext2fs/
 cp "$REPO"/lib/korukms/*.c "$REPO"/lib/korukms/*.h "$REPO/lib/korukms/Makefile.uk" korukms/
 cp "$REPO"/lib/koruinput/*.c "$REPO"/lib/koruinput/*.h "$REPO/lib/koruinput/Makefile.uk" koruinput/
 cp "$REPO"/lib/korusysfs/*.c "$REPO"/lib/korusysfs/*.h "$REPO/lib/korusysfs/Makefile.uk" korusysfs/
 cp "$REPO"/lib/korusnap/*.c "$REPO/lib/korusnap/Makefile.uk" korusnap/ # M9
+cp "$REPO"/lib/korupty/*.c "$REPO/lib/korupty/Makefile.uk" korupty/ # M9
+cp "$REPO"/lib/korumemfd/*.c "$REPO/lib/korumemfd/Makefile.uk" korumemfd/ # M9
 if [ ! -d .unikraft/unikraft ]; then
   [ -d "$W_SRC/.unikraft/unikraft" ] || { echo "run experiments/m3-busybox/build-image.sh first (fetches sources)"; exit 1; }
   mkdir -p .unikraft && cp -r "$W_SRC/.unikraft/unikraft" "$W_SRC/.unikraft/apps" "$W_SRC/.unikraft/libs" .unikraft/
@@ -44,5 +46,8 @@ ap $U $U/lib/vfscore/main.c "$P7B/unikraft-0.21-vfscore-fstatat-nofollow.patch" 
 # M9
 P9="$REPO/experiments/m9-hyprland/patches"
 ap .unikraft/apps/elfloader .unikraft/apps/elfloader/elf_load.c "$P9/app-elfloader-execve-errno.patch" "koru-os: use the raw syscall"
+ap $U $U/lib/posix-fdtab/fdtab.c "$P9/unikraft-0.21-posix-fdtab-scm-refs.patch" "koru-os M9"
+ap $U $U/lib/posix-unixsocket/unixsock.c "$P9/unikraft-0.21-posix-unixsocket-scm-rights.patch" "koru-os M9"
+ap $U $U/lib/devfs/devfs_vnops.c "$P9/unikraft-0.21-devfs-truncate-size.patch" "koru-os M9"
 rm -f .config.m7-input_qemu-x86_64 .unikraft/build/config
 UK_CFLAGS="-std=gnu17" kraft build --arch x86_64 --plat qemu --no-prompt --log-type basic

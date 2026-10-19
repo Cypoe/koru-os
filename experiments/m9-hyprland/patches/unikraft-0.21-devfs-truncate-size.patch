@@ -1,0 +1,19 @@
+--- a/lib/devfs/devfs_vnops.c
++++ b/lib/devfs/devfs_vnops.c
+@@ -315,7 +315,15 @@
+ #define devfs_rmdir	((vnop_rmdir_t)vfscore_vop_einval)
+ #define devfs_setattr	((vnop_setattr_t)vfscore_vop_eperm)
+ #define devfs_inactive	((vnop_inactive_t)vfscore_vop_nullop)
+-#define devfs_truncate	((vnop_truncate_t)vfscore_vop_nullop)
++/* koru-os M9: ftruncate() records the size in the vnode (memfds, lib/korumemfd);
++ * other devices ignore it as before */
++static int devfs_truncate(struct vnode *vp, off_t length)
++{
++	if (length < 0)
++		return EINVAL;
++	vp->v_size = length;
++	return 0;
++}
+ #define devfs_link	((vnop_link_t)vfscore_vop_eperm)
+ #define devfs_fallocate ((vnop_fallocate_t)vfscore_vop_nullop)
+ #define devfs_readlink	((vnop_readlink_t)vfscore_vop_nullop)

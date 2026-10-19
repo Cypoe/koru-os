@@ -1,0 +1,180 @@
+--- a/lib/posix-unixsocket/unixsock.c
++++ b/lib/posix-unixsocket/unixsock.c
+@@ -6,6 +6,8 @@
+ 
+ #include <string.h>
+ #include <sys/un.h>
++#include <sys/socket.h>
++#include <uk/print.h>
+ 
+ #include <uk/assert.h>
+ #include <uk/essentials.h>
+@@ -15,6 +17,123 @@
+ 
+ #include "unixsock-bind.h"
+ 
++/* koru-os M9: SCM_RIGHTS. Passed descriptors are queued per pipe (the sender's
++ * write pipe is the receiver's read pipe) as counted file references, taken at
++ * sendmsg() and installed in the receiver's table at its next recvmsg() with room
++ * for control data. They are delivered no later than the bytes sent with them
++ * (possibly with earlier bytes; libwayland keeps fds in their own queue). A
++ * receiver without control room loses them (MSG_CTRUNC), as on Linux.
++ */
++int koruos_fdtab_ref(int fd, void **ref, int *flags);
++int koruos_fdtab_install(void *ref, int flags, int cloexec);
++void koruos_fdtab_unref(void *ref, int flags);
++#define KSCM_PIPES 64
++#define KSCM_FDS 64
++static struct kscm_q {
++	const struct uk_file *pipe;
++	void *ref[KSCM_FDS];
++	int fl[KSCM_FDS];
++	unsigned h, t;
++} kscm[KSCM_PIPES];
++
++static struct kscm_q *kscm_get(const struct uk_file *pipe, int create)
++{
++	struct kscm_q *fr = NULL;
++
++	for (int i = 0; i < KSCM_PIPES; i++) {
++		if (kscm[i].pipe == pipe)
++			return &kscm[i];
++		if (!fr && !kscm[i].pipe)
++			fr = &kscm[i];
++	}
++	if (create && fr) {
++		fr->pipe = pipe;
++		fr->h = fr->t = 0;
++		return fr;
++	}
++	return NULL;
++}
++
++static int kscm_send(const struct uk_file *pipe, const struct msghdr *msg)
++{
++	struct cmsghdr *c;
++	struct kscm_q *q;
++
++	if (!msg->msg_control || !msg->msg_controllen)
++		return 0;
++	for (c = CMSG_FIRSTHDR(msg); c; c = CMSG_NXTHDR((struct msghdr *)msg, c)) {
++		int n, *fds;
++
++		if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) {
++			uk_pr_err("koru-os: REFUSED linux.sys.sendmsg cmsg level %d type %d (unix)\n",
++				  c->cmsg_level, c->cmsg_type);
++			return -EINVAL;
++		}
++		n = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
++		fds = (int *)CMSG_DATA(c);
++		q = kscm_get(pipe, 1);
++		if (!q || q->h - q->t + n > KSCM_FDS)
++			return -ETOOMANYREFS;
++		for (int i = 0; i < n; i++) {
++			void *ref;
++			int fl;
++
++			if (koruos_fdtab_ref(fds[i], &ref, &fl))
++				return -EBADF;
++			q->ref[q->h % KSCM_FDS] = ref;
++			q->fl[q->h % KSCM_FDS] = fl;
++			q->h++;
++		}
++	}
++	return 0;
++}
++
++static void kscm_recv(const struct uk_file *pipe, struct msghdr *msg, int flags)
++{
++	struct kscm_q *q = kscm_get(pipe, 0);
++	size_t room, n = 0, max;
++	struct cmsghdr *c;
++
++	if (!msg->msg_control) {
++		msg->msg_controllen = 0;
++		if (q && q->h != q->t) {
++			while (q->h != q->t) {
++				koruos_fdtab_unref(q->ref[q->t % KSCM_FDS], q->fl[q->t % KSCM_FDS]);
++				q->t++;
++			}
++			msg->msg_flags |= MSG_CTRUNC;
++		}
++		if (q)
++			q->pipe = NULL;
++		return;
++	}
++	room = msg->msg_controllen;
++	msg->msg_controllen = 0;
++	if (!q || q->h == q->t || room < CMSG_LEN(sizeof(int)))
++		return;
++	max = (room - CMSG_LEN(0)) / sizeof(int);
++	c = (struct cmsghdr *)msg->msg_control;
++	while (q->h != q->t && n < max) {
++		int fd = koruos_fdtab_install(q->ref[q->t % KSCM_FDS], q->fl[q->t % KSCM_FDS],
++					      flags & MSG_CMSG_CLOEXEC);
++
++		if (fd < 0)
++			break;
++		((int *)CMSG_DATA(c))[n++] = fd;
++		q->t++;
++	}
++	if (!n)
++		return;
++	c->cmsg_level = SOL_SOCKET;
++	c->cmsg_type = SCM_RIGHTS;
++	c->cmsg_len = CMSG_LEN(n * sizeof(int));
++	msg->msg_controllen = CMSG_SPACE(n * sizeof(int));
++	if (q->h != q->t)
++		msg->msg_flags |= MSG_CTRUNC;
++	else
++		q->pipe = NULL;
++}
++
+ 
+ struct unix_listenmsg {
+ 	const struct uk_file *rpipe;
+@@ -736,6 +855,8 @@
+ 	struct unix_sock_data *data = posix_sock_get_data(file);
+ 	ssize_t ret;
+ 
++	/* koru-os M9: MSG_DONTWAIT is handled by the socket layer */
++	flags &= ~(MSG_DONTWAIT | MSG_CMSG_CLOEXEC | MSG_NOSIGNAL);
+ 	if (unlikely(flags)) {
+ 		uk_pr_warn("Unsupported recv flags: %x\n", flags);
+ 		return -ENOSYS;
+@@ -750,6 +871,11 @@
+ 	uk_file_rlock(data->rpipe);
+ 	ret = uk_file_read(data->rpipe, msg->msg_iov, msg->msg_iovlen, 0, 0);
+ 	uk_file_runlock(data->rpipe);
++	msg->msg_flags = 0;
++	if (ret >= 0)
++		kscm_recv(data->rpipe, msg, flags); /* koru-os M9 */
++	else if (msg->msg_control)
++		msg->msg_controllen = 0;
+ 	/* Get remote addr */
+ 	if (msg->msg_name) {
+ 		if (_SOCK_CONNECTION(data->type))
+@@ -797,7 +923,7 @@
+ 	const struct uk_file *wpipe;
+ 	ssize_t ret;
+ 
+-	if (unlikely(flags & ~MSG_NOSIGNAL)) {
++	if (unlikely(flags & ~(MSG_NOSIGNAL | MSG_DONTWAIT))) { /* koru-os M9 */
+ 		uk_pr_warn("Unsupported send flags: %x\n", flags);
+ 		return -ENOSYS;
+ 	}
+@@ -845,10 +971,11 @@
+ 				? -ECONNREFUSED : -ENOTCONN);
+ 
+ 	uk_file_wlock(wpipe);
+-	ret = uk_file_write(wpipe, msg->msg_iov, msg->msg_iovlen, 0,
+-			    data->type != SOCK_STREAM ? O_DIRECT : 0);
++	ret = kscm_send(wpipe, msg); /* koru-os M9: fds first, then the bytes */
++	if (!ret)
++		ret = uk_file_write(wpipe, msg->msg_iov, msg->msg_iovlen, 0,
++				    data->type != SOCK_STREAM ? O_DIRECT : 0);
+ 	uk_file_wunlock(wpipe);
+-	/* We ignore ancillary data for now */
+ 
+ 	/* 0-length datagrams will be silently lost; warn */
+ 	if (!ret && data->type != SOCK_STREAM)

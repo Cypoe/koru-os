@@ -15,7 +15,7 @@ C
 touch "$A/status"; export APT_CONFIG=$A/apt.conf
 apt-get update -q
 apt-get -s -o APT::Install-Recommends=false install hyprland foot seatd libseat1 fontconfig \
-  fonts-dejavu-core xkb-data libgl1-mesa-dri libegl-mesa0 libgles2 libgbm1 wayland-utils libinput-tools \
+  fonts-dejavu-core xkb-data libgl1-mesa-dri libegl-mesa0 libgles2 libgbm1 wayland-utils libinput-tools libc-bin \
   | awk '/^Inst/ {print $2}' \
   | grep -Ev '^(systemd|systemd-sysv|libsystemd-shared|python3.*|libpython3.*|perl.*|libperl.*|dbus.*|libpam-systemd|polkitd|binutils.*|libbinutils|libctf.*|libgprofng.*|libsframe.*|libjansson4|gcc-.*-base)$' > "$O/dl.txt"
 (cd "$O/deb" && apt-get download $(cat "$O/dl.txt"))
