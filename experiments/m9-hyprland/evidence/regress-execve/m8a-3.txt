@@ -1,0 +1,15 @@
+128-byte inodes cannot handle dates beyond 2038 and are deprecated
+mkfs e2fsck exit=0 (koru-root: 475/2048 files (9.1% non-contiguous), 207772/262144 blocks)
+qemu exit=0 wall_s=11.065 (boot to poweroff)
+PASS (g1) surfaceless: EGL 1.5 Mesa, llvmpipe LLVM 19.1.7, ES 3.2 Mesa 25.0.7, FBO complete: GL_RENDERER llvmpipe (LLVM 19.1.7, 128 bits)
+PASS (g1) surfaceless: both frame hashes equal the L1 twin, glError 0, exit 0: {0: ('0x0', '9c784fad9c82cce9'), 1: ('0x0', '5be5b6b059035ef9')}
+PASS (g2) independent pixels: clear corners, red/green corners of frame 0, rotation in frame 1: f0 60,40 (210, 42, 3, 255) 200,40 (36, 216, 3, 255); f1 60,40 (26, 51, 76, 255) 200,40 (225, 7, 23, 255)
+PASS (g3) gbm: EGL 1.5 Mesa, llvmpipe LLVM 19.1.7, ES 3.2 Mesa 25.0.7, FBO complete: GL_RENDERER llvmpipe (LLVM 19.1.7, 128 bits)
+PASS (g3) gbm: both frame hashes equal the L1 twin, glError 0, exit 0: {0: ('0x0', '9c784fad9c82cce9'), 1: ('0x0', '5be5b6b059035ef9')}
+PASS (g5) both gloff runs exit 0, init exit 0
+PASS (g4) refusal log classified: 18 rows, names ['STUBBED __uk_syscall_r_prctl', 'STUBBED __uk_syscall_r_sched_getaffinity', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'memfd_create', 'rseq', 'set_robust_list']
+PASS (g4) Mesa messages only the classified ones (B15 sysfs; kmsro as on L1): ['MESA-LOADER: failed to retrieve device information', 'kmsro: driver missing']
+PASS (x) no Unikraft Crash
+CHECKS PASS
+PASS (x) disk unchanged, e2fsck clean
+M8 RUN PASS
