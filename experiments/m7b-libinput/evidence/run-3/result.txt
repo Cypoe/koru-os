@@ -1,0 +1,11 @@
+libudev=zero
+mkfs e2fsck exit=0 (koru-root: 1260/4096 files (0.4% non-contiguous), 11695/65536 blocks)
+qemu exit=0 wall_s=7.19 (boot to QMP quit)
+PASS (b1) sysfs view: uevents, subsystem and dev/class links as L1; input0 bitmaps: 60 entries; input0 KEY 106 codes (L1 145)
+PASS (b2) libudev view (udevprobe) == L1 libudev-zero twin; ID_INPUT/KEY/KEYBOARD as L1 udevd: 33 lines
+PASS (b3) libinput debug-events: DEVICE_ADDED seat0/default/group1/cap:k, 18 keys == derived == L1 (both): added [('koru-os i8042 keyboard (set 1)', 'seat0 default group1  cap:k')]; 18 key lines
+PASS (b4) refusal log classified: 44 rows, names ['STUBBED __uk_syscall_r_prctl', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'rseq', 'set_robust_list']
+PASS (b5) no Unikraft Crash; no dropped events where a close line exists: []
+CHECKS PASS
+PASS (x) disk unchanged, e2fsck clean
+M7b RUN PASS
