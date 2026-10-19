@@ -1,0 +1,20 @@
+PASS policy hyprland.children used
+PASS explicit grant env (not posix-inherit for foot)
+PASS posix-inherit not claimed for foot policy path
+PASS rights-census present: [   31.726307] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.726532] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.728917]
+PASS negative: ungranted path EACCES: <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+role=foot
+fd=0 open
+fd=1 open
+fd=2 open
+fd=3 open
+fd_open_count=4
+negative_ungranted_fd200_ebadf=1
+negative_ungranted_path_eacces=1
+census_done=1
+
+PASS fd census small (no inherited bag): fd_open_count=4
+PASS spawn-compat ok with policy
+STAGE2 CHECKS PASS

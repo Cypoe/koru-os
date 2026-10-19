@@ -1,8 +1,10 @@
-ok   pt_clone
-ok   unmap drops child PTE
-ok   parent keeps PTE
-ok   fault-on-violation
-ok   explicit grant
-ok   parent intact
-ok   no CRIT
-M-SPAWN-MMU STEP1 PASS
+ok   PASS step2 fault-on-violation (ungranted secret)
+ok   PASS step2 attenuation (RO: write faults)
+ok   PASS step2 fault after revoke
+ok   PASS step3 cow write faults before break
+ok   PASS step3 no ambient AS copy (other faults)
+ok   PASS step3 writable after cow_break
+ok   PASS step4 child AS: secret fault
+ok   PASS step4 attenuation RO
+ok   M-SPAWN-MMU STEPS PASS
+M-SPAWN-MMU STEPS PASS

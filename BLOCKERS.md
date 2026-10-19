@@ -7,6 +7,8 @@ Q29 ruled 2026-10-19 about 18:20 CEST by Fabian: M9 is **not** passed and stays 
 Q19 closed 2026-10-19 (about 18:59 CEST) by Fabian: DoD-2 is reformulated only after the Spawn lib passes its acceptance. **Follow-through 20:05 CEST:** Spawn lib acceptance is **conditional** (Fabian on `dcf7b75`: fork and caps over the MMU as a follow-up). DoD-2 reformulated in DESIGN-0001 §0; **M-SPAWN-MMU** named (§8.6.7c, §11.5, ladder). B20 stays open until M9 (h2a) via Spawn/compat.
 
 **Q30 stage 2 (2026-10-19 ~20:35 CEST):** `hyprland.children` explicit grants for Hyprland→foot (env allowlist, close parent fds, userspace path gate + rights census). Negatives measured (ungranted path EACCES, planted fd absent). M9 still PASS 3/3; regressions M3–M8b/M7b + Slice A + NID + spawn + spawn-elf 3/3 under TCG. Loud `posix-inherit` remains for unknown simple cmds. MMU caps still M-SPAWN-MMU.
+**M-SPAWN-MMU steps 2–4 (2026-10-19 ~21:08 CEST):** bag→PT, CoW grant, CR3 AS probe PASS 3/3 under TCG; M9/spawn/spawn-elf/Slice A regressions 3/3. Spawn conditional acceptance **proposed ready for Fabian review** (not accepted).
+
 
 | # | blocker | status | affects | evidence | needed |
 |---|---|---|---|---|---|

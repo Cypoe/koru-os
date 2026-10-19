@@ -36,6 +36,10 @@
 #include "koruspawn.h"
 #include "elf_prog.h"
 #include <libelf.h>
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+#include "mmu.h"
+#include <uk/vmem.h>
+#endif
 
 extern char **environ;
 
@@ -99,6 +103,11 @@ struct ksp_rec {
 	char supervisor[64];
 	struct uk_thread *thread;
 	struct elf_prog *prog;
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+	struct ksp_mmu_domain mmu;	/* per-child PT; live after seal when paging */
+	struct ksp_mem_grant mem[KSP_MAX_GRANTS];
+	unsigned nmem;
+#endif
 };
 
 static struct ksp_rec table[KSP_MAX_REC];
@@ -398,8 +407,11 @@ int ksp_grant(int child, const struct ksp_grant *g)
 		return -EINVAL;
 	if (!g || !g->as || !g->verbs)
 		return -EINVAL;
+	/* F2: wholesale address-space copy is not grantable. Per-region mem:/obj:
+	 * grants (incl. cow verb) are the dissected-fork AS-copy path (M-SPAWN-MMU). */
 	if (strcmp(g->from ? g->from : "", "address-space") == 0 ||
-	    strncmp(g->as, "as", 2) == 0) {
+	    (strcmp(g->as, "as") == 0) ||
+	    (strncmp(g->as, "as/", 3) == 0)) {
 		ksp_log("refused: grant child=%d.%d handle=%s verbs=%s as=%s reason=address-space copy is not grantable (F2) phase=grant",
 			r->instance, r->generation, g->from ? g->from : "",
 			g->verbs, g->as);
@@ -422,6 +434,86 @@ int ksp_grant(int child, const struct ksp_grant *g)
 	return 0;
 }
 
+
+int ksp_grant_mem(int child, unsigned long va, unsigned long len,
+		  const char *verbs, int across_exec)
+{
+	static char asbuf[KSP_MAX_GRANTS][32];
+	static char lenbuf[KSP_MAX_GRANTS][32];
+	static unsigned as_i;
+	struct ksp_grant g;
+	unsigned idx;
+
+	if (!verbs || !len)
+		return -EINVAL;
+	idx = as_i++ % KSP_MAX_GRANTS;
+	snprintf(asbuf[idx], sizeof(asbuf[idx]), "mem:0x%lx", va);
+	snprintf(lenbuf[idx], sizeof(lenbuf[idx]), "0x%lx", len);
+	g = (struct ksp_grant){
+		.as = asbuf[idx],
+		.from = "parent-mem",
+		.verbs = verbs,
+		.value = lenbuf[idx],
+		.across_exec = across_exec,
+	};
+	return ksp_grant(child, &g);
+}
+
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+static int seal_derive_mmu(struct ksp_rec *r)
+{
+	struct uk_vas *vas = uk_vas_get_active();
+	unsigned i, nmem = 0;
+	int rc;
+
+	r->nmem = 0;
+	for (i = 0; i < r->nbag; i++) {
+		struct ksp_grant *g = &r->bag[i].g;
+		__vaddr_t va;
+		unsigned long attr;
+		int cow;
+
+		if (!ksp_mmu_is_mem_as(g->as))
+			continue;
+		if (ksp_mmu_parse_mem_as(g->as, &va))
+			return -EINVAL;
+		if (ksp_mmu_parse_verbs(g->verbs, &attr, &cow))
+			return -EINVAL;
+		/* value may carry length as decimal/hex; default one page */
+		{
+			unsigned long len = UK_PAGING_PAGE_SIZE;
+			if (g->value && g->value[0])
+				len = strtoul(g->value, NULL, 0);
+			if (!len || (len & (UK_PAGING_PAGE_SIZE - 1)))
+				return -EINVAL;
+			r->mem[nmem] = (struct ksp_mem_grant){
+				.va = va,
+				.len = len,
+				.pa = UK_PAL_PADDR_INV,
+				.attr = attr,
+				.cow = cow,
+				.gi = i,
+			};
+			nmem++;
+		}
+	}
+	r->nmem = nmem;
+	if (!nmem) {
+		ksp_log("manifest: child=%d.%d mmu=skipped (no mem/obj grants; seam only)",
+			r->instance, r->generation);
+		return 0;
+	}
+	if (!vas)
+		return -EIO;
+	rc = ksp_mmu_derive(&r->mmu, vas, r->mem, r->nmem);
+	if (rc)
+		return rc;
+	ksp_log("manifest: child=%d.%d mmu=derived grants_mem=%u rung=2 (PT from bag)",
+		r->instance, r->generation, r->nmem);
+	return 0;
+}
+#endif
+
 int ksp_seal(int child)
 {
 	struct ksp_rec *r = find(child);
@@ -429,10 +521,24 @@ int ksp_seal(int child)
 
 	if (!r || r->state != KSP_STAGED)
 		return -EINVAL;
-	r->state = KSP_SEALED;
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+	{
+		int rc = seal_derive_mmu(r);
+		if (rc) {
+			ksp_log("refused: seal child=%d.%d reason=mmu_derive %d phase=seal",
+				r->instance, r->generation, rc);
+			return rc;
+		}
+	}
+	ksp_log("manifest: child=%d.%d image=%s parent=%d rung=2 (MMU PT from bag) bag=%u ambient=memory<=%llu,clock,exit,yield",
+		r->instance, r->generation, r->path, r->parent, r->nbag,
+		(unsigned long long)r->budget);
+#else
 	ksp_log("manifest: child=%d.%d image=%s parent=%d rung=0/1 (one address space; enforced at the seam) bag=%u ambient=memory<=%llu,clock,exit,yield",
 		r->instance, r->generation, r->path, r->parent, r->nbag,
 		(unsigned long long)r->budget);
+#endif
+	r->state = KSP_SEALED;
 	for (i = 0; i < r->nbag; i++)
 		ksp_log("manifest: child=%d.%d grant as=%s from=%s verbs=%s across_exec=%d granted_by=%d why=explicit",
 			r->instance, r->generation, r->bag[i].g.as,
@@ -519,7 +625,6 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 		r->state = KSP_EXITED;
 		uk_syscall_r_exit_group(127); UK_BUG();
 	}
-
 	ksp_libelf_init();
 	prog = elf_load_vfs(uk_alloc_get_default(), r->path,
 			    strrchr(r->path, '/') ? strrchr(r->path, '/') + 1
@@ -536,6 +641,35 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 	ksp_log("spawn: loaded child=%d.%d entry=%p len=%lu",
 		r->instance, r->generation, (void *)prog->entry,
 		(unsigned long)prog->valen);
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+	/* Step 4: bring ELF image pages into the child PT, then CR3-switch.
+	 * Load ran on the parent PT; clone already stripped user VMAs at seal. */
+	if (r->mmu.live && prog->vabase && prog->valen) {
+		__vaddr_t base = (__vaddr_t)prog->vabase & ~(UK_PAGING_PAGE_SIZE - 1);
+		__sz len = (prog->valen + ((__vaddr_t)prog->vabase - base) +
+			    UK_PAGING_PAGE_SIZE - 1) & ~(UK_PAGING_PAGE_SIZE - 1);
+		unsigned long pages = len / UK_PAGING_PAGE_SIZE;
+		unsigned long i;
+		struct uk_pagetable *ppt = uk_paging_pt_get_active();
+		unsigned long mapped = 0;
+		for (i = 0; i < pages; i++) {
+			__vaddr_t va = base + i * UK_PAGING_PAGE_SIZE;
+			unsigned int lvl = UK_PAL_PAGE_LEVEL;
+			__pte_t pte;
+			if (uk_paging_pt_walk(ppt, va, &lvl, NULL, &pte) ||
+			    !UK_PAL_PT_Lx_PTE_PRESENT(pte, lvl))
+				continue;
+			if (uk_paging_page_map(&r->mmu.pt, va,
+					UK_PAL_PT_Lx_PTE_PADDR(pte, lvl), 1,
+					UK_PAGING_PAGE_ATTR_PROT_RWX,
+					UK_PAGING_PAGE_FLAG_FORCE_SIZE |
+					UK_PAGING_PAGE_FLAG_SIZE(UK_PAL_PAGE_LEVEL)) == 0)
+				mapped++;
+		}
+		ksp_log("spawn: mmu map elf child=%d va=%p pages=%lu mapped=%lu",
+			r->instance, (void *)base, pages, mapped);
+	}
+#endif
 
 	/* Fresh stack for the ELF (same as execve): never overwrite the
 	 * Unikraft stack we are currently running on. */
@@ -573,6 +707,34 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 
 	me->_mem.stack = stack_new;
 	me->ctx = elfctx;
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+	if (r->mmu.live) {
+		__vaddr_t sva = (__vaddr_t)stack_new & ~(UK_PAGING_PAGE_SIZE - 1);
+		__sz slen = (STACK_SIZE + UK_PAGING_PAGE_SIZE - 1) &
+			    ~(UK_PAGING_PAGE_SIZE - 1);
+		unsigned long spages = slen / UK_PAGING_PAGE_SIZE;
+		unsigned int lvl = UK_PAL_PAGE_LEVEL;
+		__pte_t pte;
+		struct uk_pagetable *ppt = uk_paging_pt_get_active();
+		if (uk_paging_pt_walk(ppt, sva, &lvl, NULL, &pte) == 0 &&
+		    UK_PAL_PT_Lx_PTE_PRESENT(pte, lvl)) {
+			(void)uk_paging_page_map(&r->mmu.pt, sva,
+				UK_PAL_PT_Lx_PTE_PADDR(pte, lvl), spages,
+				UK_PAGING_PAGE_ATTR_PROT_RW,
+				UK_PAGING_PAGE_FLAG_FORCE_SIZE |
+				UK_PAGING_PAGE_FLAG_SIZE(UK_PAL_PAGE_LEVEL));
+		}
+		if (ksp_mmu_activate(&r->mmu)) {
+			ksp_log("spawn: start child=%d.%d stalled reason=mmu_activate",
+				r->instance, r->generation);
+			r->status = 127;
+			r->state = KSP_EXITED;
+			uk_syscall_r_exit_group(127); UK_BUG();
+		}
+		ksp_log("spawn: mmu active child=%d.%d (separate AS)",
+			r->instance, r->generation);
+	}
+#endif
 	ksp_log("spawn: jumping child=%d.%d ip=%p sp=%p",
 		r->instance, r->generation, (void *)elfctx.ip,
 		(void *)elfctx.sp);
@@ -594,6 +756,10 @@ static int on_ppexit(void *data)
 		if (table[i].state == KSP_RUNNING ||
 		    table[i].state == KSP_DETACHED)
 			table[i].state = KSP_EXITED;
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+		if (table[i].mmu.live && table[i].mmu.active)
+			(void)ksp_mmu_deactivate(&table[i].mmu);
+#endif
 		ksp_log("spawn: exited child=%d.%d (ppexit)",
 			table[i].instance, table[i].generation);
 		break;
@@ -725,6 +891,17 @@ int ksp_revoke(int child, unsigned gi)
 	ksp_log("spawn: revoke child=%d.%d grant=%u as=%s epoch=%u (revoked)",
 		r->instance, r->generation, gi, r->bag[gi].g.as,
 		r->bag[gi].epoch);
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+	if (r->mmu.live) {
+		unsigned i;
+		for (i = 0; i < r->nmem; i++) {
+			if (r->mem[i].gi == gi) {
+				(void)ksp_mmu_revoke(&r->mmu, &r->mem[i]);
+				break;
+			}
+		}
+	}
+#endif
 	return 0;
 }
 

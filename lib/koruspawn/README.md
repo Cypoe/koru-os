@@ -21,3 +21,12 @@ re-applying that patch.
 - **env:** `install_bag` clears the environment and re-adds only `env/*` grants.
 
 Rung 0/1: provenance and correctness at the seam, not a security boundary.
+
+
+## M-SPAWN-MMU (local until Q33)
+
+When `CONFIG_LIBUKPAGING` is set, `mmu.c` is linked. `ksp_seal` derives a
+per-child page table from `mem:` / `obj:` grants (`ksp_grant_mem`). Revoke
+unmaps + TLB flush. Verb `cow` is the dissected-fork AS-copy grant.
+Without mem grants, behaviour stays seam-only (rung 0/1). See
+`experiments/m-spawn-mmu/`.

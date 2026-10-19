@@ -70,4 +70,9 @@ int ksp_active_child(void);                 /* current thread's child instance, 
 int ksp_path_allowed(const char *abs);      /* 1 if ambient or a path: grant covers it */
 int ksp_grant_epoch_ok(unsigned slot);      /* 1 if the grant's epoch matches the store */
 
+/* Memory grant helper (M-SPAWN-MMU). as becomes "mem:0xVA"; pa resolved at seal.
+ * verbs: read / read+write / read+cow / read+write+exec (exec only if granted). */
+int ksp_grant_mem(int child, unsigned long va, unsigned long len,
+		  const char *verbs, int across_exec);
+
 #endif /* KORUSPAWN_H */

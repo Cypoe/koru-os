@@ -1,6 +1,6 @@
-# koru-os lib/koruspawn: Spawn provider + loud compat. Included from an
-# application's Makefile.uk with KORUSPAWN_DIR set.
+# koru-os lib/koruspawn: Spawn provider + loud compat + M-SPAWN-MMU.
 APPKORUOS_SRCS-y += $(KORUSPAWN_DIR)/koruspawn.c
 APPKORUOS_SRCS-y += $(KORUSPAWN_DIR)/vfs_gate.c
+APPKORUOS_SRCS-$(CONFIG_LIBUKPAGING) += $(KORUSPAWN_DIR)/mmu.c
 APPKORUOS_CINCLUDES-y += -I$(KORUSPAWN_DIR)
 APPKORUOS_CINCLUDES-y += -I$(KORUSPAWN_DIR)/../koruelf

@@ -1,0 +1,2 @@
+qemu exit=0 wall_s=0.401 accel=tcg
+99740de41c63a4030e50734a3faec537e5a9155f3096f5aca330dbad1738f86b  /workspace/spelf/.unikraft/build/spawn-elf_qemu-x86_64

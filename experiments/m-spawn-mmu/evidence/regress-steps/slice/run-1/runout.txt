@@ -1,0 +1,5 @@
+1.001 attach
+3.584 detach
+7.084 attach
+9.348 detach
+9.356 qemu exit=0

@@ -6,32 +6,177 @@ Press Ctrl-B to configure iPXE (PCI 00:03.0)...
 
 
 Booting from ROM..Powered by Unikraft Ijiraq (0.21.0)
-[    0.103545] ERR:  [appkoruos] <main.c @   23> m-spawn-mmu: begin
-m-spawn-mmu: begin
-[    0.104829] ERR:  [appkoruos] <main.c @   23> secret_va=0x1000089000
-secret_va=0x1000089000
-[    0.105164] ERR:  [appkoruos] <main.c @   23> secret_pa=0x56000 parent_present=1
-secret_pa=0x56000 parent_present=1
-[    0.105763] ERR:  [appkoruos] <main.c @   23> pt_clone ok (dissected fork AS copy is explicit here)
-pt_clone ok (dissected fork AS copy is explicit here)
-[    0.106028] ERR:  [appkoruos] <main.c @   23> child_present_after_clone=1
-child_present_after_clone=1
-[    0.106556] ERR:  [appkoruos] <main.c @   23> child_present_after_unmap=0
-child_present_after_unmap=0
-[    0.106723] ERR:  [appkoruos] <main.c @   23> parent_present_after_child_unmap=1
-parent_present_after_child_unmap=1
-[    0.107124] ERR:  [appkoruos] <main.c @   23> child_nofault_bytes=0
-child_nofault_bytes=0
-[    0.107271] ERR:  [appkoruos] <main.c @   23> PASS fault-on-violation (ungranted secret)
-PASS fault-on-violation (ungranted secret)
-[    0.107480] ERR:  [appkoruos] <main.c @   23> grant_map ok (explicit AS share of secret frame)
-grant_map ok (explicit AS share of secret frame)
-[    0.108445] ERR:  [appkoruos] <main.c @   23> child_nofault_after_grant=25
-child_nofault_after_grant=25
-[    0.109038] ERR:  [appkoruos] <main.c @   23> PASS explicit grant readable
-PASS explicit grant readable
-[    0.109618] ERR:  [appkoruos] <main.c @   23> PASS parent secret intact
-PASS parent secret intact
-[    0.111030] ERR:  [appkoruos] <main.c @   23> M-SPAWN-MMU STEP1 PASS
-M-SPAWN-MMU STEP1 PASS
-[    0.112164] ERR:  [libukpm] <pm.c @   69> PM driver failed the opera
+[    0.104755] ERR:  [appkoruos] <main.c @   23> m-spawn-mmu: begin steps 2-4
+m-spawn-mmu: begin steps 2-4
+[    0.107205] ERR:  [appkoruos] <main.c @   23> == step2 bag-to-PT ==
+== step2 bag-to-PT ==
+[    0.108142] ERR:  [appkoruos] <mmu.c @   38> mmu: pt_clone ok grants=1
+mmu: pt_clone ok grants=1
+[    0.108851] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000000000 len=0x15000 name=-
+mmu: strip va=0x1000000000 len=0x15000 name=-
+[    0.109096] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000015000 len=0x15000 name=-
+mmu: strip va=0x1000015000 len=0x15000 name=-
+[    0.109325] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100002a000 len=0x25000 name=-
+mmu: strip va=0x100002a000 len=0x25000 name=-
+[    0.109551] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100004f000 len=0x15000 name=-
+mmu: strip va=0x100004f000 len=0x15000 name=-
+[    0.109784] ERR:  [appkoruos] <mmu.c @   38> mmu: keep stack vma va=0x1000064000 len=0x25000
+mmu: keep stack vma va=0x1000064000 len=0x25000
+[    0.110005] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret
+[    0.110929] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100008b000 len=0x1000 name=mmu-cow
+mmu: strip va=0x100008b000 len=0x1000 name=mmu-cow
+[    0.111804] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100008c000 len=0x1000 name=mmu-other
+mmu: strip va=0x100008c000 len=0x1000 name=mmu-other
+[    0.112833] ERR:  [appkoruos] <mmu.c @   38> mmu: grant va=0x100008a000 len=0x1000 attr=0x1 cow=0 gi=0
+mmu: grant va=0x100008a000 len=0x1000 attr=0x1 cow=0 gi=0
+[    0.113687] ERR:  [appkoruos] <mmu.c @   38> mmu: derive done (seal-child PT from bag)
+mmu: derive done (seal-child PT from bag)
+[    0.114540] ERR:  [appkoruos] <main.c @   23> PASS step2 derive
+PASS step2 derive
+[    0.115233] ERR:  [appkoruos] <mmu.c @   38> mmu: activate child PT (CR3 switch)
+mmu: activate child PT (CR3 switch)
+[    0.116045] ERR:  [appkoruos] <main.c @   23> PASS step2 activate
+PASS step2 activate
+[    0.116903] ERR:  [appkoruos] <main.c @   23> PASS step2 fault-on-violation (ungranted secret)
+PASS step2 fault-on-violation (ungranted secret)
+[    0.118209] ERR:  [appkoruos] <main.c @   23> PASS step2 granted RO readable
+PASS step2 granted RO readable
+[    0.119596] ERR:  [appkoruos] <main.c @   23> PASS step2 attenuation (RO: write faults)
+PASS step2 attenuation (RO: write faults)
+[    0.121324] ERR:  [appkoruos] <mmu.c @   38> mmu: revoke va=0x100008a000 len=0x1000 tlb_flush gi=0 rc=0
+mmu: revoke va=0x100008a000 len=0x1000 tlb_flush gi=0 rc=0
+[    0.122656] ERR:  [appkoruos] <main.c @   23> PASS step2 revoke rc
+PASS step2 revoke rc
+[    0.123779] ERR:  [appkoruos] <main.c @   23> PASS step2 fault after revoke
+PASS step2 fault after revoke
+[    0.124439] ERR:  [appkoruos] <mmu.c @   38> mmu: deactivate  parent PT
+mmu: deactivate  parent PT
+[    0.125070] ERR:  [appkoruos] <main.c @   23> PASS step2 parent secret intact
+PASS step2 parent secret intact
+[    0.126725] ERR:  [appkoruos] <mmu.c @   38> mmu: destroy child PT
+mmu: destroy child PT
+[    0.127420] ERR:  [appkoruos] <main.c @   23> == step3 CoW grant ==
+== step3 CoW grant ==
+[    0.128470] ERR:  [appkoruos] <main.c @   23> PASS step3 parse cow verbs
+PASS step3 parse cow verbs
+[    0.129146] ERR:  [appkoruos] <mmu.c @   38> mmu: pt_clone ok grants=1
+mmu: pt_clone ok grants=1
+[    0.129701] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000000000 len=0x15000 name=-
+mmu: strip va=0x1000000000 len=0x15000 name=-
+[    0.130506] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000015000 len=0x15000 name=-
+mmu: strip va=0x1000015000 len=0x15000 name=-
+[    0.131334] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100002a000 len=0x25000 name=-
+mmu: strip va=0x100002a000 len=0x25000 name=-
+[    0.132155] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100004f000 len=0x15000 name=-
+mmu: strip va=0x100004f000 len=0x15000 name=-
+[    0.132974] ERR:  [appkoruos] <mmu.c @   38> mmu: keep stack vma va=0x1000064000 len=0x25000
+mmu: keep stack vma va=0x1000064000 len=0x25000
+[    0.133777] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret
+[    0.134914] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed
+mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed
+[    0.136424] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100008c000 len=0x1000 name=mmu-other
+mmu: strip va=0x100008c000 len=0x1000 name=mmu-other
+[    0.138410] ERR:  [appkoruos] <mmu.c @   38> mmu: grant va=0x100008b000 len=0x1000 attr=0x1 cow=1 gi=0
+mmu: grant va=0x100008b000 len=0x1000 attr=0x1 cow=1 gi=0
+[    0.140018] ERR:  [appkoruos] <mmu.c @   38> mmu: derive done (seal-child PT from bag)
+mmu: derive done (seal-child PT from bag)
+[    0.140865] ERR:  [appkoruos] <main.c @   23> PASS step3 derive with cow grant
+PASS step3 derive with cow grant
+[    0.141693] ERR:  [appkoruos] <mmu.c @   38> mmu: activate child PT (CR3 switch)
+mmu: activate child PT (CR3 switch)
+[    0.142497] ERR:  [appkoruos] <main.c @   23> PASS step3 cow region readable
+PASS step3 cow region readable
+[    0.143277] ERR:  [appkoruos] <main.c @   23> PASS step3 cow write faults before break
+PASS step3 cow write faults before break
+[    0.144095] ERR:  [appkoruos] <main.c @   23> PASS step3 no ambient AS copy (other faults)
+PASS step3 no ambient AS copy (other faults)
+[    0.145114] ERR:  [appkoruos] <mmu.c @   38> mmu: cow_break va=0x100008b000 pages=1 new_pa=0x75000 rc=0
+mmu: cow_break va=0x100008b000 pages=1 new_pa=0x75000 rc=0
+[    0.145975] ERR:  [appkoruos] <main.c @   23> PASS step3 cow_break
+PASS step3 cow_break
+[    0.146564] ERR:  [appkoruos] <main.c @   23> PASS step3 writable after cow_break
+PASS step3 writable after cow_break
+[    0.147525] ERR:  [appkoruos] <mmu.c @   38> mmu: deactivate  parent PT
+mmu: deactivate  parent PT
+[    0.148142] ERR:  [appkoruos] <main.c @   23> PASS step3 parent still MAGIC2
+PASS step3 parent still MAGIC2
+[    0.148907] ERR:  [appkoruos] <main.c @   23> step3 F2: ambient address-space copy refused (no grant  unmapped)
+step3 F2: ambient address-space copy refused (no grant  unmapped)
+[    0.149889] ERR:  [appkoruos] <mmu.c @   38> mmu: destroy child PT
+mmu: destroy child PT
+[    0.150437] ERR:  [appkoruos] <main.c @   23> == step4 separate AS (CR3) ==
+== step4 separate AS (CR3) ==
+[    0.151343] ERR:  [appkoruos] <mmu.c @   38> mmu: pt_clone ok grants=1
+mmu: pt_clone ok grants=1
+[    0.152208] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000000000 len=0x15000 name=-
+mmu: strip va=0x1000000000 len=0x15000 name=-
+[    0.153634] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000015000 len=0x15000 name=-
+mmu: strip va=0x1000015000 len=0x15000 name=-
+[    0.155330] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100002a000 len=0x25000 name=-
+mmu: strip va=0x100002a000 len=0x25000 name=-
+[    0.156757] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100004f000 len=0x15000 name=-
+mmu: strip va=0x100004f000 len=0x15000 name=-
+[    0.157715] ERR:  [appkoruos] <mmu.c @   38> mmu: keep stack vma va=0x1000064000 len=0x25000
+mmu: keep stack vma va=0x1000064000 len=0x25000
+[    0.158590] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret
+[    0.159446] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100008b000 len=0x1000 name=mmu-cow
+mmu: strip va=0x100008b000 len=0x1000 name=mmu-cow
+[    0.160321] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100008c000 len=0x1000 name=mmu-other
+mmu: strip va=0x100008c000 len=0x1000 name=mmu-other
+[    0.161158] ERR:  [appkoruos] <mmu.c @   38> mmu: grant va=0x100008a000 len=0x1000 attr=0x3 cow=0 gi=0
+mmu: grant va=0x100008a000 len=0x1000 attr=0x3 cow=0 gi=0
+[    0.161995] ERR:  [appkoruos] <mmu.c @   38> mmu: derive done (seal-child PT from bag)
+mmu: derive done (seal-child PT from bag)
+[    0.162822] ERR:  [appkoruos] <main.c @   23> PASS step4 derive
+PASS step4 derive
+[    0.163384] ERR:  [appkoruos] <mmu.c @   38> mmu: activate child PT (CR3 switch)
+mmu: activate child PT (CR3 switch)
+[    0.164191] ERR:  [appkoruos] <main.c @   23> PASS step4 CR3-child
+PASS step4 CR3-child
+[    0.164753] ERR:  [appkoruos] <main.c @   23> PASS step4 child AS: secret fault
+PASS step4 child AS: secret fault
+[    0.165536] ERR:  [appkoruos] <main.c @   23> PASS step4 child AS: grant rw
+PASS step4 child AS: grant rw
+[    0.166121] ERR:  [appkoruos] <mmu.c @   38> mmu: deactivate  parent PT
+mmu: deactivate  parent PT
+[    0.166797] ERR:  [appkoruos] <main.c @   23> PASS step4 CR3-parent
+PASS step4 CR3-parent
+[    0.167607] ERR:  [appkoruos] <main.c @   23> PASS step4 parent AS restored
+PASS step4 parent AS restored
+[    0.168687] ERR:  [appkoruos] <mmu.c @   38> mmu: destroy child PT
+mmu: destroy child PT
+[    0.169726] ERR:  [appkoruos] <mmu.c @   38> mmu: pt_clone ok grants=1
+mmu: pt_clone ok grants=1
+[    0.170815] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000000000 len=0x15000 name=-
+mmu: strip va=0x1000000000 len=0x15000 name=-
+[    0.172555] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000015000 len=0x15000 name=-
+mmu: strip va=0x1000015000 len=0x15000 name=-
+[    0.173420] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100002a000 len=0x25000 name=-
+mmu: strip va=0x100002a000 len=0x25000 name=-
+[    0.174220] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100004f000 len=0x15000 name=-
+mmu: strip va=0x100004f000 len=0x15000 name=-
+[    0.175021] ERR:  [appkoruos] <mmu.c @   38> mmu: keep stack vma va=0x1000064000 len=0x25000
+mmu: keep stack vma va=0x1000064000 len=0x25000
+[    0.175872] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret
+[    0.176888] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100008b000 len=0x1000 name=mmu-cow
+mmu: strip va=0x100008b000 len=0x1000 name=mmu-cow
+[    0.177904] ERR:  [appkoruos] <mmu.c @   38> mmu: strip va=0x100008c000 len=0x1000 name=mmu-other
+mmu: strip va=0x100008c000 len=0x1000 name=mmu-other
+[    0.178770] ERR:  [appkoruos] <mmu.c @   38> mmu: grant va=0x100008a000 len=0x1000 attr=0x1 cow=0 gi=0
+mmu: grant va=0x100008a000 len=0x1000 attr=0x1 cow=0 gi=0
+[    0.179626] ERR:  [appkoruos] <mmu.c @   38> mmu: derive done (seal-child PT from bag)
+mmu: derive done (seal-child PT from bag)
+[    0.180464] ERR:  [appkoruos] <mmu.c @   38> mmu: activate child PT (CR3 switch)
+mmu: activate child PT (CR3 switch)
+[    0.181284] ERR:  [appkoruos] <main.c @   23> PASS step4 attenuation RO
+PASS step4 attenuation RO
+[    0.181849] ERR:  [appkoruos] <mmu.c @   38> mmu: deactivate  parent PT
+mmu: deactivate  parent PT
+[    0.182518] ERR:  [appkoruos] <mmu.c @   38> mmu: destroy child PT
+mmu: destroy child PT
+[    0.183068] ERR:  [appkoruos] <main.c @   23> M-SPAWN-MMU STEPS PASS
+M-SPAWN-MMU STEPS PASS

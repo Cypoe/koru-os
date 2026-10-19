@@ -1,0 +1,97 @@
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+01F86E00+01EC6E00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+spawn: begin
+roster: 0
+authority: holder=1 handles=2 spawn=[census|greedy|inert] max_bag=2 max_children=2
+authority: holds console verbs=write
+authority: holds env.TERM verbs=read
+refused: fork by holder=1 reason=address-space copy is not grantable (F2) phase=run arm=unikraft/qemu-x86_64 offered=reserve+grant+seal+start
+fork: address-space copy is not grantable (F2)
+refused: reserve image=@caller holder=1 reason=no second context: continuing at the caller's instruction pointer is not grantable (F2) phase=reserve
+reserve1: refused reason=no second context: continuing at the caller's instruction pointer is not grantable (F2)
+refused: reserve image=evil holder=1 reason=image not in the spawn authority (F9) phase=reserve
+reserve2: refused reason=image not in the spawn authority (F9)
+spawn: reserve child=2.1 image=census parent=1 budget=4096 bag=0 (empty by default) roster=1
+roster: 1
+manifest: child=2.1 image=census parent=1 rung=0/1 (one address space; enforced at the seam) bag=0 ambient=memory<=4096,clock,exit,yield
+census: child=2.1 bag=0
+refused: child=2.1 use=fd/1 verb=write phase=run (not in bag)
+refused: child=2.1 use=env/TERM verb=read phase=run (not in bag)
+refused: child=2.1 use=fd/1 verb=read phase=run (not in bag)
+census: child=2.1 wrote=no TERM=(none) clock_ok=yes
+spawn: start child=2.1 entered=yes seam_refusals=3
+spawn: exited child=2.1 status=0
+E: status=0
+spawn: reap child=2.1 released bag=0 roster=0
+roster: 0
+spawn: reserve child=3.1 image=census parent=1 budget=4096 bag=0 (empty by default) roster=1
+spawn: grant child=3.1 as=fd/1 from=console verbs=write across_exec=0 (parent holds write) granted_by=1 why=explicit
+refused: grant child=3.1 handle=console verbs=write+admin as=fd/2 reason=over-grant: verbs exceed the parent's (amplification) phase=grant
+grant: refused reason=over-grant: verbs exceed the parent's (amplification)
+refused: grant child=3.1 handle=net.raw verbs=connect as=sock/0 reason=parent does not hold this handle phase=grant
+grant: refused reason=parent does not hold this handle
+refused: grant child=3.1 handle=address-space verbs=copy as=as reason=address-space copy is not grantable (F2) phase=grant
+grant: refused reason=address-space copy is not grantable (F2)
+spawn: grant child=3.1 as=env/TERM from=env.TERM verbs=read across_exec=0 (parent holds read) granted_by=1 why=explicit
+refused: grant child=3.1 handle=console verbs=write as=fd/2 reason=bag full (max_bag) phase=grant
+grant: refused reason=bag full (max_bag)
+manifest: child=3.1 image=census parent=1 rung=0/1 (one address space; enforced at the seam) bag=2 ambient=memory<=4096,clock,exit,yield
+manifest: child=3.1 grant as=fd/1 from=console verbs=write across_exec=0 epoch=1 granted_by=1 why=explicit
+manifest: child=3.1 grant as=env/TERM from=env.TERM verbs=read across_exec=0 epoch=1 granted_by=1 why=explicit
+census: child=3.1 bag=2
+census: child=3.1 sees fd/1 verbs=write
+census: child=3.1 sees env/TERM verbs=read
+child=3.1 fd/1: hello from a spawned child
+refused: child=3.1 use=fd/1 verb=read granted=write phase=run (verb not in bag)
+census: child=3.1 wrote=yes TERM=xterm-256color clock_ok=yes
+spawn: start child=3.1 entered=yes seam_refusals=1
+spawn: exited child=3.1 status=2
+G: status=2
+spawn: reap child=3.1 released bag=2 roster=0
+spawn: reserve child=4.1 image=census parent=1 budget=4096 bag=0 (empty by default) roster=1
+spawn: reserve child=5.1 image=census parent=1 budget=4096 bag=0 (empty by default) roster=2
+refused: reserve image=census holder=1 reason=spawn authority has no free child slot (max_children) phase=reserve
+reserve3: refused reason=spawn authority has no free child slot (max_children)
+spawn: abandon (no evidence it ran) child=5.1 released bag=0 roster=1
+spawn: abandon (no evidence it ran) child=4.1 released bag=0 roster=0
+spawn: reserve child=6.1 image=greedy parent=1 budget=4096 bag=0 (empty by default) roster=1
+refused: seal child=6.1 image=greedy missing=store/ring phase=seal (not in bag, not ambient)
+seal: refused missing=store/ring
+spawn: abandon (no evidence it ran) child=6.1 released bag=0 roster=0
+spawn: reserve child=7.1 image=inert parent=1 budget=4096 bag=0 (empty by default) roster=1
+manifest: child=7.1 image=inert parent=1 rung=0/1 (one address space; enforced at the seam) bag=0 ambient=memory<=4096,clock,exit,yield
+spawn: start child=7.1 stalled (no evidence the entry executed)
+start: stalled reason=no evidence the entry executed
+spawn: abandon (no evidence it ran) child=7.1 released bag=0 roster=0
+spawn: reserve child=8.1 image=census parent=1 budget=4096 bag=0 (empty by default) roster=1
+spawn: grant child=8.1 as=fd/1 from=console verbs=write across_exec=0 (parent holds write) granted_by=1 why=explicit
+manifest: child=8.1 image=census parent=1 rung=0/1 (one address space; enforced at the seam) bag=1 ambient=memory<=4096,clock,exit,yield
+manifest: child=8.1 grant as=fd/1 from=console verbs=write across_exec=0 epoch=1 granted_by=1 why=explicit
+spawn: revoke child=8.1 grant=0 as=fd/1 epoch=1 (revoked)
+census: child=8.1 bag=1
+census: child=8.1 sees fd/1 verbs=write
+refused: child=8.1 use=fd/1 verb=write reason=revoked epoch=1 phase=run
+refused: child=8.1 use=env/TERM verb=read phase=run (not in bag)
+refused: child=8.1 use=fd/1 verb=read reason=revoked epoch=1 phase=run
+census: child=8.1 wrote=no TERM=(none) clock_ok=yes
+spawn: start child=8.1 entered=yes seam_refusals=3
+spawn: exited child=8.1 status=1
+R: status=1
+spawn: reap child=8.1 released bag=1 roster=0
+spawn: reserve child=9.1 image=census parent=1 budget=4096 bag=0 (empty by default) roster=1
+spawn: grant child=9.1 as=fd/1 from=console verbs=write across_exec=0 (parent holds write) granted_by=1 why=explicit
+manifest: child=9.1 image=census parent=1 rung=0/1 (one address space; enforced at the seam) bag=1 ambient=memory<=4096,clock,exit,yield
+manifest: child=9.1 grant as=fd/1 from=console verbs=write across_exec=0 epoch=1 granted_by=1 why=explicit
+authority: derived holder=9 from child=9.1 handles=1 (nested attenuation)
+spawn: reserve child=10.1 image=census parent=9 budget=4096 bag=0 (empty by default) roster=2
+refused: grant child=10.1 handle=fd/1 verbs=write+admin as=fd/9 reason=over-grant: verbs exceed the parent's (amplification) phase=grant
+nested: refused reason=over-grant: verbs exceed the parent's (amplification)
+spawn: abandon (no evidence it ran) child=10.1 released bag=0 roster=1
+spawn: abandon (no evidence it ran) child=9.1 released bag=1 roster=0
+roster: 0
+spawn: done

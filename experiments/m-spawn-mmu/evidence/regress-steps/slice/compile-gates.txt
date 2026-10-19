@@ -1,0 +1,6 @@
+control compiles: control_minimal.k
+REJECTED as expected: negative_start_unsealed.k :: error[KORU030]: Phantom state mismatch: expected 'koruos.slice:sealed' but got 'koruos.slice:staged!' for argument 'c'
+REJECTED as expected: negative_grant_after_seal.k :: error[KORU030]: Phantom state mismatch: expected 'koruos.slice:staged' but got 'koruos.slice:sealed!' for argument 'c'
+REJECTED as expected: negative_reap_running.k :: error[KORU030]: Phantom state mismatch: expected 'koruos.slice:exited' but got 'koruos.slice:running!' for argument 'c'
+REJECTED as expected: negative_child_leaked.k :: error[KORU030]: Resource 'x' obligation <running!> was not discharged. Call: wait
+SLICE-compile PASS

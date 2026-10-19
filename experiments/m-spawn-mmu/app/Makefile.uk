@@ -1,2 +1,4 @@
 $(eval $(call addlib,appkoruos))
 APPKORUOS_SRCS-y += $(APPKORUOS_BASE)/main.c
+APPKORUOS_SRCS-y += $(APPKORUOS_BASE)/mmu.c
+APPKORUOS_CINCLUDES-y += -I$(APPKORUOS_BASE)

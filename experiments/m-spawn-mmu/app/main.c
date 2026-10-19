@@ -1,22 +1,22 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* M-SPAWN-MMU first measured step (DESIGN-0001 §8.6.7c):
- * per-child page table via uk_paging_pt_clone; ungranted secret faults;
- * explicit grant (remap same frame) restores access. TCG only. */
+/* M-SPAWN-MMU steps 1–4 under TCG (DESIGN-0001 §8.6.7c). */
 #include <stdio.h>
 #include <string.h>
 
-#include <uk/alloc.h>
-#include <uk/arch/limits.h>
 #include <uk/essentials.h>
 #include <uk/nofault.h>
 #include <uk/paging.h>
-#include <uk/plat/console.h>
 #include <uk/print.h>
 #include <uk/vmem.h>
 #include <uk/vmem/vma_types.h>
 
-#define SECRET_LEN 0x1000UL
-#define MAGIC "KORU-SPAWN-MMU-SECRET-v1"
+#include "mmu.h"
+
+#define PG UK_PAGING_PAGE_SIZE
+#define MAGIC1 "KORU-MMU-SECRET-PARENT"
+#define MAGIC2 "KORU-MMU-SHARED-COW-REG"
+
+static int fails;
 
 static void say(const char *s)
 {
@@ -25,172 +25,211 @@ static void say(const char *s)
 	fputc('\n', stdout);
 }
 
-static int pte_present(struct uk_pagetable *pt, __vaddr_t va)
+static void expect(const char *name, int cond)
 {
-	unsigned int lvl = UK_PAL_PAGE_LEVEL;
-	__pte_t pte = 0;
-	int rc = uk_paging_pt_walk(pt, va, &lvl, NULL, &pte);
+	char buf[128];
 
+	snprintf(buf, sizeof(buf), "%s %s", cond ? "PASS" : "FAIL", name);
+	say(buf);
+	if (!cond)
+		fails++;
+}
+
+
+/* ---- step 2: bag → PT at "seal" ---------------------------------------- */
+static int step2(struct uk_vas *vas, __vaddr_t secret, __vaddr_t allowed)
+{
+	struct ksp_mmu_domain d;
+	struct ksp_mem_grant g[1];
+	__sz n;
+	int rc;
+
+	say("== step2 bag-to-PT ==");
+	memcpy((void *)secret, MAGIC1, sizeof(MAGIC1));
+	memcpy((void *)allowed, "ALLOWED-RO", 11);
+
+	g[0] = (struct ksp_mem_grant){
+		.va = allowed,
+		.len = PG,
+		.pa = UK_PAL_PADDR_INV,
+		.attr = UK_PAGING_PAGE_ATTR_PROT_READ, /* attenuation: RO */
+		.cow = 0,
+		.gi = 0,
+	};
+	rc = ksp_mmu_derive(&d, vas, g, 1);
+	expect("step2 derive", rc == 0);
 	if (rc)
-		return 0;
-	return UK_PAL_PT_Lx_PTE_PRESENT(pte, lvl) ? 1 : 0;
+		return -1;
+
+	rc = ksp_mmu_activate(&d);
+	expect("step2 activate", rc == 0);
+
+	n = ksp_mmu_probe_r(secret, PG);
+	expect("step2 fault-on-violation (ungranted secret)", n == 0);
+
+	n = ksp_mmu_probe_r(allowed, 11);
+	expect("step2 granted RO readable", n >= 11);
+
+	n = ksp_mmu_probe_rw(allowed, 1);
+	expect("step2 attenuation (RO: write faults)", n == 0);
+
+	/* revoke granted region */
+	rc = ksp_mmu_revoke(&d, &g[0]);
+	expect("step2 revoke rc", rc == 0);
+	n = ksp_mmu_probe_r(allowed, 1);
+	expect("step2 fault after revoke", n == 0);
+
+	(void)ksp_mmu_deactivate(&d);
+	n = ksp_mmu_probe_r(secret, sizeof(MAGIC1));
+	expect("step2 parent secret intact", n >= sizeof(MAGIC1) &&
+	       memcmp((void *)secret, MAGIC1, sizeof(MAGIC1)) == 0);
+
+	ksp_mmu_destroy(&d);
+	return 0;
+}
+
+/* ---- step 3: CoW grant as AS-copy -------------------------------------- */
+static int step3(struct uk_vas *vas, __vaddr_t region, __vaddr_t other)
+{
+	struct ksp_mmu_domain d;
+	struct ksp_mem_grant g[1];
+	unsigned long attr;
+	int cow, rc;
+	__sz n;
+
+	say("== step3 CoW grant ==");
+	memcpy((void *)region, MAGIC2, sizeof(MAGIC2));
+	memcpy((void *)other, "NOCOPY", 7);
+
+	/* Refuse ambient AS: deriving with zero grants leaves other unmapped. */
+	rc = ksp_mmu_parse_verbs("read+cow", &attr, &cow);
+	expect("step3 parse cow verbs", rc == 0 && cow == 1 &&
+	       (attr & UK_PAGING_PAGE_ATTR_PROT_READ) &&
+	       !(attr & UK_PAGING_PAGE_ATTR_PROT_WRITE));
+
+	g[0] = (struct ksp_mem_grant){
+		.va = region,
+		.len = PG,
+		.pa = UK_PAL_PADDR_INV,
+		.attr = attr,
+		.cow = cow,
+		.gi = 0,
+	};
+	rc = ksp_mmu_derive(&d, vas, g, 1);
+	expect("step3 derive with cow grant", rc == 0);
+	if (rc)
+		return -1;
+
+	(void)ksp_mmu_activate(&d);
+	n = ksp_mmu_probe_r(region, sizeof(MAGIC2));
+	expect("step3 cow region readable", n >= sizeof(MAGIC2));
+	n = ksp_mmu_probe_rw(region, 1);
+	expect("step3 cow write faults before break", n == 0);
+	n = ksp_mmu_probe_r(other, 1);
+	expect("step3 no ambient AS copy (other faults)", n == 0);
+
+	rc = ksp_mmu_cow_break(&d, region, PG);
+	expect("step3 cow_break", rc == 0);
+	n = ksp_mmu_probe_rw(region, 1);
+	expect("step3 writable after cow_break", n >= 1);
+	/* parent still has original */
+	(void)ksp_mmu_deactivate(&d);
+	expect("step3 parent still MAGIC2",
+	       memcmp((void *)region, MAGIC2, sizeof(MAGIC2)) == 0);
+
+	/* Explicit refuse path: without cow/mem grant, AS copy not present —
+	 * already shown by `other` fault. Log the F2-equivalent. */
+	say("step3 F2: ambient address-space copy refused (no grant → unmapped)");
+
+	ksp_mmu_destroy(&d);
+	return 0;
+}
+
+/* ---- step 4: separate AS activate / parent restore --------------------- */
+static int step4(struct uk_vas *vas, __vaddr_t secret, __vaddr_t grant_va)
+{
+	struct ksp_mmu_domain d;
+	struct ksp_mem_grant g[1];
+	__sz n;
+	int rc;
+
+	say("== step4 separate AS (CR3) ==");
+	g[0] = (struct ksp_mem_grant){
+		.va = grant_va,
+		.len = PG,
+		.pa = UK_PAL_PADDR_INV,
+		.attr = UK_PAGING_PAGE_ATTR_PROT_RW,
+		.cow = 0,
+		.gi = 0,
+	};
+	rc = ksp_mmu_derive(&d, vas, g, 1);
+	expect("step4 derive", rc == 0);
+	if (rc)
+		return -1;
+
+	rc = ksp_mmu_activate(&d);
+	expect("step4 CR3-child", rc == 0);
+	n = ksp_mmu_probe_r(secret, 1);
+	expect("step4 child AS: secret fault", n == 0);
+	n = ksp_mmu_probe_rw(grant_va, 1);
+	expect("step4 child AS: grant rw", n >= 1);
+
+	rc = ksp_mmu_deactivate(&d);
+	expect("step4 CR3-parent", rc == 0);
+	n = ksp_mmu_probe_r(secret, sizeof(MAGIC1));
+	expect("step4 parent AS restored", n >= sizeof(MAGIC1));
+
+	/* Attenuation: re-derive RO only */
+	ksp_mmu_destroy(&d);
+	g[0].attr = UK_PAGING_PAGE_ATTR_PROT_READ;
+	rc = ksp_mmu_derive(&d, vas, g, 1);
+	(void)ksp_mmu_activate(&d);
+	n = ksp_mmu_probe_rw(grant_va, 1);
+	expect("step4 attenuation RO", n == 0);
+	(void)ksp_mmu_deactivate(&d);
+	ksp_mmu_destroy(&d);
+	return 0;
 }
 
 int main(int argc __unused, char *argv[] __unused)
 {
 	struct uk_vas *vas = uk_vas_get_active();
-	struct uk_pagetable *pt_parent;
-	struct uk_pagetable pt_child;
-	__vaddr_t secret_va = UK_PAGING_VADDR_ANY;
-	__paddr_t secret_pa = UK_PAL_PADDR_INV;
-	unsigned int lvl;
-	__pte_t pte;
-	__sz n;
-	int rc, fail = 0;
-	char buf[64];
+	__vaddr_t secret = UK_PAGING_VADDR_ANY;
+	__vaddr_t allowed = UK_PAGING_VADDR_ANY;
+	__vaddr_t cowreg = UK_PAGING_VADDR_ANY;
+	__vaddr_t other = UK_PAGING_VADDR_ANY;
+	int rc;
 
-	say("m-spawn-mmu: begin");
-	if (!vas) {
-		say("FAIL no active vas");
-		return 1;
-	}
-	pt_parent = vas->pt;
-	if (!pt_parent) {
-		say("FAIL no parent pt");
+	fails = 0;
+	say("m-spawn-mmu: begin steps 2-4");
+	if (!vas || !vas->pt) {
+		say("FAIL no vas");
 		return 1;
 	}
 
-	/* Parent: map one anonymous page, write a secret, force present. */
-	rc = uk_vma_map_anon(vas, &secret_va, SECRET_LEN,
-			     UK_PAGING_PAGE_ATTR_PROT_RW,
-			     UK_VMA_MAP_POPULATE, "spawn-mmu-secret");
+	rc = uk_vma_map_anon(vas, &secret, PG, UK_PAGING_PAGE_ATTR_PROT_RW,
+			     UK_VMA_MAP_POPULATE, "mmu-secret");
+	rc |= uk_vma_map_anon(vas, &allowed, PG, UK_PAGING_PAGE_ATTR_PROT_RW,
+			      UK_VMA_MAP_POPULATE, "mmu-allowed");
+	rc |= uk_vma_map_anon(vas, &cowreg, PG, UK_PAGING_PAGE_ATTR_PROT_RW,
+			      UK_VMA_MAP_POPULATE, "mmu-cow");
+	rc |= uk_vma_map_anon(vas, &other, PG, UK_PAGING_PAGE_ATTR_PROT_RW,
+			      UK_VMA_MAP_POPULATE, "mmu-other");
 	if (rc) {
-		snprintf(buf, sizeof(buf), "FAIL map_anon rc=%d", rc);
-		say(buf);
+		say("FAIL map_anon");
 		return 1;
 	}
-	memcpy((void *)secret_va, MAGIC, sizeof(MAGIC));
-	snprintf(buf, sizeof(buf), "secret_va=0x%lx", (unsigned long)secret_va);
-	say(buf);
 
-	lvl = UK_PAL_PAGE_LEVEL;
-	rc = uk_paging_pt_walk(pt_parent, secret_va, &lvl, NULL, &pte);
-	if (rc || !UK_PAL_PT_Lx_PTE_PRESENT(pte, lvl)) {
-		say("FAIL parent walk missing secret");
+	/* step 1 residual: clone sanity already covered by derive */
+
+	step2(vas, secret, allowed);
+	step3(vas, cowreg, other);
+	step4(vas, secret, allowed);
+
+	if (fails) {
+		say("M-SPAWN-MMU STEPS FAIL");
 		return 1;
 	}
-	secret_pa = UK_PAL_PT_Lx_PTE_PADDR(pte, lvl);
-	snprintf(buf, sizeof(buf), "secret_pa=0x%lx parent_present=1",
-		 (unsigned long)secret_pa);
-	say(buf);
-
-	/* Dissected fork: clone parent PT (explicit AS copy of mappings). */
-	memset(&pt_child, 0, sizeof(pt_child));
-	rc = uk_paging_pt_clone(&pt_child, pt_parent, 0);
-	if (rc) {
-		snprintf(buf, sizeof(buf), "FAIL pt_clone rc=%d", rc);
-		say(buf);
-		return 1;
-	}
-	say("pt_clone ok (dissected fork AS copy is explicit here)");
-
-	if (!pte_present(&pt_child, secret_va)) {
-		say("FAIL child missing secret right after clone");
-		fail = 1;
-	} else {
-		say("child_present_after_clone=1");
-	}
-
-	/* Default bag empty for this region: drop secret from child, keep frame. */
-	rc = uk_paging_page_unmap(&pt_child, secret_va, 1,
-				  UK_PAGING_PAGE_FLAG_KEEP_FRAMES |
-				  UK_PAGING_PAGE_FLAG_FORCE_SIZE |
-				  UK_PAGING_PAGE_FLAG_SIZE(UK_PAL_PAGE_LEVEL));
-	if (rc) {
-		snprintf(buf, sizeof(buf), "FAIL child unmap rc=%d", rc);
-		say(buf);
-		fail = 1;
-	}
-	if (pte_present(&pt_child, secret_va)) {
-		say("FAIL child still present after unmap");
-		fail = 1;
-	} else {
-		say("child_present_after_unmap=0");
-	}
-	if (!pte_present(pt_parent, secret_va)) {
-		say("FAIL parent lost secret after child unmap");
-		fail = 1;
-	} else {
-		say("parent_present_after_child_unmap=1");
-	}
-
-	/* Switch to child PT and probe — must fault (MMU enforce). */
-	rc = uk_paging_pt_set_active(&pt_child);
-	if (rc) {
-		snprintf(buf, sizeof(buf), "FAIL pt_set_active(child) rc=%d", rc);
-		say(buf);
-		fail = 1;
-		goto out_parent;
-	}
-	n = uk_nofault_probe_r(secret_va, SECRET_LEN, UK_NOFAULTF_NOPAGING);
-	snprintf(buf, sizeof(buf), "child_nofault_bytes=%lu", (unsigned long)n);
-	say(buf);
-	if (n != 0) {
-		say("FAIL child could read ungranted secret");
-		fail = 1;
-	} else {
-		say("PASS fault-on-violation (ungranted secret)");
-	}
-
-	/* Explicit grant: map the same frame back into the child. */
-	rc = uk_paging_page_map(&pt_child, secret_va, secret_pa, 1,
-				UK_PAGING_PAGE_ATTR_PROT_READ,
-				UK_PAGING_PAGE_FLAG_FORCE_SIZE |
-				UK_PAGING_PAGE_FLAG_SIZE(UK_PAL_PAGE_LEVEL));
-	if (rc) {
-		snprintf(buf, sizeof(buf), "FAIL grant map rc=%d", rc);
-		say(buf);
-		fail = 1;
-	} else {
-		say("grant_map ok (explicit AS share of secret frame)");
-	}
-	n = uk_nofault_probe_r(secret_va, sizeof(MAGIC), UK_NOFAULTF_NOPAGING);
-	snprintf(buf, sizeof(buf), "child_nofault_after_grant=%lu",
-		 (unsigned long)n);
-	say(buf);
-	if (n < sizeof(MAGIC)) {
-		say("FAIL grant did not restore child read");
-		fail = 1;
-	} else if (memcmp((void *)secret_va, MAGIC, sizeof(MAGIC)) != 0) {
-		say("FAIL grant content mismatch");
-		fail = 1;
-	} else {
-		say("PASS explicit grant readable");
-	}
-
-out_parent:
-	rc = uk_paging_pt_set_active(pt_parent);
-	if (rc) {
-		snprintf(buf, sizeof(buf), "FAIL pt_set_active(parent) rc=%d", rc);
-		say(buf);
-		fail = 1;
-	}
-	n = uk_nofault_probe_r(secret_va, sizeof(MAGIC), UK_NOFAULTF_NOPAGING);
-	if (n < sizeof(MAGIC) ||
-	    memcmp((void *)secret_va, MAGIC, sizeof(MAGIC)) != 0) {
-		say("FAIL parent secret damaged");
-		fail = 1;
-	} else {
-		say("PASS parent secret intact");
-	}
-
-	/* Best-effort free of child PT pages (frames of secret kept by parent). */
-	(void)uk_paging_pt_free(&pt_child, 0);
-
-	if (fail) {
-		say("M-SPAWN-MMU STEP1 FAIL");
-		return 1;
-	}
-	say("M-SPAWN-MMU STEP1 PASS");
+	say("M-SPAWN-MMU STEPS PASS");
 	return 0;
 }
