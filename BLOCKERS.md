@@ -1,4 +1,6 @@
-# Blockers (as of 2026-10-19 15:50 CEST, Europe/Berlin)
+# Blockers (as of 2026-10-19 15:56 CEST, Europe/Berlin)
+
+Q28 closed 2026-10-19 15:55 CEST by Fabian: native providers first (DoD-3 counts with the native `bochs-display` and i8042 providers); the DS3/DS4 silo variant is a later milestone of its own.
 
 | # | blocker | status | affects | evidence | needed |
 |---|---|---|---|---|---|
