@@ -1,0 +1,2 @@
+2.01 NOT seen 'DEVICE_ADDED'
+2.01 quit failed [Errno 32] Broken pipe

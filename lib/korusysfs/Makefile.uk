@@ -1,0 +1,4 @@
+# koru-os M7b: minimal Linux sysfs view on /sys (ramfs), written from the bound rows.
+# Included from an application's Makefile.uk with KORUSYSFS_DIR set.
+APPKORUOS_SRCS-y += $(KORUSYSFS_DIR)/korusysfs.c
+APPKORUOS_CINCLUDES-y += -I$(KORUSYSFS_DIR)

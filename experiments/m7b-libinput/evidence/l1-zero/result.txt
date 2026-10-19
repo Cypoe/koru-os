@@ -1,0 +1,3 @@
+libudev=zero qemu exit=0 wall_s=39.729
+L1 libinput distinct /sys,/run,/dev paths: 36
+L1 libinput KEYBOARD_KEY lines: 18

@@ -1,0 +1,48 @@
+## /sys/devices/platform/i8042/serio0/input/input0/event0
+MAJOR=13
+MINOR=64
+DEVNAME=input/event0
+SUBSYSTEM-LINK ../../../../../../../class/input
+## /sys/devices/platform/i8042/serio0/input/input0
+PRODUCT=11/1/1/ab41
+NAME="AT Translated Set 2 keyboard"
+PHYS="isa0060/serio0/input0"
+PROP=0
+EV=120013
+KEY=402000002 3803078f800d001 feffffdfffefffff fffffffffffffffe
+MSC=10
+LED=7
+MODALIAS=input:b0011v0001p0001eAB41-e0,1,4,11,14,k71,72,73,74,75,76,77,79,7A,7B,7C,7D,7E,7F,80,8C,8E,8F,9B,9C,9D,9E,9F,A3,A4,A5,A6,AC,AD,B7,B8,B9,C1,D9,E2,ram4,l0,1,2,sfw
+SUBSYSTEM-LINK ../../../../../../class/input
+## /sys/devices/platform/i8042/serio0
+DRIVER=atkbd
+SERIO_TYPE=06
+SERIO_PROTO=00
+SERIO_ID=00
+SERIO_EXTRA=00
+MODALIAS=serio:ty06pr00id00ex00
+SERIO_FIRMWARE_ID=PNP: PNP0303
+SUBSYSTEM-LINK ../../../../bus/serio
+## /sys/devices/platform/i8042
+DRIVER=i8042
+MODALIAS=platform:i8042
+SUBSYSTEM-LINK ../../../bus/platform
+## /sys/devices/platform
+SUBSYSTEM-LINK 
+## /sys/devices/virtual/dmi/id
+MODALIAS=dmi:bvnSeaBIOS:bvr1.16.3-debian-1.16.3-2:bd04/01/2014:br0.0:svnQEMU:pnStandardPC(i440FX+PIIX,1996):pvrpc-i440fx-10.0:cvnQEMU:ct1:cvrpc-i440fx-10.0:sku:
+SUBSYSTEM-LINK ../../../../class/dmi
+## /sys/devices/pci0000:00/0000:00:03.0/drm/card0
+MAJOR=226
+MINOR=0
+DEVNAME=dri/card0
+DEVTYPE=drm_minor
+SUBSYSTEM-LINK ../../../../../class/drm
+## /sys/devices/pci0000:00/0000:00:03.0
+DRIVER=bochs-drm
+PCI_CLASS=38000
+PCI_ID=1234:1111
+PCI_SUBSYS_ID=1AF4:1100
+PCI_SLOT_NAME=0000:00:03.0
+MODALIAS=pci:v00001234d00001111sv00001AF4sd00001100bc03sc80i00
+SUBSYSTEM-LINK ../../../bus/pci

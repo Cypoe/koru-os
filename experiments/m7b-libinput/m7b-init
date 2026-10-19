@@ -1,0 +1,11 @@
+# M7b init (koru-os): dump the kernel's sysfs view, probe it through libudev, then run
+# unmodified libinput debug-events on event0 (last; the host quits QEMU).
+echo "m7b-init: start"
+echo "==== SYSFS"
+ls -lR /sys
+find /sys -type f | sort | xargs head -n 40
+echo "==== END sysfs"
+/bin/udevprobe
+echo "m7b-init: udevprobe exit status $?"
+/usr/bin/libinput debug-events --show-keycodes --device /dev/input/event0
+echo "m7b-init: libinput exit status $?"

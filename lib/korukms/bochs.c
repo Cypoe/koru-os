@@ -17,6 +17,7 @@
 #include <uk/paging.h>
 #include <devfs/device.h>
 #include "kms_rows.h"
+#include "korusysfs.h"
 
 #define BOCHS_VENDOR 0x1234
 #define BOCHS_DEVICE 0x1111
@@ -190,6 +191,40 @@ static struct pci_driver bochs_pci_drv = {
 };
 PCI_REGISTER_DRIVER(&bochs_pci_drv);
 
+/* M7b: the PCI device in the sysfs view, from its config space */
+static void publish_sysfs(void)
+{
+	static char dev[64], ue[512], f[96], v[32];
+	uint32_t id = cfg_read32(&bochs.addr, 0x00);
+	uint32_t cr = cfg_read32(&bochs.addr, 0x08);
+	uint32_t ss = cfg_read32(&bochs.addr, 0x2c);
+	unsigned int ven = id & 0xffff, did = id >> 16, cls = cr >> 8, rev = cr & 0xff;
+	unsigned int sven = ss & 0xffff, sdid = ss >> 16;
+	static const char *const attr[] = { "vendor", "device", "subsystem_vendor",
+					    "subsystem_device", "class", "revision" };
+	unsigned int val[] = { ven, did, sven, sdid, cls, rev };
+	int i;
+
+	snprintf(dev, sizeof(dev), "pci%04x:%02x/%04x:%02x:%02x.%x",
+		 bochs.addr.domain, bochs.addr.bus, bochs.addr.domain,
+		 bochs.addr.bus, bochs.addr.devid, bochs.addr.function);
+	snprintf(ue, sizeof(ue),
+		 "DRIVER=koru-bochs\nPCI_CLASS=%X\nPCI_ID=%04X:%04X\n"
+		 "PCI_SUBSYS_ID=%04X:%04X\nPCI_SLOT_NAME=%s\n"
+		 "MODALIAS=pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02X\n",
+		 cls, ven, did, sven, sdid, strchr(dev, '/') + 1,
+		 ven, did, sven, sdid, cls >> 16, (cls >> 8) & 0xff, cls & 0xff);
+	snprintf(f, sizeof(f), "pci%04x:%02x", bochs.addr.domain, bochs.addr.bus);
+	korusysfs_device(f, NULL, "", NULL);
+	korusysfs_device(dev, "bus/pci", ue, NULL);
+	for (i = 0; i < 6; i++) {
+		snprintf(f, sizeof(f), "devices/%s/%s", dev, attr[i]);
+		snprintf(v, sizeof(v), i == 4 ? "0x%06x\n" : i == 5 ? "0x%02x\n" : "0x%04x\n", val[i]);
+		korusysfs_file(f, v);
+	}
+	bochs.p.sys_parent = dev;
+}
+
 static int map_phys(uint64_t paddr, size_t len, const char *name, void **out)
 {
 	__vaddr_t va = UK_PAGING_VADDR_ANY;
@@ -265,6 +300,7 @@ static int bochs_bind(struct uk_init_ctx *ictx __unused)
 		   (unsigned long)(bochs.p.vram_size >> 10),
 		   (unsigned long)bochs.bar0, (unsigned long)bochs.bar2,
 		   bochs.p.nmodes, bochs.p.nmodes ? bochs.p.modes[0].name : "-");
+	publish_sysfs();
 	rc = kms_rows_bind(&bochs.p);
 	if (rc)
 		uk_pr_err("koru-os: kms: bind rows: %d\n", rc);

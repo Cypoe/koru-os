@@ -4,7 +4,7 @@
  *
  * The controller is put into translated mode (config bit 6), so the keyboard's
  * scan code set 2 arrives as set 1. Set 1 make codes 0x01..0x58 are the Linux
- * KEY_* numbers; 0xE0-prefixed codes go through e0_map. The IRQ 1 handler only
+ * KEY_* numbers (except 0x54, Alt+SysRq: KEY_SYSRQ); 0xE0 codes go through e0_map. The IRQ 1 handler only
  * moves bytes into a ring and ups a semaphore; a koru-input thread decodes and
  * reports through input_rows_event(), so no personality code runs in IRQ context.
  * The aux (mouse) port is left disabled: M7a is keyboard only.
@@ -20,6 +20,7 @@
 #include <uk/lcpu.h>
 #include <devfs/device.h>
 #include "input_rows.h"
+#include "korusysfs.h"
 
 #define I8042_DATA	0x60
 #define I8042_STATUS	0x64
@@ -168,6 +169,8 @@ static void decode(uint8_t b)
 		kc = e0_map[code];
 	} else {
 		kc = (code >= 1 && code <= 0x58) ? code : 0;
+		if (code == 0x54)	/* Alt+SysRq make code: KEY_SYSRQ, as atkbd */
+			kc = 99;
 	}
 	if (!kc) {
 		uk_pr_warn("koru-os: input.ps2: unmapped scan code 0x%x\n", scan);
@@ -241,7 +244,9 @@ static int ps2kbd_bind(struct uk_init_ctx *ictx __unused)
 	ps2.evbits[EV_LED / 8] |= 1 << (EV_LED % 8);
 	ps2.evbits[EV_REP / 8] |= 1 << (EV_REP % 8);
 	for (unsigned int k = 1; k <= 0x58; k++)
-		ps2.keybits[k / 8] |= 1 << (k % 8);
+		if (k != 0x54)	/* 84 is no Linux key code; 0x54 -> KEY_SYSRQ */
+			ps2.keybits[k / 8] |= 1 << (k % 8);
+	ps2.keybits[99 / 8] |= 1 << (99 % 8);
 	for (unsigned int i = 0; i < 128; i++)
 		if (e0_map[i])
 			ps2.keybits[e0_map[i] / 8] |= 1 << (e0_map[i] % 8);
@@ -261,6 +266,16 @@ static int ps2kbd_bind(struct uk_init_ctx *ictx __unused)
 			  KBD_IRQ, rc);
 		return rc;
 	}
+	/* M7b sysfs view of this provider's hardware (the same nodes Linux has
+	 * for i8042 + serio0; the driver names are koru-os's own). */
+	korusysfs_device("platform", NULL, "", NULL);
+	korusysfs_device("platform/i8042", "bus/platform",
+			 "DRIVER=koru-i8042\nMODALIAS=platform:i8042\n", NULL);
+	korusysfs_device("platform/i8042/serio0", "bus/serio",
+			 "DRIVER=koru-ps2kbd\nSERIO_TYPE=06\nSERIO_PROTO=00\n"
+			 "SERIO_ID=00\nSERIO_EXTRA=00\n"
+			 "MODALIAS=serio:ty06pr00id00ex00\n", NULL);
+	ps2.sys_parent = "platform/i8042/serio0";
 	rc = input_rows_bind(&ps2);
 	uk_pr_err("koru-os: INFO input.ps2: i8042 cfg 0x%02x -> 0x%02x, enable-scan ack 0x%02x, IRQ %d, bind %d\n",
 		   cfg0, cfg, ack & 0xff, KBD_IRQ, rc);

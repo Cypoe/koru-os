@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
+#include <stdio.h>
 #include <time.h>
 #include <sys/epoll.h>
 #include <sys/sysmacros.h>
@@ -29,6 +30,7 @@
 #include <vfscore/uio.h>
 #include <vfscore/eventpoll.h>
 #include "input_rows.h"
+#include "korusysfs.h"
 
 struct kinput_event {	/* struct input_event, x86_64 */
 	int64_t sec, usec;
@@ -309,6 +311,99 @@ static struct driver ev_drv = {
 	.name = "koruinput",
 };
 
+/*
+ * M7b sysfs view: <provider parent>/input/input0 and .../input0/event0 with the
+ * uevent and attributes Linux's input core writes (input_dev_uevent,
+ * input_print_bitmap, input_print_modalias), from the provider's bitmaps.
+ */
+static size_t bm_print(char *b, size_t n, const uint8_t *bits, size_t nbytes)
+{
+	size_t nw = (nbytes + 7) / 8, o = 0;
+	int w, started = 0;
+
+	for (w = (int)nw - 1; w >= 0; w--) {
+		uint64_t v = 0;
+
+		for (int i = 7; i >= 0; i--)
+			if ((size_t)(w * 8 + i) < nbytes)
+				v = (v << 8) | bits[w * 8 + i];
+			else
+				v <<= 8;
+		if (!v && !started && w)
+			continue;
+		o += snprintf(b + o, n - o, started ? " %lx" : "%lx", (unsigned long)v);
+		started = 1;
+	}
+	return o;
+}
+
+static size_t ma_print(char *b, size_t n, char c, const uint8_t *bits,
+		       size_t nbytes, unsigned int min)
+{
+	size_t o = snprintf(b, n, "%c", c);
+
+	for (unsigned int i = min; bits && i < nbytes * 8; i++)
+		if (bits[i / 8] & (1 << (i % 8)))
+			o += snprintf(b + o, n - o, "%X,", i);
+	return o;
+}
+
+static void publish_sysfs(struct input_provider *p)
+{
+	static char ue[2048], ma[1024], d[160], f[200], v[200], ev[64], key[256],
+		    msc[32], led[32];
+	const char *par = p->sys_parent ? p->sys_parent : "virtual";
+	size_t o;
+
+	bm_print(ev, sizeof(ev), p->evbits, sizeof(p->evbits));
+	bm_print(key, sizeof(key), p->keybits, sizeof(p->keybits));
+	bm_print(msc, sizeof(msc), p->mscbits, sizeof(p->mscbits));
+	bm_print(led, sizeof(led), p->ledbits, sizeof(p->ledbits));
+	o = snprintf(ma, sizeof(ma), "input:b%04Xv%04Xp%04Xe%04X-",
+		     p->bustype, p->vendor, p->product, p->version);
+	o += ma_print(ma + o, sizeof(ma) - o, 'e', p->evbits, sizeof(p->evbits), 0);
+	o += ma_print(ma + o, sizeof(ma) - o, 'k', p->keybits, sizeof(p->keybits), 0x71);
+	o += ma_print(ma + o, sizeof(ma) - o, 'r', NULL, 0, 0);
+	o += ma_print(ma + o, sizeof(ma) - o, 'a', NULL, 0, 0);
+	o += ma_print(ma + o, sizeof(ma) - o, 'm', p->mscbits, sizeof(p->mscbits), 0);
+	o += ma_print(ma + o, sizeof(ma) - o, 'l', p->ledbits, sizeof(p->ledbits), 0);
+	snprintf(ma + o, sizeof(ma) - o, "sfw");
+	snprintf(ue, sizeof(ue),
+		 "PRODUCT=%x/%x/%x/%x\nNAME=\"%s\"\nPHYS=\"%s\"\nPROP=0\nEV=%s\n"
+		 "KEY=%s\nMSC=%s\nLED=%s\nMODALIAS=%s\n",
+		 p->bustype, p->vendor, p->product, p->version, p->name,
+		 p->phys ? p->phys : "", ev, key, msc, led, ma);
+	snprintf(d, sizeof(d), "%s/input/input0", par);
+	korusysfs_device(d, "class/input", ue, NULL);
+#define ATTR(name, fmt, ...) do { \
+	snprintf(f, sizeof(f), "devices/%s/" name, d); \
+	snprintf(v, sizeof(v), fmt, __VA_ARGS__); korusysfs_file(f, v); } while (0)
+	snprintf(f, sizeof(f), "devices/%s/name", d);
+	snprintf(ue, sizeof(ue), "%s\n", p->name); korusysfs_file(f, ue);
+	ATTR("phys", "%s\n", p->phys ? p->phys : "");
+	ATTR("properties", "%s\n", "0");
+	snprintf(f, sizeof(f), "devices/%s/modalias", d);
+	snprintf(ue, sizeof(ue), "%s\n", ma); korusysfs_file(f, ue);
+	ATTR("id/bustype", "%04x\n", p->bustype);
+	ATTR("id/vendor", "%04x\n", p->vendor);
+	ATTR("id/product", "%04x\n", p->product);
+	ATTR("id/version", "%04x\n", p->version);
+	ATTR("capabilities/ev", "%s\n", ev);
+	ATTR("capabilities/msc", "%s\n", msc);
+	ATTR("capabilities/led", "%s\n", led);
+	ATTR("capabilities/rel", "%s\n", "0");
+	ATTR("capabilities/abs", "%s\n", "0");
+	snprintf(f, sizeof(f), "devices/%s/capabilities/key", d);
+	snprintf(ue, sizeof(ue), "%s\n", key); korusysfs_file(f, ue);
+#undef ATTR
+	snprintf(f, sizeof(f), "%s/event0", d);
+	korusysfs_device(f, "class/input",
+			 "MAJOR=13\nMINOR=64\nDEVNAME=input/event0\n", "13:64");
+	snprintf(f, sizeof(f), "devices/%s/event0/device", d);
+	snprintf(v, sizeof(v), "devices/%s", d);
+	korusysfs_link(f, v);
+}
+
 int input_rows_bind(struct input_provider *p)
 {
 	int rc;
@@ -322,6 +417,7 @@ int input_rows_bind(struct input_provider *p)
 		return -rc;
 	E.dev->rdev = makedev(13, 64);
 	E.p = p;
+	publish_sysfs(p);
 	uk_pr_err("koru-os: INFO input rows bound: /dev/input/event0 -> %s\n",
 		   p->name);
 	return 0;

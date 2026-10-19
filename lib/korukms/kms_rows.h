@@ -48,6 +48,9 @@ struct kms_provider {
 		       uint32_t h, uint32_t pitch);
 	/* kms.disable */
 	int (*disable)(struct kms_provider *p);
+	/* M7b: the provider's device in the sysfs view (korusysfs.h), relative
+	 * to /sys/devices, e.g. "pci0000:00/0000:00:02.0"; NULL: "virtual". */
+	const char *sys_parent;
 };
 
 /* Called by a provider once it is ready. One provider (card0) at first. */

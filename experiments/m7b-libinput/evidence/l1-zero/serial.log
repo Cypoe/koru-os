@@ -1,0 +1,397 @@
+l1-init: libudev-zero, no udevd
+l1-init: keyboard /dev/input/event0
+==== UDEVDB /run/udev/data/c13:*
+cat: can't open '/run/udev/data/c13:*': No such file or directory
+==== END
+==== UDEVDB /run/udev/data/c226:0
+cat: can't open '/run/udev/data/c226:0': No such file or directory
+==== END
+udevprobe: /dev/input/event0 syspath=/sys/devices/platform/i8042/serio0/input/input0/event0 subsystem=input devnode=/dev/input/event0
+udevprobe: /dev/input/event0 prop DEVNAME=/dev/input/event0
+udevprobe: /dev/input/event0 prop DEVPATH=/devices/platform/i8042/serio0/input/input0/event0
+udevprobe: /dev/input/event0 prop DRIVER=
+udevprobe: /dev/input/event0 prop ID_INPUT=1
+udevprobe: /dev/input/event0 prop ID_INPUT_KEY=1
+udevprobe: /dev/input/event0 prop ID_INPUT_KEYBOARD=1
+udevprobe: /dev/input/event0 prop MAJOR=13
+udevprobe: /dev/input/event0 prop MINOR=64
+udevprobe: /dev/input/event0 prop SUBSYSTEM=input
+udevprobe: /dev/input/event0 prop SYSNAME=event0
+udevprobe: /dev/input/event0 prop SYSNUM=0
+udevprobe: /dev/input/event0 prop SYSPATH=/sys/devices/platform/i8042/serio0/input/input0/event0
+udevprobe: /dev/input/event0 parent input:input0
+udevprobe: /dev/input/event0 parent serio:serio0
+udevprobe: /dev/input/event0 parent platform:i8042
+udevprobe: /dev/input/event0 parent -:platform
+udevprobe: /dev/dri/card0 syspath=/sys/devices/pci0000:00/0000:00:03.0/drm/card0 subsystem=drm devnode=/dev/dri/card0
+udevprobe: /dev/dri/card0 prop DEVNAME=/dev/dri/card0
+udevprobe: /dev/dri/card0 prop DEVPATH=/devices/pci0000:00/0000:00:03.0/drm/card0
+udevprobe: /dev/dri/card0 prop DEVTYPE=drm_minor
+udevprobe: /dev/dri/card0 prop DRIVER=
+udevprobe: /dev/dri/card0 prop ID_PATH=pci-0000:00:03.0
+udevprobe: /dev/dri/card0 prop MAJOR=226
+udevprobe: /dev/dri/card0 prop MINOR=0
+udevprobe: /dev/dri/card0 prop SUBSYSTEM=drm
+udevprobe: /dev/dri/card0 prop SYSNAME=card0
+udevprobe: /dev/dri/card0 prop SYSNUM=0
+udevprobe: /dev/dri/card0 prop SYSPATH=/sys/devices/pci0000:00/0000:00:03.0/drm/card0
+udevprobe: /dev/dri/card0 parent pci:0000:00:03.0
+udevprobe: /dev/dri/card0 parent -:pci0000:00
+udevprobe: enumerate drm: card0 devnode=/dev/dri/card0
+udevprobe: enumerate drm: 1 devices
+udevprobe: enumerate input: event0 devnode=/dev/input/event0
+udevprobe: enumerate input: mice devnode=/dev/input/mice
+udevprobe: enumerate input: 2 devices
+udevprobe: DONE
+l1-init: udevprobe exit status 0
+==== UEVENT /sys/devices/platform/i8042/serio0/input/input0/event0
+MAJOR=13
+MINOR=64
+DEVNAME=input/event0
+SUBSYSTEM-LINK ../../../../../../../class/input
+==== END
+==== UEVENT /sys/devices/platform/i8042/serio0/input/input0
+PRODUCT=11/1/1/ab41
+NAME="AT Translated Set 2 keyboard"
+PHYS="isa0060/serio0/input0"
+PROP=0
+EV=120013
+KEY=402000002 3803078f800d001 feffffdfffefffff fffffffffffffffe
+MSC=10
+LED=7
+MODALIAS=input:b0011v0001p0001eAB41-e0,1,4,11,14,k71,72,73,74,75,76,77,79,7A,7B,7C,7D,7E,7F,80,8C,8E,8F,9B,9C,9D,9E,9F,A3,A4,A5,A6,AC,AD,B7,B8,B9,C1,D9,E2,ram4,l0,1,2,sfw
+SUBSYSTEM-LINK ../../../../../../class/input
+==== END
+==== UEVENT /sys/devices/platform/i8042/serio0
+DRIVER=atkbd
+SERIO_TYPE=06
+SERIO_PROTO=00
+SERIO_ID=00
+SERIO_EXTRA=00
+MODALIAS=serio:ty06pr00id00ex00
+SERIO_FIRMWARE_ID=PNP: PNP0303
+SUBSYSTEM-LINK ../../../../bus/serio
+==== END
+==== UEVENT /sys/devices/platform/i8042
+DRIVER=i8042
+MODALIAS=platform:i8042
+SUBSYSTEM-LINK ../../../bus/platform
+==== END
+==== UEVENT /sys/devices/platform
+SUBSYSTEM-LINK 
+==== END
+==== UEVENT /sys/devices/virtual/dmi/id
+MODALIAS=dmi:bvnSeaBIOS:bvr1.16.3-debian-1.16.3-2:bd04/01/2014:br0.0:svnQEMU:pnStandardPC(i440FX+PIIX,1996):pvrpc-i440fx-10.0:cvnQEMU:ct1:cvrpc-i440fx-10.0:sku:
+SUBSYSTEM-LINK ../../../../class/dmi
+==== END
+==== UEVENT /sys/devices/pci0000:00/0000:00:03.0/drm/card0
+MAJOR=226
+MINOR=0
+DEVNAME=dri/card0
+DEVTYPE=drm_minor
+SUBSYSTEM-LINK ../../../../../class/drm
+==== END
+==== UEVENT /sys/devices/pci0000:00/0000:00:03.0
+DRIVER=bochs-drm
+PCI_CLASS=38000
+PCI_ID=1234:1111
+PCI_SUBSYS_ID=1AF4:1100
+PCI_SLOT_NAME=0000:00:03.0
+MODALIAS=pci:v00001234d00001111sv00001AF4sd00001100bc03sc80i00
+SUBSYSTEM-LINK ../../../bus/pci
+==== END
+lrwxrwxrwx    1 0        0                0 Oct 19 13:01 [1;36m/sys/class/drm/card0[m -> [1;34m../../devices/pci0000:00/0000:00:03.0/drm/card0[m
+lrwxrwxrwx    1 0        0                0 Oct 19 13:01 [1;36m/sys/class/input/event0[m -> [1;34m../../devices/platform/i8042/serio0/input/input0/event0[m
+lrwxrwxrwx    1 0        0                0 Oct 19 13:01 [1;36m/sys/dev/char/13:64[m -> [1;34m../../devices/platform/i8042/serio0/input/input0/event0[m
+lrwxrwxrwx    1 0        0                0 Oct 19 13:01 [1;36m/sys/dev/char/226:0[m -> [1;34m../../devices/pci0000:00/0000:00:03.0/drm/card0[m
+m7b-init: start
+-event0   DEVICE_ADDED                 AT Translated Set 2 keyboard      seat0 default group1  cap:k
+ event0   KEYBOARD_KEY                 +4294967.294s	KEY_K (37) pressed
+ event0   KEYBOARD_KEY                 +0.047s	KEY_K (37) released
+ event0   KEYBOARD_KEY                 +0.398s	KEY_O (24) pressed
+ event0   KEYBOARD_KEY                 +0.449s	KEY_O (24) released
+ event0   KEYBOARD_KEY                 +0.800s	KEY_R (19) pressed
+ event0   KEYBOARD_KEY                 +0.851s	KEY_R (19) released
+ event0   KEYBOARD_KEY                 +1.202s	KEY_U (22) pressed
+ event0   KEYBOARD_KEY                 +1.254s	KEY_U (22) released
+ event0   KEYBOARD_KEY                 +1.605s	KEY_LEFTSHIFT (42) pressed
+ event0   KEYBOARD_KEY                 +1.656s	KEY_1 (2) pressed
+ event0   KEYBOARD_KEY                 +1.707s	KEY_1 (2) released
+ event0   KEYBOARD_KEY                 +1.758s	KEY_LEFTSHIFT (42) released
+ event0   KEYBOARD_KEY                 +2.109s	KEY_ENTER (28) pressed
+ event0   KEYBOARD_KEY                 +2.160s	KEY_ENTER (28) released
+ event0   KEYBOARD_KEY                 +2.511s	KEY_UP (103) pressed
+ event0   KEYBOARD_KEY                 +2.562s	KEY_UP (103) released
+ event0   KEYBOARD_KEY                 +2.913s	KEY_ESC (1) pressed
+ event0   KEYBOARD_KEY                 +2.964s	KEY_ESC (1) released
+m7b-init: stopping 182 (strace 178)
+
+m7b-init: libinput stopped
+==== STRACE libinput
+182   execve("/usr/bin/libinput", ["/usr/bin/libinput", "debug-events", "--show-keycodes", "--device", "/dev/input/event0"], 0x7ffe2a56d058 /* 4 vars */) = 0
+182   execve("/usr/libexec/libinput/libinput-debug-events", ["libinput-debug-events", "--show-keycodes", "--device", "/dev/input/event0"], 0x563793374410 /* 5 vars */) = 0
+182   ioctl(1, TCGETS, {c_iflag=ICRNL|IXON, c_oflag=NL0|CR0|TAB0|BS0|VT0|FF0|OPOST|ONLCR, c_cflag=B9600|CS8|CREAD|HUPCL|CLOCAL, c_lflag=ISIG|ICANON|ECHO|ECHOE|ECHOK|IEXTEN|ECHOCTL|ECHOKE, ...}) = 0
+182   newfstatat(AT_FDCWD, "/dev/input/event0", {st_mode=S_IFCHR|0600, st_rdev=makedev(0xd, 0x40), ...}, 0) = 0
+182   readlink("/sys", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/dev", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/dev/char", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/dev/char/13:64", "../../devices/platform/i8042/ser"..., 1023) = 55
+182   readlink("/sys/devices", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/event0", 0x7ffdfe070a00, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/event0/uevent", O_RDONLY) = 5
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/event0/driver", 0x7ffdfe06ee30, 4096) = -1 ENOENT (No such file or directory)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/event0/subsystem", "../../../../../../../class/input", 4096) = 32
+182   readlink("/sys", 0x7ffdfe06d080, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe06d080, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform", 0x7ffdfe06d080, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042", 0x7ffdfe06d080, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0", 0x7ffdfe06d080, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input", 0x7ffdfe06d080, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0", 0x7ffdfe06d080, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/uevent", O_RDONLY) = 5
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/driver", 0x7ffdfe06b4b0, 4096) = -1 ENOENT (No such file or directory)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/subsystem", "../../../../../../class/input", 4096) = 29
+182   readlink("/sys", 0x7ffdfe0719c0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe0719c0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/virtual", 0x7ffdfe0719c0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/virtual/dmi", 0x7ffdfe0719c0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/virtual/dmi/id", 0x7ffdfe0719c0, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/virtual/dmi/id/uevent", O_RDONLY) = 5
+182   readlink("/sys/devices/virtual/dmi/id/driver", 0x7ffdfe06fdf0, 4096) = -1 ENOENT (No such file or directory)
+182   readlink("/sys/devices/virtual/dmi/id/subsystem", "../../../../class/dmi", 4096) = 21
+182   openat(AT_FDCWD, "/sys/firmware/devicetree/base/compatible", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   openat(AT_FDCWD, "/usr/share/libinput", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 5
+182   getdents64(5, 0x55e391d8e8c0 /* 52 entries */, 32768) = 2400
+182   getdents64(5, 0x55e391d8e8c0 /* 0 entries */, 32768) = 0
+182   openat(AT_FDCWD, "/etc/libinput/local-overrides.quirks", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   openat(AT_FDCWD, "/dev/input/event0", O_RDWR|O_NONBLOCK|O_CLOEXEC) = 5
+182   readlink("/sys", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/dev", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/dev/char", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/dev/char/13:64", "../../devices/platform/i8042/ser"..., 1023) = 55
+182   readlink("/sys/devices", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/event0", 0x7ffdfe0707b0, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/event0/uevent", O_RDONLY) = 6
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/event0/driver", 0x7ffdfe06ebe0, 4096) = -1 ENOENT (No such file or directory)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/event0/subsystem", "../../../../../../../class/input", 4096) = 32
+182   readlink("/sys", 0x7ffdfe06ce30, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe06ce30, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform", 0x7ffdfe06ce30, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042", 0x7ffdfe06ce30, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0", 0x7ffdfe06ce30, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input", 0x7ffdfe06ce30, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0", 0x7ffdfe06ce30, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/uevent", O_RDONLY) = 6
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/driver", 0x7ffdfe06b260, 4096) = -1 ENOENT (No such file or directory)
+182   readlink("/sys/devices/platform/i8042/serio0/input/input0/subsystem", "../../../../../../class/input", 4096) = 29
+182   ioctl(5, EVIOCGBIT(0, 8), [EV_SYN EV_KEY EV_MSC EV_LED ...]) = 8
+182   ioctl(5, EVIOCGNAME(255), "AT Translated Set 2 keyboard\0") = 29
+182   ioctl(5, EVIOCGPHYS(255), "isa0060/serio0/input0\0") = 22
+182   ioctl(5, EVIOCGUNIQ(255), 0x7ffdfe0753c0) = -1 ENOENT (No such file or directory)
+182   ioctl(5, EVIOCGID, {bustype=17, vendor=1, product=1, version=43841}) = 0
+182   ioctl(5, EVIOCGVERSION, [0x10001]) = 0
+182   ioctl(5, EVIOCGPROP(8), [])       = 8
+182   ioctl(5, EVIOCGBIT(EV_REL, 8), []) = 8
+182   ioctl(5, EVIOCGBIT(EV_ABS, 8), []) = 8
+182   ioctl(5, EVIOCGBIT(EV_LED, 8), [LED_NUML LED_CAPSL LED_SCROLLL]) = 8
+182   ioctl(5, EVIOCGBIT(EV_KEY, 96), [KEY_ESC KEY_1 KEY_2 KEY_3 ...]) = 96
+182   ioctl(5, EVIOCGBIT(EV_SW, 8), []) = 8
+182   ioctl(5, EVIOCGBIT(EV_MSC, 8), [MSC_SCAN]) = 8
+182   ioctl(5, EVIOCGBIT(EV_FF, 16), []) = 16
+182   ioctl(5, EVIOCGBIT(EV_SND, 8), []) = 8
+182   ioctl(5, EVIOCGKEY(96), [])       = 96
+182   ioctl(5, EVIOCGLED(8), [])        = 8
+182   ioctl(5, EVIOCGSW(8), [])         = 8
+182   ioctl(5, EVIOCGREP, [250, 33])    = 0
+182   ioctl(5, EVIOCSCLOCKID, [1])      = 0
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0/input", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042/serio0", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/uevent", O_RDONLY) = 6
+182   readlink("/sys/devices/platform/i8042/serio0/driver", "../../../../bus/serio/drivers/at"..., 4096) = 35
+182   readlink("/sys/devices/platform/i8042/serio0/subsystem", "../../../../bus/serio", 4096) = 21
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform/i8042", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/platform/i8042/uevent", O_RDONLY) = 6
+182   readlink("/sys/devices/platform/i8042/driver", "../../../bus/platform/drivers/i8"..., 4096) = 35
+182   readlink("/sys/devices/platform/i8042/subsystem", "../../../bus/platform", 4096) = 21
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices/platform", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/platform/uevent", O_RDONLY) = 6
+182   readlink("/sys/devices/platform/driver", 0x7ffdfe06fb70, 4096) = -1 ENOENT (No such file or directory)
+182   readlink("/sys/devices/platform/subsystem", 0x7ffdfe06fb70, 4096) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071740, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   readlink("/sys", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   readlink("/sys/devices", 0x7ffdfe071610, 1023) = -1 EINVAL (Invalid argument)
+182   openat(AT_FDCWD, "/sys/devices/uevent", O_RDONLY) = -1 ENOENT (No such file or directory)
+182   ioctl(1, TCGETS, {c_iflag=ICRNL|IXON, c_oflag=NL0|CR0|TAB0|BS0|VT0|FF0|OPOST|ONLCR, c_cflag=B9600|CS8|CREAD|HUPCL|CLOCAL, c_lflag=ISIG|ICANON|ECHO|ECHOE|ECHOK|IEXTEN|ECHOCTL|ECHOKE, ...}) = 0
+182   --- SIGINT {si_signo=SIGINT, si_code=SI_USER, si_pid=1, si_uid=0} ---
+182   +++ exited with 0 +++
+==== END libinput
+l1-init: done
+[   37.917518] reboot: Power down

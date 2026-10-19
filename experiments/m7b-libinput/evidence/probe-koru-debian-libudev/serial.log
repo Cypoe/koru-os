@@ -1,0 +1,345 @@
+[    0.110245] ERR:  [appkoruos] <evdev_linux.c @  421> koru-os: INFO input rows bound: /dev/input/event0 -> koru-os i8042 keyboard (set 1)
+[    0.111436] ERR:  [appkoruos] <ps2kbd.c @  276> koru-os: INFO input.ps2: i8042 cfg 0x71 -> 0x61, enable-scan ack 0xfa, IRQ 1, bind 0
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=8 blocks=65536 free=53610 inodes=4096 free=2836
+[    0.134358] ERR:  [appkoruos] <korusysfs.c @  205> koru-os: INFO sysfs view on /sys: 60 entries, 0 errors
+[    0.135654] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.194621] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.195293] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.195809] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.196029] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.198435] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.202061] ERR:  [libposix_process] <deprecated.c @  302> koru-os: STUBBED __uk_syscall_r_prctl()
+m7b-init: start
+==== SYSFS
+[    0.246890] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.247082] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.247401] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.247606] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.249967] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+/sys:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 bus
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 class
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 dev
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 devices
+
+/sys/bus:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 pci
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 platform
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 serio
+
+/sys/bus/pci:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 devices
+
+/sys/bus/pci/devices:
+total 0
+lrwxrwxrwx    0 0        0               40 Oct 19 13:01 0000:00:03.0 -> ../../../devices/pci0000:00/0000:00:03.0
+
+/sys/bus/platform:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 devices
+
+/sys/bus/platform/devices:
+total 0
+lrwxrwxrwx    0 0        0               31 Oct 19 13:01 i8042 -> ../../../devices/platform/i8042
+
+/sys/bus/serio:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 devices
+
+/sys/bus/serio/devices:
+total 0
+lrwxrwxrwx    0 0        0               38 Oct 19 13:01 serio0 -> ../../../devices/platform/i8042/serio0
+
+/sys/class:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 drm
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 input
+
+/sys/class/drm:
+total 0
+lrwxrwxrwx    0 0        0               47 Oct 19 13:01 card0 -> ../../devices/pci0000:00/0000:00:03.0/drm/card0
+
+/sys/class/input:
+total 0
+lrwxrwxrwx    0 0        0               55 Oct 19 13:01 event0 -> ../../devices/platform/i8042/serio0/input/input0/event0
+lrwxrwxrwx    0 0        0               48 Oct 19 13:01 input0 -> ../../devices/platform/i8042/serio0/input/input0
+
+/sys/dev:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 block
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 char
+
+/sys/dev/block:
+total 0
+
+/sys/dev/char:
+total 0
+lrwxrwxrwx    0 0        0               55 Oct 19 13:01 13:64 -> ../../devices/platform/i8042/serio0/input/input0/event0
+lrwxrwxrwx    0 0        0               47 Oct 19 13:01 226:0 -> ../../devices/pci0000:00/0000:00:03.0/drm/card0
+
+/sys/devices:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 pci0000:00
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 platform
+
+/sys/devices/pci0000:00:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 0000:00:03.0
+-r--r--r--    0 0        0                0 Oct 19 13:01 uevent
+
+/sys/devices/pci0000:00/0000:00:03.0:
+total 0
+-r--r--r--    0 0        0                9 Oct 19 13:01 class
+-r--r--r--    0 0        0                7 Oct 19 13:01 device
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 drm
+-r--r--r--    0 0        0                5 Oct 19 13:01 revision
+lrwxrwxrwx    0 0        0               16 Oct 19 13:01 subsystem -> ../../../bus/pci
+-r--r--r--    0 0        0                7 Oct 19 13:01 subsystem_device
+-r--r--r--    0 0        0                7 Oct 19 13:01 subsystem_vendor
+-r--r--r--    0 0        0              165 Oct 19 13:01 uevent
+-r--r--r--    0 0        0                7 Oct 19 13:01 vendor
+
+/sys/devices/pci0000:00/0000:00:03.0/drm:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 card0
+
+/sys/devices/pci0000:00/0000:00:03.0/drm/card0:
+total 0
+-r--r--r--    0 0        0                6 Oct 19 13:01 dev
+lrwxrwxrwx    0 0        0               21 Oct 19 13:01 device -> ../../../0000:00:03.0
+lrwxrwxrwx    0 0        0               24 Oct 19 13:01 subsystem -> ../../../../../class/drm
+-r--r--r--    0 0        0               54 Oct 19 13:01 uevent
+
+/sys/devices/platform:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 i8042
+-r--r--r--    0 0        0                0 Oct 19 13:01 uevent
+
+/sys/devices/platform/i8042:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 serio0
+lrwxrwxrwx    0 0        0               21 Oct 19 13:01 subsystem -> ../../../bus/platform
+-r--r--r--    0 0        0               42 Oct 19 13:01 uevent
+
+/sys/devices/platform/i8042/serio0:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 input
+lrwxrwxrwx    0 0        0               21 Oct 19 13:01 subsystem -> ../../../../bus/serio
+-r--r--r--    0 0        0              107 Oct 19 13:01 uevent
+
+/sys/devices/platform/i8042/serio0/input:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 input0
+
+/sys/devices/platform/i8042/serio0/input/input0:
+total 0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 capabilities
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 event0
+drwxr-xr-x    0 0        0                0 Oct 19 13:01 id
+-r--r--r--    0 0        0               69 Oct 19 13:01 modalias
+-r--r--r--    0 0        0               31 Oct 19 13:01 name
+-r--r--r--    0 0        0               22 Oct 19 13:01 phys
+-r--r--r--    0 0        0                2 Oct 19 13:01 properties
+lrwxrwxrwx    0 0        0               29 Oct 19 13:01 subsystem -> ../../../../../../class/input
+-r--r--r--    0 0        0              233 Oct 19 13:01 uevent
+
+/sys/devices/platform/i8042/serio0/input/input0/capabilities:
+total 0
+-r--r--r--    0 0        0                2 Oct 19 13:01 abs
+-r--r--r--    0 0        0                7 Oct 19 13:01 ev
+-r--r--r--    0 0        0               34 Oct 19 13:01 key
+-r--r--r--    0 0        0                2 Oct 19 13:01 led
+-r--r--r--    0 0        0                3 Oct 19 13:01 msc
+-r--r--r--    0 0        0                2 Oct 19 13:01 rel
+
+/sys/devices/platform/i8042/serio0/input/input0/event0:
+total 0
+-r--r--r--    0 0        0                6 Oct 19 13:01 dev
+lrwxrwxrwx    0 0        0               12 Oct 19 13:01 device -> ../../input0
+lrwxrwxrwx    0 0        0               32 Oct 19 13:01 subsystem -> ../../../../../../../class/input
+-r--r--r--    0 0        0               39 Oct 19 13:01 uevent
+
+/sys/devices/platform/i8042/serio0/input/input0/id:
+total 0
+-r--r--r--    0 0        0                5 Oct 19 13:01 bustype
+-r--r--r--    0 0        0                5 Oct 19 13:01 product
+-r--r--r--    0 0        0                5 Oct 19 13:01 vendor
+-r--r--r--    0 0        0                5 Oct 19 13:01 version
+[    0.326142] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.326352] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.326702] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.326922] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.328975] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.381560] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.381766] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.382101] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.382329] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.384631] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.448800] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.449015] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.449379] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.449621] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.451818] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.506783] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.507008] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.507415] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.507656] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.509941] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+==> /sys/devices/pci0000:00/0000:00:03.0/class <==
+0x038000
+
+==> /sys/devices/pci0000:00/0000:00:03.0/device <==
+0x1111
+
+==> /sys/devices/pci0000:00/0000:00:03.0/drm/card0/dev <==
+226:0
+
+==> /sys/devices/pci0000:00/0000:00:03.0/drm/card0/uevent <==
+MAJOR=226
+MINOR=0
+DEVNAME=dri/card0
+DEVTYPE=drm_minor
+
+==> /sys/devices/pci0000:00/0000:00:03.0/revision <==
+0x02
+
+==> /sys/devices/pci0000:00/0000:00:03.0/subsystem_device <==
+0x1100
+
+==> /sys/devices/pci0000:00/0000:00:03.0/subsystem_vendor <==
+0x1af4
+
+==> /sys/devices/pci0000:00/0000:00:03.0/uevent <==
+DRIVER=koru-bochs
+PCI_CLASS=38000
+PCI_ID=1234:1111
+PCI_SUBSYS_ID=1AF4:1100
+PCI_SLOT_NAME=0000:00:03.0
+MODALIAS=pci:v00001234d00001111sv00001AF4sd00001100bc03sc80i00
+
+==> /sys/devices/pci0000:00/0000:00:03.0/vendor <==
+0x1234
+
+==> /sys/devices/pci0000:00/uevent <==
+
+==> /sys/devices/platform/i8042/serio0/input/input0/capabilities/abs <==
+0
+
+==> /sys/devices/platform/i8042/serio0/input/input0/capabilities/ev <==
+120013
+
+==> /sys/devices/platform/i8042/serio0/input/input0/capabilities/key <==
+e080ffdf01ffffff fffffffffffffffe
+
+==> /sys/devices/platform/i8042/serio0/input/input0/capabilities/led <==
+7
+
+==> /sys/devices/platform/i8042/serio0/input/input0/capabilities/msc <==
+10
+
+==> /sys/devices/platform/i8042/serio0/input/input0/capabilities/rel <==
+0
+
+==> /sys/devices/platform/i8042/serio0/input/input0/event0/dev <==
+13:64
+
+==> /sys/devices/platform/i8042/serio0/input/input0/event0/uevent <==
+MAJOR=13
+MINOR=64
+DEVNAME=input/event0
+
+==> /sys/devices/platform/i8042/serio0/input/input0/id/bustype <==
+0011
+
+==> /sys/devices/platform/i8042/serio0/input/input0/id/product <==
+0001
+
+==> /sys/devices/platform/i8042/serio0/input/input0/id/vendor <==
+0001
+
+==> /sys/devices/platform/i8042/serio0/input/input0/id/version <==
+ab41
+
+==> /sys/devices/platform/i8042/serio0/input/input0/modalias <==
+input:b0011v0001p0001eAB41-e0,1,4,11,14,k77,7D,7E,7F,ram4,l0,1,2,sfw
+
+==> /sys/devices/platform/i8042/serio0/input/input0/name <==
+koru-os i8042 keyboard (set 1)
+
+==> /sys/devices/platform/i8042/serio0/input/input0/phys <==
+isa0060/serio0/input0
+
+==> /sys/devices/platform/i8042/serio0/input/input0/properties <==
+0
+
+==> /sys/devices/platform/i8042/serio0/input/input0/uevent <==
+PRODUCT=11/1/1/ab41
+NAME="koru-os i8042 keyboard (set 1)"
+PHYS="isa0060/serio0/input0"
+PROP=0
+EV=120013
+KEY=e080ffdf01ffffff fffffffffffffffe
+MSC=10
+LED=7
+MODALIAS=input:b0011v0001p0001eAB41-e0,1,4,11,14,k77,7D,7E,7F,ram4,l0,1,2,sfw
+
+==> /sys/devices/platform/i8042/serio0/uevent <==
+DRIVER=koru-ps2kbd
+SERIO_TYPE=06
+SERIO_PROTO=00
+SERIO_ID=00
+SERIO_EXTRA=00
+MODALIAS=serio:ty06pr00id00ex00
+
+==> /sys/devices/platform/i8042/uevent <==
+DRIVER=koru-i8042
+MODALIAS=platform:i8042
+
+==> /sys/devices/platform/uevent <==
+==== END sysfs
+[    0.538094] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.583049] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.583319] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.590868] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.594384] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.594921] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.595434] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS name_to_handle_at (nr 303)
+udevprobe: /dev/input/event0: no udev device for 13:64
+[    0.600559] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.600739] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.600937] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS name_to_handle_at (nr 303)
+udevprobe: /dev/dri/card0: no udev device for 226:0
+[    0.605628] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.605821] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.605987] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS name_to_handle_at (nr 303)
+udevprobe: enumerate drm: 0 devices
+[    0.608424] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.608602] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.608773] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS name_to_handle_at (nr 303)
+[    0.609317] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.609497] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.609666] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS name_to_handle_at (nr 303)
+udevprobe: enumerate input: 0 devices
+udevprobe: DONE
+m7b-init: udevprobe exit status 0
+[    0.619745] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.717199] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.717476] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.726601] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.758620] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.884862] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.885157] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.900999] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.922847] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.923330] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS statx (nr 332)
+[    0.923602] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS name_to_handle_at (nr 303)
+libinput error: client bug: Invalid path /dev/input/event0
+Failed to initialize device /dev/input/event0
+m7b-init: libinput exit status 1
+koru-os: init exited with status 0
+koruext2: unmount: 55808 blocks in 1744 requests, 160694 cache hits
+[    0.934253] ERR:  [libukpm] <pm.c @   69> PM driver failed the operation: -5. Falling back on busy loop...

@@ -1,0 +1,5 @@
+libudev=debian
+mkfs e2fsck exit=0 (koru-root: 1260/4096 files (0.4% non-contiguous), 11926/65536 blocks)
+qemu exit=0 wall_s=2.033 (boot to QMP quit)
+PASS (x) disk unchanged, e2fsck clean
+M7b RUN FAIL

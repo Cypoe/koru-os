@@ -1,0 +1,10 @@
+7.56 seen 'DEVICE_ADDED'
+8.66 sent k
+9.07 sent o
+9.47 sent r
+9.87 sent u
+10.38 sent shift+1
+10.78 sent ret
+11.18 sent up
+11.58 sent esc
+11.88 seen 'KEY_ESC (1) released'

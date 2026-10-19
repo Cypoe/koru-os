@@ -1,0 +1,13 @@
+--- a/lib/vfscore/main.c	2026-10-19 15:00:22.458248986 +0200
++++ b/lib/vfscore/main.c	2026-10-19 15:00:22.458248986 +0200
+@@ -1510,6 +1510,10 @@
+ 	if (!pathname || !st)
+ 		return -EFAULT;
+ 	if (pathname[0] == '/' || dirfd == AT_FDCWD) {
++		/* koru-os M7b: honour AT_SYMLINK_NOFOLLOW here too (glibc's
++		 * lstat() is fstatat(AT_FDCWD, path, st, AT_SYMLINK_NOFOLLOW)) */
++		if (flags & AT_SYMLINK_NOFOLLOW)
++			return uk_syscall_do_lstat((long) pathname, (long) st);
+ 		return uk_syscall_do_stat((long) pathname, (long) st);
+ 	}
+ 	// If AT_EMPTY_PATH and pathname is an empty string, fstatat() operates on

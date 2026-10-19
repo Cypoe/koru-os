@@ -19,6 +19,10 @@ struct input_provider {
 	uint8_t mscbits[1];	/* MSC_* */
 	uint8_t ledbits[2];	/* LED_* */
 	unsigned int rep_delay_ms, rep_period_ms;	/* EVIOCGREP */
+	/* M7b: where the provider published its hardware in the sysfs view
+	 * (korusysfs.h), relative to /sys/devices, e.g. "platform/i8042/serio0";
+	 * NULL puts the input device under "virtual/input". */
+	const char *sys_parent;
 };
 
 /* Provider -> personality. Called from thread context (never from an IRQ). */

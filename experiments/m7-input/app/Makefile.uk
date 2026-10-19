@@ -6,3 +6,5 @@ KORUKMS_DIR := $(APPKORUOS_BASE)/korukms
 include $(KORUKMS_DIR)/Makefile.uk
 KORUINPUT_DIR := $(APPKORUOS_BASE)/koruinput
 include $(KORUINPUT_DIR)/Makefile.uk
+KORUSYSFS_DIR := $(APPKORUOS_BASE)/korusysfs
+include $(KORUSYSFS_DIR)/Makefile.uk

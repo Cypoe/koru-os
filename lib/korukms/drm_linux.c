@@ -30,6 +30,7 @@
 #include <uk/wait.h>
 #include <uk/plat/time.h>
 #include "kms_rows.h"
+#include "korusysfs.h"
 #include "drm_uapi.h"
 
 #define ID_PLANE     31
@@ -635,6 +636,19 @@ int kms_rows_bind(struct kms_provider *p)
 	if (rc)
 		return -rc;
 	K.dev->rdev = makedev(226, 0);
+	{	/* M7b sysfs view: <provider device>/drm/card0 */
+		char d[160], l[180], t[170];
+		const char *par = p->sys_parent ? p->sys_parent : "virtual";
+
+		snprintf(d, sizeof(d), "%s/drm/card0", par);
+		korusysfs_device(d, "class/drm", "MAJOR=226\nMINOR=0\n"
+				 "DEVNAME=dri/card0\nDEVTYPE=drm_minor\n", "226:0");
+		if (p->sys_parent) {
+			snprintf(l, sizeof(l), "devices/%s/device", d);
+			snprintf(t, sizeof(t), "devices/%s", par);
+			korusysfs_link(l, t);
+		}
+	}
 	uk_pr_info("koru-os: kms rows bound: /dev/dri/card0 -> %s\n", p->name);
 	return 0;
 }

@@ -1,0 +1,230 @@
+200   execve("/usr/bin/libinput", ["/usr/bin/libinput", "debug-events", "--show-keycodes", "--device", "/dev/input/event0"], 0x7ffc12368368 /* 4 vars */) = 0
+200   execve("/usr/libexec/libinput/libinput-debug-events", ["libinput-debug-events", "--show-keycodes", "--device", "/dev/input/event0"], 0x558a53970410 /* 5 vars */) = 0
+200   ioctl(1, TCGETS, {c_iflag=ICRNL|IXON, c_oflag=NL0|CR0|TAB0|BS0|VT0|FF0|OPOST|ONLCR, c_cflag=B9600|CS8|CREAD|HUPCL|CLOCAL, c_lflag=ISIG|ICANON|ECHO|ECHOE|ECHOK|IEXTEN|ECHOCTL|ECHOKE, ...}) = 0
+200   newfstatat(AT_FDCWD, "/dev/input/event0", {st_mode=S_IFCHR|0600, st_rdev=makedev(0xd, 0x40), ...}, 0) = 0
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 5
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   statx(5, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   statx(6, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   openat(5, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(6, "sys", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 8
+200   openat(8, "dev", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 6
+200   openat(6, "char", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 8
+200   openat(8, "13:64", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 6
+200   readlinkat(8, "13:64", "../../devices/platform/i8042/ser"..., 4096) = 55
+200   openat(8, "..", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(6, "..", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH|O_DIRECTORY) = 8
+200   openat(8, "devices", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 6
+200   openat(6, "platform", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 8
+200   openat(8, "i8042", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 6
+200   openat(6, "serio0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 8
+200   openat(8, "input", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 6
+200   openat(6, "input0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 8
+200   openat(8, "event0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 6
+200   faccessat2(6, "uevent", F_OK, 0)  = 0
+200   openat(AT_FDCWD, "/proc/self/fd/6", O_RDONLY|O_NOCTTY|O_CLOEXEC|O_PATH) = 5
+200   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/event0/uevent", O_RDONLY|O_NOCTTY|O_CLOEXEC) = 5
+200   readlinkat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/event0/subsystem", "../../../../../../../class/input", 4096) = 32
+200   openat(AT_FDCWD, "/run/udev/data/c13:64", O_RDONLY|O_CLOEXEC) = 5
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 5
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   statx(5, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   statx(6, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   openat(5, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(6, "sys", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 8
+200   openat(8, "devices", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 6
+200   openat(6, "virtual", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 8
+200   openat(8, "dmi", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 6
+200   openat(6, "id", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 8
+200   faccessat2(8, "uevent", F_OK, 0)  = 0
+200   openat(AT_FDCWD, "/proc/self/fd/8", O_RDONLY|O_NOCTTY|O_CLOEXEC|O_PATH) = 5
+200   openat(AT_FDCWD, "/sys/devices/virtual/dmi/id/uevent", O_RDONLY|O_NOCTTY|O_CLOEXEC) = 5
+200   readlinkat(AT_FDCWD, "/sys/devices/virtual/dmi/id/subsystem", "../../../../class/dmi", 4096) = 21
+200   openat(AT_FDCWD, "/run/udev/data/+dmi:id", O_RDONLY|O_CLOEXEC) = 5
+200   openat(AT_FDCWD, "/sys/firmware/devicetree/base/compatible", O_RDONLY) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/usr/share/libinput", O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY) = 5
+200   getdents64(5, 0x556105ce8230 /* 52 entries */, 32768) = 2400
+200   getdents64(5, 0x556105ce8230 /* 0 entries */, 32768) = 0
+200   openat(AT_FDCWD, "/etc/libinput/local-overrides.quirks", O_RDONLY) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/dev/input/event0", O_RDWR|O_NONBLOCK|O_CLOEXEC) = 5
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   statx(6, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   statx(7, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   openat(6, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 8
+200   openat(7, "sys", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "dev", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "char", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "13:64", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   readlinkat(9, "13:64", "../../devices/platform/i8042/ser"..., 4096) = 55
+200   openat(9, "..", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(7, "..", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH|O_DIRECTORY) = 9
+200   openat(9, "devices", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "platform", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "i8042", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "serio0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "input", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "input0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "event0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   faccessat2(7, "uevent", F_OK, 0)  = 0
+200   openat(AT_FDCWD, "/proc/self/fd/7", O_RDONLY|O_NOCTTY|O_CLOEXEC|O_PATH) = 6
+200   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/event0/uevent", O_RDONLY|O_NOCTTY|O_CLOEXEC) = 6
+200   readlinkat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/event0/subsystem", "../../../../../../../class/input", 4096) = 32
+200   ioctl(5, EVIOCGBIT(0, 8), [EV_SYN EV_KEY EV_MSC EV_LED ...]) = 8
+200   ioctl(5, EVIOCGNAME(255), "AT Translated Set 2 keyboard\0") = 29
+200   ioctl(5, EVIOCGPHYS(255), "isa0060/serio0/input0\0") = 22
+200   ioctl(5, EVIOCGUNIQ(255), 0x7ffd57e33460) = -1 ENOENT (No such file or directory)
+200   ioctl(5, EVIOCGID, {bustype=17, vendor=1, product=1, version=43841}) = 0
+200   ioctl(5, EVIOCGVERSION, [0x10001]) = 0
+200   ioctl(5, EVIOCGPROP(8), [])       = 8
+200   ioctl(5, EVIOCGBIT(EV_REL, 8), []) = 8
+200   ioctl(5, EVIOCGBIT(EV_ABS, 8), []) = 8
+200   ioctl(5, EVIOCGBIT(EV_LED, 8), [LED_NUML LED_CAPSL LED_SCROLLL]) = 8
+200   ioctl(5, EVIOCGBIT(EV_KEY, 96), [KEY_ESC KEY_1 KEY_2 KEY_3 ...]) = 96
+200   ioctl(5, EVIOCGBIT(EV_SW, 8), []) = 8
+200   ioctl(5, EVIOCGBIT(EV_MSC, 8), [MSC_SCAN]) = 8
+200   ioctl(5, EVIOCGBIT(EV_FF, 16), []) = 16
+200   ioctl(5, EVIOCGBIT(EV_SND, 8), []) = 8
+200   ioctl(5, EVIOCGKEY(96), [])       = 96
+200   ioctl(5, EVIOCGLED(8), [])        = 8
+200   ioctl(5, EVIOCGSW(8), [])         = 8
+200   ioctl(5, EVIOCGREP, [250, 33])    = 0
+200   ioctl(5, EVIOCSCLOCKID, [1])      = 0
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   statx(6, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   statx(7, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   openat(6, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 8
+200   openat(7, "sys", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "devices", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "platform", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "i8042", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "serio0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "input", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "input0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   faccessat2(9, "uevent", F_OK, 0)  = 0
+200   openat(AT_FDCWD, "/proc/self/fd/9", O_RDONLY|O_NOCTTY|O_CLOEXEC|O_PATH) = 6
+200   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/uevent", O_RDONLY|O_NOCTTY|O_CLOEXEC) = 6
+200   readlinkat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/input/input0/subsystem", "../../../../../../class/input", 4096) = 29
+200   openat(AT_FDCWD, "/run/udev/data/+input:input0", O_RDONLY|O_CLOEXEC) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   statx(6, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   statx(7, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   openat(6, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 8
+200   openat(7, "sys", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "devices", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "platform", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "i8042", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "serio0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "input", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   faccessat2(7, "uevent", F_OK, 0)  = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   statx(6, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   statx(7, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   openat(6, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 8
+200   openat(7, "sys", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "devices", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "platform", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "i8042", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "serio0", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   faccessat2(9, "uevent", F_OK, 0)  = 0
+200   openat(AT_FDCWD, "/proc/self/fd/9", O_RDONLY|O_NOCTTY|O_CLOEXEC|O_PATH) = 6
+200   openat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/uevent", O_RDONLY|O_NOCTTY|O_CLOEXEC) = 6
+200   readlinkat(AT_FDCWD, "/sys/devices/platform/i8042/serio0/subsystem", "../../../../bus/serio", 4096) = 21
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   statx(6, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   statx(7, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   openat(6, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 8
+200   openat(7, "sys", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "devices", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "platform", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "i8042", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   faccessat2(7, "uevent", F_OK, 0)  = 0
+200   openat(AT_FDCWD, "/proc/self/fd/7", O_RDONLY|O_NOCTTY|O_CLOEXEC|O_PATH) = 6
+200   openat(AT_FDCWD, "/sys/devices/platform/i8042/uevent", O_RDONLY|O_NOCTTY|O_CLOEXEC) = 6
+200   readlinkat(AT_FDCWD, "/sys/devices/platform/i8042/subsystem", "../../../bus/platform", 4096) = 21
+200   openat(AT_FDCWD, "/run/udev/data/+platform:i8042", O_RDONLY|O_CLOEXEC) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   statx(6, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   statx(7, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   openat(6, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 8
+200   openat(7, "sys", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "devices", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   openat(7, "platform", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   faccessat2(9, "uevent", F_OK, 0)  = 0
+200   openat(AT_FDCWD, "/proc/self/fd/9", O_RDONLY|O_NOCTTY|O_CLOEXEC|O_PATH) = 6
+200   openat(AT_FDCWD, "/sys/devices/platform/uevent", O_RDONLY|O_NOCTTY|O_CLOEXEC) = 6
+200   readlinkat(AT_FDCWD, "/sys/devices/platform/subsystem", 0x556105d3b560, 4096) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 6
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   statx(6, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   statx(7, "", AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, STATX_TYPE|STATX_INO|STATX_MNT_ID, {stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_attributes=STATX_ATTR_MOUNT_ROOT, stx_mode=S_IFDIR|S_ISVTX|0777, stx_size=320, ...}) = 0
+200   openat(6, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 7
+200   openat(AT_FDCWD, "/", O_RDONLY|O_CLOEXEC|O_PATH|O_DIRECTORY) = 8
+200   openat(7, "sys", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 9
+200   openat(9, "devices", O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_PATH) = 7
+200   faccessat2(7, "uevent", F_OK, 0)  = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   openat(AT_FDCWD, "/run/udev/data/+serio:serio0", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+200   ioctl(1, TCGETS, {c_iflag=ICRNL|IXON, c_oflag=NL0|CR0|TAB0|BS0|VT0|FF0|OPOST|ONLCR, c_cflag=B9600|CS8|CREAD|HUPCL|CLOCAL, c_lflag=ISIG|ICANON|ECHO|ECHOE|ECHOK|IEXTEN|ECHOCTL|ECHOKE, ...}) = 0
+200   --- SIGINT {si_signo=SIGINT, si_code=SI_USER, si_pid=1, si_uid=0} ---
+200   +++ exited with 0 +++
