@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -1073,6 +1073,36 @@ Per the matrix's own §4 precedent, a row is a claim about the tree. The terms m
 | `generation` | epoch / incarnation number | a stale generation is refused at use, never redirected | not yet in tree (koru-os) |
 | `evidence class` (V/M/C/D) | provenance level / assurance level | verified-now, measured, carried-over, design-only | not yet in tree (koru-os) |
 
+### 2.3 The concordance as the third matrix, and the verification-path gate
+
+*Recorded 2026-10-19 about 18:40 CEST from Fabian's whitepaper analysis (ch.06/08 of `Cypoe/plex-shell` @ `f34e473f`, now readable through GitHub). Decisions are Fabian's, or a synthesis he endorsed by pasting it; the wording here is this note's.*
+
+There is **no second matrix**. The ccomp concordance matrix (`Cypoe/koru`, branch `ccomp`,
+`docs/concordance-matrix.md`) is the seed, and it wins:
+
+- the file was last changed at `a1218e1f` (2026-10-17);
+- the ccomp tip at re-read was `b39a442f` (2026-10-18);
+- V, read through GitHub 2026-10-19.
+
+It is the **third matrix** beside the refusal and obligation matrices. Its row shape is already
+the gate's shape: `term | first minted | nearest canon | delta | ruling`. Its ruling values are
+`canon-alias`, `warranted neologism` and `unplaced`. The paste's "justified neologism" and
+"unclassified" are the same two values under the matrix's names; the matrix's names are used.
+
+**Gate (the matrix's own proposed gate, endorsed by Fabian for koru-os).** Every new surface
+noun or verb in a PR must cite an existing row or add one:
+
+- the **ruling may pend** (`unplaced`, Lars rules);
+- the **registration may not**.
+
+For koru-os this applies to every term in this note and in koru-os code. The proposed rows of
+§2.2 are the koru-os backlog against it. New terms since DRAFT 5 that still need registering
+include: `spawn`, `grant`, `rights bag`, `seal`, `detach`, `replace` (§8.6), `realization graph`
+(§11.0) and `interface descriptor` (§3.6).
+
+**History and provenance outrank the final artifact.** A row records when and where a term was
+first minted and how it evolved. That is the same lineage discipline as §3.2.
+
 ---
 
 ## 3. The execution contract
@@ -1356,6 +1386,23 @@ code subject to licence review. Translate and behavioural reference are the defa
 | plex-desktop traits | translate (names only) | `DesktopProjection`, `CompositorBridge.attach/detach` |
 | plex-core quine_crypto, secure_channel, pcc, SASOS/multikernel | reject | XOR "cipher"; toy checker; hosted structs presented as an OS |
 
+**Decisions on KolibriOS and FASM.** *Recorded 2026-10-19 about 18:40 CEST from Fabian's whitepaper analysis (ch.06/08 of `Cypoe/plex-shell` @ `f34e473f`, now readable through GitHub). Decisions are Fabian's, or a synthesis he endorsed by pasting it; the wording here is this note's.*
+
+- **FASM dialect: no.** A FASM-derived Koru dialect will not be built:
+  - (a) its untyped macro comptime would double the Transform layer and add host debt;
+  - (b) it would multiply the ccomp congruence obligations;
+  - (c) a raw-assembly escape already exists through `~proc|zig`.
+
+  KolibriOS FASM is a behaviour reference and donor, not a dialect source.
+- **KolibriOS is a donor for drivers, not a structural model.** It is a donor for block
+  devices, buses, networking and file systems (the table above).
+  - Its structure preserves timesharing: process slots, a per-process address space, rings
+    and traps. That is the Garmisch 1968 discipline of *size*, not of *structure*, and koru-os
+    does not adopt it.
+  - Its i686 target is shared with plex-os, so the two are realization B's class (§8.7).
+  - GPL-2.0: studying KolibriOS is free, but reusing or wrapping its code needs a licence
+    review (Q7, Q26).
+
 ---
 
 ## 5. What Koru already provides
@@ -1486,8 +1533,12 @@ no revoke.
   - a stale epoch is refused at use (the same rule as a stale `generation` in §3.3).
 - **Phantom state keeps doing what it does well.** It enforces that each binding is
   released exactly once. The store answers "how many" and "still valid".
-- This is an open research question (§12), not a decision. It must be tested against
-  the three verified specimens before anything is built.
+- *Closed at the design level (D), 2026-10-19 about 18:40 CEST.* Fabian: "Zähl Mauer wir hier
+  schon beantwortet haben." The design answer is §8.5. Revocation goes through indirection (Redell),
+  not through counting holders: an epoch per store-held slot, plus leases. Counting returns only
+  for reclamation, answered by epoch plus quiescence (RCU-like), and frozen regions need neither.
+  Still owed: **measurement (M)** against the three verified specimens (§6.3), as a spike inside the
+  SASOS ascent (§11.5). Until measured it is D, not V or M.
 
 ---
 
@@ -1697,6 +1748,10 @@ indirection, so revocation does not require counting holders:
     counts.
   - Frozen snapshot regions need neither counting nor revocation for safety (§6.4).
   - This is the concrete form of the counting-wall question (§12).
+
+**Status: this subsection is the design answer to the counting wall** (closed at the design
+level 2026-10-19 by Fabian, §6.4, §12 Q1). There is no N-holder count for revocation. The open
+part is measurement only.
 
 ### 8.6 Spawn: minting a child (a dissected fork)
 
@@ -1984,6 +2039,61 @@ it is another remote, and this work's push authorisation covers `Cypoe/koru-os` 
   its gates is evidence about the lift. It is not evidence that a Linux program in a Spawn child
   behaves.
 
+### 8.7 Whitepaper and koru: complementary, not competing
+
+*Recorded 2026-10-19 about 18:40 CEST from Fabian's whitepaper analysis (ch.06/08 of `Cypoe/plex-shell` @ `f34e473f`, now readable through GitHub). Decisions are Fabian's, or a synthesis he endorsed by pasting it; the wording here is this note's.*
+
+**Synthesis.** The whitepaper's ch.06 `CapAddress` supplies the **canonical identity side**.
+Koru supplies the realizations:
+
+- **realization A:** the koru-libs Unikraft lifts. They write receipts: gates, measured tables
+  and refusal logs;
+- **realization B:** plex-os on i686 (M0).
+
+**Correction carried from the earlier study** (`notes/plex-os-study.md` §4 and §7 item 4).
+"Kernel.lean is the canonical identity of `CapAddress`" is wrong as stated:
+
+- `CapAddress` is a hosted Rust enum in `plex-core/src/unikernel.rs`;
+- a grep of all 55 `.lean` files finds no `CapAddress` and no SASOS;
+- what `Kernel.lean` proves is SKI/ISAR confluence (`IRed_confluence`,
+  `isar_fragment_unique_normal_forms`). That anchors term-level identity ("same normal form on
+  every substrate"), not the address model.
+
+So the identity side is `CapAddress` as a **shape** (whitepaper prose + plex-core), with
+confluence as the term-level anchor. Neither is a proof about addresses.
+
+**Correspondence: `CapAddress` variants and Koru surfaces** (D; the phantom surfaces named are V):
+
+| `CapAddress` variant (ch.06) | koru-os reading | phantom / store surface | realization A | realization B |
+|---|---|---|---|---|
+| `Port { scheme, identifier }` | the foreign side of a correspondence row (scheme + namespace + NID, §3.2) | row in `std/store`; `ref(T)` (KORU161) | resolution tables §3.5 (D) | `PlexGuestBoot` as a one-row contract (V) |
+| `Capability { cap_id }` | a rung-1 handle `(row, slot, epoch)` minted by the resolver (§8.4), **not** a string | `unikraft/store` `<held!>`; `koruos/silo` handles (DS0, V) | DS0 refusal harness (M) | none (capabilities are strings in plex-core, no revoke) |
+| `Snapshot { epoch, proof_hash }` | a frozen, content-addressed region (§6.4); `proof_hash` is artifact identity, `epoch` a generation | vmem `freeze` (one-way, V) | vmem lift (V) | none |
+| `Ring { ring_id, offset }` | a live binding to a mutable shared ring: the counted, epoch-checked side (§8.5, Q2) | `std/channel` custody / transit (V) | none yet | none (no rings in plex-os) |
+| `Tensor { field_name, node_id }` | associative rung B (§9): later, clear-text first | none | none | none |
+
+**An unbound NID fails loudly.** `resolve` returning nothing is the refusal hook (§3.4).
+`bind` must never silently overwrite an existing binding, as plex-core's `bind_address` does
+today (`notes/plex-os-study.md` §3).
+
+**Honesty notes:**
+
+- **ch.06:** the front matter says `lean4_file: Kernel.lean`, `lean4_status: verified` for
+  "SASOS = DirectMemoryDescriptor × UPageRing × CapAddress". That status is **aspirational**:
+  the Lean file proves confluence, not SASOS.
+- **ch.08:** the front matter says `TensorSemantics.lean`, `verified` for the holographic carrier
+  and the "inverse complexity law". The law is an assertion, and the earlier study found the
+  Lean file named does not back it.
+- **Ch.08 is not the counting wall.** Holographic memory is about associative lookup, not about
+  N holders of one region. It belongs to §9 (rung B, after clear text). The counting wall is
+  answered in §8.5.
+- **"Sub-50 ns inter-process messaging" and the 64-byte cache-line alignment benefit (ch.06 §3)
+  are C claims with no receipts.** `UPageFrame` really is `align(64)` (V), but the ring's
+  `try_push` takes `&mut self` and is wrapped in a `Mutex`. Nothing has been measured.
+- **ch.07 (routing)** has nothing on revocation or sharing semantics (study §5). Its confluence
+  reading only supports the half-answer already in §6.4: immutable data can be duplicated
+  safely.
+
 ## 9. Associative memory: a clear-text model first, tensors later
 
 ### 9.1 What ch.08 claims (C) and what exists (V)
@@ -2206,6 +2316,35 @@ The smallest prototype that exercises the whole contract end to end:
 3. the KolibriOS donor audit (§4.1);
 4. native boot, once the contract is worth booting.
 
+### 11.5 Post-concordance work list (ordered)
+
+*Recorded 2026-10-19 about 18:40 CEST from Fabian's whitepaper analysis (ch.06/08 of `Cypoe/plex-shell` @ `f34e473f`, now readable through GitHub). Decisions are Fabian's, or a synthesis he endorsed by pasting it; the wording here is this note's.*
+
+1. Concordance registration (§2.3): every koru-os term cited or added.
+2. Obligation-derived kconfig (§11.1).
+3. The NID binding layer: rows, admission and refusal (§3.2–§3.6, §11.2, Slice A S9–S11).
+4. **SASOS ascent** over one address space (§6.1a), with the **counting wall as a measured
+   spike** inside it. The design is closed (§8.5); the measurement is the work.
+5. Protection bits.
+6. `page_set_attr` and thaw. vmem `freeze` is one-way today, so thaw is new and must follow
+   evolve-don't-mutate.
+7. Stack VMAs.
+8. Concurrency and SMP. Today everything is single-core `ukschedcoop`.
+9. A 9P headless shell (§7, `unikraft/ninep`).
+10. Generalizing the manifest: from the Kraftfile to the realization graph (§11.0).
+11. The KolibriOS donor audit (§4.1).
+
+**Cross-cutting:**
+
+- protection domains over one VAS (rung 2, §8.4);
+- a runtime supervisor matching `std/supervisor` semantics (§2.2: today a compile-time retry
+  fold with no runtime object; Q38);
+- provenance for shared regions (who granted, under which epoch; §8.6.2 grants).
+
+**Relation to Slice A and M9.** Items 1–3 are Slice A's prerequisites, and Slice A sits inside
+them. Spawn's supervisor (§8.6) is the runtime-supervisor item. The order of Slice A vs M9 is
+still Q37, and Q30 is untouched.
+
 **Out of scope for the slice:**
 
 - the microkernel platform arm
@@ -2217,15 +2356,20 @@ The smallest prototype that exercises the whole contract end to end:
 
 ## 12. Open questions
 
-1. **Counting wall.**
-   - Is a store-held count plus epoch (§6.4) enough for the three specimens: refcount,
-     CR3 singleton, sibling fids?
-   - Or does Koru need a counted phantom form (fractional permissions, or a multiset
-     typestate)?
-   - What is the cost in compile-time checking versus runtime checks?
+1. **Counting wall.** *Closed at the design level (D), 2026-10-19 about 18:40 CEST by Fabian
+   ("Zähl Mauer wir hier schon beantwortet haben"): the answer is §8.5.*
+   - Revocation is by indirection: an epoch per store-held slot, plus leases. There is no
+     counting of holders.
+   - The count lives in the store, not in a counted phantom form. Reclamation is epoch plus
+     quiescence, and frozen regions need neither.
+   - **Still owed (M):** measure it against the three specimens (refcount, CR3 singleton,
+     sibling fids), including the compile-time vs run-time cost. This is a spike inside the
+     SASOS ascent (§11.5). It is not a new design question.
 2. **Snapshot sharing.** Can every shared-read case be expressed as a frozen,
    content-addressed region, so that counting is needed only for mutation? What breaks
-   (DMA buffers, rings)?
+   (DMA buffers, rings)? *(Still open: this is the one gap §8.5 does not settle. A DMA buffer
+   or ring is mutable and shared, so it falls under the counted, epoch-checked side, and its
+   reclamation grace period with a device as holder is unmeasured.)*
 3. **NID derivation.**
    - Does koru-os adopt a hash of the minted interface name and contract revision, or
      an opaque id assigned at mint?
@@ -2298,7 +2442,8 @@ The smallest prototype that exercises the whole contract end to end:
     declarative-UI track and the QML exemplar? This is an open item, not a DoD gate.
 24. **fasmg community packages.** Where do the KolibriOS community fasmg packages and the
     fasm platform modules Fabian mentions live? Nothing named `fasmg` is in
-    `KolibriOS/kolibrios` @ `69df0061`.
+    `KolibriOS/kolibrios` @ `69df0061`. *(Lower priority since 2026-10-19 about 18:40: a FASM
+    dialect is ruled out (§4.1). The packages matter only as donor or behaviour reference.)*
 25. **LKL on Unikraft.** Can LKL's host operations be bound to Unikraft scheduling,
     allocation and timers? How does a silo get PCI/MMIO, IRQ and DMA access for
     `virtio_gpu`/`virtio_input`/`virtio_blk`, and is `intel-iommu` in QEMU needed to
@@ -2354,6 +2499,10 @@ The smallest prototype that exercises the whole contract end to end:
     first for its supervisor (S13), while M9 (Spawn stage 1 for Hyprland) waits? Or do both
     proceed in parallel? This is the tension noted in §0.4 ("Architectural priority vs the DoD
     ladder"). It does not answer Q30.
+38. **Runtime supervisor vs `std/supervisor`.** `std/supervisor` elaborates at compile
+    time into a bounded retry fold and has no runtime object (§2.2). Should the runtime
+    supervisor (§11.5; Spawn's reap and detach target, §8.6) lower from the same declarations
+    and keep the same semantics, or be a separate interface that only cites them?
 
 ---
 
