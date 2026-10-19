@@ -1,0 +1,75 @@
+--- a/lib/syscall_shim/include/uk/syscall.h
++++ b/lib/syscall_shim/include/uk/syscall.h
+@@ -677,15 +677,13 @@
+ 	long __UK_NAME2SCALLDO_FN(syscall_name)(__UK_SPROTO_ARGSx(args_nr))
+ 
+ #define uk_syscall_e_stub(syscall_name) ({				\
+-			uk_pr_debug("System call \"" syscall_name	\
+-				    "\" is not available (-ENOSYS)\n");	\
++			uk_pr_err("koru-os: ENOSYS " syscall_name " (stub)\n");	\
+ 			errno = -ENOSYS;				\
+ 			-1;						\
+ 		})
+ 
+ #define uk_syscall_r_stub(syscall_name) ({				\
+-			uk_pr_debug("System call \"" syscall_name	\
+-				    "\" is not available (-ENOSYS)\n");	\
++			uk_pr_err("koru-os: ENOSYS " syscall_name " (stub)\n");	\
+ 			-ENOSYS;					\
+ 		})
+ 
+--- a/lib/syscall_shim/uk_syscall.awk
++++ b/lib/syscall_shim/uk_syscall.awk
+@@ -35,7 +35,7 @@
+ 
+ END {
+ 	printf "\tdefault:\n"
+-	printf "\t\tuk_pr_debug(\"syscall \\\"%%s\\\" is not available\\n\", uk_syscall_name(nr));\n"
++	printf "\t\tuk_pr_err(\"koru-os: ENOSYS %%s (nr %%ld)\\n\", uk_syscall_name(nr) ? uk_syscall_name(nr) : \"?\", (long) (nr));\n"
+ 	printf "\t\terrno = -ENOSYS;\n"
+ 	printf "\t\tret = -1;\n"
+ 	printf "\t}\n"
+--- a/lib/syscall_shim/uk_syscall6.awk
++++ b/lib/syscall_shim/uk_syscall6.awk
+@@ -33,7 +33,7 @@
+ 
+ END {
+ 	printf "\tdefault:\n"
+-	printf "\t\tuk_pr_debug(\"syscall \\\"%%s\\\" is not available\\n\", uk_syscall_name(nr));\n"
++	printf "\t\tuk_pr_err(\"koru-os: ENOSYS %%s (nr %%ld)\\n\", uk_syscall_name(nr) ? uk_syscall_name(nr) : \"?\", (long) (nr));\n"
+ 	printf "\t\terrno = -ENOSYS;\n"
+ 	printf "\t\tret = -1;\n"
+ 	printf "\t}\n"
+--- a/lib/syscall_shim/uk_syscall6_do.awk
++++ b/lib/syscall_shim/uk_syscall6_do.awk
+@@ -38,7 +38,7 @@
+ 
+ END {
+ 	printf "\tdefault:\n"
+-	printf "\t\tuk_pr_debug(\"syscall \\\"%%s\\\" is not available\\n\", uk_syscall_name(_UK_EXECENV_REGS_GET(execenv, __syscall_rsyscall)));\n"
++	printf "\t\tuk_pr_err(\"koru-os: ENOSYS %%s (nr %%ld)\\n\", uk_syscall_name(_UK_EXECENV_REGS_GET(execenv, __syscall_rsyscall)) ? uk_syscall_name(_UK_EXECENV_REGS_GET(execenv, __syscall_rsyscall)) : \"?\", (long) (_UK_EXECENV_REGS_GET(execenv, __syscall_rsyscall)));\n"
+ 	printf "\t\tret = -ENOSYS;\n"
+ 	printf "\t}\n"
+ 	printf "\treturn ret;\n"
+--- a/lib/syscall_shim/uk_syscall6_r.awk
++++ b/lib/syscall_shim/uk_syscall6_r.awk
+@@ -38,7 +38,7 @@
+ 
+ END {
+ 	printf "\tdefault:\n"
+-	printf "\t\tuk_pr_debug(\"syscall \\\"%%s\\\" is not available\\n\", uk_syscall_name(_UK_EXECENV_REGS_GET(execenv, __syscall_rsyscall)));\n"
++	printf "\t\tuk_pr_err(\"koru-os: ENOSYS %%s (nr %%ld)\\n\", uk_syscall_name(_UK_EXECENV_REGS_GET(execenv, __syscall_rsyscall)) ? uk_syscall_name(_UK_EXECENV_REGS_GET(execenv, __syscall_rsyscall)) : \"?\", (long) (_UK_EXECENV_REGS_GET(execenv, __syscall_rsyscall)));\n"
+ 	printf "\t\tret = -ENOSYS;\n"
+ 	printf "\t}\n"
+ 	printf "\treturn ret;\n"
+--- a/lib/syscall_shim/uk_syscall_r.awk
++++ b/lib/syscall_shim/uk_syscall_r.awk
+@@ -36,7 +36,7 @@
+ 
+ END {
+ 	printf "\tdefault:\n"
+-	printf "\t\tuk_pr_debug(\"syscall \\\"%%s\\\" is not available\\n\", uk_syscall_name(nr));\n"
++	printf "\t\tuk_pr_err(\"koru-os: ENOSYS %%s (nr %%ld)\\n\", uk_syscall_name(nr) ? uk_syscall_name(nr) : \"?\", (long) (nr));\n"
+ 	printf "\t\tret = -ENOSYS;\n"
+ 	printf "\t}\n"
+ 	printf "\treturn ret;\n"

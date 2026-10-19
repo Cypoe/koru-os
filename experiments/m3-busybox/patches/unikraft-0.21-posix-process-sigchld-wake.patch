@@ -1,0 +1,85 @@
+--- a/lib/posix-process/exit.c
++++ b/lib/posix-process/exit.c
+@@ -69,7 +69,9 @@
+ static inline int signal_exit(struct posix_process *pprocess)
+ {
+ 	struct kern_sigaction *ks;
++	struct posix_thread *pt, *ptn;
+ 	__u64 exit_signal;
++	int rc;
+ 
+ 	UK_ASSERT(pprocess);
+ 	UK_ASSERT(pprocess->signal);
+@@ -83,7 +85,19 @@
+ 	if (ks->ks_handler == SIG_IGN || ks->ks_flags & SA_NOCLDWAIT)
+ 		return 1;
+ 
+-	return pprocess_signal_send(pprocess, exit_signal, NULL);
++	rc = pprocess_signal_send(pprocess, exit_signal, NULL);
++	if (unlikely(rc))
++		return rc;
++
++	/* koru-os B9: wake threads of the parent that sleep in rt_sigsuspend()
++	 * or pause(), as kill() does in pprocess_signal_process_do(). Without
++	 * this, a shell waiting for SIGCHLD (hush `wait`) never wakes.
++	 */
++	uk_pprocess_foreach_pthread(pprocess, pt, ptn) {
++		if (pt->state == POSIX_THREAD_BLOCKED_SIGNAL)
++			uk_semaphore_up(&pt->signal->deliver_semaphore);
++	}
++	return 0;
+ }
+ #endif /* CONFIG_LIBPOSIX_PROCESS_SIGNAL */
+ 
+@@ -217,7 +231,11 @@
+ 	/* Unblock wait */
+ 	if (parent_process && !nowait) {
+ 		uk_pprocess_foreach_pthread(parent_process, pt, ptn) {
+-			if (PTHREAD_WAITING_FOR_PID(pt, uk_sys_getpid()) ||
++			/* koru-os B9: not uk_sys_getpid(): the current pthread
++			 * was released above, so getpid() returns -ENOTSUP and a
++			 * parent in waitpid(<this pid>) is never woken.
++			 */
++			if (PTHREAD_WAITING_FOR_PID(pt, pprocess->pid) ||
+ 			    PTHREAD_BLOCKING_ON_SIGNAL(pt)) {
+ 				uk_semaphore_up(&parent_process->wait_semaphore);
+ 				break;
+--- a/lib/posix-process/signal/rt_sigsuspend.c
++++ b/lib/posix-process/signal/rt_sigsuspend.c
+@@ -20,6 +20,7 @@
+ 	struct posix_thread *pthread;
+ 	uk_sigset_t suspend_mask;
+ 	uk_sigset_t saved_mask;
++	int signum, pending = 0;
+ 
+ 	pthread = uk_pthread_current();
+ 	UK_ASSERT(pthread);
+@@ -36,9 +37,26 @@
+ 	saved_mask = pthread->signal->mask;
+ 	pthread->signal->mask = suspend_mask;
+ 
++	/* koru-os B9: a signal that is already pending and not blocked by the
++	 * suspend mask must end the suspend at once (POSIX); otherwise a SIGCHLD
++	 * queued while the caller had it blocked is lost and the caller hangs.
++	 */
++	for (signum = 1; signum < SIG_ARRAY_COUNT; signum++) {
++		if (uk_sigismember(&suspend_mask, signum))
++			continue;
++		if (IS_PENDING(pthread->process->signal->sigqueue, signum) ||
++		    IS_PENDING(pthread->signal->sigqueue, signum)) {
++			pending = 1;
++			break;
++		}
++	}
++
+ 	/* Wait for signal */
+-	pthread->state = POSIX_THREAD_BLOCKED_SIGNAL;
+-	uk_semaphore_down(&pthread->signal->deliver_semaphore);
++	if (!pending) {
++		pthread->state = POSIX_THREAD_BLOCKED_SIGNAL;
++		uk_semaphore_down(&pthread->signal->deliver_semaphore);
++		pthread->state = POSIX_THREAD_RUNNING;
++	}
+ 
+ 	/* Restore mask */
+ 	pthread->signal->mask = saved_mask;
