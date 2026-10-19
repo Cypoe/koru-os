@@ -1,0 +1,20 @@
+# M9 (h5): refusal-log rows accepted as refused-by-design (same rule and format as M7:
+# <name><TAB><reason>; rows not listed fail the run). Written 2026-10-19 17:50 CEST from the
+# uncounted rehearsals (/workspace/m9r3, m9r4), before any counted acceptance run.
+brk	glibc malloc falls back to mmap when brk is refused; all programs allocate normally (M3-M8b)
+rseq	glibc 2.35+ runs without rseq when the kernel refuses it (__rseq_size stays 0)
+set_robust_list	glibc ignores the failure; no program here uses robust process-shared mutexes
+clone3	glibc's pthread_create falls back to clone(CLONE_VM|CLONE_THREAD...) on ENOSYS (threads run)
+faccessat2	glibc falls back to faccessat when faccessat2 is ENOSYS
+inotify_init1	Hyprland's config hot-reload watcher; without it the config is read once at start
+inotify_add_watch	same watcher as inotify_init1
+signalfd4	hyprutils' signal fd; Hyprland continues with plain handlers (no child processes to reap: no fork)
+sched_get_priority_min	Hyprland's optional SCHED_RR self-promotion; it stays at the default policy
+sched_getparam	same optional SCHED_RR attempt
+sched_getscheduler	same optional SCHED_RR attempt
+STUBBED __uk_syscall_r_prctl	busybox/glibc task-name calls (PR_SET_NAME); only names are affected
+STUBBED uk_posix_clone_sysvsem	kernel-internal at process creation; no System V semaphore syscalls exist to share
+STUBBED __uk_syscall_r_sched_getaffinity	Hyprland/llvmpipe CPU count probe; glibc then assumes the configured CPUs (1)
+REFUSED DRM_IOCTL_SET_CLIENT_CAP cap 3	DRM_CLIENT_CAP_ATOMIC: the korukms personality is legacy-KMS only; aquamarine falls back to its legacy path (probes 5-7)
+REFUSED DRM_IOCTL_nr_0xc6	DRM_IOCTL_MODE_CREATE_LEASE (Hyprland's DRM-lease protocol probe): no leasable non-desktop outputs
+REFUSED 0xc0406400	DRM_IOCTL_VERSION sent to the evdev node by a DRM-device probe; Linux evdev also answers ENOTTY

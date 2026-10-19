@@ -35,10 +35,12 @@ def cmd(c, a=None):
             return r
 json.loads(f.readline()); cmd("qmp_capabilities")
 def key(k, down): cmd("input-send-event", {"events": [{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}]})
+def ev(k, down): return {"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}
 def chord(keys):
-    for k in keys: key(k, True); time.sleep(0.03)
-    for k in reversed(keys): key(k, False); time.sleep(0.03)
-    time.sleep(0.15)
+    # presses and releases in one QMP command: under TCG a separate release can reach the
+    # client after its key-repeat delay (rehearsal 3 typed "eeeeecho")
+    cmd("input-send-event", {"events": [ev(k, True) for k in keys] + [ev(k, False) for k in reversed(keys)]})
+    time.sleep(0.4)
 def ch2keys(c):
     if c in K: return K[c]
     if c.isupper(): return ["shift", c.lower()]

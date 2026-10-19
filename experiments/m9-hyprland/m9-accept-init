@@ -7,9 +7,12 @@ i=0; while [ $i -lt 150 ] && ! grep -q 'Running on WAYLAND_DISPLAY' /tmp/hl.out;
 echo "m9-init: compositor ready after ${i}s"
 export HYPRLAND_INSTANCE_SIGNATURE=$(ls /tmp/xdg/hypr | head -n 1)
 echo "m9-init: signature $HYPRLAND_INSTANCE_SIGNATURE"
+grep -m 1 "Hypr socket started at" /tmp/hl.out
 echo "m9-init: monitors begin"; /usr/bin/hyprctl -j monitors; echo; echo "m9-init: monitors end"
 # (h2) frozen trigger
-echo "m9-init: dispatch exec begin"; /usr/bin/hyprctl dispatch exec foot; echo "rc=$?"; echo "m9-init: dispatch exec end"
+# Hyprland 0.56 with a Lua config takes `hyprctl dispatch exec foot` as the Lua dispatcher
+# hl.dsp.exec_cmd("foot") (the classic form is a Lua syntax error there)
+echo "m9-init: dispatch exec begin"; /usr/bin/hyprctl dispatch "hl.dsp.exec_cmd('foot')"; echo "rc=$?"; echo "m9-init: dispatch exec end"
 sleep 5
 echo "m9-init: clients after exec begin"; /usr/bin/hyprctl -j clients; echo; echo "m9-init: clients after exec end"
 # foot without fork: displays an existing pty; the shell runs on its slave (lib/korupty)
@@ -26,5 +29,6 @@ sleep 2
 echo "m9-init: clients begin"; /usr/bin/hyprctl -j clients; echo; echo "m9-init: clients end"
 tar -cf /dev/korusnap /tmp/dod3 && echo "m9-init: snapshot written"
 echo "m9-init: foot log"; tail -c 2000 /tmp/foot.out
+echo "m9-init: hyprland exec log"; grep -n -e executor -e 'Fail to fork' /tmp/hl.out | tail -5
 echo "m9-init: end"
 sleep 30

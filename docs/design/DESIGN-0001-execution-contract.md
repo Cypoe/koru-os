@@ -767,6 +767,38 @@ stay in place (Q28 with Fabian); nothing here builds a silo path or prejudges th
   first write path into the root filesystem, out of proportion for one file). Smoke test
   15:49 CEST (`experiments/m9-hyprland/evidence/korusnap-smoke`): 2048 bytes persisted, the host
   extracts `tmp/dod3` = `DOD3\n`.
+- **Probe 8 (17:15 CEST, not a pass): foot runs as a Hyprland window.** foot cannot fork its
+  shell here, so it runs as `foot --pty=/dev/korupty0` on a pty pair from `lib/korupty`, with
+  busybox `sh -i` on the slave, both started by the init script. The way there needed, in the kernel
+  (`experiments/m9-hyprland/patches`): `SO_PEERCRED` (libwayland-server refuses a client without
+  it); clearing a listener's POLLIN once its accept queue drains (a stale level event made
+  Hyprland block in `accept4` and freeze); `SCM_RIGHTS` queued per pipe node rather than per
+  pipe end; zeroing the `cmsghdr` before filling it (musl's 4-byte `cmsg_len` plus padding,
+  read by glibc as a `size_t`: libwayland-client grew a 128 GiB ring buffer); `epoll_pwait`
+  and `ppoll` with a signal mask (the mask is swapped around the wait, not atomically); POSIX
+  shm (`/dev/shm/NAME` is served by `lib/korumemfd`; Hyprland's keymap uses an rw/ro shm pair
+  and `fchmod`, so devfs `setattr` is accepted and ignored); devfs `fallocate` refused (with a
+  fake success, foot's punch-hole probe passes and it maps a 128 GiB pool); a device mmap
+  refusal returned as an error instead of a copy-on-fault file mapping; `FIONBIO` on the pty.
+  hyprctl then needed pathname unix names compared up to the first NUL (it passes
+  `sizeof(struct sockaddr_un)`) and `SO_RCVTIMEO` accepted. Screendump sha256 in
+  `evidence/probe-8-foot-window`.
+- **Check decisions (2026-10-19 17:50 CEST, before the first counted run; `check.py`).**
+  (h1) koru-os unix sockets have no filesystem node, so "a socket under `$XDG_RUNTIME_DIR/hypr/`"
+  is evidenced by Hyprland's "Hypr socket started at …/hypr/<signature>/.socket.sock" log line
+  and hyprctl connecting to that path; the monitors JSON must list `Virtual-1` (the korukms
+  bochs connector) at 1280x800. (h2) is split into two required parts: (h2a) the frozen trigger,
+  in Hyprland 0.56's Lua form `hyprctl dispatch "hl.dsp.exec_cmd('foot')"`, returns `ok`;
+  (h2b) the bounding-box variant (the L1 twin has no reference yet): pixels of foot's default
+  background `#242424` cover >= 50 % of the 1280x800 screendump in a box that is >= 90 % filled.
+  The foot window measured in (h2b)-(h4) is the init-started `foot --pty`, which the frozen text
+  does not name. **Known before measuring:** (h2a) fails on koru-os. Hyprland's executor forks
+  (`clone` without `CLONE_VM`: "Multiple address spaces are not supported", Hyprland logs
+  "Fail to fork"). That is the Q19 process-model question, not a gap of M9's own. The keys are
+  sent as one QMP `input-send-event` per character, with press and release together: in
+  rehearsal 3, separate releases arrived after the client's key-repeat delay ("eeeeecho").
+  Refusal rows: `experiments/m9-hyprland/refused-by-design.txt`. Runner: `run-m9.sh` +
+  `drive-m9.py` + `m9-accept-init`.
 - **Gated checks** (to be filled into `experiments/m9-hyprland/check.py` before the first
   acceptance run; the freeze does not invent numbers):
   - (h1) Hyprland reaches a running compositor (a socket under `$XDG_RUNTIME_DIR/hypr/` and a
