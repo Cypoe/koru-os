@@ -1,0 +1,3 @@
+9.42 seen 'Rendered '
+10.43 shot-1.ppm ok
+11.44 shot-2.ppm ok

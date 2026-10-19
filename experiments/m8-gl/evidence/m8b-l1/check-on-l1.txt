@@ -1,0 +1,6 @@
+FAIL (c1) kmscube: EGL 1.5 Mesa, llvmpipe, >=3 progress lines, 149 frames, exit 0, 150 flips: 4 progress lines, last ('149', '7.353814', '20.261594')
+PASS (c2) two screendumps 1 s apart: 1280x800, grey background, cube 5-50 %, not black, differ >= 1 %: 1280x800 non-grey [197532, 192951] black [1, 1] differing 205395
+PASS (c3) refusal log classified: 0 rows, names []
+PASS (c4) Mesa messages only the classified ones: ['kmsro: driver missing']
+FAIL (x) no Unikraft Crash, init exit 0
+CHECKS FAIL
