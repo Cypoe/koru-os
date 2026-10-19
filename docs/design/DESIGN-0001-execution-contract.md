@@ -2117,36 +2117,6 @@ The shell **manages realized apps**; it does not define their identity. KolibriO
 
 The slice does not need a bootloader or a wholesale port first.
 
-### 11.4 Slice A: a discussion-worthy prototype (D, not frozen)
-
-The smallest prototype that exercises the whole contract end to end:
-
-- **The program.** A headless task, plus bounded storage, plus a clock/event source, plus a
-  terminal status view.
-- **The steps:**
-  - **S9.** The Koru app declares a **versioned interface import** (e.g. `store.bounded@1`,
-    `clock.tick@1`).
-  - **S10.** The loader selects an **authorized** provider from the manifest (§3.0, §3.6).
-  - **S11.** The loader **rejects** an incompatible provider. A manifest that offers only a
-    provider with the wrong descriptor or contract revision is refused before execution, with
-    the fixed shape (§3.4).
-  - **S12.** A real operation runs through the selected provider: a bounded write and a read
-    back; a tick drives the task.
-  - **S13.** A supervisor tracks the task's resources and lifecycle (the Spawn child record,
-    §8.6.2: identity, bag, reap obligation).
-  - **S14.** The terminal status view **disconnects and reconnects** without terminating the
-    task. The reconnected view shows the state produced meanwhile (§7 operational test; it
-    extends S7/S8 to the target realization).
-- **Order.** S9–S14 are acceptance candidates, to be frozen before any counted run as usual.
-  Slice A can run on the Unikraft arm natively (no Linux ABI) and reuses 11.1–11.3.
-
-**Only after Slice A:**
-
-1. a second substrate (the same app realized on another arm, with the same rows);
-2. measured costs of the sparse address-space regime (§6.1a);
-3. the KolibriOS donor audit (§4.1);
-4. native boot, once the contract is worth booting.
-
 ### 11.1 Obligation-derived Unikraft configuration
 
 **Input.** A Koru program that prints, opens a 9P mount, and runs one cooperative job.
@@ -2205,6 +2175,36 @@ or 9P reader.
 - **S7.** Detach both views for 30 s, then attach a new view: the job's lines produced
   meanwhile are present. The session id is unchanged.
 - **S8.** `attach` with an unknown session id returns `not_found` and creates nothing.
+
+### 11.4 Slice A: a discussion-worthy prototype (D, not frozen)
+
+The smallest prototype that exercises the whole contract end to end:
+
+- **The program.** A headless task, plus bounded storage, plus a clock/event source, plus a
+  terminal status view.
+- **The steps:**
+  - **S9.** The Koru app declares a **versioned interface import** (e.g. `store.bounded@1`,
+    `clock.tick@1`).
+  - **S10.** The loader selects an **authorized** provider from the manifest (§3.0, §3.6).
+  - **S11.** The loader **rejects** an incompatible provider. A manifest that offers only a
+    provider with the wrong descriptor or contract revision is refused before execution, with
+    the fixed shape (§3.4).
+  - **S12.** A real operation runs through the selected provider: a bounded write and a read
+    back; a tick drives the task.
+  - **S13.** A supervisor tracks the task's resources and lifecycle (the Spawn child record,
+    §8.6.2: identity, bag, reap obligation).
+  - **S14.** The terminal status view **disconnects and reconnects** without terminating the
+    task. The reconnected view shows the state produced meanwhile (§7 operational test; it
+    extends S7/S8 to the target realization).
+- **Order.** S9–S14 are acceptance candidates, to be frozen before any counted run as usual.
+  Slice A can run on the Unikraft arm natively (no Linux ABI) and reuses 11.1–11.3.
+
+**Only after Slice A:**
+
+1. a second substrate (the same app realized on another arm, with the same rows);
+2. measured costs of the sparse address-space regime (§6.1a);
+3. the KolibriOS donor audit (§4.1);
+4. native boot, once the contract is worth booting.
 
 **Out of scope for the slice:**
 
