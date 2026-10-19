@@ -1,0 +1,221 @@
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+06FC6E00+06F06E00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+[    0.115128] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+spawn-elf: begin
+roster: 0
+
+== fork ==
+spawn-compat: fork -> refused ENOSYS (F2)
+refused: fork by holder=1 reason=address-space copy is not grantable (F2) phase=run arm=unikraft/qemu-x86_64 offered=reserve+grant+seal+start
+fork: rc=-38
+
+== E empty bag ==
+spawn: reserve child=2.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+roster: 1
+manifest: child=2.1 image=/bin/hello parent=1 rung=0/1 (one address space; enforced at the seam) bag=0 ambient=memory<=65536,clock,exit,yield
+spawn: start child=2.1 entered=yes
+spawn: path-gate child=2 path=/bin/hello
+spawn: loaded child=2.1 entry=0x100019e0f0 len=32768
+spawn: jumping child=2.1 ip=0x11029d sp=0x10000cde50
+spawn: exited child=2.1 (ppexit)
+spawn: exited child=2.1 status=0
+E: status=0
+spawn: reap child=2.1 released bag=0 roster=0
+roster: 0
+
+== G grants ==
+spawn: reserve child=3.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=3.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: grant child=3.1 as=env/TERM from=env.TERM verbs=read across_exec=0 granted_by=1 why=explicit
+refused: grant child=3.1 handle=address-space verbs=copy as=as reason=address-space copy is not grantable (F2) phase=grant
+grant: refused reason=address-space rc=-1
+manifest: child=3.1 image=/bin/hello parent=1 rung=0/1 (one address space; enforced at the seam) bag=2 ambient=memory<=65536,clock,exit,yield
+manifest: child=3.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=3.1 grant as=env/TERM from=env.TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn: start child=3.1 entered=yes
+spawn: path-gate child=3 path=/bin/hello
+spawn: loaded child=3.1 entry=0x10001dd0f0 len=32768
+spawn: jumping child=3.1 ip=0x11029d sp=0x100010ce30
+child: begin pid=3
+child: fd 1 cloexec=0
+child: nopen=1
+child: env TERM=xterm-spawn
+spawn: path-gate child=3 path=/etc/passwd
+refused: child=3 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=3.1 (ppexit)
+spawn: exited child=3.1 status=0
+G: status=0
+spawn: reap child=3.1 released bag=2 roster=0
+
+== R revoke ==
+spawn: reserve child=4.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=4.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=4.1 image=/bin/hello parent=1 rung=0/1 (one address space; enforced at the seam) bag=1 ambient=memory<=65536,clock,exit,yield
+manifest: child=4.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: revoke child=4.1 grant=0 as=fd/1 epoch=1 (revoked)
+revoke: grant 0 epoch bumped before start
+spawn: start child=4.1 entered=yes
+spawn: path-gate child=4 path=/bin/hello
+spawn: loaded child=4.1 entry=0x100021c0f0 len=32768
+spawn: jumping child=4.1 ip=0x11029d sp=0x100014be50
+refused: child=4 use=fd grant=0 reason=revoked phase=run
+refused: child=4 use=fd grant=0 reason=revoked phase=run
+refused: child=4 use=fd grant=0 reason=revoked phase=run
+spawn: path-gate child=4 path=/etc/passwd
+refused: child=4 use=path path=/etc/passwd phase=run (not in bag)
+refused: child=4 use=fd grant=0 reason=revoked phase=run
+refused: child=4 use=fd grant=0 reason=revoked phase=run
+refused: child=4 use=fd grant=0 reason=revoked phase=run
+refused: child=4 use=fd grant=0 reason=revoked phase=run
+spawn: exited child=4.1 (ppexit)
+spawn: exited child=4.1 status=0
+R: status=0
+spawn: reap child=4.1 released bag=1 roster=0
+
+== X replace ==
+spawn: reserve child=5.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=5.1 as=fd/1 from=console verbs=write across_exec=1 granted_by=1 why=explicit
+spawn: grant child=5.1 as=env/TERM from=env.TERM verbs=read across_exec=0 granted_by=1 why=explicit
+manifest: child=5.1 image=/bin/hello parent=1 rung=0/1 (one address space; enforced at the seam) bag=2 ambient=memory<=65536,clock,exit,yield
+manifest: child=5.1 grant as=fd/1 from=console verbs=write across_exec=1 granted_by=1 why=explicit
+manifest: child=5.1 grant as=env/TERM from=env.TERM verbs=read across_exec=0 granted_by=1 why=explicit
+refused: replace child=5.1 reason=not held by the child itself phase=replace
+replace: from parent rc=-1 (EPERM expected)
+spawn: start child=5.1 entered=yes
+spawn: path-gate child=5 path=/bin/hello
+spawn: loaded child=5.1 entry=0x100025b0f0 len=32768
+spawn: jumping child=5.1 ip=0x11029d sp=0x100018ae30
+child: begin pid=5
+child: fd 1 cloexec=0
+child: nopen=1
+child: env TERM=keep-me
+spawn: path-gate child=5 path=/etc/passwd
+refused: child=5 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=5.1 (ppexit)
+spawn: exited child=5.1 status=0
+X: status=0
+spawn: reap child=5.1 released bag=2 roster=0
+
+== D detach ==
+spawn: reserve child=6.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=6.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=6.1 image=/bin/hello parent=1 rung=0/1 (one address space; enforced at the seam) bag=1 ambient=memory<=65536,clock,exit,yield
+manifest: child=6.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: detach child=6.1 supervisor=init
+detach: wait rc=-10 (ECHILD expected)
+spawn: start child=6.1 entered=yes
+spawn: path-gate child=6 path=/bin/hello
+spawn: loaded child=6.1 entry=0x100029a0f0 len=32768
+spawn: jumping child=6.1 ip=0x11029d sp=0x10001c9e50
+child: begin pid=6
+child: fd 1 cloexec=0
+child: nopen=1
+spawn: path-gate child=6 path=/etc/passwd
+refused: child=6 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=6.1 (ppexit)
+spawn: reap child=6.1 released bag=1 roster=0
+roster: 0
+
+== N nested ==
+spawn: reserve child=7.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=7.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+nested: parent grant verbs=write; re-grant write+admin refused by attenuation
+manifest: child=7.1 image=/bin/hello parent=1 rung=0/1 (one address space; enforced at the seam) bag=1 ambient=memory<=65536,clock,exit,yield
+manifest: child=7.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: start child=7.1 entered=yes
+spawn: path-gate child=7 path=/bin/hello
+spawn: loaded child=7.1 entry=0x10002d90f0 len=32768
+spawn: jumping child=7.1 ip=0x11029d sp=0x1000208e50
+child: begin pid=7
+child: fd 1 cloexec=0
+child: nopen=1
+spawn: path-gate child=7 path=/etc/passwd
+refused: child=7 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=7.1 (ppexit)
+spawn: exited child=7.1 status=0
+spawn: reap child=7.1 released bag=1 roster=0
+N: status=0
+
+== C posix_spawn ==
+spawn-compat: posix_spawn path=/bin/hello
+spawn: reserve child=8.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=8.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn-compat: posix_spawn grant as=fd/1 why=posix-inherit
+spawn: grant child=8.1 as=env/TERM from=TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn-compat: posix_spawn grant as=env/TERM why=posix-inherit
+manifest: child=8.1 image=/bin/hello parent=1 rung=0/1 (one address space; enforced at the seam) bag=2 ambient=memory<=65536,clock,exit,yield
+manifest: child=8.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=8.1 grant as=env/TERM from=TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn: start child=8.1 entered=yes
+spawn: path-gate child=8 path=/bin/hello
+spawn: loaded child=8.1 entry=0x10003180f0 len=32768
+spawn: jumping child=8.1 ip=0x11029d sp=0x1000247e30
+child: begin pid=8
+child: fd 1 cloexec=0
+child: nopen=1
+child: env TERM=xterm-spawn
+spawn: path-gate child=8 path=/etc/passwd
+refused: child=8 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=8.1 (ppexit)
+spawn: exited child=8.1 status=0
+spawn: reap child=8.1 released bag=2 roster=0
+posix_spawn: status=0
+
+== C vfork+execve ==
+spawn-compat: vfork-window path=/bin/hello (vfork child is not yet a Spawn child; execve becomes reserve+grant+seal+start)
+spawn-compat: vfork+execve path=/bin/hello
+spawn: reserve child=9.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=9.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn-compat: vfork+execve grant as=fd/1 why=posix-inherit
+spawn: grant child=9.1 as=env/TERM from=TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn-compat: vfork+execve grant as=env/TERM why=posix-inherit
+manifest: child=9.1 image=/bin/hello parent=1 rung=0/1 (one address space; enforced at the seam) bag=2 ambient=memory<=65536,clock,exit,yield
+manifest: child=9.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=9.1 grant as=env/TERM from=TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn: start child=9.1 entered=yes
+spawn: path-gate child=9 path=/bin/hello
+spawn: loaded child=9.1 entry=0x10003570f0 len=32768
+spawn: jumping child=9.1 ip=0x11029d sp=0x1000286e30
+child: begin pid=9
+child: fd 1 cloexec=0
+child: nopen=1
+child: env TERM=xterm-spawn
+spawn: path-gate child=9 path=/etc/passwd
+refused: child=9 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=9.1 (ppexit)
+spawn: exited child=9.1 status=0
+spawn: reap child=9.1 released bag=2 roster=0
+vfork+execve: status=0
+roster: 0
+spawn-elf: done
+[    0.243097] ERR:  [libukpm] <pm.c @   69> PM driver failed the operation: -5. Falling back on busy loop...

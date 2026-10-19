@@ -12,6 +12,6 @@ koruos/spawn:authority(spec: "handle console write; spawn census; max_bag 1; max
     | refused q |> std/io:print.ln("{{ q.reason:s }}")
     | staged s |> koruos/spawn:seal(c: s)
         | refused r |> koruos/spawn:abandon(r.c)
-        | sealed z |> koruos/spawn:grant(c: z, handle: "console", verbs: "write", as: "fd/1")
+        | sealed z |> koruos/spawn:grant(c: z, handle: "console", verbs: "write", as: "fd/1", across_exec: 0)
             | refused r |> koruos/spawn:abandon(r.c)
             | ok g |> koruos/spawn:abandon(c: g)

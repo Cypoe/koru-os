@@ -1,0 +1,6 @@
+$(eval $(call addlib,appkoruos))
+APPKORUOS_SRCS-y += $(APPKORUOS_BASE)/main.c
+KORUSPAWN_DIR := $(APPKORUOS_BASE)/koruspawn
+include $(KORUSPAWN_DIR)/Makefile.uk
+KORUELF_DIR := $(APPKORUOS_BASE)/koruelf
+include $(KORUELF_DIR)/Makefile.uk

@@ -10,7 +10,7 @@ koruos/spawn:authority(spec: "handle console write; spawn census; max_bag 1; max
 | refused ar |> std/io:print.ln("{{ ar:s }}")
 | ok a |> koruos/spawn:reserve(a, image: "census", budget: 4096)
     | refused q |> std/io:print.ln("{{ q.reason:s }}")
-    | staged s |> koruos/spawn:grant(c: s, handle: "console", verbs: "write", as: "fd/1")
+    | staged s |> koruos/spawn:grant(c: s, handle: "console", verbs: "write", as: "fd/1", across_exec: 0)
         | refused r |> koruos/spawn:abandon(r.c)
         | ok g |> koruos/spawn:seal(c: g)
             | refused r |> koruos/spawn:abandon(r.c)

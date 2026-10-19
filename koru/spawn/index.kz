@@ -13,14 +13,18 @@
 //   - identities {instance, generation} are minted at reserve and never reused (F1);
 //   - seal checks the image's imports against bag + ambient and emits the manifest;
 //   - start mints <running!> only on evidence that the child's entry executed.
-// Not yet (later steps of §8.6): replace, detach, revoke, nested attenuation, the Unikraft
-// provider (posix-process), the Linux compat layer. Rung honesty (§8.6.2): one address space,
-// cooperative; the bag is enforced at the seam (ChildCtx), not by hardware. A child image here
-// is an entry function linked into this image and runs to completion inside `start`.
+// Also covered: replace (exec; rights die unless across_exec), detach, revoke (epoch, §8.5),
+// nested attenuation (a child's derived authority can only re-grant verbs it holds). The
+// Unikraft provider and the loud compat layer live in lib/koruspawn + lib/koruelf
+// (experiments/spawn-elf/). Rung honesty (§8.6.2): one address space, cooperative; the bag
+// is enforced at the seam (ChildCtx), not by hardware. A child image here is an entry
+// function linked into this image and runs to completion inside `start` (rung 0/1 skeleton);
+// an external ELF child is started by the C provider.
 //
 // Phantom states: reserve mints <staged!>; grant <!staged> -> <staged!>; seal <!staged> ->
 // <sealed!> | refused <staged!>; start <!sealed> -> <running!> | stalled <sealed!>;
-// wait <!running> -> <exited!>; reap <!exited>; abandon <!staged|!sealed>.
+// wait <!running> -> <exited!>; reap <!exited>; abandon <!staged|!sealed>;
+// detach <!running>; revoke (epoch bump); replace <!running> -> <running!>.
 
 const std = @import("std");
 
@@ -122,6 +126,9 @@ const Grant = struct {
     value: []const u8,
     granted_by: u32,
     why: []const u8,
+    across_exec: bool, // F12: default false; kept by replace
+    epoch: u32, // §8.5
+    revoked_epoch: u32, // dead when equal to epoch
 };
 
 pub const Child = struct {
@@ -136,6 +143,8 @@ pub const Child = struct {
     entered: bool,
     status: i32,
     seam_refusals: u32,
+    supervisor: []const u8, // "" = parent; set by detach
+    lineage: []const u8, // "create" | "evolve"
 };
 
 // The seam: the ONLY way a child image reaches anything. Ambient: clock, exit (return), yield.
@@ -149,6 +158,11 @@ pub const ChildCtx = struct {
         while (i < self.c.nbag) : (i += 1) {
             const g = &self.c.bag[i];
             if (std.mem.eql(u8, g.as, as)) {
+                if (g.epoch == g.revoked_epoch) {
+                    self.c.seam_refusals += 1;
+                    logln("refused: child={d}.{d} use={s} verb={s} reason=revoked epoch={d} phase=run", .{ self.c.instance, self.c.generation, as, verb, g.epoch });
+                    return null;
+                }
                 if (verbsWithin(verb, g.verbs)) return g;
                 self.c.seam_refusals += 1;
                 logln("refused: child={d}.{d} use={s} verb={s} granted={s} phase=run (verb not in bag)", .{ self.c.instance, self.c.generation, as, verb, g.verbs });
@@ -254,7 +268,7 @@ const images = [_]Image{
     }
     const mem = malloc(@sizeOf(Child)) orelse return .{ .refused = .{ .reason = "out of memory", .image = image } };
     const c: *Child = @ptrCast(@alignCast(mem));
-    c.* = .{ .instance = next_instance, .generation = 1, .image = img.?, .auth = a, .parent = a.instance, .budget = budget, .bag = undefined, .nbag = 0, .entered = false, .status = -1, .seam_refusals = 0 };
+    c.* = .{ .instance = next_instance, .generation = 1, .image = img.?, .auth = a, .parent = a.instance, .budget = budget, .bag = undefined, .nbag = 0, .entered = false, .status = -1, .seam_refusals = 0, .supervisor = "", .lineage = "create" };
     next_instance += 1; // never reused (F1)
     a.children += 1;
     roster += 1;
@@ -262,7 +276,7 @@ const images = [_]Image{
     return .{ .staged = c };
 }
 
-~pub tor grant { c: *Child<!staged>, handle: string, verbs: string, as: string }
+~pub tor grant { c: *Child<!staged>, handle: string, verbs: string, as: string, across_exec: u32 }
 | ok *Child<staged!>
 | refused { c: *Child<staged!>, reason: string }
 
@@ -287,9 +301,9 @@ const images = [_]Image{
         logln("refused: grant child={d}.{d} handle={s} verbs={s} as={s} reason={s} phase=grant", .{ c.instance, c.generation, handle, verbs, as, why });
         return .{ .refused = .{ .c = c, .reason = why } };
     }
-    c.bag[c.nbag] = .{ .as = as, .from = handle, .verbs = verbs, .value = held.?.value, .granted_by = a.instance, .why = "explicit" };
+    c.bag[c.nbag] = .{ .as = as, .from = handle, .verbs = verbs, .value = held.?.value, .granted_by = a.instance, .why = "explicit", .across_exec = across_exec != 0, .epoch = 1, .revoked_epoch = 0 };
     c.nbag += 1;
-    logln("spawn: grant child={d}.{d} as={s} from={s} verbs={s} (parent holds {s}) granted_by={d} why=explicit", .{ c.instance, c.generation, as, handle, verbs, held.?.verbs, a.instance });
+    logln("spawn: grant child={d}.{d} as={s} from={s} verbs={s} across_exec={d} (parent holds {s}) granted_by={d} why=explicit", .{ c.instance, c.generation, as, handle, verbs, across_exec, held.?.verbs, a.instance });
     return .{ .ok = c };
 }
 
@@ -313,7 +327,7 @@ const images = [_]Image{
     }
     logln("manifest: child={d}.{d} image={s} parent={d} rung={s} bag={d} ambient=memory<={d},clock,exit,yield", .{ c.instance, c.generation, c.image.name, c.parent, rung, c.nbag, c.budget });
     var i: u32 = 0;
-    while (i < c.nbag) : (i += 1) logln("manifest: child={d}.{d} grant as={s} from={s} verbs={s} granted_by={d} why={s}", .{ c.instance, c.generation, c.bag[i].as, c.bag[i].from, c.bag[i].verbs, c.bag[i].granted_by, c.bag[i].why });
+    while (i < c.nbag) : (i += 1) logln("manifest: child={d}.{d} grant as={s} from={s} verbs={s} across_exec={d} epoch={d} granted_by={d} why={s}", .{ c.instance, c.generation, c.bag[i].as, c.bag[i].from, c.bag[i].verbs, @intFromBool(c.bag[i].across_exec), c.bag[i].epoch, c.bag[i].granted_by, c.bag[i].why });
     return .{ .sealed = c };
 }
 
@@ -356,4 +370,108 @@ fn retire(c: *Child, how: []const u8) void {
 
 ~proc abandon|zig {
     retire(c, "abandon (no evidence it ran)");
+}
+
+// ------------------------------------------------------------ replace / detach / revoke / nested
+
+~pub tor revoke { c: *Child<!sealed>, index: u32 }
+| ok *Child<sealed!>
+| refused { c: *Child<sealed!>, reason: string }
+
+~proc revoke|zig {
+    if (index >= c.nbag) {
+        logln("refused: revoke child={d}.{d} index={d} reason=no such grant phase=revoke", .{ c.instance, c.generation, index });
+        return .{ .refused = .{ .c = c, .reason = "no such grant" } };
+    }
+    const g = &c.bag[index];
+    g.revoked_epoch = g.epoch; // equal => dead (§8.5)
+    logln("spawn: revoke child={d}.{d} grant={d} as={s} epoch={d} (revoked)", .{ c.instance, c.generation, index, g.as, g.epoch });
+    return .{ .ok = c };
+}
+
+~pub tor detach { c: *Child<!running>, supervisor: string }
+
+~proc detach|zig {
+    c.supervisor = supervisor;
+    logln("spawn: detach child={d}.{d} supervisor={s}", .{ c.instance, c.generation, supervisor });
+    // The reap obligation moves; the roster still tracks the child until the
+    // supervisor reaps. For the skeleton we keep the record and let the caller
+    // drop the handle without reap (the second disposal that makes a leak a
+    // compile error alongside reap).
+}
+
+~pub tor replace { c: *Child<!running>, image: string }
+| running *Child<running!>
+| refused { c: *Child<running!>, reason: string }
+
+~proc replace|zig {
+    // Must be invoked "by the child itself": the skeleton has no separate
+    // caller identity, so we require a replace grant in the bag for the image.
+    var allowed = false;
+    var i: u32 = 0;
+    while (i < c.nbag) : (i += 1) {
+        const g = &c.bag[i];
+        if (g.epoch == g.revoked_epoch) continue;
+        if (std.mem.eql(u8, g.as, "replace") and verbsWithin("exec", g.verbs) and std.mem.eql(u8, g.value, image)) {
+            allowed = true;
+        }
+    }
+    var img: ?*const Image = null;
+    for (&images) |*im| if (std.mem.eql(u8, im.name, image)) {
+        img = im;
+    };
+    var why: []const u8 = "";
+    if (!allowed) why = "replace for this image is not in the bag";
+    if (why.len == 0 and img == null) why = "image not linked into this realization";
+    if (why.len != 0) {
+        logln("refused: replace child={d}.{d} image={s} reason={s} phase=replace", .{ c.instance, c.generation, image, why });
+        return .{ .refused = .{ .c = c, .reason = why } };
+    }
+    // Rights die unless across_exec (F12).
+    var w: u32 = 0;
+    i = 0;
+    while (i < c.nbag) : (i += 1) {
+        if (!c.bag[i].across_exec) {
+            logln("spawn: replace child={d}.{d} drop as={s} (not across_exec)", .{ c.instance, c.generation, c.bag[i].as });
+            continue;
+        }
+        c.bag[w] = c.bag[i];
+        w += 1;
+    }
+    c.nbag = w;
+    c.image = img.?;
+    c.generation += 1;
+    c.lineage = "evolve";
+    c.entered = false;
+    logln("spawn: replace child={d}.{d} image={s} lineage=evolve bag={d}", .{ c.instance, c.generation, image, c.nbag });
+    var ctx = ChildCtx{ .c = c };
+    c.status = c.image.entry(&ctx);
+    if (!c.entered) {
+        logln("spawn: replace child={d}.{d} stalled (no evidence the entry executed)", .{ c.instance, c.generation });
+        return .{ .refused = .{ .c = c, .reason = "no evidence the entry executed" } };
+    }
+    return .{ .running = c };
+}
+
+// Nested attenuation: mint an Authority whose held handles are exactly the
+// child's live bag (verbs and values). A grandchild can only receive a subset.
+~pub tor authority-of { c: *Child<!sealed> }
+| ok { a: *Authority, c: *Child<sealed!> }
+| refused { c: *Child<sealed!>, reason: string }
+
+~proc authority-of|zig {
+    if (nauth == authorities.len) return .{ .refused = .{ .c = c, .reason = "authority table full" } };
+    const a = &authorities[nauth];
+    a.* = .{ .instance = c.instance, .held = undefined, .nheld = 0, .images = c.auth.images, .max_bag = c.auth.max_bag, .max_children = c.auth.max_children, .children = 0 };
+    var i: u32 = 0;
+    while (i < c.nbag) : (i += 1) {
+        const g = &c.bag[i];
+        if (g.epoch == g.revoked_epoch) continue;
+        if (a.nheld == a.held.len) break;
+        a.held[a.nheld] = .{ .name = g.as, .verbs = g.verbs, .value = g.value };
+        a.nheld += 1;
+    }
+    nauth += 1;
+    logln("authority: derived holder={d} from child={d}.{d} handles={d} (nested attenuation)", .{ a.instance, c.instance, c.generation, a.nheld });
+    return .{ .ok = .{ .a = a, .c = c } };
 }

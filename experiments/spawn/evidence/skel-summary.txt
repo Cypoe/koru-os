@@ -1,0 +1,3 @@
+skel 1: SPAWN PASS
+skel 2: SPAWN PASS
+skel 3: SPAWN PASS

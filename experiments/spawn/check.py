@@ -22,7 +22,7 @@ res["S1 empty-by-default rights (only the ambient set)"] = (ok, f"child {E}")
 # S2 explicit grants: the child sees exactly its manifest; granted verbs work, others refused
 g = [m.group(1) for m in re.finditer(r"^spawn: reserve child=(\d+)\.1 image=census", S, re.M)]
 G = g[1] if len(g) > 1 else "?"
-man = [(m.group(1), m.group(2)) for m in re.finditer(rf"^manifest: child={G}\.1 grant as=(\S+) from=\S+ verbs=(\S+) granted_by=1 why=explicit$", S, re.M)]
+man = [(m.group(1), m.group(2)) for m in re.finditer(rf"^manifest: child={G}\.1 grant as=(\S+) from=\S+ verbs=(\S+) across_exec=\d+ epoch=\d+ granted_by=1 why=explicit$", S, re.M)]
 seen = [(m.group(1), m.group(2)) for m in re.finditer(rf"^census: child={G}\.1 sees (\S+) verbs=(\S+)$", S, re.M)]
 ok = man == [("fd/1", "write"), ("env/TERM", "read")] and seen == man \
     and has(rf"^child={G}\.1 fd/1: hello from a spawned child$") \
@@ -70,7 +70,7 @@ res["S8 roster n -> n+1 -> n, none left"] = (ok, f"{lines(r'^roster: ')}")
 
 # S9 identities minted at reserve, strictly increasing, never reused (also across refusals)
 ids = [int(m.group(1)) for m in re.finditer(r"^spawn: reserve child=(\d+)\.(\d+)", S, re.M)]
-ok = len(ids) == 6 and ids == sorted(ids) and len(set(ids)) == len(ids) and ids[0] == 2
+ok = len(ids) >= 6 and ids == sorted(ids) and len(set(ids)) == len(ids) and ids[0] == 2
 res["S9 identities never reused"] = (ok, f"{ids}")
 
 # S10 compile gates
@@ -80,6 +80,16 @@ res["S10 compile gates"] = ("SPAWN-compile PASS" in gt, gt.strip().splitlines()[
 # S11 hygiene
 ok = "spawn: done" in L and not any("FAIL" in l or "CRIT" in l for l in L)
 res["S11 done, no FAIL/crash"] = (ok, "")
+
+# S12 revoke
+ok = has(r"^spawn: revoke child=\d+\.1 grant=0 as=fd/1 epoch=1 \(revoked\)$") \
+    and has(r"^refused: child=\d+\.1 use=fd/1 verb=write reason=revoked epoch=1 phase=run$")
+res["S12 revoke: epoch marked, write refused at seam"] = (ok, "")
+
+# S13 nested attenuation
+ok = has(r"^authority: derived holder=\d+ from child=\d+\.1 handles=1 \(nested attenuation\)$") \
+    and has(r"^nested: refused reason=over-grant: verbs exceed the parent's \(amplification\)$")
+res["S13 nested attenuation: over-grant refused"] = (ok, "")
 
 allok = True
 for k, (ok, why) in res.items():

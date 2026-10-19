@@ -10,7 +10,7 @@ koru-os for now; nothing is pushed to `Cypoe/koru-libs` (Q33). The acceptance in
   The stack FITS at 77,192 B ≤ 131,072 B (order 5).
 - **Compile gates:** SPAWN-compile PASS. Both controls compile. `start` on staged, `grant`
   after `seal`, `reap` on running, and a leaked running child are KORU030.
-- **Boots:** S1–S11 and R pass in 3/3 boots of one image (`evidence/run-{1,2,3}.txt`,
+- **Boots:** S1–S13 and R pass in 3/3 boots of one image (`evidence/run-{1,2,3}.txt`,
   `run-*-serial.log`, sha256 in each run file).
 - **Checker mutation:** in a copy of the run-1 log, an extra `sees fd/1` line for the empty
   child and a changed over-grant reason make S1 and S3 FAIL (`evidence/check-mutation.txt`).
@@ -28,6 +28,12 @@ koru-os for now; nothing is pushed to `Cypoe/koru-libs` (Q33). The acceptance in
 - **`seal` checks imports against bag + ambient** and emits the manifest.
 - **`start` mints `running` only on evidence;** a stall goes to `abandon`.
 - **The roster brackets every child,** and identities are never reused.
+
+## Later (same day): replace / detach / revoke / nested
+
+S12 (revoke, epoch) and S13 (nested attenuation via `authority-of`) PASS 3/3 on the
+extended skeleton. The Unikraft provider and an external ELF child are measured in
+`experiments/spawn-elf/` (E0–E12).
 
 ## Limits (rung 0/1)
 

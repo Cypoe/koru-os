@@ -1,0 +1,36 @@
+--- a/lib/vfscore/task.c	2026-04-20 10:54:36.000000000 +0200
++++ b/lib/vfscore/task.c	2026-10-19 19:57:52.941749839 +0200
+@@ -46,6 +46,12 @@
+ #include "vfs.h"
+ 
+ 
++
++/* koru-os spawn: path gate. Weak; lib/koruspawn provides the strong definition.
++ * Declared here (not defined) so calls bind to the strong symbol when present.
++ */
++int koru_vfs_path_gate(const char *abs);
++#pragma weak koru_vfs_path_gate
+ /*
+  * Convert to full path from the cwd of task and path.
+  * @wd:   working directory
+@@ -140,6 +146,9 @@
+ 	}
+ 
+ 	/* Check if the client task has required permission */
++	if (koru_vfs_path_gate && !koru_vfs_path_gate(full)) {
++		return (EACCES);
++	}
+ 	return (0); //sec_file_permission(t->t_taskid, full, acc);
+ }
+ 
+@@ -194,6 +203,10 @@
+ 	if (error)
+ 		goto out_error;
+ 
++	if (koru_vfs_path_gate && !koru_vfs_path_gate(full)) {
++		error = -EACCES;
++		goto out_error;
++	}
+ 	return 0;
+ out_error:
+ 	return error;

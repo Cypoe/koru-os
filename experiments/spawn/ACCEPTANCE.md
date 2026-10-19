@@ -29,9 +29,11 @@ seam, not by hardware.
 | S9 | identities are minted at reserve, start at 2 (1 is the boot program), strictly increase and are never reused, also across refused and abandoned children (6 reserves) |
 | S10 | compile gates (`check-negatives.sh`): both controls (the full order and the `abandon` escape) compile. `start` on staged, `grant` after `seal`, `reap` on running, and a leaked running child are KORU030 |
 | S11 | `spawn: done`, no `FAIL` or `CRIT` |
+| S12 | `revoke` marks the grant's epoch; the child's next use fails with `revoked` |
+| S13 | nested attenuation: `authority-of` derives a child's authority; a grandchild over-grant is refused |
 | R | `realize gen` derives the Kraftfile (koruos.spawn row), `../realize/check-config.py` R2/R3 PASS, `../realize/stack-demand.py` FITS |
 
-PASS = S1–S11 and R in 3/3 boots of one image. Regressions, since `koru/realize` gained a
+PASS = S1–S13 and R in 3/3 boots of one image. Regressions, since `koru/realize` gained a
 row: `../realize/run-counted.sh` (Slice A and DS0 3/3, R1–R6), plus the NID image
 (`../nid/check.py` N1–N10 and `../nid-link/agree.py` L1, 3/3).
 
