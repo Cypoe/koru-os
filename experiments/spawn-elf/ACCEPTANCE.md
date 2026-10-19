@@ -35,4 +35,10 @@ Concordance terms proposed only.
 
 ## M-SPAWN-MMU gaps (2026-10-19)
 
-Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **ready for Fabian review**, not accepted. ELF child-CR3 remaining (see DESIGN-0001 M-SPAWN-MMU row).
+Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`).
+
+## ELF child-CR3 (2026-10-19 ~22:17 CEST)
+
+External ELF runs on **child CR3** (kernel-half + syscall/IRQ CR3 leave). E0–E12 plus M
+(hw parent-heap fault + RO attenuation under child CR3) PASS 3/3
+(`evidence/elf-cr3-accept/`). Spawn acceptance: **ready for Fabian review**, not accepted.

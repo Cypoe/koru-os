@@ -1,0 +1,19 @@
+ok   E1 begin/done: 
+ok   E2 fork refused: 
+ok   E3 empty bag: exit status 0: 
+ok   E4 empty bag: no child: lines: 
+ok   E5 grants: child sees fd/1 and TERM: 
+ok   E6 address-space grant refused: 
+ok   E7 path /etc/passwd refused for child: 
+ok   E8 revoke: epoch marked and write refused: 
+ok   E9 replace from parent refused: 
+ok   E10 detach: 
+ok   E11 posix_spawn compat lines: 
+ok   E12 vfork+execve compat + roster 0: 
+ok   E0 no CRIT/crash: 
+ok   M child CR3 activate: 
+ok   M hw parent-heap fault: 
+ok   M hw attenuation: 
+ok   M ELF parent-heap fault: 
+ok   M ELF attenuation: 
+SPAWN-ELF PASS

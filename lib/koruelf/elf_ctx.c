@@ -47,6 +47,7 @@
  */
 
 #include <limits.h>
+#include <stdint.h>
 #include <string.h>
 #include <uk/assert.h>
 #include <uk/print.h>
@@ -114,6 +115,18 @@ static void infoblk_push(struct ukarch_ctx *ctx, void *buf, __sz len)
 	memcpy((void *)ctx->sp, buf, len);
 	((char *)ctx->sp)[len] = '\0';
 }
+
+/* Binary payload for the information block (no trailing NUL). */
+static void infoblk_push_raw(struct ukarch_ctx *ctx, const void *buf, __sz len)
+{
+	UK_ASSERT(ctx);
+	UK_ASSERT(ctx->sp);
+	UK_ASSERT(buf || !len);
+
+	ctx->sp = ALIGN_DOWN(ctx->sp - len, sizeof(long));
+	memcpy((void *)ctx->sp, buf, len);
+}
+
 
 int elf_arg_env_count(int *argc, const char **argv,
 		      int *envc, const char **envp,
@@ -201,20 +214,19 @@ void elf_ctx_init(struct ukarch_ctx *ctx, struct elf_prog *prog,
 	/* list of all auxiliary vector entries whose pointer values need
 	 * to point to information block areas
 	 */
+	/* Pointer-valued auxv that must live on the child stack (M-SPAWN-MMU). */
 	struct auxv_entry infoblk_auxv[] = {
 		{ AT_PLATFORM, (__uptr)UK_AUXV_PLATFORM	},
+		{ AT_EXECFN, (__uptr)(prog->path ? prog->path : prog->name) },
 	};
+	struct auxv_entry auxv_random = { AT_RANDOM, 0 };
 
-	/* list of all auxiliary vector entries whose pointer values need
-	 * not be in the information block
-	 */
+	/* Scalar / child-mapped auxv (no parent pointers). */
 	struct auxv_entry auxv[] = {
 		{ AT_NOTELF, 0x0 },
 		{ AT_UCACHEBSIZE, 0x0 },
 		{ AT_ICACHEBSIZE, 0x0 },
 		{ AT_DCACHEBSIZE, 0x0 },
-		/* path to executable */
-		{ AT_EXECFN, (long) (prog->path ? prog->path : prog->name) },
 		{ AT_SECURE, 0x0 },
 		{ AT_EGID, 0x0 },
 		{ AT_GID, 0x0 },
@@ -225,10 +237,8 @@ void elf_ctx_init(struct ukarch_ctx *ctx, struct elf_prog *prog,
 		{ AT_CLKTCK, 0x64 }, /* Mimic Linux */
 		{ AT_HWCAP, 0x0 },
 		{ AT_PAGESZ, 4096 },
-		/* base addr of interpreter */
 		{ AT_BASE, prog->interp.prog ?
 			   prog->interp.prog->start : 0x0 },
-		{ AT_RANDOM, (uintptr_t) rand },
 		{ AT_PHENT, prog->phdr.entsize },
 		{ AT_PHNUM, prog->phdr.num },
 		{ AT_PHDR, (__uptr)prog->vabase + prog->phdr.off },
@@ -243,12 +253,13 @@ void elf_ctx_init(struct ukarch_ctx *ctx, struct elf_prog *prog,
 	};
 	struct auxv_entry auxv_null = { AT_NULL, 0x0 };
 
+	UK_ASSERT(rand);
+	infoblk_push_raw(ctx, rand, 2 * sizeof(uint64_t));
+	auxv_random.val = (__uptr)ctx->sp;
+
 	for (i = (int)ARRAY_SIZE(infoblk_auxv) - 1; i >= 0; i--) {
 		infoblk_push(ctx, (void *)infoblk_auxv[i].val,
 			     strlen((const char*)infoblk_auxv[i].val));
-		/* Overwrite previous pointer to our memory to a pointer to
-		 * the newly copied buffer in the information block.
-		 */
 		infoblk_auxv[i].val = ctx->sp;
 	}
 
@@ -289,7 +300,7 @@ void elf_ctx_init(struct ukarch_ctx *ctx, struct elf_prog *prog,
 	 * - environment variables (plus extra NULL pointer);
 	 * - arguments (plus extra NULL pointer and argument count (long))
 	 */
-	elfvec_len = ((ARRAY_SIZE(auxv) + 1) * sizeof(struct auxv_entry))
+	elfvec_len = ((ARRAY_SIZE(auxv) + 2) * sizeof(struct auxv_entry))
 		+ (envc + 1) * sizeof(uintptr_t)
 		+ (argc + (argv0 ? 1 : 0) + 1) * sizeof(uintptr_t)
 		+ sizeof(long);
@@ -306,6 +317,7 @@ void elf_ctx_init(struct ukarch_ctx *ctx, struct elf_prog *prog,
 	ukarch_rctx_stackpush_packed(ctx, auxv_null);
 	for (i = (int)ARRAY_SIZE(infoblk_auxv) - 1; i >= 0; i--)
 		ukarch_rctx_stackpush_packed(ctx, infoblk_auxv[i]);
+	ukarch_rctx_stackpush_packed(ctx, auxv_random);
 	for (i = (int)ARRAY_SIZE(auxv) - 1; i >= 0; --i)
 		ukarch_rctx_stackpush_packed(ctx, auxv[i]);
 

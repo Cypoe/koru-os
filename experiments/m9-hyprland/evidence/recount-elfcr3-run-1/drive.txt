@@ -1,0 +1,6 @@
+32.55 seen 'm9-init: foot mapped after'
+40.55 screendump shot-foot.ppm
+49.38 typed 'echo DOD3 > /tmp/dod3\n'
+53.19 seen 'm9-init: end'
+54.19 screendump shot.ppm
+55.19 quit sent

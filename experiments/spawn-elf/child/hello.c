@@ -6,6 +6,38 @@
 #include <fcntl.h>
 #include <errno.h>
 
+#define KSP_PROBE_MAGIC 0x4B535052554C54ULL
+
+static void run_mmu_report(int outfd)
+{
+	const char *rs;
+	unsigned long *res;
+	char *end;
+
+	rs = getenv("KORU_PROBE_RESULT");
+	if (!rs)
+		return;
+	res = (unsigned long *)strtoul(rs, &end, 0);
+	if (!res)
+		return;
+	/* Ambient heap is mapped in the child PT; reading it proves child CR3. */
+	if (res[3] != KSP_PROBE_MAGIC) {
+		dprintf(outfd, "child: FAIL probe magic=0x%lx\n", res[3]);
+		return;
+	}
+	if (res[0] == 1)
+		dprintf(outfd, "child: parent-heap fault ok (hw under child CR3)\n");
+	else
+		dprintf(outfd, "child: FAIL parent-heap not isolated\n");
+	if (res[1] == 0 && res[2] == 0)
+		; /* no RO grant in this bag — skip */
+	else if (res[1] == 1 && res[2] == 1)
+		dprintf(outfd, "child: attenuation RO write fault ok (hw under child CR3)\n");
+	else
+		dprintf(outfd, "child: FAIL attenuation read=%lu write_fault=%lu\n",
+			res[1], res[2]);
+}
+
 int main(int argc, char **argv)
 {
 	int fd, flags, nopen = 0;
@@ -21,8 +53,7 @@ int main(int argc, char **argv)
 		nopen++;
 	}
 	if (!have_out) {
-		/* Empty bag: no way to print; encode nopen in the exit status. */
-		_exit(nopen); /* 0 = empty, as required */
+		_exit(nopen);
 	}
 	dprintf(1, "child: begin pid=%d\n", (int)getpid());
 	for (fd = 0; fd < 64; fd++) {
@@ -36,6 +67,7 @@ int main(int argc, char **argv)
 		for (e = environ; *e; e++)
 			dprintf(1, "child: env %s\n", *e);
 	}
+	run_mmu_report(1);
 	if (access("/etc/passwd", R_OK) == 0)
 		dprintf(1, "child: FAIL ambient /etc/passwd readable\n");
 	else

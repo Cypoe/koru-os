@@ -1,0 +1,17 @@
+# M-SPAWN-MMU ELF child-CR3 board (2026-10-19 ~22:22 CEST, Europe/Berlin)
+# accel=tcg. Tip includes kernel-half + syscall/IRQ CR3 leave + auxv fix.
+
+Chosen path: kernel-half (boot text/.bss + ambient dual-map + auxsp/uktls/thread
+metadata pages; never full parent heap) + syscall/IRQ CR3 leave + naked CR3 gate.
+Rejected: per-child allocator arena alone; CR3 switch without mapped assist.
+
+m-spawn-mmu gaps 1–3: PASS 3/3 (evidence/gaps-elfcr3/run-{1,2,3}/)
+spawn-elf E0–E12+M: PASS 3/3 (experiments/spawn-elf/evidence/elf-cr3-accept/run-{1,2,3}/)
+M9 + STAGE2: PASS 3/3 recounted (experiments/m9-hyprland/evidence/recount-elfcr3-run-{1,2,3}/;
+  QMP hardened; kernel sha256 still 595f8c05… — foot not on child CR3)
+
+Remaining gaps:
+- M9/foot on child CR3 requires koruspawn MMU in the m9k4 elfloader image
+- Parent-heap direct-map aliases (if any) not stripped; VMA heap unmapped (tested)
+- SIGSEGV-from-ELF for parent-heap probe unstable; gate-time uk_nofault under child CR3
+  + ELF reads ambient result block instead

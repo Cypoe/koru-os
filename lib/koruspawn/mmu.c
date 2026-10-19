@@ -15,6 +15,8 @@
 #include <uk/paging.h>
 #include <uk/print.h>
 #include <uk/thread.h>
+#include <uk/event.h>
+#include <uk/lcpu/except.h>
 #include <uk/vmem.h>
 #include <uk/vmem/vma_types.h>
 
@@ -38,7 +40,9 @@
 
 static struct uk_pagetable *g_parent_pt;
 static struct ksp_mmu_domain *g_active_dom;
-static unsigned g_ambient_slot;
+static int ksp_mmu_nofault_depth;
+void ksp_mmu_nofault_begin(void);
+void ksp_mmu_nofault_end(void);
 
 static void mlog(const char *fmt, ...)
 {
@@ -183,6 +187,7 @@ int ksp_mmu_derive(struct ksp_mmu_domain *d, struct uk_vas *parent_vas,
 	ppt = parent_vas->pt;
 	memset(d, 0, sizeof(*d));
 	d->parent_pt = ppt;
+	d->parent_vas = parent_vas;
 	g_parent_pt = ppt;
 
 	if (ngrants)
@@ -387,7 +392,6 @@ int ksp_mmu_activate(struct ksp_mmu_domain *d)
 	d->active = 1;
 	g_active_dom = d;
 	uk_paging_tlb_flush();
-	/* no mlog here: CR3 is child; libc/heap may be unmapped */
 	return 0;
 }
 
@@ -403,6 +407,8 @@ int ksp_mmu_deactivate(struct ksp_mmu_domain *d)
 	d->active = 0;
 	if (g_active_dom == d)
 		g_active_dom = NULL;
+	if (d->parent_vas)
+		(void)uk_vas_set_active(d->parent_vas);
 	uk_paging_tlb_flush();
 	return 0;
 }
@@ -419,12 +425,17 @@ void ksp_mmu_sched_switch(struct uk_thread *next)
 {
 	/* Leave child AS before heap ctx save/load. Current SP must be ambient
 	 * (dual-mapped) or boot-mapped — never a parent-heap-only stack. */
+	struct ksp_mmu_domain *d;
+
 	(void)next;
 	if (!g_parent_pt || !g_active_dom)
 		return;
+	d = g_active_dom;
 	(void)uk_paging_pt_set_active(g_parent_pt);
-	g_active_dom->active = 0;
+	d->active = 0;
 	g_active_dom = NULL;
+	if (d->parent_vas)
+		(void)uk_vas_set_active(d->parent_vas);
 	uk_paging_tlb_flush();
 }
 
@@ -518,7 +529,12 @@ void ksp_mmu_destroy(struct ksp_mmu_domain *d)
 __sz ksp_mmu_probe_r(__vaddr_t va, __sz len)
 {
 #if CONFIG_LIBUKNOFAULT
-	return uk_nofault_probe_r(va, len, UK_NOFAULTF_NOPAGING);
+	__sz n;
+
+	ksp_mmu_nofault_begin();
+	n = uk_nofault_probe_r(va, len, UK_NOFAULTF_NOPAGING);
+	ksp_mmu_nofault_end();
+	return n;
 #else
 	(void)va;
 	(void)len;
@@ -529,7 +545,12 @@ __sz ksp_mmu_probe_r(__vaddr_t va, __sz len)
 __sz ksp_mmu_probe_rw(__vaddr_t va, __sz len)
 {
 #if CONFIG_LIBUKNOFAULT
-	return uk_nofault_probe_rw(va, len, UK_NOFAULTF_NOPAGING);
+	__sz n;
+
+	ksp_mmu_nofault_begin();
+	n = uk_nofault_probe_rw(va, len, UK_NOFAULTF_NOPAGING);
+	ksp_mmu_nofault_end();
+	return n;
 #else
 	(void)va;
 	(void)len;
@@ -566,3 +587,79 @@ uk_syscall_entertab_prio(ksp_mmu_syscall_enter, UK_PRIO_EARLIEST);
 uk_syscall_exittab_prio(ksp_mmu_syscall_exit, UK_PRIO_LATEST);
 #endif /* CONFIG_LIBSYSCALL_SHIM */
 
+#if CONFIG_LIBUKPAGING
+/* IRQ/PF CR3 leave: handlers touch parent heap; pair with arrive.
+ * ksp_mmu_nofault_begin/end: PF leave disabled so uk_nofault probes see the
+ * child PT (gaps / ksp_mmu_hw_probe). */
+static unsigned ksp_mmu_exc_left;
+
+void ksp_mmu_nofault_begin(void)
+{
+	ksp_mmu_nofault_depth++;
+}
+
+void ksp_mmu_nofault_end(void)
+{
+	if (ksp_mmu_nofault_depth)
+		ksp_mmu_nofault_depth--;
+}
+
+static int ksp_mmu_except_leave(void *data)
+{
+	(void)data;
+	if (g_active_dom) {
+		ksp_mmu_sched_switch(NULL);
+		ksp_mmu_exc_left++;
+	}
+	return UK_EVENT_HANDLED_CONT;
+}
+
+static int ksp_mmu_except_arrive(void *data)
+{
+	(void)data;
+	if (ksp_mmu_exc_left) {
+		ksp_mmu_exc_left--;
+		if (!ksp_mmu_exc_left)
+			ksp_mmu_sched_arrive();
+	}
+	return UK_EVENT_HANDLED_CONT;
+}
+
+static int ksp_mmu_pf_leave(void *data)
+{
+	struct ksp_mmu_domain *d = g_active_dom;
+
+	(void)data;
+	if (ksp_mmu_nofault_depth)
+		return UK_EVENT_HANDLED_CONT;
+	/*
+	 * Stay on child CR3 for the fault (so SIGSEGV/nofault see the child PT).
+	 * Only block parent-VAS demand-paging; IRQ/syscall still leave via their
+	 * own hooks when kernel heap is required.
+	 */
+	if (d && d->parent_vas)
+		d->parent_vas->flags |= UK_VAS_FLAG_NO_PAGING;
+	return UK_EVENT_HANDLED_CONT;
+}
+
+static int ksp_mmu_pf_arrive(void *data)
+{
+	struct ksp_mmu_domain *d = g_active_dom;
+
+	(void)data;
+	if (ksp_mmu_nofault_depth)
+		return UK_EVENT_HANDLED_CONT;
+	if (d && d->parent_vas)
+		d->parent_vas->flags &= ~UK_VAS_FLAG_NO_PAGING;
+	return UK_EVENT_HANDLED_CONT;
+}
+
+UK_EVENT_HANDLER_PRIO(UK_LCPU_EXCEPT_EVENT_IRQ, ksp_mmu_except_leave,
+		      UK_PRIO_EARLIEST);
+UK_EVENT_HANDLER_PRIO(UK_LCPU_EXCEPT_EVENT_IRQ, ksp_mmu_except_arrive,
+		      UK_PRIO_LATEST);
+UK_EVENT_HANDLER_PRIO(UK_LCPU_EXCEPT_EVENT_ERR_PAGE_FAULT, ksp_mmu_pf_leave,
+		      UK_PRIO_EARLIEST);
+UK_EVENT_HANDLER_PRIO(UK_LCPU_EXCEPT_EVENT_ERR_PAGE_FAULT, ksp_mmu_pf_arrive,
+		      UK_PRIO_LATEST);
+#endif /* CONFIG_LIBUKPAGING */

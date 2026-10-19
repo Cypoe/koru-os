@@ -1,0 +1,211 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+06FC6E00+06F06E00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM..Powered by Unikraft Ijiraq (0.21.0)
+[    0.103637] ERR:  [appkoruos] <main.c @   33> m-spawn-mmu: gaps 1-3 begin
+m-spawn-mmu: gaps 1-3 begin
+[    0.104637] ERR:  [appkoruos] <main.c @   33> == gap1 no parent heap/stack ==
+== gap1 no parent heap/stack ==
+[    0.105872] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+[    0.106339] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7e93000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7e93000 (will unmap in child)
+[    0.107924] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7e93000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7e93000 name=heap rc=0
+[    0.108240] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.108533] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.108808] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+[    0.109083] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+[    0.110643] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+[    0.111653] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+[    0.112802] ERR:  [appkoruos] <mmu.c @   62> mmu: grant va=0x100008a000 len=0x1000 attr=0x1 cow=0 gi=0
+mmu: grant va=0x100008a000 len=0x1000 attr=0x1 cow=0 gi=0
+[    0.113821] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.114862] ERR:  [appkoruos] <main.c @   33> PASS gap1 derive (strips heap+stack)
+PASS gap1 derive (strips heap+stack)
+[    0.116538] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x100008b000 len=0x10000 pa=0x6a000
+mmu: ambient stack va=0x100008b000 len=0x10000 pa=0x6a000
+[    0.117572] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x100009b000 len=0x10000 pa=0x76000
+mmu: ambient heap va=0x100009b000 len=0x10000 pa=0x76000
+[    0.118597] ERR:  [appkoruos] <main.c @   33> PASS gap1 provision ambient
+PASS gap1 provision ambient
+[    0.119994] ERR:  [appkoruos] <main.c @   33> PASS gap1 fault: child cannot read parent heap
+PASS gap1 fault: child cannot read parent heap
+[    0.121010] ERR:  [appkoruos] <main.c @   33> PASS gap1 fault: ungranted secret
+PASS gap1 fault: ungranted secret
+[    0.121953] ERR:  [appkoruos] <main.c @   33> PASS gap1 granted readable
+PASS gap1 granted readable
+[    0.122642] ERR:  [appkoruos] <main.c @   33> PASS gap1 attenuation RO write faults
+PASS gap1 attenuation RO write faults
+[    0.123634] ERR:  [appkoruos] <main.c @   33> PASS gap1 own ambient heap writable
+PASS gap1 own ambient heap writable
+[    0.124616] ERR:  [appkoruos] <main.c @   33> PASS gap1 parent secret intact after
+PASS gap1 parent secret intact after
+[    0.125892] ERR:  [appkoruos] <mmu.c @   62> mmu: destroy child PT
+mmu: destroy child PT
+[    0.126579] ERR:  [appkoruos] <main.c @   33> == gap2 always-on AS (zero mem grants) ==
+== gap2 always-on AS (zero mem grants) ==
+[    0.127690] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.128771] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7e93000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7e93000 (will unmap in child)
+[    0.129962] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7e93000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7e93000 name=heap rc=0
+[    0.130993] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.132016] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.133028] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+[    0.134048] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+[    0.135063] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+[    0.136098] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+[    0.137152] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+[    0.138203] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+[    0.139290] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+[    0.140391] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.141426] ERR:  [appkoruos] <main.c @   33> PASS gap2 derive empty bag
+PASS gap2 derive empty bag
+[    0.142472] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x10000ab000 len=0x10000 pa=0x7f93000
+mmu: ambient stack va=0x10000ab000 len=0x10000 pa=0x7f93000
+[    0.143534] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x10000bb000 len=0x10000 pa=0x7f8d000
+mmu: ambient heap va=0x10000bb000 len=0x10000 pa=0x7f8d000
+[    0.144598] ERR:  [appkoruos] <main.c @   33> PASS gap2 ambient
+PASS gap2 ambient
+[    0.145378] ERR:  [appkoruos] <main.c @   33> PASS gap2 zero-grant: parent heap fault
+PASS gap2 zero-grant: parent heap fault
+[    0.146408] ERR:  [appkoruos] <main.c @   33> PASS gap2 zero-grant: own stack ok
+PASS gap2 zero-grant: own stack ok
+[    0.147448] ERR:  [appkoruos] <mmu.c @   62> mmu: destroy child PT
+mmu: destroy child PT
+[    0.148141] ERR:  [appkoruos] <main.c @   33> == gap3 sched CR3 multi-AS ==
+== gap3 sched CR3 multi-AS ==
+[    0.149063] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+[    0.150127] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7e93000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7e93000 (will unmap in child)
+[    0.151260] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7e93000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7e93000 name=heap rc=0
+[    0.152312] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.153323] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.154317] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+[    0.155431] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+[    0.156488] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+[    0.157429] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+[    0.158333] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+[    0.159256] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+[    0.160232] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+[    0.161149] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ab000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ab000 len=0x10000 name=child-ambient-stack rc=0
+[    0.162063] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000bb000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000bb000 len=0x10000 name=child-ambient-heap rc=0
+[    0.162983] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000cc000 len=0x1000 name=sec-b rc=0
+mmu: strip va=0x10000cc000 len=0x1000 name=sec-b rc=0
+[    0.163909] ERR:  [appkoruos] <mmu.c @   62> mmu: grant va=0x10000cb000 len=0x1000 attr=0x1 cow=0 gi=0
+mmu: grant va=0x10000cb000 len=0x1000 attr=0x1 cow=0 gi=0
+[    0.164836] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.166020] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x10000cd000 len=0x10000 pa=0x7fb0000
+mmu: ambient stack va=0x10000cd000 len=0x10000 pa=0x7fb0000
+[    0.167091] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x10000dd000 len=0x8000 pa=0x7fbc000
+mmu: ambient heap va=0x10000dd000 len=0x8000 pa=0x7fbc000
+[    0.168088] ERR:  [appkoruos] <main.c @   33> PASS gap3 d0 ready
+PASS gap3 d0 ready
+[    0.168790] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+[    0.169713] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7e93000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7e93000 (will unmap in child)
+[    0.170693] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7e93000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7e93000 name=heap rc=0
+[    0.171589] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.172472] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.173316] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+[    0.174136] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+[    0.175011] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+[    0.175989] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+[    0.177049] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+[    0.177932] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+[    0.178852] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+[    0.179788] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ab000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ab000 len=0x10000 name=child-ambient-stack rc=0
+[    0.180656] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000bb000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000bb000 len=0x10000 name=child-ambient-heap rc=0
+[    0.181515] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000cb000 len=0x1000 name=sec-a rc=0
+mmu: strip va=0x10000cb000 len=0x1000 name=sec-a rc=0
+[    0.182337] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000cd000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000cd000 len=0x10000 name=child-ambient-stack rc=0
+[    0.183298] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000dd000 len=0x8000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000dd000 len=0x8000 name=child-ambient-heap rc=0
+[    0.184275] ERR:  [appkoruos] <mmu.c @   62> mmu: grant va=0x10000cc000 len=0x1000 attr=0x1 cow=0 gi=0
+mmu: grant va=0x10000cc000 len=0x1000 attr=0x1 cow=0 gi=0
+[    0.185201] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.186476] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x10000e5000 len=0x10000 pa=0x199000
+mmu: ambient stack va=0x10000e5000 len=0x10000 pa=0x199000
+[    0.187476] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x10000f5000 len=0x8000 pa=0x197000
+mmu: ambient heap va=0x10000f5000 len=0x8000 pa=0x197000
+[    0.188388] ERR:  [appkoruos] <main.c @   33> PASS gap3 d1 ready
+PASS gap3 d1 ready
+[    0.189296] ERR:  [appkoruos] <main.c @   33> PASS gap3 create threads
+PASS gap3 create threads
+[    0.190049] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x40000a020 domain=0x140120
+mmu: bind thread=0x40000a020 domain=0x140120
+[    0.190935] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x40000e020 domain=0x1400a0
+mmu: bind thread=0x40000e020 domain=0x1400a0
+[    0.200214] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x40000a020 domain=0
+mmu: bind thread=0x40000a020 domain=0
+[    0.201262] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x40000e020 domain=0
+mmu: bind thread=0x40000e020 domain=0
+[    0.202108] ERR:  [appkoruos] <main.c @   33> PASS gap3 both threads finished
+PASS gap3 both threads finished
+[    0.202958] ERR:  [appkoruos] <main.c @   33> PASS gap3 isolation A
+PASS gap3 isolation A
+[    0.203573] ERR:  [appkoruos] <main.c @   33> PASS gap3 isolation B
+PASS gap3 isolation B
+[    0.204185] ERR:  [appkoruos] <main.c @   33> PASS gap3 stress switches
+PASS gap3 stress switches
+[    0.204818] ERR:  [appkoruos] <main.c @   33> gap3 stress_switches=400
+gap3 stress_switches=400
+[    0.205500] ERR:  [appkoruos] <mmu.c @   62> mmu: destroy child PT
+mmu: destroy child PT
+[    0.206255] ERR:  [appkoruos] <mmu.c @   62> mmu: destroy child PT
+mmu: destroy child PT
+[    0.206912] ERR:  [appkoruos] <main.c @   33> M-SPAWN-MMU GAPS PASS
+M-SPAWN-MMU GAPS PASS
+[    0.207882] ERR:  [libukpm] <pm.c @   69> PM driver failed the operation: -5. Fallin

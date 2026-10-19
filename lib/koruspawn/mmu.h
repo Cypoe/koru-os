@@ -22,6 +22,7 @@ struct ksp_mem_grant {
 struct ksp_mmu_domain {
 	struct uk_pagetable pt;
 	struct uk_pagetable *parent_pt;
+	struct uk_vas *parent_vas;
 	int live;
 	int active;
 	/* Child-private ambient regions (not parent heap/stack). */
@@ -62,6 +63,8 @@ void ksp_mmu_bind_thread(struct uk_thread *t, struct ksp_mmu_domain *d);
  * thread must also call ksp_mmu_activate (see child entry stubs). */
 void ksp_mmu_sched_switch(struct uk_thread *next);
 void ksp_mmu_sched_arrive(void);
+void ksp_mmu_nofault_begin(void);
+void ksp_mmu_nofault_end(void);
 
 __sz ksp_mmu_probe_r(__vaddr_t va, __sz len);
 __sz ksp_mmu_probe_rw(__vaddr_t va, __sz len);

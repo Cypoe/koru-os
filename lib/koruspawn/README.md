@@ -33,4 +33,4 @@ Without mem grants, behaviour stays seam-only (rung 0/1). See
 
 ## M-SPAWN-MMU gaps (2026-10-19)
 
-Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **ready for Fabian review**, not accepted. ELF child-CR3 remaining (see DESIGN-0001 M-SPAWN-MMU row).
+Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **ready for Fabian review**, not accepted. ELF child-CR3 via kernel-half + syscall CR3 leave (see experiments/m-spawn-mmu/README.md).

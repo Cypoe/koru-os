@@ -52,6 +52,16 @@ def main(log_path):
     need("E0 no CRIT/crash",
          "CRIT" not in log and "Page fault" not in log and
          "child: FAIL" not in log)
+    need("M child CR3 activate",
+         "(child CR3" in log and ("mmu gate" in log or "mmu activate" in log))
+    need("M hw parent-heap fault",
+         "hw_probe parent_heap rc=0" in log)
+    need("M hw attenuation",
+         "hw_probe RO-write rc=0" in log)
+    need("M ELF parent-heap fault",
+         "child: parent-heap fault ok" in section("M mmu"))
+    need("M ELF attenuation",
+         "child: attenuation RO write fault ok" in section("M mmu"))
 
     print("SPAWN-ELF PASS" if not fails else "SPAWN-ELF FAIL")
     return 0 if not fails else 1

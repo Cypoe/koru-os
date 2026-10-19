@@ -75,4 +75,10 @@ int ksp_grant_epoch_ok(unsigned slot);      /* 1 if the grant's epoch matches th
 int ksp_grant_mem(int child, unsigned long va, unsigned long len,
 		  const char *verbs, int across_exec);
 
+/* After seal: parent heap VA (unmapped in child) and ambient heap VA. */
+int ksp_mmu_info(int child, unsigned long *parent_heap_va,
+		 unsigned long *parent_heap_len, unsigned long *ambient_heap_va);
+/* 1=mapped under child PT, 0=hardware fault, <0 error. want_write=1 probes RW. */
+int ksp_mmu_hw_probe(int child, unsigned long va, int want_write);
+
 #endif /* KORUSPAWN_H */

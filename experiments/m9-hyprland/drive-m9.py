@@ -20,9 +20,18 @@ def wait(marker):
         time.sleep(0.2)
     L("NOT seen %r" % marker); return False
 q = None
-for _ in range(100):
-    try: q = socket.socket(socket.AF_UNIX); q.connect(out + "/qmp.sock"); break
-    except OSError: time.sleep(0.1)
+for _ in range(300):  # TCG boot can take >10s before QMP accepts
+    try:
+        q = socket.socket(socket.AF_UNIX)
+        q.settimeout(2.0)
+        q.connect(out + "/qmp.sock")
+        break
+    except OSError:
+        if q: q.close()
+        q = None
+        time.sleep(0.1)
+if q is None:
+    L("QMP connect failed"); sys.exit(2)
 f = q.makefile("rw")
 def cmd(c, a=None):
     m = {"execute": c}

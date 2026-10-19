@@ -14,7 +14,7 @@ Spawn lib acceptance status: **ready for Fabian review** (not accepted).
 
 ## Remaining
 
-- External ELF on **child CR3** still fails unikraft CRT/exception paths that touch the parent heap before the first syscall leave hook. `spawn-elf` keeps a derived+bound PT (rung=2) and runs the ELF on the parent CR3 until that path is CRT-safe. Gaps harness proves HW isolation.
+- External ELF runs on **child CR3** (see below).
 - Q33 open → keep pushes to Cypoe/koru-os only; no GPL/images/WAD.
 
 ## Build / run
@@ -24,3 +24,26 @@ Spawn lib acceptance status: **ready for Fabian review** (not accepted).
 ./run.sh /workspace/msmmu/.unikraft/build/m-spawn-mmu_qemu-x86_64 /tmp/gaps
 python3 check.py /tmp/gaps
 ```
+
+## ELF child-CR3 (gap close)
+
+**Chosen: kernel-half mapping + syscall/exception CR3 leave** (not a per-child
+allocator arena, not CR3-only without a mapped assist).
+
+Why this is the soundest of the three options:
+
+1. **Kernel-half (shared RO boot text/.bss + per-child ambient stack/heap)** —
+   `pt_clone` keeps boot-mapped unikernel text; VMA strip removes parent
+   heap/stack; `ksp_mmu_provision_ambient` dual-maps private frames into child
+   and parent PT at the same VA. The ELF entry pivots SP onto ambient, then
+   activates the child CR3. Never remap the parent heap into the child.
+2. **Syscall enter/exit CR3 leave** — already paired in `mmu.c` so unikraft
+   heap TLS/syscall paths run on the parent PT; sched leave/arrive for yields.
+3. **Rejected: per-child allocator arena alone** — does not stop CRT/auxv from
+   chasing parent pointers, and would still require parent heap pages in the
+   child PT (the gap). **Rejected: CR3 switch alone without ambient assist** —
+   exception/CRT paths need a mapped stack before the first leave hook.
+
+AT_RANDOM and AT_EXECFN are copied onto the child stack (`lib/koruelf/elf_ctx.c`)
+so the static-pie CRT never dereferences parent heap through auxv.
+

@@ -1,0 +1,1023 @@
+cSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+06FC6E00+06F06E00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM..[    0.116470] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+spawn-elf: begin
+roster: 0
+
+== fork ==
+spawn-compat: fork -> refused ENOSYS (F2)
+refused: fork by holder=1 reason=address-space copy is not grantable (F2) phase=run arm=unikraft/qemu-x86_64 offered=reserve+grant+seal+start
+fork: rc=-38
+
+== E empty bag ==
+spawn: reserve child=2.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+roster: 1
+[    0.120226] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.120718] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.122223] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.123343] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.124376] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.125388] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.126413] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.127429] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.128439] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.129459] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.130475] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.132702] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x1000093000 len=0x20000 pa=0x3ed000
+mmu: ambient stack va=0x1000093000 len=0x20000 pa=0x3ed000
+[    0.133772] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x10000b3000 len=0x10000 pa=0x7e01000
+mmu: ambient heap va=0x10000b3000 len=0x10000 pa=0x7e01000
+manifest: child=2.1 mmu=derived grants_mem=0 ambient_stack=0x1000093000 ambient_heap=0x10000b3000 rung=2
+manifest: child=2.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=0 ambient=memory<=65536,clock,exit,yield
+spawn: start child=2.1 entered=yes
+spawn: path-gate child=2 path=/bin/hello
+spawn: loaded child=2.1 entry=0x10001d7360 len=36864
+[    0.144467] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x10001d5000 pages=9 mapped=9
+mmu: map_from_parent va=0x10001d5000 pages=9 mapped=9
+spawn: jumping child=2.1 ip=0x11029d sp=0x10000a2e00 mmu=1
+[    0.146424] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x400066020 domain=0x277220
+mmu: bind thread=0x400066020 domain=0x277220
+[    0.147256] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x10000c4000 pages=16 mapped=16
+mmu: map_from_parent va=0x10000c4000 pages=16 mapped=16
+spawn: map auxsp base=0x10000c4000 rc=0
+[    0.148343] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x400066000 pages=1 mapped=1
+mmu: map_from_parent va=0x400066000 pages=1 mapped=1
+[    0.149234] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407ce1000 pages=2 mapped=2
+mmu: map_from_parent va=0x407ce1000 pages=2 mapped=2
+[    0.150141] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407ce1000 pages=1 mapped=1
+mmu: map_from_parent va=0x407ce1000 pages=1 mapped=1
+spawn: map kernel-half thread=0x400066020 uktls=0x407ce1020 ectx=0x407ce1080
+spawn: gate patch call0=0x1102c5 entry=0x10001d7360 gate=0x1130d0 scratch=0x10000b3000
+spawn: mmu gate child=2.1 entry=0x10001d7360 sp=0x10000a2e00 (child CR3 via gate)
+spawn: exited child=2.1 (ppexit)
+spawn: exited child=2.1 status=0
+E: status=0
+spawn: reap child=2.1 released bag=0 roster=0
+roster: 0
+
+== G grants ==
+spawn: reserve child=3.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=3.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: grant child=3.1 as=env/TERM from=env.TERM verbs=read across_exec=0 granted_by=1 why=explicit
+refused: grant child=3.1 handle=address-space verbs=copy as=as reason=address-space copy is not grantable (F2) phase=grant
+grant: refused reason=address-space rc=-1
+[    0.164858] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.165916] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.166842] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.167671] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.168480] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.169351] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.170234] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.171107] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.171973] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.172846] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.173773] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+[    0.174929] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+[    0.175871] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+[    0.176698] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+[    0.177523] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.178743] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x10000ed000 len=0x20000 pa=0x7c14000
+mmu: ambient stack va=0x10000ed000 len=0x20000 pa=0x7c14000
+[    0.179589] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x100010d000 len=0x10000 pa=0x7c09000
+mmu: ambient heap va=0x100010d000 len=0x10000 pa=0x7c09000
+manifest: child=3.1 mmu=derived grants_mem=0 ambient_stack=0x10000ed000 ambient_heap=0x100010d000 rung=2
+manifest: child=3.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=2 ambient=memory<=65536,clock,exit,yield
+manifest: child=3.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=3.1 grant as=env/TERM from=env.TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn: start child=3.1 entered=yes
+spawn: path-gate child=3 path=/bin/hello
+spawn: loaded child=3.1 entry=0x1000231360 len=36864
+[    0.186202] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x100022f000 pages=9 mapped=9
+mmu: map_from_parent va=0x100022f000 pages=9 mapped=9
+spawn: jumping child=3.1 ip=0x11029d sp=0x10000fcdf0 mmu=1
+[    0.187449] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x407ce7020 domain=0x277220
+mmu: bind thread=0x407ce7020 domain=0x277220
+[    0.188329] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x100011e000 pages=16 mapped=16
+mmu: map_from_parent va=0x100011e000 pages=16 mapped=16
+spawn: map auxsp base=0x100011e000 rc=0
+[    0.189492] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407ce7000 pages=1 mapped=1
+mmu: map_from_parent va=0x407ce7000 pages=1 mapped=1
+[    0.190359] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x4001f2000 pages=2 mapped=2
+mmu: map_from_parent va=0x4001f2000 pages=2 mapped=2
+[    0.191195] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x4001f2000 pages=1 mapped=1
+mmu: map_from_parent va=0x4001f2000 pages=1 mapped=1
+spawn: map kernel-half thread=0x407ce7020 uktls=0x4001f2020 ectx=0x4001f2080
+spawn: gate patch call0=0x1102c5 entry=0x1000231360 gate=0x1130d0 scratch=0x100010d000
+spawn: mmu gate child=3.1 entry=0x1000231360 sp=0x10000fcdf0 (child CR3 via gate)
+child: begin pid=3
+child: fd 1 cloexec=0
+child: nopen=1
+child: env KORU_PROBE_RESULT=0x100010d000
+child: env TERM=xterm-spawn
+child: parent-heap fault ok (hw under child CR3)
+spawn: path-gate child=3 path=/etc/passwd
+refused: child=3 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=3.1 (ppexit)
+spawn: exited child=3.1 status=0
+G: status=0
+spawn: reap child=3.1 released bag=2 roster=0
+
+== M mmu ==
+spawn: reserve child=4.1 image=/bin/hello parent=1 budget=262144 bag=0 (empty by default) roster=1
+spawn: grant child=4.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: grant child=4.1 as=mem:0x407d2f000 from=parent-mem verbs=read across_exec=0 granted_by=1 why=explicit
+[    0.210950] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+[    0.211834] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.212779] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.213652] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.214651] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.215517] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.216347] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.217197] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.218105] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.218936] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.219762] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+[    0.220647] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+[    0.221570] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+[    0.222465] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+[    0.223354] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+[    0.224393] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+[    0.225408] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+[    0.226332] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+[    0.227327] ERR:  [appkoruos] <mmu.c @   62> mmu: grant va=0x407d2f000 len=0x1000 attr=0x1 cow=0 gi=1
+mmu: grant va=0x407d2f000 len=0x1000 attr=0x1 cow=0 gi=1
+[    0.228232] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.229852] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x1000147000 len=0x20000 pa=0x7ef1000
+mmu: ambient stack va=0x1000147000 len=0x20000 pa=0x7ef1000
+[    0.230745] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x1000167000 len=0x40000 pa=0x7e5d000
+mmu: ambient heap va=0x1000167000 len=0x40000 pa=0x7e5d000
+manifest: child=4.1 mmu=derived grants_mem=1 ambient_stack=0x1000147000 ambient_heap=0x1000167000 rung=2
+manifest: child=4.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=2 ambient=memory<=262144,clock,exit,yield
+manifest: child=4.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=4.1 grant as=mem:0x407d2f000 from=parent-mem verbs=read across_exec=0 granted_by=1 why=explicit
+M: parent_heap=0x400000000 len=0x7d66000 ambient=0x1000167000 ro=0x407d2f000
+M: hw_probe parent_heap rc=0 (0=fault expected)
+M: hw_probe RO-write rc=0 (0=fault expected)
+spawn: abandon (no evidence it ran) child=4.1 released bag=2 roster=0
+spawn: reserve child=5.1 image=/bin/hello parent=1 budget=262144 bag=0 (empty by default) roster=1
+spawn: grant child=5.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: grant child=5.1 as=mem:0x407d2f000 from=parent-mem verbs=read across_exec=0 granted_by=1 why=explicit
+[    0.237654] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+[    0.238600] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.239604] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.240461] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.241378] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.242309] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.243199] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.244157] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.245177] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.246124] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.246947] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+[    0.247824] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+[    0.248709] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+[    0.249591] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+[    0.250472] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+[    0.251369] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+[    0.252308] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+[    0.253193] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+[    0.254250] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+[    0.255309] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+[    0.256257] ERR:  [appkoruos] <mmu.c @   62> mmu: grant va=0x407d2f000 len=0x1000 attr=0x1 cow=0 gi=1
+mmu: grant va=0x407d2f000 len=0x1000 attr=0x1 cow=0 gi=1
+[    0.257153] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.258783] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x10001a7000 len=0x20000 pa=0x7ca7000
+mmu: ambient stack va=0x10001a7000 len=0x20000 pa=0x7ca7000
+[    0.259674] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x10001c7000 len=0x40000 pa=0x7cbb000
+mmu: ambient heap va=0x10001c7000 len=0x40000 pa=0x7cbb000
+manifest: child=5.1 mmu=derived grants_mem=1 ambient_stack=0x10001a7000 ambient_heap=0x10001c7000 rung=2
+manifest: child=5.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=2 ambient=memory<=262144,clock,exit,yield
+manifest: child=5.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=5.1 grant as=mem:0x407d2f000 from=parent-mem verbs=read across_exec=0 granted_by=1 why=explicit
+spawn: start child=5.1 entered=yes
+spawn: path-gate child=5 path=/bin/hello
+spawn: loaded child=5.1 entry=0x100031b360 len=36864
+[    0.265449] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000319000 pages=9 mapped=9
+mmu: map_from_parent va=0x1000319000 pages=9 mapped=9
+spawn: jumping child=5.1 ip=0x11029d sp=0x10001b6e00 mmu=1
+[    0.266729] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x40006e020 domain=0x277220
+mmu: bind thread=0x40006e020 domain=0x277220
+[    0.267661] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000208000 pages=16 mapped=16
+mmu: map_from_parent va=0x1000208000 pages=16 mapped=16
+spawn: map auxsp base=0x1000208000 rc=0
+[    0.268875] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x40006e000 pages=1 mapped=1
+mmu: map_from_parent va=0x40006e000 pages=1 mapped=1
+[    0.269788] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407d29000 pages=2 mapped=2
+mmu: map_from_parent va=0x407d29000 pages=2 mapped=2
+[    0.270684] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407d29000 pages=1 mapped=1
+mmu: map_from_parent va=0x407d29000 pages=1 mapped=1
+spawn: map kernel-half thread=0x40006e020 uktls=0x407d29020 ectx=0x407d29080
+spawn: gate patch call0=0x1102c5 entry=0x100031b360 gate=0x1130d0 scratch=0x10001c7000
+spawn: mmu gate child=5.1 entry=0x100031b360 sp=0x10001b6e00 (child CR3 via gate)
+child: begin pid=4
+child: fd 1 cloexec=0
+child: nopen=1
+child: env KORU_PROBE_RESULT=0x10001c7000
+child: parent-heap fault ok (hw under child CR3)
+child: attenuation RO write fault ok (hw under child CR3)
+spawn: path-gate child=5 path=/etc/passwd
+refused: child=5 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=5.1 (ppexit)
+spawn: exited child=5.1 status=0
+M: ELF status=0
+spawn: reap child=5.1 released bag=2 roster=0
+
+== R revoke ==
+spawn: reserve child=6.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=6.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+[    0.290180] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.291244] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.292362] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.293393] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.294442] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.295471] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.296483] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.297490] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.298506] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.299538] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.300561] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+[    0.301649] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+[    0.302738] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+[    0.303742] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+[    0.304770] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+[    0.305894] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+[    0.307001] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+[    0.308000] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+[    0.309019] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+[    0.310123] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+[    0.311195] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+[    0.312252] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+[    0.313323] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+[    0.314382] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+[    0.315393] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.316891] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x1000231000 len=0x20000 pa=0x7d9a000
+mmu: ambient stack va=0x1000231000 len=0x20000 pa=0x7d9a000
+[    0.317930] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x1000251000 len=0x10000 pa=0x7c6e000
+mmu: ambient heap va=0x1000251000 len=0x10000 pa=0x7c6e000
+manifest: child=6.1 mmu=derived grants_mem=0 ambient_stack=0x1000231000 ambient_heap=0x1000251000 rung=2
+manifest: child=6.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=1 ambient=memory<=65536,clock,exit,yield
+manifest: child=6.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: revoke child=6.1 grant=0 as=fd/1 epoch=1 (revoked)
+revoke: grant 0 epoch bumped before start
+spawn: start child=6.1 entered=yes
+spawn: path-gate child=6 path=/bin/hello
+spawn: loaded child=6.1 entry=0x1000375360 len=36864
+[    0.324212] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000373000 pages=9 mapped=9
+mmu: map_from_parent va=0x1000373000 pages=9 mapped=9
+spawn: jumping child=6.1 ip=0x11029d sp=0x1000240e00 mmu=1
+[    0.325604] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x4001fb020 domain=0x277220
+mmu: bind thread=0x4001fb020 domain=0x277220
+[    0.326653] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000262000 pages=16 mapped=16
+mmu: map_from_parent va=0x1000262000 pages=16 mapped=16
+spawn: map auxsp base=0x1000262000 rc=0
+[    0.328020] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x4001fb000 pages=1 mapped=1
+mmu: map_from_parent va=0x4001fb000 pages=1 mapped=1
+[    0.329041] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407d2e000 pages=2 mapped=2
+mmu: map_from_parent va=0x407d2e000 pages=2 mapped=2
+[    0.330062] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407d2e000 pages=1 mapped=1
+mmu: map_from_parent va=0x407d2e000 pages=1 mapped=1
+spawn: map kernel-half thread=0x4001fb020 uktls=0x407d2e020 ectx=0x407d2e080
+spawn: gate patch call0=0x1102c5 entry=0x1000375360 gate=0x1130d0 scratch=0x1000251000
+spawn: mmu gate child=6.1 entry=0x1000375360 sp=0x1000240e00 (child CR3 via gate)
+refused: child=6 use=fd grant=0 reason=revoked phase=run
+refused: child=6 use=fd grant=0 reason=revoked phase=run
+refused: child=6 use=fd grant=0 reason=revoked phase=run
+refused: child=6 use=fd grant=0 reason=revoked phase=run
+refused: child=6 use=fd grant=0 reason=revoked phase=run
+spawn: path-gate child=6 path=/etc/passwd
+refused: child=6 use=path path=/etc/passwd phase=run (not in bag)
+refused: child=6 use=fd grant=0 reason=revoked phase=run
+refused: child=6 use=fd grant=0 reason=revoked phase=run
+refused: child=6 use=fd grant=0 reason=revoked phase=run
+refused: child=6 use=fd grant=0 reason=revoked phase=run
+spawn: exited child=6.1 (ppexit)
+spawn: exited child=6.1 status=0
+R: status=0
+spawn: reap child=6.1 released bag=1 roster=0
+
+== X replace ==
+spawn: reserve child=7.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=7.1 as=fd/1 from=console verbs=write across_exec=1 granted_by=1 why=explicit
+spawn: grant child=7.1 as=env/TERM from=env.TERM verbs=read across_exec=0 granted_by=1 why=explicit
+[    0.350646] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.351656] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.352733] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.353746] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.354765] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.355765] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.356724] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.357678] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.358668] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.359637] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.360583] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+[    0.361600] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+[    0.362598] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+[    0.363525] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+[    0.364565] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+[    0.365637] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+[    0.366714] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+[    0.367740] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+[    0.368746] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+[    0.369817] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+[    0.370885] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+[    0.371933] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+[    0.372981] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+[    0.374057] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+[    0.375048] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+[    0.375958] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+[    0.376830] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+[    0.377716] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+[    0.378592] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.379833] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x100028b000 len=0x20000 pa=0x7d56000
+mmu: ambient stack va=0x100028b000 len=0x20000 pa=0x7d56000
+[    0.380684] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x10002ab000 len=0x10000 pa=0x7d4a000
+mmu: ambient heap va=0x10002ab000 len=0x10000 pa=0x7d4a000
+manifest: child=7.1 mmu=derived grants_mem=0 ambient_stack=0x100028b000 ambient_heap=0x10002ab000 rung=2
+manifest: child=7.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=2 ambient=memory<=65536,clock,exit,yield
+manifest: child=7.1 grant as=fd/1 from=console verbs=write across_exec=1 granted_by=1 why=explicit
+manifest: child=7.1 grant as=env/TERM from=env.TERM verbs=read across_exec=0 granted_by=1 why=explicit
+refused: replace child=7.1 reason=not held by the child itself phase=replace
+replace: from parent rc=-1 (EPERM expected)
+spawn: start child=7.1 entered=yes
+spawn: path-gate child=7 path=/bin/hello
+spawn: loaded child=7.1 entry=0x10003cf360 len=36864
+[    0.387410] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x10003cd000 pages=9 mapped=9
+mmu: map_from_parent va=0x10003cd000 pages=9 mapped=9
+spawn: jumping child=7.1 ip=0x11029d sp=0x100029adf0 mmu=1
+[    0.388553] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x407d2f020 domain=0x277220
+mmu: bind thread=0x407d2f020 domain=0x277220
+[    0.389393] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x10002bc000 pages=16 mapped=16
+mmu: map_from_parent va=0x10002bc000 pages=16 mapped=16
+spawn: map auxsp base=0x10002bc000 rc=0
+[    0.390545] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407d2f000 pages=1 mapped=1
+mmu: map_from_parent va=0x407d2f000 pages=1 mapped=1
+[    0.391420] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x400072000 pages=2 mapped=2
+mmu: map_from_parent va=0x400072000 pages=2 mapped=2
+[    0.392272] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x400072000 pages=1 mapped=1
+mmu: map_from_parent va=0x400072000 pages=1 mapped=1
+spawn: map kernel-half thread=0x407d2f020 uktls=0x400072020 ectx=0x400072080
+spawn: gate patch call0=0x1102c5 entry=0x10003cf360 gate=0x1130d0 scratch=0x10002ab000
+spawn: mmu gate child=7.1 entry=0x10003cf360 sp=0x100029adf0 (child CR3 via gate)
+child: begin pid=6
+child: fd 1 cloexec=0
+child: nopen=1
+child: env KORU_PROBE_RESULT=0x10002ab000
+child: env TERM=keep-me
+child: parent-heap fault ok (hw under child CR3)
+spawn: path-gate child=7 path=/etc/passwd
+refused: child=7 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=7.1 (ppexit)
+spawn: exited child=7.1 status=0
+X: status=0
+spawn: reap child=7.1 released bag=2 roster=0
+
+== D detach ==
+spawn: reserve child=8.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=8.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+[    0.409703] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.410602] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.411530] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.412362] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.413217] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.414218] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.415148] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.415970] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.416798] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.417629] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.418462] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+[    0.419343] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+[    0.420218] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+[    0.421051] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+[    0.421885] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+[    0.422764] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+[    0.423881] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+[    0.424890] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+[    0.425814] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+[    0.426693] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+[    0.427566] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+[    0.428448] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+[    0.429332] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+[    0.430193] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+[    0.431024] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+[    0.432021] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+[    0.433025] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+[    0.433989] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+[    0.434999] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100028b000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x100028b000 len=0x20000 name=child-ambient-stack rc=0
+[    0.435974] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002ab000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10002ab000 len=0x10000 name=child-ambient-heap rc=0
+[    0.436916] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002bb000 len=0x15000 name=- rc=0
+mmu: strip va=0x10002bb000 len=0x15000 name=- rc=0
+[    0.437825] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002d0000 len=0x15000 name=- rc=0
+mmu: strip va=0x10002d0000 len=0x15000 name=- rc=0
+[    0.438654] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.439856] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x10002e5000 len=0x20000 pa=0x434000
+mmu: ambient stack va=0x10002e5000 len=0x20000 pa=0x434000
+[    0.440728] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x1000305000 len=0x10000 pa=0x428000
+mmu: ambient heap va=0x1000305000 len=0x10000 pa=0x428000
+manifest: child=8.1 mmu=derived grants_mem=0 ambient_stack=0x10002e5000 ambient_heap=0x1000305000 rung=2
+manifest: child=8.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=1 ambient=memory<=65536,clock,exit,yield
+manifest: child=8.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: detach child=8.1 supervisor=init
+detach: wait rc=-10 (ECHILD expected)
+spawn: start child=8.1 entered=yes
+spawn: path-gate child=8 path=/bin/hello
+spawn: loaded child=8.1 entry=0x1000429360 len=36864
+[    0.446455] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000427000 pages=9 mapped=9
+mmu: map_from_parent va=0x1000427000 pages=9 mapped=9
+spawn: jumping child=8.1 ip=0x11029d sp=0x10002f4e00 mmu=1
+[    0.447601] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x400076020 domain=0x277220
+mmu: bind thread=0x400076020 domain=0x277220
+[    0.448424] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000316000 pages=16 mapped=16
+mmu: map_from_parent va=0x1000316000 pages=16 mapped=16
+spawn: map auxsp base=0x1000316000 rc=0
+[    0.449533] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x400076000 pages=1 mapped=1
+mmu: map_from_parent va=0x400076000 pages=1 mapped=1
+[    0.450367] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x40007a000 pages=2 mapped=2
+mmu: map_from_parent va=0x40007a000 pages=2 mapped=2
+[    0.451200] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x40007a000 pages=1 mapped=1
+mmu: map_from_parent va=0x40007a000 pages=1 mapped=1
+spawn: map kernel-half thread=0x400076020 uktls=0x40007a020 ectx=0x40007a080
+spawn: gate patch call0=0x1102c5 entry=0x1000429360 gate=0x1130d0 scratch=0x1000305000
+spawn: mmu gate child=8.1 entry=0x1000429360 sp=0x10002f4e00 (child CR3 via gate)
+child: begin pid=7
+child: fd 1 cloexec=0
+child: nopen=1
+child: env KORU_PROBE_RESULT=0x1000305000
+child: parent-heap fault ok (hw under child CR3)
+spawn: path-gate child=8 path=/etc/passwd
+refused: child=8 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=8.1 (ppexit)
+spawn: reap child=8.1 released bag=1 roster=0
+roster: 0
+
+== N nested ==
+spawn: reserve child=9.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=9.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+nested: parent grant verbs=write; re-grant write+admin refused by attenuation
+[    0.468347] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.469228] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.470170] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.471010] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.471830] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.472653] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.473500] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.474573] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.475461] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.476329] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.477183] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+[    0.478068] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+[    0.478936] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+[    0.479757] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+[    0.480580] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+[    0.481463] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+[    0.482338] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+[    0.483164] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+[    0.484156] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+[    0.485159] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+[    0.486106] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+[    0.487014] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+[    0.487893] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+[    0.488746] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+[    0.489649] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+[    0.490562] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+[    0.491440] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+[    0.492279] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+[    0.493204] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100028b000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x100028b000 len=0x20000 name=child-ambient-stack rc=0
+[    0.494309] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002ab000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10002ab000 len=0x10000 name=child-ambient-heap rc=0
+[    0.495373] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002bb000 len=0x15000 name=- rc=0
+mmu: strip va=0x10002bb000 len=0x15000 name=- rc=0
+[    0.496248] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002d0000 len=0x15000 name=- rc=0
+mmu: strip va=0x10002d0000 len=0x15000 name=- rc=0
+[    0.497072] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002e5000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10002e5000 len=0x20000 name=child-ambient-stack rc=0
+[    0.498011] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000305000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000305000 len=0x10000 name=child-ambient-heap rc=0
+[    0.498921] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000315000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000315000 len=0x15000 name=- rc=0
+[    0.499757] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100032a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100032a000 len=0x15000 name=- rc=0
+[    0.500645] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.501936] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x100033f000 len=0x20000 pa=0x416000
+mmu: ambient stack va=0x100033f000 len=0x20000 pa=0x416000
+[    0.502841] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x100035f000 len=0x10000 pa=0x7dfe000
+mmu: ambient heap va=0x100035f000 len=0x10000 pa=0x7dfe000
+manifest: child=9.1 mmu=derived grants_mem=0 ambient_stack=0x100033f000 ambient_heap=0x100035f000 rung=2
+manifest: child=9.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=1 ambient=memory<=65536,clock,exit,yield
+manifest: child=9.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn: start child=9.1 entered=yes
+spawn: path-gate child=9 path=/bin/hello
+spawn: loaded child=9.1 entry=0x1000483360 len=36864
+[    0.508129] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000481000 pages=9 mapped=9
+mmu: map_from_parent va=0x1000481000 pages=9 mapped=9
+spawn: jumping child=9.1 ip=0x11029d sp=0x100034ee00 mmu=1
+[    0.509363] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x400068020 domain=0x277220
+mmu: bind thread=0x400068020 domain=0x277220
+[    0.510234] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000370000 pages=16 mapped=16
+mmu: map_from_parent va=0x1000370000 pages=16 mapped=16
+spawn: map auxsp base=0x1000370000 rc=0
+[    0.511345] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x400068000 pages=1 mapped=1
+mmu: map_from_parent va=0x400068000 pages=1 mapped=1
+[    0.512179] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407cf3000 pages=2 mapped=2
+mmu: map_from_parent va=0x407cf3000 pages=2 mapped=2
+[    0.513034] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407cf3000 pages=1 mapped=1
+mmu: map_from_parent va=0x407cf3000 pages=1 mapped=1
+spawn: map kernel-half thread=0x400068020 uktls=0x407cf3020 ectx=0x407cf3080
+spawn: gate patch call0=0x1102c5 entry=0x1000483360 gate=0x1130d0 scratch=0x100035f000
+spawn: mmu gate child=9.1 entry=0x1000483360 sp=0x100034ee00 (child CR3 via gate)
+child: begin pid=8
+child: fd 1 cloexec=0
+child: nopen=1
+child: env KORU_PROBE_RESULT=0x100035f000
+child: parent-heap fault ok (hw under child CR3)
+spawn: path-gate child=9 path=/etc/passwd
+refused: child=9 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=9.1 (ppexit)
+spawn: exited child=9.1 status=0
+spawn: reap child=9.1 released bag=1 roster=0
+N: status=0
+
+== C posix_spawn ==
+spawn-compat: posix_spawn path=/bin/hello
+spawn: reserve child=10.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=10.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn-compat: posix_spawn grant as=fd/1 why=posix-inherit
+spawn: grant child=10.1 as=env/TERM from=TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn-compat: posix_spawn grant as=env/TERM why=posix-inherit
+[    0.532924] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.534028] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.535188] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.536237] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.537266] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.538293] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.539303] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.540331] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.541347] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.542384] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.543411] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+[    0.544525] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+[    0.545622] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+[    0.546661] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+[    0.547681] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+[    0.548742] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+[    0.549816] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+[    0.550817] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+[    0.551809] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+[    0.552869] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+[    0.553966] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+[    0.555040] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+[    0.556065] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+[    0.556999] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+[    0.557943] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+[    0.558938] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+[    0.559932] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+[    0.560825] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+[    0.561730] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100028b000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x100028b000 len=0x20000 name=child-ambient-stack rc=0
+[    0.562708] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002ab000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10002ab000 len=0x10000 name=child-ambient-heap rc=0
+[    0.563772] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002bb000 len=0x15000 name=- rc=0
+mmu: strip va=0x10002bb000 len=0x15000 name=- rc=0
+[    0.564845] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002d0000 len=0x15000 name=- rc=0
+mmu: strip va=0x10002d0000 len=0x15000 name=- rc=0
+[    0.565914] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002e5000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10002e5000 len=0x20000 name=child-ambient-stack rc=0
+[    0.566993] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000305000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000305000 len=0x10000 name=child-ambient-heap rc=0
+[    0.568017] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000315000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000315000 len=0x15000 name=- rc=0
+[    0.568990] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100032a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100032a000 len=0x15000 name=- rc=0
+[    0.569991] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100033f000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x100033f000 len=0x20000 name=child-ambient-stack rc=0
+[    0.571019] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100035f000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100035f000 len=0x10000 name=child-ambient-heap rc=0
+[    0.572050] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100036f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100036f000 len=0x15000 name=- rc=0
+[    0.573029] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000384000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000384000 len=0x15000 name=- rc=0
+[    0.574106] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.575598] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x1000399000 len=0x20000 pa=0x50c000
+mmu: ambient stack va=0x1000399000 len=0x20000 pa=0x50c000
+[    0.576653] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x10003b9000 len=0x10000 pa=0x4b8000
+mmu: ambient heap va=0x10003b9000 len=0x10000 pa=0x4b8000
+manifest: child=10.1 mmu=derived grants_mem=0 ambient_stack=0x1000399000 ambient_heap=0x10003b9000 rung=2
+manifest: child=10.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=2 ambient=memory<=65536,clock,exit,yield
+manifest: child=10.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=10.1 grant as=env/TERM from=TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn: start child=10.1 entered=yes
+spawn: path-gate child=10 path=/bin/hello
+spawn: loaded child=10.1 entry=0x10004dd360 len=36864
+[    0.582965] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x10004db000 pages=9 mapped=9
+mmu: map_from_parent va=0x10004db000 pages=9 mapped=9
+spawn: jumping child=10.1 ip=0x11029d sp=0x10003a8df0 mmu=1
+[    0.584386] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x407d3d020 domain=0x277220
+mmu: bind thread=0x407d3d020 domain=0x277220
+[    0.585393] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x10003ca000 pages=16 mapped=16
+mmu: map_from_parent va=0x10003ca000 pages=16 mapped=16
+spawn: map auxsp base=0x10003ca000 rc=0
+[    0.586702] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407d3d000 pages=1 mapped=1
+mmu: map_from_parent va=0x407d3d000 pages=1 mapped=1
+[    0.587722] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407d32000 pages=2 mapped=2
+mmu: map_from_parent va=0x407d32000 pages=2 mapped=2
+[    0.588737] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407d32000 pages=1 mapped=1
+mmu: map_from_parent va=0x407d32000 pages=1 mapped=1
+spawn: map kernel-half thread=0x407d3d020 uktls=0x407d32020 ectx=0x407d32080
+spawn: gate patch call0=0x1102c5 entry=0x10004dd360 gate=0x1130d0 scratch=0x10003b9000
+spawn: mmu gate child=10.1 entry=0x10004dd360 sp=0x10003a8df0 (child CR3 via gate)
+child: begin pid=9
+child: fd 1 cloexec=0
+child: nopen=1
+child: env KORU_PROBE_RESULT=0x10003b9000
+child: env TERM=xterm-spawn
+child: parent-heap fault ok (hw under child CR3)
+spawn: path-gate child=10 path=/etc/passwd
+refused: child=10 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=10.1 (ppexit)
+spawn: exited child=10.1 status=0
+spawn: reap child=10.1 released bag=2 roster=0
+posix_spawn: status=0
+
+== C vfork+execve ==
+spawn-compat: vfork-window path=/bin/hello (vfork child is not yet a Spawn child; execve becomes reserve+grant+seal+start)
+spawn-compat: vfork+execve path=/bin/hello
+spawn: reserve child=11.1 image=/bin/hello parent=1 budget=65536 bag=0 (empty by default) roster=1
+spawn: grant child=11.1 as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+spawn-compat: vfork+execve grant as=fd/1 why=posix-inherit
+spawn: grant child=11.1 as=env/TERM from=TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn-compat: vfork+execve grant as=env/TERM why=posix-inherit
+[    0.610848] ERR:  [appkoruos] <mmu.c @   62> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.611931] ERR:  [appkoruos] <mmu.c @   62> mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7d66000 (will unmap in child)
+[    0.613058] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7d66000 name=heap rc=0
+[    0.614120] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.615156] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.616161] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x15000 name=- rc=0
+[    0.617185] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100003f000 len=0x15000 name=- rc=0
+[    0.618224] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000054000 len=0x15000 name=- rc=0
+[    0.619227] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000069000 len=0x15000 name=- rc=0
+[    0.620236] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+mmu: strip va=0x100007e000 len=0x15000 name=- rc=0
+[    0.621247] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000093000 len=0x20000 name=child-ambient-stack rc=0
+[    0.622322] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000b3000 len=0x10000 name=child-ambient-heap rc=0
+[    0.623420] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000c3000 len=0x15000 name=- rc=0
+[    0.624452] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+mmu: strip va=0x10000d8000 len=0x15000 name=- rc=0
+[    0.625415] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ed000 len=0x20000 name=child-ambient-stack rc=0
+[    0.626381] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100010d000 len=0x10000 name=child-ambient-heap rc=0
+[    0.627280] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+mmu: strip va=0x100011d000 len=0x15000 name=- rc=0
+[    0.628100] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000132000 len=0x15000 name=- rc=0
+[    0.628934] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000147000 len=0x20000 name=child-ambient-stack rc=0
+[    0.629890] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000167000 len=0x40000 name=child-ambient-heap rc=0
+[    0.630786] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10001a7000 len=0x20000 name=child-ambient-stack rc=0
+[    0.631671] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+mmu: strip va=0x10001c7000 len=0x40000 name=child-ambient-heap rc=0
+[    0.632548] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000207000 len=0x15000 name=- rc=0
+[    0.633468] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+mmu: strip va=0x100021c000 len=0x15000 name=- rc=0
+[    0.634441] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000231000 len=0x20000 name=child-ambient-stack rc=0
+[    0.635367] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000251000 len=0x10000 name=child-ambient-heap rc=0
+[    0.636261] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000261000 len=0x15000 name=- rc=0
+[    0.637088] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000276000 len=0x15000 name=- rc=0
+[    0.637922] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100028b000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x100028b000 len=0x20000 name=child-ambient-stack rc=0
+[    0.638801] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002ab000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10002ab000 len=0x10000 name=child-ambient-heap rc=0
+[    0.639673] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002bb000 len=0x15000 name=- rc=0
+mmu: strip va=0x10002bb000 len=0x15000 name=- rc=0
+[    0.640496] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002d0000 len=0x15000 name=- rc=0
+mmu: strip va=0x10002d0000 len=0x15000 name=- rc=0
+[    0.641336] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10002e5000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x10002e5000 len=0x20000 name=child-ambient-stack rc=0
+[    0.642282] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000305000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x1000305000 len=0x10000 name=child-ambient-heap rc=0
+[    0.643215] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000315000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000315000 len=0x15000 name=- rc=0
+[    0.644216] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100032a000 len=0x15000 name=- rc=0
+mmu: strip va=0x100032a000 len=0x15000 name=- rc=0
+[    0.645175] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100033f000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x100033f000 len=0x20000 name=child-ambient-stack rc=0
+[    0.646096] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100035f000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100035f000 len=0x10000 name=child-ambient-heap rc=0
+[    0.646971] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x100036f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100036f000 len=0x15000 name=- rc=0
+[    0.647794] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000384000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000384000 len=0x15000 name=- rc=0
+[    0.648618] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x1000399000 len=0x20000 name=child-ambient-stack rc=0
+mmu: strip va=0x1000399000 len=0x20000 name=child-ambient-stack rc=0
+[    0.649500] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10003b9000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10003b9000 len=0x10000 name=child-ambient-heap rc=0
+[    0.650381] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10003c9000 len=0x15000 name=- rc=0
+mmu: strip va=0x10003c9000 len=0x15000 name=- rc=0
+[    0.651219] ERR:  [appkoruos] <mmu.c @   62> mmu: strip va=0x10003de000 len=0x15000 name=- rc=0
+mmu: strip va=0x10003de000 len=0x15000 name=- rc=0
+[    0.652039] ERR:  [appkoruos] <mmu.c @   62> mmu: derive done (no parent heap/stack in child PT)
+mmu: derive done (no parent heap/stack in child PT)
+[    0.653309] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient stack va=0x10003f3000 len=0x20000 pa=0x516000
+mmu: ambient stack va=0x10003f3000 len=0x20000 pa=0x516000
+[    0.654358] ERR:  [appkoruos] <mmu.c @   62> mmu: ambient heap va=0x1000413000 len=0x10000 pa=0x51b000
+mmu: ambient heap va=0x1000413000 len=0x10000 pa=0x51b000
+manifest: child=11.1 mmu=derived grants_mem=0 ambient_stack=0x10003f3000 ambient_heap=0x1000413000 rung=2
+manifest: child=11.1 image=/bin/hello parent=1 rung=2 (MMU PT from bag) bag=2 ambient=memory<=65536,clock,exit,yield
+manifest: child=11.1 grant as=fd/1 from=console verbs=write across_exec=0 granted_by=1 why=explicit
+manifest: child=11.1 grant as=env/TERM from=TERM verbs=read across_exec=0 granted_by=1 why=explicit
+spawn: start child=11.1 entered=yes
+spawn: path-gate child=11 path=/bin/hello
+spawn: loaded child=11.1 entry=0x1000537360 len=36864
+[    0.659696] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000535000 pages=9 mapped=9
+mmu: map_from_parent va=0x1000535000 pages=9 mapped=9
+spawn: jumping child=11.1 ip=0x11029d sp=0x1000402df0 mmu=1
+[    0.660875] ERR:  [appkoruos] <mmu.c @   62> mmu: bind thread=0x407d36020 domain=0x277220
+mmu: bind thread=0x407d36020 domain=0x277220
+[    0.661749] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x1000424000 pages=16 mapped=16
+mmu: map_from_parent va=0x1000424000 pages=16 mapped=16
+spawn: map auxsp base=0x1000424000 rc=0
+[    0.662854] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407d36000 pages=1 mapped=1
+mmu: map_from_parent va=0x407d36000 pages=1 mapped=1
+[    0.663811] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407cf8000 pages=2 mapped=2
+mmu: map_from_parent va=0x407cf8000 pages=2 mapped=2
+[    0.664821] ERR:  [appkoruos] <mmu.c @   62> mmu: map_from_parent va=0x407cf8000 pages=1 mapped=1
+mmu: map_from_parent va=0x407cf8000 pages=1 mapped=1
+spawn: map kernel-half thread=0x407d36020 uktls=0x407cf8020 ectx=0x407cf8080
+spawn: gate patch call0=0x1102c5 entry=0x1000537360 gate=0x1130d0 scratch=0x1000413000
+spawn: mmu gate child=11.1 entry=0x1000537360 sp=0x1000402df0 (child CR3 via gate)
+child: begin pid=10
+child: fd 1 cloexec=0
+child: nopen=1
+child: env KORU_PROBE_RESULT=0x1000413000
+child: env TERM=xterm-spawn
+child: parent-heap fault ok (hw under child CR3)
+spawn: path-gate child=11 path=/etc/passwd
+refused: child=11 use=path path=/etc/passwd phase=run (not in bag)
+child: path /etc/passwd refused errno=13
+child: hello from an external ELF
+child: stderr absent (empty by default)
+child: done
+spawn: exited child=11.1 (ppexit)
+spawn: exited child=11.1 status=0
+spawn: reap child=11.1 released bag=2 roster=0
+vfork+execve: status=0
+roster: 0
+spawn-elf: done
+[

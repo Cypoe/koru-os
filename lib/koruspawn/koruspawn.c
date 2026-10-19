@@ -460,6 +460,78 @@ int ksp_grant_mem(int child, unsigned long va, unsigned long len,
 }
 
 #if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+int ksp_mmu_info(int child, unsigned long *parent_heap_va,
+		 unsigned long *parent_heap_len, unsigned long *ambient_heap_va)
+{
+	struct ksp_rec *r = find(child);
+
+	if (!r || !r->mmu.live)
+		return -EINVAL;
+	if (parent_heap_va)
+		*parent_heap_va = (unsigned long)r->mmu.parent_heap_va;
+	if (parent_heap_len)
+		*parent_heap_len = (unsigned long)r->mmu.parent_heap_len;
+	if (ambient_heap_va)
+		*ambient_heap_va = (unsigned long)r->mmu.heap_va;
+	return 0;
+}
+
+/* Hardware probe under the child's PT (SP on ambient). 1=ok, 0=fault, <0 err. */
+static struct ksp_mmu_domain *g_probe_dom;
+static volatile unsigned long g_probe_va;
+static volatile int g_probe_write;
+static volatile __sz g_probe_n;
+static volatile int g_probe_act_rc;
+
+static void __attribute__((noinline)) ksp_mmu_hw_probe_on_ambient(void)
+{
+	g_probe_act_rc = ksp_mmu_activate(g_probe_dom);
+	if (g_probe_act_rc == 0) {
+		if (g_probe_write)
+			g_probe_n = ksp_mmu_probe_rw((__vaddr_t)g_probe_va, 1);
+		else
+			g_probe_n = ksp_mmu_probe_r((__vaddr_t)g_probe_va, 1);
+		(void)ksp_mmu_deactivate(g_probe_dom);
+	}
+}
+
+int ksp_mmu_hw_probe(int child, unsigned long va, int want_write)
+{
+	struct ksp_rec *r = find(child);
+	__vaddr_t tramp, saved;
+
+	if (!r || !r->mmu.live || !r->mmu.stack_va)
+		return -EINVAL;
+	g_probe_dom = &r->mmu;
+	g_probe_va = va;
+	g_probe_write = want_write ? 1 : 0;
+	g_probe_n = 0;
+	g_probe_act_rc = -1;
+	tramp = ukarch_gen_sp((__uptr)r->mmu.stack_va + r->mmu.stack_len / 2,
+			      r->mmu.stack_len / 2);
+#if defined(__x86_64__)
+	__asm__ volatile("mov %%rsp, %0" : "=r"(saved));
+	__asm__ volatile("mov %0, %%rsp" : : "r"(tramp) : "memory");
+	ksp_mmu_nofault_begin();
+	ksp_mmu_hw_probe_on_ambient();
+	ksp_mmu_nofault_end();
+	__asm__ volatile("mov %0, %%rsp" : : "r"(saved) : "memory");
+#else
+	(void)tramp;
+	(void)saved;
+	ksp_mmu_nofault_begin();
+	ksp_mmu_hw_probe_on_ambient();
+	ksp_mmu_nofault_end();
+#endif
+	if (g_probe_act_rc != 0)
+		return -EIO;
+	return g_probe_n > 0 ? 1 : 0;
+}
+
+#endif
+
+
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
 static int seal_derive_mmu(struct ksp_rec *r)
 {
 	struct uk_vas *vas = uk_vas_get_active();
@@ -570,6 +642,16 @@ static int install_bag(struct ksp_rec *r)
 
 	/* Clear the environment; re-add only what the bag grants (F5). */
 	clearenv();
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+	/* Ambient heap holds gate-time HW probe results for ELF children. */
+	if (r->mmu.live && r->mmu.heap_va) {
+		char pbuf[32];
+
+		snprintf(pbuf, sizeof(pbuf), "0x%lx",
+			 (unsigned long)r->mmu.heap_va);
+		setenv("KORU_PROBE_RESULT", pbuf, 1);
+	}
+#endif
 
 	for (i = 0; i < r->nbag; i++) {
 		struct ksp_grant *g = &r->bag[i].g;
@@ -608,6 +690,82 @@ static int install_bag(struct ksp_rec *r)
 	}
 	return 0;
 }
+
+
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+/* .bss: boot-mapped. Gate runs after ctx_switch (parent CR3), then activates. */
+static struct {
+	struct ksp_mmu_domain *dom;
+	__uptr real_ip;
+	__uptr scratch_sp; /* ambient upper half; activate may use C stack */
+	/* Fields below must not shift scratch_sp (asm uses +16). */
+	__vaddr_t probe_heap;
+	__vaddr_t probe_ro;
+	__vaddr_t result_va;
+} g_elf_gate;
+
+#define KSP_PROBE_MAGIC 0x4B535052554C54ULL
+
+int ksp_elf_gate_activate(void)
+{
+	__sz n;
+	volatile unsigned long *res;
+
+	if (!g_elf_gate.dom || !g_elf_gate.dom->live)
+		return -EINVAL;
+	if (ksp_mmu_activate(g_elf_gate.dom))
+		return -EFAULT;
+	if (g_elf_gate.result_va) {
+		res = (volatile unsigned long *)g_elf_gate.result_va;
+		res[0] = res[1] = res[2] = 0;
+		res[3] = KSP_PROBE_MAGIC;
+		if (g_elf_gate.probe_heap) {
+			n = ksp_mmu_probe_r(g_elf_gate.probe_heap, 1);
+			res[0] = (n == 0) ? 1 : 0;
+		}
+		if (g_elf_gate.probe_ro) {
+			n = ksp_mmu_probe_r(g_elf_gate.probe_ro, 1);
+			res[1] = (n >= 1) ? 1 : 0;
+			n = ksp_mmu_probe_rw(g_elf_gate.probe_ro, 1);
+			res[2] = (n == 0) ? 1 : 0;
+		}
+	}
+	return 0;
+}
+
+/*
+ * Landed via clearregs→call0→here with the ELF auxv stack already installed.
+ * Switch to scratch SP for activate (C), restore auxv SP, jmp to ELF entry.
+ * Struct layout: dom@0, real_ip@8, scratch_sp@16.
+ */
+#if defined(__x86_64__)
+static void __noreturn __attribute__((naked)) ksp_elf_cr3_gate(void)
+{
+	__asm__ volatile(
+		"movq %rsp, %r15\n\t"              /* save auxv SP */
+		"movq g_elf_gate+16(%rip), %rsp\n\t" /* scratch */
+		"call ksp_elf_gate_activate\n\t"
+		"test %eax, %eax\n\t"
+		"jnz 1f\n\t"
+		"movq %r15, %rsp\n\t"              /* restore auxv */
+		"movq g_elf_gate+8(%rip), %rax\n\t"
+		"jmp *%rax\n\t"
+		"1:\n\t"
+		"mov $127, %edi\n\t"
+		"call uk_syscall_r_exit_group\n\t"
+		"ud2\n\t"
+	);
+}
+#else
+static void __noreturn __attribute__((noinline)) ksp_elf_cr3_gate(void)
+{
+	if (ksp_elf_gate_activate())
+		uk_syscall_r_exit_group(127);
+	uk_syscall_r_exit_group(127);
+	UK_BUG();
+}
+#endif
+#endif
 
 /* Child body for uk_posix_process_run: install bag, load ELF, jump. */
 static void __noreturn child_main(void *argc_v, void *argv_v)
@@ -707,16 +865,89 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 #if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
 	if (r->mmu.live) {
 		/*
-		 * PT derived (parent heap/stack stripped, ambient stack/heap, ELF
-		 * pages, thread bound). Child-CR3 for external ELF still fails in
-		 * unikraft CRT/exception paths that touch parent heap before the
-		 * first syscall leave; gaps 1–3 prove HW isolation. Run ELF on
-		 * parent CR3 with ambient stack; sched bind ready for arrive.
+		 * Kernel-half + syscall CR3 leave (chosen path):
+		 * - boot/.bss/text kept by pt_clone (not VMA-stripped)
+		 * - ambient stack+heap dual-mapped (never parent heap)
+		 * - syscall enter/exit leave/restore parent CR3
+		 * ctx_switch stays on parent CR3 (ectx/thread heap). The gate
+		 * (boot text) activates child CR3, then jmps to the ELF entry
+		 * with the auxv stack already installed.
 		 */
+		__uptr *slot;
+
 		ksp_mmu_bind_thread(me, &r->mmu);
-		ksp_log("spawn: mmu ready child=%d.%d ip=%p sp=%p (PT derived; ELF parent CR3)",
-			r->instance, r->generation, (void *)me->ctx.ip,
-			(void *)me->ctx.sp);
+		/*
+		 * Syscall entry swaps onto thread auxsp before entertab leave.
+		 * Map that aux stack into the child PT (same VA, dual-map).
+		 */
+		if (me->auxsp) {
+			__vaddr_t abase = (__vaddr_t)me->auxsp - AUXSTACK_SIZE;
+			int arc = ksp_mmu_map_from_parent(
+				&r->mmu, abase, AUXSTACK_SIZE,
+				UK_PAGING_PAGE_ATTR_PROT_RW);
+			ksp_log("spawn: map auxsp base=0x%lx rc=%d",
+				(unsigned long)abase, arc);
+		}
+		/*
+		 * Kernel-half metadata: syscall path reads uk_thread + UKTLS
+		 * before entertab can leave to parent CR3. Map only those
+		 * pages (not the parent heap VMA). Ambient stack/heap remain
+		 * the child's private scratch.
+		 */
+		{
+			__vaddr_t pg = (__vaddr_t)me & ~(UK_PAGING_PAGE_SIZE - 1);
+			(void)ksp_mmu_map_from_parent(
+				&r->mmu, pg, UK_PAGING_PAGE_SIZE,
+				UK_PAGING_PAGE_ATTR_PROT_RW);
+			if (me->_mem.uktls) {
+				__vaddr_t tbase =
+					(__vaddr_t)me->_mem.uktls &
+					~(UK_PAGING_PAGE_SIZE - 1);
+				__sz tlen = UK_PAGING_PAGE_SIZE * 2;
+				(void)ksp_mmu_map_from_parent(
+					&r->mmu, tbase, tlen,
+					UK_PAGING_PAGE_ATTR_PROT_RW);
+			}
+			if (me->ectx) {
+				__vaddr_t ebase =
+					(__vaddr_t)me->ectx &
+					~(UK_PAGING_PAGE_SIZE - 1);
+				(void)ksp_mmu_map_from_parent(
+					&r->mmu, ebase, UK_PAGING_PAGE_SIZE,
+					UK_PAGING_PAGE_ATTR_PROT_RW);
+			}
+			ksp_log("spawn: map kernel-half thread=%p uktls=%p ectx=%p",
+				(void *)me, me->_mem.uktls, (void *)me->ectx);
+		}
+		/*
+		 * elf_ctx_init left: sp → [call0][entry][argc…]; ip = clearregs.
+		 * Replace entry with the CR3 gate; gate jmps to real entry.
+		 */
+		slot = (__uptr *)elfctx.sp;
+		/* stack: [0]=call0, [1]=entry (see ukarch_ctx_init) */
+		g_elf_gate.real_ip = slot[1];
+		g_elf_gate.dom = &r->mmu;
+		g_elf_gate.scratch_sp = ukarch_gen_sp(
+			(__uptr)stack_new + STACK_SIZE, STACK_SIZE);
+		g_elf_gate.probe_heap = r->mmu.parent_heap_va;
+		g_elf_gate.probe_ro = 0;
+		g_elf_gate.result_va = 0;
+		if (r->mmu.heap_va && r->mmu.heap_len >= 64) {
+			g_elf_gate.result_va = r->mmu.heap_va;
+			if (r->nmem &&
+			    !(r->mem[0].attr & UK_PAGING_PAGE_ATTR_PROT_WRITE))
+				g_elf_gate.probe_ro = r->mem[0].va;
+		}
+		ksp_log("spawn: gate patch call0=%p entry=%p gate=%p scratch=%p",
+			(void *)slot[0], (void *)slot[1], (void *)ksp_elf_cr3_gate,
+			(void *)g_elf_gate.scratch_sp);
+		slot[1] = (__uptr)ksp_elf_cr3_gate;
+		me->ctx = elfctx;
+		ksp_log("spawn: mmu gate child=%d.%d entry=%p sp=%p (child CR3 via gate)",
+			r->instance, r->generation, (void *)g_elf_gate.real_ip,
+			(void *)elfctx.sp);
+		ukarch_ctx_switch(&junk, &elfctx);
+		uk_syscall_r_exit_group(0); UK_BUG();
 	}
 #endif
 	ukarch_ctx_switch(&junk, &me->ctx);

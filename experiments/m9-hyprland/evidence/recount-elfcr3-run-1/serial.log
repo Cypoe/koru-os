@@ -1,0 +1,455 @@
+[    0.110828] ERR:  [appkoruos] <evdev_linux.c @  421> koru-os: INFO input rows bound: /dev/input/event0 -> koru-os i8042 keyboard (set 1)
+[    0.111876] ERR:  [appkoruos] <ps2kbd.c @  280> koru-os: INFO input.ps2: i8042 cfg 0x71 -> 0x61, enable-scan ack 0xfa, IRQ 1, bind 0
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=51 blocks=410072 free=98963 inodes=16728 free=15325
+[    0.135265] ERR:  [appkoruos] <korusysfs.c @  205> koru-os: INFO sysfs view on /sys: 60 entries, 0 errors
+[    0.142362] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.188045] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.188584] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.189020] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.189213] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    0.192586] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.195667] ERR:  [libposix_process] <deprecated.c @  302> koru-os: STUBBED __uk_syscall_r_prctl()
+[    0.238183] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.238461] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.238762] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.238963] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    0.241180] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.277959] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.278114] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.278408] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.278609] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    0.281102] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.324737] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.324931] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.325291] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.325533] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    0.327962] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+m9-init: start
+[    0.381778] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.381981] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.382347] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.382591] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    0.385134] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+m9-init: korupty shell ready
+[    0.658027] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    1.693290] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    1.693682] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    1.871358] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    1.894502] ERR:  [libuksched] <sched.c @  434> koru-os: STUBBED __uk_syscall_r_sched_getaffinity()
+[    2.023773] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS sched_get_priority_min (nr 147)
+[    2.024083] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS sched_getparam (nr 143)
+[    2.024291] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS sched_getscheduler (nr 145)
+[    2.031642] ERR:  [libposix_process] <deprecated.c @  337> Ignore updating resource 7: cur = 1024, max = 1024
+[    2.034685] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS signalfd4 (nr 289)
+[    2.057004] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS inotify_init1 (nr 294)
+[    2.114080] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS clone3 (nr 435)
+[    2.130072] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    2.171258] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    2.171456] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    2.171991] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    2.172188] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    2.174599] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    2.316863] ERR:  [appkoruos] <drm_linux.c @  116> koru-os: REFUSED linux.ioctl.DRM_IOCTL_SET_CLIENT_CAP cap 3 (kms)
+[    2.343839] ERR:  [appkoruos] <drm_linux.c @  119> koru-os: REFUSED linux.ioctl.DRM_IOCTL_nr_0xc6 (kms)
+[    5.607425] ERR:  [appkoruos] <drm_linux.c @  119> koru-os: REFUSED linux.ioctl.DRM_IOCTL_nr_0xc6 (kms)
+[    6.073815] ERR:  [libposix_process] <clone.c @  216> CLONE_VM not set: Multiple address spaces are not supported
+[    7.706900] ERR:  [appkoruos] <evdev_linux.c @  144> koru-os: REFUSED linux.ioctl.0xc0406400 (evdev)
+[    8.610360] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    8.891651] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    8.891900] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    8.893234] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    8.893490] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    8.895892] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   11.913386] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   11.913632] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   11.914647] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   11.914865] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   11.917168] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   15.907862] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS faccessat2 (nr 439)
+[   15.919308] ERR:  [appkoruos] <korumemfd.c @   85> koru-os: INFO memfd slot 2: 4 KiB (memfd total 4 KiB)
+[   16.023094] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   16.023336] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   16.024536] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   16.024802] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   16.027363] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   16.115348] ERR:  [appkoruos] <korumemfd.c @   85> koru-os: INFO memfd slot 3: 36 KiB (memfd total 40 KiB)
+[   16.116278] ERR:  [appkoruos] <korumemfd.c @   85> koru-os: INFO memfd slot 4: 36 KiB (memfd total 76 KiB)
+[   16.180035] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS inotify_add_watch (nr 254)
+[   18.300580] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   18.300854] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   18.301861] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   18.302068] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   18.304637] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+m9-init: compositor ready after 2s
+[   19.086126] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   19.086343] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   19.087362] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   19.087603] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   19.090085] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   19.146144] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   19.146363] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   19.147492] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   19.147753] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   19.150143] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   19.762593] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   19.762835] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   19.763940] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   19.764144] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   19.766495] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+m9-init: signature efb50993780079460b0cbed1363e2166a2de1d9f_1792441196_829783401
+[   20.408041] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   20.408411] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   20.410150] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   20.410475] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   20.412997] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+DEBUG ]: Hypr socket started at /tmp/xdg/hypr/efb50993780079460b0cbed1363e2166a2de1d9f_1792441196_829783401/.socket.sock
+m9-init: monitors begin
+[   21.013877] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   21.370791] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   21.371077] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   21.405900] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   21.417147] ERR:  [libposix_unixsocket] <unixsock.c @  495> STUB: accept4 flags 0x80000
+[{
+    "id": 0,
+    "name": "Virtual-1",
+    "description": "",
+    "make": "",
+    "model": "",
+    "serial": "",
+    "width": 1280,
+    "height": 800,
+    "physicalWidth": 325,
+    "physicalHeight": 203,
+    "refreshRate": 74.99400,
+    "x": 0,
+    "y": 0,
+    "activeWorkspace": {
+        "id": 1,
+        "name": "1"
+    },
+    "specialWorkspace": {
+        "id": 0,
+        "name": ""
+    },
+    "reserved": [0, 0, 0, 0],
+    "scale": 1,
+    "transform": 0,
+    "focused": true,
+    "dpmsStatus": true,
+    "vrr": false,
+    "solitary": "0",
+    "solitaryBlockedBy": ["NOTIFICATION","WINDOWED","CANDIDATE"],
+    "activelyTearing": false,
+    "tearingBlockedBy": ["NOT_TORN","USER","CANDIDATE"],
+    "directScanoutTo": "0",
+    "directScanoutBlockedBy": ["USER","SW","CANDIDATE"],
+    "disabled": false,
+    "currentFormat": "XRGB8888",
+    "mirrorOf": "none",
+    "availableModes": ["1280x800@74.99Hz","1024x768@60.00Hz","800x600@60.32Hz","640x480@59.94Hz"],
+    "colorManagementPreset": "srgb",
+    "sdrBrightness": 1,
+    "sdrSaturation": 1,
+    "sdrMinLuminance": 0.2,
+    "sdrMaxLuminance": 80,
+    "hardwareCursorsInUse": true
+}]
+
+m9-init: monitors end
+m9-init: dispatch exec begin
+[   22.603298] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   22.951849] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   22.952108] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   22.987208] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   22.999425] ERR:  [libposix_unixsocket] <unixsock.c @  495> STUB: accept4 flags 0x80000
+[   23.009684] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS clone3 (nr 435)
+[   23.036265] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   23.305431] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   23.305716] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   23.324840] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+ok
+rc=0
+m9-init: dispatch exec end
+[   23.808253] ERR:  [libposix_unixsocket] <unixsock.c @  495> STUB: accept4 flags 0x80000
+[   24.083892] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   24.084114] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   24.085351] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   24.085575] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   24.088258] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   24.660661] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS clone3 (nr 435)
+[   24.903925] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   24.919760] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   24.930741] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   24.940373] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   24.967568] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   25.122904] ERR:  [appkoruos] <korumemfd.c @   85> koru-os: INFO memfd slot 5: 4000 KiB (memfd total 4076 KiB)
+[   25.124325] ERR:  [libvfscore] <main.c @ 1839> unsupported fcntl cmd 0x409
+[   25.982159] ERR:  [appkoruos] <korumemfd.c @   85> koru-os: INFO memfd slot 6: 3792 KiB (memfd total 7868 KiB)
+[   25.983609] ERR:  [libvfscore] <main.c @ 1839> unsupported fcntl cmd 0x409
+m9-init: clients after exec begin
+[   30.303643] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   30.771439] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   30.771775] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   30.814016] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   30.828810] ERR:  [libposix_unixsocket] <unixsock.c @  495> STUB: accept4 flags 0x80000
+[{
+    "address": "0x101d5612e0",
+    "mapped": true,
+    "hidden": false,
+    "visible": true,
+    "acceptsInput": true,
+    "at": [21, 21],
+    "size": [1238, 758],
+    "workspace": {
+        "id": 1,
+        "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "foot",
+    "title": "foot",
+    "initialClass": "foot",
+    "initialTitle": "foot",
+    "pid": 20,
+    "xwayland": false,
+    "pinned": false,
+    "pinFullscreened": false,
+    "fullscreen": 0,
+    "fullscreenClient": 0,
+    "fullscreenHandler": "default",
+    "allowedOverFullscreen": true,
+    "grouped": [],
+    "tags": [],
+    "swallowing": "0x0",
+    "focusHistoryID": 0,
+    "inhibitingIdle": false,
+    "xdgTag": "",
+    "xdgDescription": "",
+    "contentType": "none",
+    "tearingHint": false,
+    "stableId": "18000000"
+}]
+
+m9-init: clients after exec end
+[   30.875048] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.324584] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   31.324868] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   31.371513] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.385291] ERR:  [libposix_unixsocket] <unixsock.c @  495> STUB: accept4 flags 0x80000
+[   31.438613] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.438821] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.440437] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   31.440682] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   31.443543] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+m9-init: foot mapped after 0s
+m9-init: rights-census begin
+[   31.557024] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.557382] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.561171] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   31.561664] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   31.565388] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+role=foot
+fd=0 open
+fd=1 open
+fd=2 open
+fd=3 open
+fd_open_count=4
+negative_ungranted_fd200_ebadf=1
+negative_ungranted_path_eacces=1
+census_done=1
+
+m9-init: rights-census end
+[   31.644281] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.644500] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   31.646160] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   31.646369] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   31.648791] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   32.703612] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   32.703833] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   32.705798] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   32.706065] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   32.709114] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   33.771125] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   33.771379] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   33.773392] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   33.773643] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   33.776313] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   34.835451] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   34.835663] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   34.837567] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   34.837845] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   34.843584] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   35.897923] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   35.898138] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   35.899881] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   35.900090] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   35.903529] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   36.964013] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   36.964255] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   36.966352] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   36.966604] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   36.969070] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   38.025911] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   38.026206] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   38.028448] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   38.028708] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   38.032938] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   39.098886] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   39.099107] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   39.101055] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   39.101296] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   39.103948] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   40.666999] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   40.667262] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   40.668500] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   40.668747] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   40.671276] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   41.856240] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   41.856505] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   41.857941] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   41.858229] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   41.860686] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   43.028960] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   43.029220] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   43.030683] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   43.030973] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   43.033373] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   44.256457] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   44.256715] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   44.258092] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   44.258384] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   44.260937] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   45.452951] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   45.453213] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   45.454639] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   45.454936] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   45.457620] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   46.700113] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   46.700353] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   46.701703] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   46.701941] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   46.704295] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   47.880852] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   47.881084] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   47.883155] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   47.883405] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   47.885941] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+m9-init: dod3 wait 15s
+[   49.087098] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   49.087296] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   49.089144] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   49.089355] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   49.091925] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+m9-init: clients begin
+[   51.133638] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   51.739748] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   51.740027] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   51.786329] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   51.801734] ERR:  [libposix_unixsocket] <unixsock.c @  495> STUB: accept4 flags 0x80000
+[{
+    "address": "0x101d5612e0",
+    "mapped": true,
+    "hidden": false,
+    "visible": true,
+    "acceptsInput": true,
+    "at": [21, 21],
+    "size": [1238, 758],
+    "workspace": {
+        "id": 1,
+        "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "foot",
+    "title": "foot",
+    "initialClass": "foot",
+    "initialTitle": "foot",
+    "pid": 20,
+    "xwayland": false,
+    "pinned": false,
+    "pinFullscreened": false,
+    "fullscreen": 0,
+    "fullscreenClient": 0,
+    "fullscreenHandler": "default",
+    "allowedOverFullscreen": true,
+    "grouped": [],
+    "tags": [],
+    "swallowing": "0x0",
+    "focusHistoryID": 0,
+    "inhibitingIdle": false,
+    "xdgTag": "",
+    "xdgDescription": "",
+    "contentType": "none",
+    "tearingHint": false,
+    "stableId": "18000000"
+}]
+
+m9-init: clients end
+[   51.869926] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   51.870130] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   51.872341] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   51.872630] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   51.875344] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+tar: removing leading '/' from member names
+[   51.896423] ERR:  [appkoruos] <korusnap.c @  146> koru-os: INFO korusnap: 3072 bytes persisted to blkdev 1
+m9-init: snapshot written
+m9-init: foot log
+[   51.945865] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   51.946036] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   51.947858] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   51.948071] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   51.950600] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+m9-init: hyprland exec log
+[   52.010771] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   52.010943] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   52.013078] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   52.013288] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   52.015790] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   52.118674] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   52.118878] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   52.121230] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   52.121513] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   52.124244] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+871:DEBUG ]: [executor] Executing systemctl --user import-environment DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS && hash dbus-update-activation-environment 2>/dev/null && dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS
+872:spawn-compat: hyprland-fork->posix_spawn cmd=systemctl --user import-environment DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS && hash dbus-update-activation-environment 2>/dev/null && dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS (Q30 stage 2)
+873:spawn-compat: REFUSED complex shell (no fork)
+874:DEBUG ]: Fail to fork
+885:DEBUG ]: [executor] Executing systemctl --user import-environment DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS && hash dbus-update-activation-environment 2>/dev/null && dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS
+886:spawn-compat: hyprland-fork->posix_spawn cmd=systemctl --user import-environment DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS && hash dbus-update-activation-environment 2>/dev/null && dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS (Q30 stage 2)
+887:spawn-compat: REFUSED complex shell (no fork)
+888:DEBUG ]: Fail to fork
+973:DEBUG ]: [executor] Executing /usr/bin/foot --pty=/dev/korupty0
+974:spawn-compat: hyprland-fork->posix_spawn cmd=/usr/bin/foot --pty=/dev/korupty0 (Q30 stage 2)
+975:spawn-compat: policy=hyprland.children image=foot (explicit grants; not posix-inherit)
+976:spawn-compat: planted ungranted fd=51 path=/tmp/ungranted-secret (must not reach child)
+977:spawn-compat: grant as=fd/0,fd/1,fd/2 from=/dev/null verbs=read|write why=hyprland.children
+978:spawn-compat: grant as=path:/dev/korupty0 verbs=read+write why=hyprland.children (foot --pty opens it)
+979:spawn-compat: grant as=path:wayland-socket verbs=connect why=hyprland.children (via WAYLAND_DISPLAY)
+980:spawn-compat: grant as=env/PATH why=hyprland.children
+981:spawn-compat: drop env/LD_LIBRARY_PATH why=not-in-hyprland.children
+982:spawn-compat: grant as=env/HOME why=hyprland.children
+983:spawn-compat: drop env/PWD why=not-in-hyprland.children
+984:spawn-compat: drop env/HUSH_VERSION why=not-in-hyprland.children
+985:spawn-compat: grant as=env/XDG_CACHE_HOME why=hyprland.children
+986:spawn-compat: grant as=env/XDG_RUNTIME_DIR why=hyprland.children
+987:spawn-compat: grant as=env/LIBSEAT_BACKEND why=hyprland.children
+988:spawn-compat: grant as=env/LANG why=hyprland.children
+989:spawn-compat: grant as=env/SHELL why=hyprland.children
+990:spawn-compat: grant as=env/LD_PRELOAD why=hyprland.children
+991:spawn-compat: drop env/HYPRLAND_CMD why=not-in-hyprland.children
+992:spawn-compat: drop env/XDG_BACKEND why=not-in-hyprland.children
+993:spawn-compat: drop env/XDG_SESSION_TYPE why=not-in-hyprland.children
+994:spawn-compat: drop env/_JAVA_AWT_WM_NONREPARENTING why=not-in-hyprland.children
+995:spawn-compat: drop env/MOZ_ENABLE_WAYLAND why=not-in-hyprland.children
+996:spawn-compat: grant as=env/HYPRLAND_INSTANCE_SIGNATURE why=hyprland.children
+997:spawn-compat: grant as=env/WAYLAND_DISPLAY why=hyprland.children
+998:spawn-compat: drop env/XDG_CURRENT_DESKTOP why=not-in-hyprland.children
+999:spawn-compat: ok pid=20 policy=hyprland.children
+1000:DEBUG ]: [executor] Process created with pid 20
+m9-init: end
+[   52.190285] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   52.190458] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   52.192701] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   52.192941] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   52.195757] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)

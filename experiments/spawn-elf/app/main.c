@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <uk/sched.h>
 #include "koruspawn.h"
@@ -51,6 +52,54 @@ int main(void)
 	}
 	printf("G: status=%d\n", st);
 	ksp_reap(c);
+
+	section("M mmu");
+	{
+		unsigned long parent_heap = 0, parent_hlen = 0, amb = 0;
+		unsigned long ro_va = 0;
+		char heap_env[64], ro_env[64];
+		void *ro_page;
+		int pr, pw;
+
+		if (posix_memalign(&ro_page, 4096, 4096)) { printf("FAIL mmu alloc\n"); return 1; }
+		memset(ro_page, 0xA5, 4096);
+		ro_va = (unsigned long)ro_page;
+		c = ksp_reserve("/bin/hello", 256 * 1024);
+		g = (struct ksp_grant){ .as="fd/1", .from="console", .verbs="write",
+					.value="console", .across_exec=0 };
+		if (ksp_grant(c, &g)) { printf("FAIL M fd\n"); return 1; }
+		if (ksp_grant_mem(c, ro_va, 4096, "read", 0)) {
+			printf("FAIL M grant_mem RO\n"); return 1;
+		}
+		if (ksp_seal(c)) { printf("FAIL M seal\n"); return 1; }
+		if (ksp_mmu_info(c, &parent_heap, &parent_hlen, &amb)) {
+			printf("FAIL M mmu_info\n"); return 1;
+		}
+		printf("M: parent_heap=0x%lx len=0x%lx ambient=0x%lx ro=0x%lx\n",
+		       parent_heap, parent_hlen, amb, ro_va);
+		pr = ksp_mmu_hw_probe(c, parent_heap, 0);
+		pw = ksp_mmu_hw_probe(c, ro_va, 1);
+		printf("M: hw_probe parent_heap rc=%d (0=fault expected)\n", pr);
+		printf("M: hw_probe RO-write rc=%d (0=fault expected)\n", pw);
+		if (pr != 0 || pw != 0) {
+			printf("FAIL M hardware isolation\n"); return 1;
+		}
+		/* Rebuild with RO grant; install_bag injects KORU_PROBE_RESULT. */
+		ksp_abandon(c);
+		c = ksp_reserve("/bin/hello", 256 * 1024);
+		g = (struct ksp_grant){ .as="fd/1", .from="console", .verbs="write",
+					.value="console", .across_exec=0 };
+		ksp_grant(c, &g);
+		if (ksp_grant_mem(c, ro_va, 4096, "read", 0)) {
+			printf("FAIL M grant_mem2\n"); return 1;
+		}
+		if (ksp_seal(c) || ksp_start(c) || ksp_wait(c, &st)) {
+			printf("FAIL M ELF run\n"); return 1;
+		}
+		printf("M: ELF status=%d\n", st);
+		ksp_reap(c);
+		free(ro_page);
+	}
 
 	section("R revoke");
 	c = ksp_reserve("/bin/hello", 65536);
