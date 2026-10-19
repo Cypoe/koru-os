@@ -1,0 +1,514 @@
+// koruos/slice: DESIGN-0001 Slice A (§11.4) as one Koru lift, in koru-libs shape.
+//
+// Three parts, kept in one module for the prototype (to be split when it moves to
+// koru-libs, Q33):
+//   1. contract: a manifest of providers, versioned imports, binding admission (§3.6)
+//      and the fixed refusal shape (§3.4);
+//   2. supervisor: a minimal Spawn stand-in (§8.6.2): a child record with identity,
+//      artifact, a rights bag of grants (each grant consumes a binding: custody moves
+//      into the child), seal, start-on-evidence, wait, reap;
+//   3. providers and the task: the realization. Each provider is an artifact whose
+//      identity is the sha256 of its source block (build-slice.sh fills the ART tokens).
+//
+// Phantom states:
+//   load    mints <loaded!>; resolve needs <!loaded>, returns it, and mints a binding
+//           <bound!> or refuses; close needs <!loaded>.
+//   reserve mints a child <staged!>; grant needs <!staged> and consumes <!bound>;
+//   seal    <!staged> -> <sealed!> | refused <staged!>;
+//   start   <!sealed> -> <running!> (only on evidence the task ran) | stalled <sealed!>;
+//   wait    <!running> -> <exited!>; reap needs <!exited>; abandon needs <!staged|!sealed>.
+//
+// Output channels: stdout (COM1) carries the evidence log; the task's status view is
+// written to I/O port 0x402 (QEMU isa-debugcon), a renderer the host may attach to and
+// detach from at any time. The guest neither knows nor cares whether one is attached.
+
+const std = @import("std");
+
+extern fn malloc(size: usize) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) void;
+extern fn ukplat_monotonic_clock() u64;
+const C = struct {
+    extern var stdout: ?*anyopaque;
+    extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) c_int;
+};
+
+pub const arm_name = "unikraft/qemu-x86_64";
+
+fn logln(comptime f: []const u8, a: anytype) void {
+    var b: [1024]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, f ++ "\n", a) catch return;
+    _ = C.fputs(s.ptr, C.stdout);
+}
+
+fn outb(port: u16, v: u8) void {
+    asm volatile ("outb %[v], %[p]"
+        :
+        : [v] "{al}" (v),
+          [p] "{dx}" (port),
+    );
+}
+
+// ------------------------------------------------------------ providers
+
+const StoreOps = struct {
+    open: *const fn (budget: *u64) ?*anyopaque,
+    append: *const fn (st: *anyopaque, rec: []const u8) void,
+    read: *const fn (st: *anyopaque, idx: u32, out: []u8) ?[]const u8,
+    used: *const fn (st: *anyopaque) u32,
+    evicted: *const fn (st: *anyopaque) u64,
+    commit_bytes: u64,
+    cap: u32,
+    entry: u32,
+};
+const ClockOps = struct { now_ns: *const fn () u64 };
+const ViewOps = struct { frame: *const fn (line: []const u8) void };
+
+const Ops = union(enum) { store: *const StoreOps, clock: *const ClockOps, view: *const ViewOps };
+
+// artifact-begin store_mem_v1
+const StoreMem = struct {
+    ring: [16][64]u8,
+    lens: [16]u8,
+    head: u32, // index of the oldest live entry
+    n: u32,
+    appended: u64,
+    evicted: u64,
+};
+fn smOpen(budget: *u64) ?*anyopaque {
+    const cost: u64 = @sizeOf(StoreMem);
+    if (budget.* < cost) return null;
+    const m = malloc(@sizeOf(StoreMem)) orelse return null;
+    budget.* -= cost;
+    const s: *StoreMem = @ptrCast(@alignCast(m));
+    s.* = .{ .ring = undefined, .lens = [_]u8{0} ** 16, .head = 0, .n = 0, .appended = 0, .evicted = 0 };
+    return m;
+}
+fn smAppend(p: *anyopaque, rec: []const u8) void {
+    const s: *StoreMem = @ptrCast(@alignCast(p));
+    const l: usize = @min(rec.len, 64);
+    var slot: u32 = undefined;
+    if (s.n == 16) {
+        slot = s.head;
+        s.head = (s.head + 1) % 16;
+        s.evicted += 1;
+    } else {
+        slot = (s.head + s.n) % 16;
+        s.n += 1;
+    }
+    @memcpy(s.ring[slot][0..l], rec[0..l]);
+    s.lens[slot] = @intCast(l);
+    s.appended += 1;
+}
+fn smRead(p: *anyopaque, idx: u32, out: []u8) ?[]const u8 {
+    const s: *StoreMem = @ptrCast(@alignCast(p));
+    if (idx >= s.n) return null;
+    const slot = (s.head + idx) % 16;
+    const l = s.lens[slot];
+    @memcpy(out[0..l], s.ring[slot][0..l]);
+    return out[0..l];
+}
+fn smUsed(p: *anyopaque) u32 {
+    const s: *StoreMem = @ptrCast(@alignCast(p));
+    return s.n;
+}
+fn smEvicted(p: *anyopaque) u64 {
+    const s: *StoreMem = @ptrCast(@alignCast(p));
+    return s.evicted;
+}
+const store_mem_v1 = StoreOps{ .open = smOpen, .append = smAppend, .read = smRead, .used = smUsed, .evicted = smEvicted, .commit_bytes = @sizeOf(StoreMem), .cap = 16, .entry = 64 };
+// artifact-end store_mem_v1
+
+// artifact-begin clock_uk_v1
+fn ukNow() u64 {
+    return ukplat_monotonic_clock();
+}
+const clock_uk_v1 = ClockOps{ .now_ns = ukNow };
+// artifact-end clock_uk_v1
+
+// artifact-begin view_debugcon_v1
+fn dcFrame(line: []const u8) void {
+    for (line) |c| outb(0x402, c);
+    outb(0x402, '\n');
+}
+const view_debugcon_v1 = ViewOps{ .frame = dcFrame };
+// artifact-end view_debugcon_v1
+
+// The realization's registry: which provider artifacts are linked into this image.
+// A manifest may name anything; only these exist here.
+const Linked = struct { name: []const u8, artifact: []const u8, ops: Ops };
+const linked = [_]Linked{
+    .{ .name = "store_mem_v1", .artifact = "@@ART:store_mem_v1@@", .ops = .{ .store = &store_mem_v1 } },
+    .{ .name = "clock_uk_v1", .artifact = "@@ART:clock_uk_v1@@", .ops = .{ .clock = &clock_uk_v1 } },
+    .{ .name = "view_debugcon_v1", .artifact = "@@ART:view_debugcon_v1@@", .ops = .{ .view = &view_debugcon_v1 } },
+};
+
+// ------------------------------------------------------------ contract
+
+// A manifest entry: name=..,iface=..,rev=..,layout=..,entry=..,effects=a+b,artifact=..
+// Entries are separated by ';'. Authorization is a separate allowlist of artifact ids.
+const Entry = struct {
+    name: []const u8 = "",
+    iface: []const u8 = "",
+    rev: u32 = 0,
+    layout: []const u8 = "",
+    entry: u32 = 0,
+    effects: []const u8 = "",
+    artifact: []const u8 = "",
+};
+
+const Manifest = struct {
+    text: []const u8,
+    allow: []const u8,
+    entries: [16]Entry,
+    n: u32,
+};
+
+fn parseEntry(t: []const u8) ?Entry {
+    var e = Entry{};
+    var it = std.mem.splitScalar(u8, t, ',');
+    while (it.next()) |kv0| {
+        const kv = std.mem.trim(u8, kv0, " ");
+        if (kv.len == 0) continue;
+        const eq = std.mem.indexOfScalar(u8, kv, '=') orelse return null;
+        const k = kv[0..eq];
+        const v = kv[eq + 1 ..];
+        if (std.mem.eql(u8, k, "name")) e.name = v else if (std.mem.eql(u8, k, "iface")) e.iface = v else if (std.mem.eql(u8, k, "rev")) e.rev = std.fmt.parseInt(u32, v, 10) catch return null else if (std.mem.eql(u8, k, "layout")) e.layout = v else if (std.mem.eql(u8, k, "entry")) e.entry = std.fmt.parseInt(u32, v, 10) catch return null else if (std.mem.eql(u8, k, "effects")) e.effects = v else if (std.mem.eql(u8, k, "artifact")) e.artifact = v else return null;
+    }
+    if (e.name.len == 0 or e.iface.len == 0 or e.artifact.len == 0) return null;
+    return e;
+}
+
+fn listHas(list: []const u8, sep: u8, item: []const u8) bool {
+    var it = std.mem.splitScalar(u8, list, sep);
+    while (it.next()) |x| if (std.mem.eql(u8, std.mem.trim(u8, x, " "), item)) return true;
+    return false;
+}
+
+fn effectsWithin(have: []const u8, allowed: []const u8) bool {
+    var it = std.mem.splitScalar(u8, have, '+');
+    while (it.next()) |x| if (x.len != 0 and !listHas(allowed, '+', x)) return false;
+    return true;
+}
+
+pub const Binding = struct {
+    iface: []const u8,
+    rev: u32,
+    provider: []const u8,
+    artifact: []const u8,
+    ops: Ops,
+    calls: u64,
+};
+
+~pub tor load { manifest: string, allow: string }
+| ok *Manifest<loaded!>
+| refused { reason: string, at: string }
+
+~proc load|zig {
+    const mem = malloc(@sizeOf(Manifest)) orelse return .{ .refused = .{ .reason = "out of memory", .at = "" } };
+    const m: *Manifest = @ptrCast(@alignCast(mem));
+    m.* = .{ .text = manifest, .allow = allow, .entries = undefined, .n = 0 };
+    var it = std.mem.splitScalar(u8, manifest, ';');
+    while (it.next()) |t0| {
+        const t = std.mem.trim(u8, t0, " ");
+        if (t.len == 0) continue;
+        if (m.n == m.entries.len) {
+            free(mem);
+            return .{ .refused = .{ .reason = "too many entries", .at = t } };
+        }
+        m.entries[m.n] = parseEntry(t) orelse {
+            free(mem);
+            return .{ .refused = .{ .reason = "malformed entry", .at = t } };
+        };
+        m.n += 1;
+    }
+    logln("manifest: loaded entries={d}", .{m.n});
+    return .{ .ok = m };
+}
+
+// S9/S10/S11: a versioned import, admitted only against a compatible, authorized
+// provider whose artifact is linked into this realization. Every candidate that is
+// passed over is named with its reason; a miss is a refusal before execution.
+~pub tor resolve { m: *Manifest<!loaded>, iface: string, rev: u32, layout: string, entry: u32, effects: string }
+| bound { m: *Manifest<loaded!>, b: *Binding<bound!> }
+| refused { m: *Manifest<loaded!>, iface: string, rev: u32, arm: string, phase: string, missing: string, offered: string }
+
+~proc resolve|zig {
+    logln("import: {s}@{d} layout={s} entry={d} effects<={s}", .{ iface, rev, layout, entry, effects });
+    const S = struct {
+        var offered_buf: [512]u8 = undefined;
+    };
+    var off = std.io.fixedBufferStream(&S.offered_buf);
+    const w = off.writer();
+    var i: u32 = 0;
+    while (i < m.n) : (i += 1) {
+        const e = m.entries[i];
+        if (!std.mem.eql(u8, e.iface, iface)) continue;
+        var why: []const u8 = "";
+        var lk: ?Linked = null;
+        for (linked) |l| if (std.mem.eql(u8, l.artifact, e.artifact)) {
+            lk = l;
+        };
+        if (e.rev != rev) {
+            why = "contract revision";
+        } else if (!std.mem.eql(u8, e.layout, layout)) {
+            why = "data layout";
+        } else if (entry != 0 and e.entry != entry) {
+            why = "entry size";
+        } else if (!effectsWithin(e.effects, effects)) {
+            why = "effects exceed import";
+        } else if (!listHas(m.allow, ',', e.artifact)) {
+            why = "unauthorized artifact";
+        } else if (lk == null) {
+            why = "artifact not in this realization";
+        }
+        if (why.len != 0) {
+            w.print("{s}{s}(rev {d}: {s})", .{ if (off.pos == 0) "" else " ", e.name, e.rev, why }) catch {};
+            continue;
+        }
+        const mem = malloc(@sizeOf(Binding)) orelse break;
+        const b: *Binding = @ptrCast(@alignCast(mem));
+        b.* = .{ .iface = iface, .rev = rev, .provider = e.name, .artifact = e.artifact, .ops = lk.?.ops, .calls = 0 };
+        if (off.pos != 0) logln("passed over: {s}@{d} {s}", .{ iface, rev, off.getWritten() });
+        logln("bound: {s}@{d} -> {s} artifact={s} arm={s}", .{ iface, rev, e.name, e.artifact[0..@min(16, e.artifact.len)], arm_name });
+        return .{ .bound = .{ .m = m, .b = b } };
+    }
+    const offered: []const u8 = if (off.pos == 0) "none" else off.getWritten();
+    return .{ .refused = .{ .m = m, .iface = iface, .rev = rev, .arm = arm_name, .phase = "load", .missing = "compatible authorized provider", .offered = offered } };
+}
+
+~pub tor close { m: *Manifest<!loaded> }
+
+~proc close|zig {
+    free(@ptrCast(m));
+}
+
+~pub tor unbind { b: *Binding<!bound> }
+
+~proc unbind|zig {
+    free(@ptrCast(b));
+}
+
+// ------------------------------------------------------------ supervisor (Spawn stand-in)
+
+const Grant = struct { as: []const u8, b: *Binding };
+
+pub const Child = struct {
+    instance: u32,
+    generation: u32,
+    image: []const u8,
+    artifact: []const u8,
+    bag: [8]Grant,
+    nbag: u32,
+    budget: u64,
+    ran: bool,
+    ticks: u32,
+    status: i32,
+};
+
+var roster: u32 = 0;
+var next_instance: u32 = 1;
+
+~pub tor census { } -> u32
+
+~proc census|zig {
+    return roster;
+}
+
+~pub tor reserve { image: string, artifact: string, budget: u64 }
+| staged *Child<staged!>
+| refused string
+
+~proc reserve|zig {
+    const mem = malloc(@sizeOf(Child)) orelse return .{ .refused = "out of memory" };
+    const c: *Child = @ptrCast(@alignCast(mem));
+    c.* = .{ .instance = next_instance, .generation = 1, .image = image, .artifact = artifact, .bag = undefined, .nbag = 0, .budget = budget, .ran = false, .ticks = 0, .status = -1 };
+    next_instance += 1;
+    roster += 1;
+    logln("supervisor: reserve child={d}.{d} image={s} artifact={s} budget={d} roster={d}", .{ c.instance, c.generation, image, artifact[0..@min(16, artifact.len)], budget, roster });
+    return .{ .staged = c };
+}
+
+// Custody of the binding moves into the child's bag; the grant is recorded.
+~pub tor grant { c: *Child<!staged>, b: *Binding<!bound>, as: string } -> *Child<staged!>
+
+~proc grant|zig {
+    if (c.nbag < c.bag.len) {
+        c.bag[c.nbag] = .{ .as = as, .b = b };
+        c.nbag += 1;
+        logln("supervisor: grant child={d}.{d} as={s} row={s}@{d} provider={s} granted_by=supervisor", .{ c.instance, c.generation, as, b.iface, b.rev, b.provider });
+    } else {
+        free(@ptrCast(b));
+        logln("supervisor: grant child={d}.{d} as={s} DROPPED (bag full)", .{ c.instance, c.generation, as });
+    }
+    return c;
+}
+
+fn bagFind(c: *Child, as: []const u8) ?*Binding {
+    var i: u32 = 0;
+    while (i < c.nbag) : (i += 1) if (std.mem.eql(u8, c.bag[i].as, as)) return c.bag[i].b;
+    return null;
+}
+
+~pub tor seal { c: *Child<!staged>, requires: string }
+| sealed *Child<sealed!>
+| refused { c: *Child<staged!>, missing: string }
+
+~proc seal|zig {
+    var it = std.mem.splitScalar(u8, requires, ',');
+    while (it.next()) |r| {
+        if (r.len != 0 and bagFind(c, r) == null) {
+            logln("refused: child={d}.{d} phase=seal missing={s} (not in bag)", .{ c.instance, c.generation, r });
+            return .{ .refused = .{ .c = c, .missing = r } };
+        }
+    }
+    logln("supervisor: seal child={d}.{d} bag={d} requires={s} budget={d}", .{ c.instance, c.generation, c.nbag, requires, c.budget });
+    return .{ .sealed = c };
+}
+
+// ------------------------------------------------------------ the task (module-owned body)
+
+// artifact-begin slice_task
+
+const ticks_total: u32 = 30;
+const tick_ns: u64 = 300 * std.time.ns_per_ms;
+
+const TaskCtx = struct {
+    st: *anyopaque,
+    store: *Binding,
+    clock: *Binding,
+    view: *Binding,
+    t0: u64,
+};
+var task_ctx: TaskCtx = undefined;
+
+fn frame(c: *Child, state: []const u8) void {
+    const so = task_ctx.store.ops.store;
+    var b: [256]u8 = undefined;
+    var fb = std.io.fixedBufferStream(&b);
+    const w = fb.writer();
+    const t_ms = (task_ctx.clock.ops.clock.now_ns() - task_ctx.t0) / std.time.ns_per_ms;
+    task_ctx.clock.calls += 1;
+    w.print("view: child={d}.{d} state={s} tick={d}/{d} t_ms={d} store={d}/{d} evicted={d} ", .{ c.instance, c.generation, state, c.ticks, ticks_total, t_ms, so.used(task_ctx.st), so.cap, so.evicted(task_ctx.st) }) catch {};
+    const n = so.used(task_ctx.st);
+    var rb: [64]u8 = undefined;
+    // held=<oldest>..<newest>: everything the store still holds, so a view that
+    // attaches late can reconstruct what happened while no view was attached.
+    if (n > 0) {
+        const lo = so.read(task_ctx.st, 0, &rb) orelse rb[0..0];
+        const lo_sp = std.mem.indexOfScalar(u8, lo, ' ') orelse lo.len;
+        w.print("held={s}..", .{if (lo.len > 5) lo[5..lo_sp] else "?"}) catch {};
+        const hi = so.read(task_ctx.st, n - 1, &rb) orelse rb[0..0];
+        const hi_sp = std.mem.indexOfScalar(u8, hi, ' ') orelse hi.len;
+        w.print("{s} last=", .{if (hi.len > 5) hi[5..hi_sp] else "?"}) catch {};
+    } else {
+        w.print("held=none last=", .{}) catch {};
+    }
+    var i: u32 = if (n > 4) n - 4 else 0;
+    var first = true;
+    while (i < n) : (i += 1) {
+        if (so.read(task_ctx.st, i, &rb)) |rec| {
+            // records are "tick=<k> ..."; show <k>
+            const sp = std.mem.indexOfScalar(u8, rec, ' ') orelse rec.len;
+            w.print("{s}{s}", .{ if (first) "" else ",", rec[5..sp] }) catch {};
+            first = false;
+        }
+    }
+    task_ctx.view.ops.view.frame(fb.getWritten());
+    task_ctx.view.calls += 1;
+}
+
+fn oneTick(c: *Child) void {
+    const k = c.ticks + 1;
+    const deadline = task_ctx.t0 + @as(u64, k) * tick_ns;
+    const ck = task_ctx.clock.ops.clock;
+    while (ck.now_ns() < deadline) {}
+    task_ctx.clock.calls += 1;
+    const t_ms = (ck.now_ns() - task_ctx.t0) / std.time.ns_per_ms;
+    var rec: [64]u8 = undefined;
+    const r = std.fmt.bufPrint(&rec, "tick={d} t_ms={d}", .{ k, t_ms }) catch rec[0..0];
+    task_ctx.store.ops.store.append(task_ctx.st, r);
+    task_ctx.store.calls += 1;
+    c.ticks = k;
+    c.ran = true;
+    logln("task: child={d}.{d} tick={d} t_ms={d} store_used={d}", .{ c.instance, c.generation, k, t_ms, task_ctx.store.ops.store.used(task_ctx.st) });
+    frame(c, "running");
+}
+
+// artifact-end slice_task
+
+~pub tor start { c: *Child<!sealed> }
+| running *Child<running!>
+| stalled { c: *Child<sealed!>, reason: string }
+
+~proc start|zig {
+    const sb = bagFind(c, "store") orelse return .{ .stalled = .{ .c = c, .reason = "no store in bag" } };
+    const cb = bagFind(c, "clock") orelse return .{ .stalled = .{ .c = c, .reason = "no clock in bag" } };
+    const vb = bagFind(c, "view") orelse return .{ .stalled = .{ .c = c, .reason = "no view in bag" } };
+    if (sb.ops != .store or cb.ops != .clock or vb.ops != .view) return .{ .stalled = .{ .c = c, .reason = "bag entry of the wrong kind" } };
+    const st = sb.ops.store.open(&c.budget) orelse return .{ .stalled = .{ .c = c, .reason = "store commit exceeds budget" } };
+    sb.calls += 1;
+    logln("cost: store.bounded@1 mechanism=ring({d}x{d}) committed={d} budget_left={d}", .{ sb.ops.store.cap, sb.ops.store.entry, sb.ops.store.commit_bytes, c.budget });
+    task_ctx = .{ .st = st, .store = sb, .clock = cb, .view = vb, .t0 = cb.ops.clock.now_ns() };
+    oneTick(c);
+    if (!c.ran) return .{ .stalled = .{ .c = c, .reason = "task did not run" } };
+    logln("supervisor: start child={d}.{d} ran=yes", .{ c.instance, c.generation });
+    return .{ .running = c };
+}
+
+~pub tor wait { c: *Child<!running> } -> { c: *Child<exited!>, status: i32, ticks: u32 }
+
+~proc wait|zig {
+    while (c.ticks < ticks_total) oneTick(c);
+    // read back everything the provider still holds and check it
+    const so = task_ctx.store.ops.store;
+    const n = so.used(task_ctx.st);
+    var rb: [64]u8 = undefined;
+    var ok = true;
+    var i: u32 = 0;
+    var first: u32 = 0;
+    var last: u32 = 0;
+    while (i < n) : (i += 1) {
+        const rec = so.read(task_ctx.st, i, &rb) orelse {
+            ok = false;
+            break;
+        };
+        task_ctx.store.calls += 1;
+        const sp = std.mem.indexOfScalar(u8, rec, ' ') orelse rec.len;
+        const k = std.fmt.parseInt(u32, rec[5..sp], 10) catch 0;
+        if (i == 0) first = k;
+        if (i != 0 and k != last + 1) ok = false;
+        last = k;
+    }
+    if (last != ticks_total) ok = false;
+    logln("task: readback {s} entries={d} first={d} last={d}", .{ if (ok) "ok" else "BAD", n, first, last });
+    c.status = if (ok) 0 else 1;
+    frame(c, "exited");
+    logln("supervisor: exited child={d}.{d} status={d} ticks={d}", .{ c.instance, c.generation, c.status, c.ticks });
+    return .{ .c = c, .status = c.status, .ticks = c.ticks };
+}
+
+fn dropBag(c: *Child) void {
+    var i: u32 = 0;
+    while (i < c.nbag) : (i += 1) {
+        logln("supervisor: release child={d}.{d} as={s} provider={s} calls={d}", .{ c.instance, c.generation, c.bag[i].as, c.bag[i].b.provider, c.bag[i].b.calls });
+        free(@ptrCast(c.bag[i].b));
+    }
+}
+
+~pub tor reap { c: *Child<!exited> }
+
+~proc reap|zig {
+    dropBag(c);
+    roster -= 1;
+    logln("supervisor: reap child={d}.{d} roster={d}", .{ c.instance, c.generation, roster });
+    free(@ptrCast(c));
+}
+
+~pub tor abandon { c: *Child<!staged|!sealed> }
+
+~proc abandon|zig {
+    dropBag(c);
+    roster -= 1;
+    logln("supervisor: abandon child={d}.{d} roster={d} (never ran)", .{ c.instance, c.generation, roster });
+    free(@ptrCast(c));
+}
