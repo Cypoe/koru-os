@@ -743,6 +743,28 @@ stay in place (Q28 with Fabian); nothing here builds a silo path or prejudges th
   accepts the legacy-only personality or needs atomic KMS (`AQ_NO_ATOMIC=1` exists); GBM/EGL
   dmabuf import with kms_swrast; `memfd_create` + seals and `SCM_RIGHTS` for foot's `wl_shm`;
   `signalfd4` if a client needs it.
+- **Probes 5–7 (15:41–15:47 CEST, not a pass):** PRIME (B18) in the DRM personality lets
+  aquamarine pass its feature check; then it needed `DRM_CAP_CRTC_IN_VBLANK_EVENT`, a plane
+  `type` property and a connector `DPMS` property (legacy KMS: `DRM_CLIENT_CAP_ATOMIC` is refused,
+  aquamarine falls back to its legacy implementation on its own), and `GET_MAGIC`/`AUTH_MAGIC` on
+  a second open of card0 (its GBM allocator reopens the node). With those, Hyprland modesets
+  1280x800 and page-flips continuously; the probe-7 screendump is Hyprland's own frame (solid
+  `#111111` background and the software cursor in the centre; sha256 in the evidence). Still
+  logged every frame and not yet understood: aquamarine's multi-GPU blit renderer fails
+  (`eglQueryDeviceStringEXT` → `EGL_BAD_PARAMETER`, "no matching devices"); frames reach KMS
+  regardless.
+- **`/tmp/dod3` policy (h3) — decided 2026-10-19 15:50 CEST, before any counted run.** Of the
+  three options left open above, M9 takes the **snapshotted ramfs `/tmp`**. `/tmp` stays the
+  ramfs; the root image stays read-only and untouched. The guest snapshots explicitly: after
+  the QMP keys and before shutdown, the init script runs `tar -cf /dev/korusnap /tmp/dod3`
+  (busybox tar). `/dev/korusnap` (`lib/korusnap`) accepts one byte stream per boot and on close
+  writes it to block device 1, a second, empty 8 MiB scratch virtio-blk image, as a 512-byte
+  header `KORUSNAP1 <length>` plus the stream. After QEMU exits, the host (`run-probe.sh`)
+  decodes that image to `snap.bin` and reads `tmp/dod3` from the tar. (h3) passes only if that
+  member exists and is exactly `DOD3\n`. A writable koruext2 lift was not taken (it would be the
+  first write path into the root filesystem, out of proportion for one file). Smoke test
+  15:49 CEST (`experiments/m9-hyprland/evidence/korusnap-smoke`): 2048 bytes persisted, the host
+  extracts `tmp/dod3` = `DOD3\n`.
 - **Gated checks** (to be filled into `experiments/m9-hyprland/check.py` before the first
   acceptance run; the freeze does not invent numbers):
   - (h1) Hyprland reaches a running compositor (a socket under `$XDG_RUNTIME_DIR/hypr/` and a

@@ -1,0 +1,38 @@
+[    0.110198] ERR:  [appkoruos] <evdev_linux.c @  421> koru-os: INFO input rows bound: /dev/input/event0 -> koru-os i8042 keyboard (set 1)
+[    0.111197] ERR:  [appkoruos] <ps2kbd.c @  280> koru-os: INFO input.ps2: i8042 cfg 0x71 -> 0x61, enable-scan ack 0xfa, IRQ 1, bind 0
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=5 blocks=35600 free=31193 inodes=16400 free=15976
+[    0.139510] ERR:  [appkoruos] <korusysfs.c @  205> koru-os: INFO sysfs view on /sys: 60 entries, 0 errors
+[    0.141462] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.196270] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.197331] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.198210] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.198613] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.202634] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.208432] ERR:  [libposix_process] <deprecated.c @  302> koru-os: STUBBED __uk_syscall_r_prctl()
+m9-init: start
+[    0.225683] ERR:  [appelfloader] <elf_load.c @  947> ls: Failed to execute /usr/bin/ls: No such file or directory
+[    0.226058] ERR:  [appelfloader] <elf_binfmt.c @   42> Could not load ELF (-2)
+[    0.226198] ERR:  [libukbinfmt] <binfmt.c @   70> binfmt loader error (-2)
+[    0.226321] ERR:  [libposix_process] <execve.c @  157> /usr/bin/ls: Unable to load (-2)
+[    0.261364] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.261552] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.261872] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.262089] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.264624] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+crw-------    0 0        0           0,   0 Jan  1  1970 /dev/korusnap
+[    0.281122] ERR:  [appelfloader] <elf_load.c @  947> tar: Failed to execute /usr/bin/tar: No such file or directory
+[    0.281315] ERR:  [appelfloader] <elf_binfmt.c @   42> Could not load ELF (-2)
+[    0.281432] ERR:  [libukbinfmt] <binfmt.c @   70> binfmt loader error (-2)
+[    0.281542] ERR:  [libposix_process] <execve.c @  157> /usr/bin/tar: Unable to load (-2)
+[    0.313967] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.314157] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.314487] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.314706] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.316855] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+tar: removing leading '/' from member names
+[    0.329291] ERR:  [appkoruos] <korusnap.c @  146> koru-os: INFO korusnap: 2048 bytes persisted to blkdev 1
+snaptest: tar rc 0
+m9-init: end
+koru-os: init exited with status 0
+koruext2: unmount: 15040 blocks in 470 requests, 39917 cache hits

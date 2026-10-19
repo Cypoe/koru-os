@@ -8,3 +8,5 @@ KORUINPUT_DIR := $(APPKORUOS_BASE)/koruinput
 include $(KORUINPUT_DIR)/Makefile.uk
 KORUSYSFS_DIR := $(APPKORUOS_BASE)/korusysfs
 include $(KORUSYSFS_DIR)/Makefile.uk
+KORUSNAP_DIR := $(APPKORUOS_BASE)/korusnap
+include $(KORUSNAP_DIR)/Makefile.uk

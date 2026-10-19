@@ -1,0 +1,6 @@
+export PATH=/usr/bin:/bin
+echo "m9-init: start"
+ls -l /dev/korusnap
+echo DOD3 > /tmp/dod3
+tar -cf /dev/korusnap /tmp/dod3; echo "snaptest: tar rc $?"
+echo "m9-init: end"

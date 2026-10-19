@@ -12,12 +12,13 @@ P="$REPO/experiments/m3-busybox/patches"; P6="$REPO/experiments/m6-kms/patches";
 export PATH=/workspace/tc/zig-x86_64-linux-0.15.2:/workspace/tc/kraft:$PATH
 mkdir -p "$W" && cd "$W"
 cp "$HERE/app/Kraftfile" "$HERE/app/Makefile.uk" "$HERE/app/Config.uk" "$HERE/app/exitstatus.c" .
-rm -rf koruext2fs korukms koruinput korusysfs && mkdir koruext2fs korukms koruinput korusysfs
+rm -rf koruext2fs korukms koruinput korusysfs korusnap && mkdir koruext2fs korukms koruinput korusysfs korusnap
 "$REPO/lib/koruext2fs/build-core.sh" >/dev/null
 cp -r "$REPO/lib/koruext2fs/ext2fs_vfs.c" "$REPO/lib/koruext2fs/Makefile.uk" "$REPO/lib/koruext2fs/build" koruext2fs/
 cp "$REPO"/lib/korukms/*.c "$REPO"/lib/korukms/*.h "$REPO/lib/korukms/Makefile.uk" korukms/
 cp "$REPO"/lib/koruinput/*.c "$REPO"/lib/koruinput/*.h "$REPO/lib/koruinput/Makefile.uk" koruinput/
 cp "$REPO"/lib/korusysfs/*.c "$REPO"/lib/korusysfs/*.h "$REPO/lib/korusysfs/Makefile.uk" korusysfs/
+cp "$REPO"/lib/korusnap/*.c "$REPO/lib/korusnap/Makefile.uk" korusnap/ # M9
 if [ ! -d .unikraft/unikraft ]; then
   [ -d "$W_SRC/.unikraft/unikraft" ] || { echo "run experiments/m3-busybox/build-image.sh first (fetches sources)"; exit 1; }
   mkdir -p .unikraft && cp -r "$W_SRC/.unikraft/unikraft" "$W_SRC/.unikraft/apps" "$W_SRC/.unikraft/libs" .unikraft/
