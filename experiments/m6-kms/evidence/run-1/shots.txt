@@ -1,0 +1,3 @@
+shot-A.ppm at 3.00 s after QEMU start
+shot-B.ppm at 7.21 s after QEMU start
+shot-SMPTE.ppm at 11.62 s after QEMU start

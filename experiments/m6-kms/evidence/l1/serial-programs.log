@@ -1,0 +1,13 @@
+l1-init: start
+kmsdumb: driver bochs-drm 1.0.0 (bochs dispi vga interface (qemu stdvga))
+kmsdumb: crtc 36 connector 32 type 15 connection 1, 15 modes: 1280x800 1920x1080 1920x1080 1600x1200 1680x1050 1400x1050 1280x1024 1440x900 1280x960 1360x768 1280x768 1024x768 800x600 640x480 640x480
+kmsdumb: buffer A handle 1 pitch 4096 size 3145728 fb 40
+kmsdumb: buffer B handle 2 pitch 4096 size 3145728 fb 41
+kmsdumb: PHASE A scanout 1024x768 fb 40
+kmsdumb: PHASE B scanout 1024x768 fb 41
+kmsdumb: probe CLIENT_CAP_ATOMIC -> 0 errno 0 (accepted)
+kmsdumb: done, exit 0
+l1-init: kmsdumb exit status 0
+opened device `bochs dispi vga interface (qemu stdvga)` on driver `bochs-drm` (version 1.0.0 at 0)
+setting mode 1024x768-60.00Hz on connectors Virtual-1, crtc 36
+l1-init: modetest exit status 0
