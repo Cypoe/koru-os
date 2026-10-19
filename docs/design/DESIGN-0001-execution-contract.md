@@ -630,6 +630,70 @@ stdin is an idle pipe, as for modetest in M6; and the M6 personality had no page
 - **Not in M8b.** Vblank pacing and `DRM_IOCTL_WAIT_VBLANK`, atomic KMS, modifiers, DS3,
   multi-threaded llvmpipe.
 
+**M7b acceptance: libinput on the koru-os sysfs view (fixed 2026-10-19, 15:07 CEST, before any
+acceptance run; resolves B15).** Probe boots and the L1 oracle before this freeze established:
+libinput's path backend (`--device`) touches only `/sys/dev/char/13:64`, the `uevent` files and
+`subsystem` links along `event0 → input0 → serio0 → i8042 → platform`, `/run/udev/data/*` and
+`/sys/devices/virtual/dmi/id` (strace on L1, `experiments/m7b-libinput/evidence/l1-debian/`); it
+reads no capability attributes (bitmaps come from evdev ioctls). Debian's systemd `libudev.so.1`
+on koru-os fails before any of that: its path resolution needs `statx` with `STATX_MNT_ID`,
+`name_to_handle_at`, `O_PATH` symlink fds and `/proc/self/fd` (probe kept in
+`evidence/probe-koru-debian-libudev/`, B16). Also found and fixed: vfscore's `newfstatat` ignored
+`AT_SYMLINK_NOFOLLOW` for absolute paths, so glibc `lstat()` followed symlinks
+(`unikraft-0.21-vfscore-fstatat-nofollow.patch`); set 1 code 0x54 now reports `KEY_SYSRQ` as
+`atkbd` does (it was the non-code 84).
+- **Decision: the udev-less path.** koru-os writes a minimal sysfs view and uses
+  **libudev-zero** (ISC, pinned commit, `build-libudev-zero.sh`) as `libudev.so.1`: it reads
+  `/sys` directly and derives `ID_INPUT_*` from the input device's uevent bitmaps, so there is
+  no udevd and no `/run/udev` database. The libinput binaries and libraries stay Debian's,
+  unmodified. systemd's libudev on koru-os is B16 (not needed for M7b; revisit if an M9
+  component insists on it).
+- **Kernel side.** `lib/korusysfs` mounts a ramfs on `/sys` (mount point in the image) at a
+  late initcall and replays what was published: a **provider** publishes the nodes of its own
+  hardware (`ps2kbd.c`: `platform/i8042/serio0`; `bochs.c`: `pci0000:00/0000:00:BB.F` with
+  `vendor`/`device`/`class`/... from PCI config space) and names its node in the row
+  (`input_provider.sys_parent`, `kms_provider.sys_parent`); a **personality** publishes the class
+  device it creates under that node (`evdev_linux.c`: `input/input0` with the Linux
+  `input_dev_uevent` lines and attributes, `input0/event0`; `drm_linux.c`: `drm/card0`, `device`
+  link), plus `/sys/class/*`, `/sys/bus/*/devices/*`, `/sys/dev/char/M:m`. A driver silo would fill
+  the same row fields; nothing here assumes the native providers (Q28 stays open).
+- **Arm.** The M8b kernel plus `lib/korusysfs` and the fstatat patch (built by
+  `experiments/m7-input/build-image.sh`), QEMU i440fx, `-vga none -device bochs-display`, TCG
+  only, keys via QMP `input-send-event` (`experiments/m7b-libinput/drive.py`, after
+  `DEVICE_ADDED`: k, o, r, u, shift+1, enter, up, esc).
+- **Programs** (ext2 root, `/etc/m7b-init` under the M3 hush): `ls -lR /sys` and `head` of every
+  file; `/bin/udevprobe` (koru-os probe, `udevprobe.c`: libudev view of event0 and card0 by
+  devnum, parents, `drm`/`input` enumeration); then Debian `libinput-tools` 1.28.1, unmodified,
+  `libinput debug-events --show-keycodes --device /dev/input/event0` (the host quits QEMU).
+- **Gated checks** (`experiments/m7b-libinput/check.py`, against the L1 evidence committed in
+  b1d02a9):
+  - (b1) the kernel logs `sysfs view on /sys: N entries, 0 errors`; the `uevent` of `event0`
+    and `card0`, the `subsystem` links of event0, input0, serio0, i8042, card0 and the PCI device,
+    and the links `/sys/dev/char/13:64`, `/sys/dev/char/226:0`, `/sys/class/input/event0`,
+    `/sys/class/drm/card0` equal L1's; input0's `PRODUCT`, `PHYS`, `PROP`, `EV`, `MSC`, `LED`
+    equal L1's, its `KEY` bitmap is a subset of L1's containing the injected keys, its `MODALIAS`
+    equals the one derived from that bitmap;
+  - (b2) every `udevprobe` line for event0, card0 and the `drm` enumeration equals the L1
+    libudev-zero twin (`evidence/l1-zero`); `ID_INPUT`, `ID_INPUT_KEY`, `ID_INPUT_KEYBOARD` = 1
+    as systemd-udevd wrote them on L1; the `input` enumeration lists event0; exit status 0;
+  - (b3) libinput prints exactly one `DEVICE_ADDED` for event0 with `seat0 default group1 cap:k`,
+    and its 18 `KEYBOARD_KEY` lines (name, code, pressed/released, in order) equal the sequence
+    derived from the host keys and both L1 runs (udevd + systemd libudev; libudev-zero);
+  - (b4) every refusal-log row is in `experiments/m7b-libinput/refused-by-design.txt` (the M7a
+    rows, unchanged);
+  - (b5) no `Unikraft Crash`; (x) the disk is byte-identical across the boot; `e2fsck -fn` clean.
+- **Regression.** M3, M4 (a)–(d), M5a, M6, M7a, M8a and M8b each pass 3/3 on the M7b kernel.
+- **L1 twin (oracle, not a pass).** Debian `linux-image-6.12.113+deb13-amd64` + `evdev.ko` +
+  bochs-drm modules, initramfs with busybox, systemd-udevd/udevadm 257 (Debian `udev`,
+  `libsystemd-shared`), the same libinput binaries under strace, the same `drive.py`
+  (`run-l1.sh`, `LIBUDEV=debian|zero`). Reference runs 2026-10-19 15:03 (debian) and 15:02 (zero) CEST, both before this freeze.
+  Accepted differences: device name `AT Translated Set 2 keyboard` (koru-os: `koru-os i8042
+  keyboard (set 1)`); `atkbd` declares 145 key codes, koru-os 106; uevent `DRIVER=` values are
+  koru-os's own driver names; L1 also enumerates `/dev/input/mice` (no mouse here); no
+  `/sys/devices/virtual/dmi` on koru-os (libinput's DMI quirks match nothing, as on L1 with QEMU).
+- **Not in M7b.** udev monitor / hotplug (netlink), seats and `ID_SEAT`, the udev database and
+  rules, systemd's libudev (B16), DMI, sysfs attributes nobody read, write access to `/sys`.
+
 ### 0.5 Biggest risks
 
 1. **GPU and input drivers in a silo.** LKL's supported hosts are POSIX and Windows
