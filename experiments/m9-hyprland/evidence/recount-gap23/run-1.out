@@ -1,0 +1,5 @@
+cp: cannot stat './m9-accept-init': No such file or directory
+128-byte inodes cannot handle dates beyond 2038 and are deprecated
+image blocks=410072
+qemu exit=0 wall_s=55.277
+snap bytes=3072

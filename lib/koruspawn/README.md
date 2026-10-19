@@ -28,9 +28,12 @@ Rung 0/1: provenance and correctness at the seam, not a security boundary.
 When `CONFIG_LIBUKPAGING` is set, `mmu.c` is linked. `ksp_seal` derives a
 per-child page table from `mem:` / `obj:` grants (`ksp_grant_mem`). Revoke
 unmaps + TLB flush. Verb `cow` is the dissected-fork AS-copy grant.
-Without mem grants, behaviour stays seam-only (rung 0/1). See
+(Superseded: seal now always derives a child PT.) Direct map and non-image frames are
+stripped from every child PT (`ksp_mmu_strip_directmap`, `ksp_mmu_strip_nonimage`,
+`ksp_mmu_census`). A child page fault on an ungranted address becomes a real SIGSEGV
+(CR3 exception hooks + `ksp_mmu_pf_child`; needs `experiments/m-spawn-mmu/patches/unikraft-0.21-except-cr3-hooks.patch`). See
 `experiments/m-spawn-mmu/`.
 
 ## M-SPAWN-MMU gaps (2026-10-19)
 
-Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **ready for Fabian review**, not accepted. ELF child-CR3 via kernel-half + syscall CR3 leave (see experiments/m-spawn-mmu/README.md).
+Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **not yet ready (gaps listed)** (review of `d1dc650`: R1 open, DESIGN-0001 §8.6.7d), not accepted. ELF child-CR3 via kernel-half + syscall CR3 leave (see experiments/m-spawn-mmu/README.md).

@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <signal.h>
 
 #include <uk/assert.h>
 #include <uk/config.h>
@@ -495,6 +496,33 @@ static void __attribute__((noinline)) ksp_mmu_hw_probe_on_ambient(void)
 	}
 }
 
+int ksp_mmu_alias(int child, unsigned long va, unsigned long *alias)
+{
+	struct ksp_rec *r = find(child);
+	unsigned int lvl = UK_PAL_PAGE_LEVEL;
+	__pte_t pte;
+
+	if (!r || !r->mmu.live || !r->mmu.parent_pt || !alias)
+		return -EINVAL;
+	if (uk_paging_pt_walk(r->mmu.parent_pt, va & ~(UK_PAGING_PAGE_SIZE - 1),
+			      &lvl, NULL, &pte) ||
+	    !UK_PAL_PT_Lx_PTE_PRESENT(pte, lvl))
+		return -EFAULT;
+	*alias = (unsigned long)ksp_mmu_dm_alias(
+		UK_PAL_PT_Lx_PTE_PADDR(pte, lvl) +
+		(va & (UK_PAGING_PAGE_SIZE - 1)));
+	return 0;
+}
+
+long ksp_mmu_census_child(int child, const char *phase)
+{
+	struct ksp_rec *r = find(child);
+
+	if (!r || !r->mmu.live)
+		return -EINVAL;
+	return ksp_mmu_census(&r->mmu, phase, NULL, NULL);
+}
+
 int ksp_mmu_hw_probe(int child, unsigned long va, int want_write)
 {
 	struct ksp_rec *r = find(child);
@@ -642,16 +670,6 @@ static int install_bag(struct ksp_rec *r)
 
 	/* Clear the environment; re-add only what the bag grants (F5). */
 	clearenv();
-#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
-	/* Ambient heap holds gate-time HW probe results for ELF children. */
-	if (r->mmu.live && r->mmu.heap_va) {
-		char pbuf[32];
-
-		snprintf(pbuf, sizeof(pbuf), "0x%lx",
-			 (unsigned long)r->mmu.heap_va);
-		setenv("KORU_PROBE_RESULT", pbuf, 1);
-	}
-#endif
 
 	for (i = 0; i < r->nbag; i++) {
 		struct ksp_grant *g = &r->bag[i].g;
@@ -708,28 +726,13 @@ static struct {
 
 int ksp_elf_gate_activate(void)
 {
-	__sz n;
-	volatile unsigned long *res;
-
+	/* Activate only. Isolation is measured by the child itself touching
+	 * ungranted addresses (real #PF -> SIGSEGV), not by gate-time
+	 * uk_nofault probes. */
 	if (!g_elf_gate.dom || !g_elf_gate.dom->live)
 		return -EINVAL;
 	if (ksp_mmu_activate(g_elf_gate.dom))
 		return -EFAULT;
-	if (g_elf_gate.result_va) {
-		res = (volatile unsigned long *)g_elf_gate.result_va;
-		res[0] = res[1] = res[2] = 0;
-		res[3] = KSP_PROBE_MAGIC;
-		if (g_elf_gate.probe_heap) {
-			n = ksp_mmu_probe_r(g_elf_gate.probe_heap, 1);
-			res[0] = (n == 0) ? 1 : 0;
-		}
-		if (g_elf_gate.probe_ro) {
-			n = ksp_mmu_probe_r(g_elf_gate.probe_ro, 1);
-			res[1] = (n >= 1) ? 1 : 0;
-			n = ksp_mmu_probe_rw(g_elf_gate.probe_ro, 1);
-			res[2] = (n == 0) ? 1 : 0;
-		}
-	}
 	return 0;
 }
 
@@ -885,6 +888,8 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 			int arc = ksp_mmu_map_from_parent(
 				&r->mmu, abase, AUXSTACK_SIZE,
 				UK_PAGING_PAGE_ATTR_PROT_RW);
+			ksp_mmu_declare(&r->mmu, abase, AUXSTACK_SIZE,
+					"kernel-half auxsp");
 			ksp_log("spawn: map auxsp base=0x%lx rc=%d",
 				(unsigned long)abase, arc);
 		}
@@ -899,6 +904,8 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 			(void)ksp_mmu_map_from_parent(
 				&r->mmu, pg, UK_PAGING_PAGE_SIZE,
 				UK_PAGING_PAGE_ATTR_PROT_RW);
+			ksp_mmu_declare(&r->mmu, pg, UK_PAGING_PAGE_SIZE,
+					"kernel-half uk_thread");
 			if (me->_mem.uktls) {
 				__vaddr_t tbase =
 					(__vaddr_t)me->_mem.uktls &
@@ -907,6 +914,8 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 				(void)ksp_mmu_map_from_parent(
 					&r->mmu, tbase, tlen,
 					UK_PAGING_PAGE_ATTR_PROT_RW);
+				ksp_mmu_declare(&r->mmu, tbase, tlen,
+						"kernel-half uktls");
 			}
 			if (me->ectx) {
 				__vaddr_t ebase =
@@ -915,6 +924,9 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 				(void)ksp_mmu_map_from_parent(
 					&r->mmu, ebase, UK_PAGING_PAGE_SIZE,
 					UK_PAGING_PAGE_ATTR_PROT_RW);
+				ksp_mmu_declare(&r->mmu, ebase,
+						UK_PAGING_PAGE_SIZE,
+						"kernel-half ectx");
 			}
 			ksp_log("spawn: map kernel-half thread=%p uktls=%p ectx=%p",
 				(void *)me, me->_mem.uktls, (void *)me->ectx);
@@ -929,15 +941,9 @@ static void __noreturn child_main(void *argc_v, void *argv_v)
 		g_elf_gate.dom = &r->mmu;
 		g_elf_gate.scratch_sp = ukarch_gen_sp(
 			(__uptr)stack_new + STACK_SIZE, STACK_SIZE);
-		g_elf_gate.probe_heap = r->mmu.parent_heap_va;
-		g_elf_gate.probe_ro = 0;
-		g_elf_gate.result_va = 0;
-		if (r->mmu.heap_va && r->mmu.heap_len >= 64) {
-			g_elf_gate.result_va = r->mmu.heap_va;
-			if (r->nmem &&
-			    !(r->mem[0].attr & UK_PAGING_PAGE_ATTR_PROT_WRITE))
-				g_elf_gate.probe_ro = r->mem[0].va;
-		}
+		/* Census after kernel-half metadata is mapped: only declared
+		 * parent-heap pages may appear in the child PT. */
+		(void)ksp_mmu_census(&r->mmu, "gate", NULL, NULL);
 		ksp_log("spawn: gate patch call0=%p entry=%p gate=%p scratch=%p",
 			(void *)slot[0], (void *)slot[1], (void *)ksp_elf_cr3_gate,
 			(void *)g_elf_gate.scratch_sp);
@@ -1024,11 +1030,28 @@ int ksp_wait(int child, int *status)
 	if (got < 0)
 		return (int)got;
 	r->state = KSP_EXITED;
-	r->status = WEXITSTATUS(wstatus);
+	if (WIFSIGNALED(wstatus)) {
+		r->status = 128 + WTERMSIG(wstatus);
+#if CONFIG_LIBUKPAGING && CONFIG_LIBUKVMEM
+		if (r->mmu.faulted)
+			ksp_log("spawn: killed child=%d.%d reason=mmu-violation sig=SIGSEGV va=0x%lx ip=0x%lx ec=0x%lx class=%s faults=%u",
+				r->instance, r->generation,
+				(unsigned long)r->mmu.fault_va,
+				r->mmu.fault_ip, r->mmu.fault_ec,
+				r->mmu.fault_class ? r->mmu.fault_class : "?",
+				r->mmu.faulted);
+#endif
+		ksp_log("spawn: exited child=%d.%d status=%d signaled=%d%s",
+			r->instance, r->generation, r->status,
+			WTERMSIG(wstatus),
+			WTERMSIG(wstatus) == SIGSEGV ? " (SIGSEGV)" : "");
+	} else {
+		r->status = WEXITSTATUS(wstatus);
+		ksp_log("spawn: exited child=%d.%d status=%d",
+			r->instance, r->generation, r->status);
+	}
 	if (status)
 		*status = r->status;
-	ksp_log("spawn: exited child=%d.%d status=%d",
-		r->instance, r->generation, r->status);
 	return 0;
 }
 

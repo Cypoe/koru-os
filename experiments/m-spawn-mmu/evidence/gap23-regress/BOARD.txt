@@ -1,0 +1,18 @@
+Regression board for the R2/R3 tree (Fabian's review of d1dc650), 2026-10-19, Europe/Berlin (CEST). TCG only, no KVM.
+
+acceptance (new code)
+  spawn-elf  E0-E12+M+G2+G3   3/3 SPAWN-ELF PASS        kernel 1b8f10f552fa  experiments/spawn-elf/evidence/elf-gap23-accept/
+  m-spawn-mmu gaps+R2/R3      3/3 M-SPAWN-MMU GAPS PASS kernel ef0253711303  experiments/m-spawn-mmu/evidence/gaps-gap23/
+
+regressions
+  spawn skeleton S1-S13       3/3 SPAWN PASS (3x)   kernel 37abae7105ff  experiments/m-spawn-mmu/evidence/gap23-regress/spawn-{1,2,3}/
+  NID                         3/3 NID PASS (3x)     kernel d6ab5c534510  experiments/m-spawn-mmu/evidence/gap23-regress/nid-{1,2,3}/
+  Slice A                     3/3 SLICE-A PASS (3x) kernel 7a0c15019b73  experiments/m-spawn-mmu/evidence/gap23-regress/slice-{1,2,3}/
+  M3 M4 M5a M6 M7 M8a M8b M7b 3/3 each (24/24 PASS; M4 "(e) open" as before)  experiments/m-spawn-mmu/evidence/gap23-regress/m3-m8b-m7b.txt
+  M9 + Q30 STAGE2             3/3 CHECKS PASS / STAGE2 CHECKS PASS  kernel 595f8c052016 (m9k4, UNCHANGED)
+                              experiments/m9-hyprland/evidence/recount-gap23/
+
+not covered
+  R1: m9k4 has no koruspawn MMU; foot runs on the parent CR3. The M9 recount is a
+  regression count only, there is no foot-side hardware negative. Label stays
+  "not yet ready (gaps listed)".

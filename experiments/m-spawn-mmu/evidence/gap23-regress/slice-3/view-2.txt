@@ -1,0 +1,9 @@
+7.240 view: child=2.1 state=running tick=23/30 t_ms=6900 store=16/16 evicted=7 held=8..23 last=20,21,22,23
+7.544 view: child=2.1 state=running tick=24/30 t_ms=7200 store=16/16 evicted=8 held=9..24 last=21,22,23,24
+7.847 view: child=2.1 state=running tick=25/30 t_ms=7500 store=16/16 evicted=9 held=10..25 last=22,23,24,25
+8.150 view: child=2.1 state=running tick=26/30 t_ms=7800 store=16/16 evicted=10 held=11..26 last=23,24,25,26
+8.454 view: child=2.1 state=running tick=27/30 t_ms=8100 store=16/16 evicted=11 held=12..27 last=24,25,26,27
+8.757 view: child=2.1 state=running tick=28/30 t_ms=8400 store=16/16 evicted=12 held=13..28 last=25,26,27,28
+9.061 view: child=2.1 state=running tick=29/30 t_ms=8700 store=16/16 evicted=13 held=14..29 last=26,27,28,29
+9.364 view: child=2.1 state=running tick=30/30 t_ms=9000 store=16/16 evicted=14 held=15..30 last=27,28,29,30
+9.365 view: child=2.1 state=exited tick=30/30 t_ms=9001 store=16/16 evicted=14 held=15..30 last=27,28,29,30

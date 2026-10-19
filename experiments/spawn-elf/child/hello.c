@@ -6,36 +6,34 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#define KSP_PROBE_MAGIC 0x4B535052554C54ULL
-
-static void run_mmu_report(int outfd)
+/* Gap 3: the child itself dereferences an address named by an env grant
+ * (KORU_TOUCH, mode KORU_TOUCH_MODE r|w, optional KORU_SLEEP_US first).
+ * Under its own CR3 an ungranted address must raise a real #PF that the
+ * kernel turns into SIGSEGV; "survived" lines mean it was NOT isolated
+ * (or, for the RO-read positive control, that the grant works). */
+static void run_touch(int outfd)
 {
-	const char *rs;
-	unsigned long *res;
-	char *end;
+	const char *t = getenv("KORU_TOUCH");
+	const char *m = getenv("KORU_TOUCH_MODE");
+	const char *sl = getenv("KORU_SLEEP_US");
+	volatile unsigned char *p;
 
-	rs = getenv("KORU_PROBE_RESULT");
-	if (!rs)
+	if (!t)
 		return;
-	res = (unsigned long *)strtoul(rs, &end, 0);
-	if (!res)
-		return;
-	/* Ambient heap is mapped in the child PT; reading it proves child CR3. */
-	if (res[3] != KSP_PROBE_MAGIC) {
-		dprintf(outfd, "child: FAIL probe magic=0x%lx\n", res[3]);
-		return;
+	p = (volatile unsigned char *)strtoul(t, NULL, 0);
+	if (sl) {
+		usleep((useconds_t)atoi(sl));
+		dprintf(outfd, "child: slept %s us\n", sl);
 	}
-	if (res[0] == 1)
-		dprintf(outfd, "child: parent-heap fault ok (hw under child CR3)\n");
-	else
-		dprintf(outfd, "child: FAIL parent-heap not isolated\n");
-	if (res[1] == 0 && res[2] == 0)
-		; /* no RO grant in this bag — skip */
-	else if (res[1] == 1 && res[2] == 1)
-		dprintf(outfd, "child: attenuation RO write fault ok (hw under child CR3)\n");
-	else
-		dprintf(outfd, "child: FAIL attenuation read=%lu write_fault=%lu\n",
-			res[1], res[2]);
+	dprintf(outfd, "child: touch va=%p mode=%s\n", (void *)p, m ? m : "r");
+	if (m && m[0] == 'w') {
+		*p = 0x5a;
+		dprintf(outfd, "child: touch write survived\n");
+	} else {
+		unsigned v = *p;
+
+		dprintf(outfd, "child: touch read survived value=0x%02x\n", v);
+	}
 }
 
 int main(int argc, char **argv)
@@ -67,7 +65,7 @@ int main(int argc, char **argv)
 		for (e = environ; *e; e++)
 			dprintf(1, "child: env %s\n", *e);
 	}
-	run_mmu_report(1);
+	run_touch(1);
 	if (access("/etc/passwd", R_OK) == 0)
 		dprintf(1, "child: FAIL ambient /etc/passwd readable\n");
 	else

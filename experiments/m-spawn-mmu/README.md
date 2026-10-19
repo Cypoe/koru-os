@@ -10,11 +10,16 @@ Closes the three gaps before Spawn acceptance review:
 
 `evidence/gaps-accept/run-{1,2,3}/` — **M-SPAWN-MMU GAPS PASS 3/3** under TCG.
 
-Spawn lib acceptance status: **ready for Fabian review** (not accepted).
+Spawn lib acceptance status: **not yet ready (gaps listed)** (Fabian's review of `d1dc650`; R1 open, see below and DESIGN-0001 §8.6.7d).
+
+## Review gaps R2/R3 (2026-10-19 ~23:00 CEST)
+
+`evidence/gaps-gap23/run-{1,2,3}/`: **M-SPAWN-MMU GAPS PASS 3/3** on the R2/R3 tree (direct-map strip, non-image strip, census, CR3 exception hooks, SIGSEGV path). R1 (foot on child CR3 in M9) open.
 
 ## Remaining
 
-- External ELF runs on **child CR3** (see below).
+- **R1:** foot (Hyprland child) on child CR3 in the M9 kernel + foot-side hw negative.
+- Ring 0 residual; kernel-half metadata pages are parent heap frames (declared).
 - Q33 open → keep pushes to Cypoe/koru-os only; no GPL/images/WAD.
 
 ## Build / run

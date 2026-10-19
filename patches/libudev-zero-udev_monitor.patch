@@ -1,0 +1,46 @@
+# libudev-zero udev_monitor.c (koru-os pipe monitor, B-M7b). Upstream: https://github.com/illiliti/libudev-zero @ 8f1d3d0624496f1c4967f18d6afaddbd552d8bce (ISC).
+# Same hunk as experiments/m9-hyprland/patches/libudev-zero-pipe-monitor.patch; source only, no .o/.so.
+diff --git a/udev_monitor.c b/udev_monitor.c
+index d533a48..06e83a9 100644
+--- a/udev_monitor.c
++++ b/udev_monitor.c
+@@ -17,6 +17,7 @@
+ 
+ #include <string.h>
+ #include <unistd.h>
++#include <fcntl.h>
+ #include <stdlib.h>
+ #include <sys/socket.h>
+ #include <linux/netlink.h>
+@@ -149,6 +150,9 @@ int udev_monitor_enable_receiving(struct udev_monitor *udev_monitor)
+         return -1;
+     }
+ 
++    if (!udev_monitor->nlgrp)
++        return 0; /* pipe fallback: nothing to bind */
++
+     sa.nl_family = AF_NETLINK;
+     sa.nl_groups = udev_monitor->nlgrp;
+     return bind(udev_monitor->fd, (struct sockaddr *)&sa, sizeof(sa));
+@@ -227,8 +231,19 @@ struct udev_monitor *udev_monitor_new_from_netlink(struct udev *udev, const char
+     udev_monitor->fd = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, NETLINK_KOBJECT_UEVENT);
+ 
+     if (udev_monitor->fd == -1) {
+-        free(udev_monitor);
+-        return NULL;
++        /* koru-os M9: no AF_NETLINK. A pipe never fires; hotplug is not needed
++         * (devices are published once into /sys at boot). */
++        int pfd[2];
++
++        if (pipe(pfd) == -1) {
++            free(udev_monitor);
++            return NULL;
++        }
++        close(pfd[1]);
++        udev_monitor->fd = pfd[0];
++        udev_monitor->nlgrp = 0;
++        fcntl(udev_monitor->fd, F_SETFL, O_NONBLOCK);
++        fcntl(udev_monitor->fd, F_SETFD, FD_CLOEXEC);
+     }
+ 
+     udev_monitor->refcount = 1;

@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "name": "koru",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/korulang/koru.git",
+        "revision": "3d81f837f63dc9eb0b5a5a6f96e17e09f3cc0aeb"
+      },
+      "target": "tc/koru"
+    },
+    {
+      "name": "koru-libs",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/korulang/koru-libs.git",
+        "revision": "ff5cb559e1c00431a1bb36024871c760a9bdcbe9"
+      },
+      "target": "tc/koru-libs"
+    },
+    {
+      "name": "unikraft",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/unikraft/unikraft.git",
+        "revision": "7351f8b563c9e6773da9fdd5bacde6ac91e32112"
+      },
+      "target": "upstream/unikraft"
+    },
+    {
+      "name": "lib-libelf",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/unikraft/lib-libelf.git",
+        "revision": "c03d4ceb22a2b9e9799238f9c277a14284d313ad"
+      },
+      "target": "upstream/lib-libelf"
+    },
+    {
+      "name": "app-elfloader-stable",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/unikraft/app-elfloader.git",
+        "revision": "6ecbcd08d85b4688112a3b275a9c8446cf59e25d"
+      },
+      "target": "upstream/app-elfloader"
+    },
+    {
+      "name": "app-elfloader",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/unikraft/app-elfloader.git",
+        "revision": "0cd7a2b2c4d5ece85647c0c9903b50426e849420"
+      },
+      "target": "m3/app-elfloader"
+    },
+    {
+      "name": "unikraft-catalog",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/unikraft/catalog.git",
+        "revision": "476b59ce1ea67979ec32b79d61ae0aae29f745b9"
+      },
+      "target": "m3/catalog"
+    },
+    {
+      "name": "libudev-zero",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/illiliti/libudev-zero.git",
+        "revision": "8f1d3d0624496f1c4967f18d6afaddbd552d8bce"
+      },
+      "target": "m7bin/src/libudev-zero"
+    },
+    {
+      "name": "foot",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://codeberg.org/dnkl/foot.git",
+        "revision": "ab33c9a19d626f8d0ac0bd1adfdba21946ada948"
+      },
+      "target": "m9src/foot"
+    },
+    {
+      "name": "aquamarine",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/hyprwm/aquamarine.git",
+        "revision": "f31c47a1b9d300847d8fc3108ad959448103dfc1"
+      },
+      "target": "m9src/aquamarine"
+    }
+  ]
+}

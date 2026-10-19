@@ -1,0 +1,263 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+06FC6E00+06F06E00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM..Powered by Unikraft Ijiraq (0.21.0)
+[    0.103260] ERR:  [appkoruos] <main.c @   33> m-spawn-mmu: gaps 1-3 begin
+m-spawn-mmu: gaps 1-3 begin
+[    0.104081] ERR:  [appkoruos] <main.c @   33> == gap1 no parent heap/stack ==
+== gap1 no parent heap/stack ==
+[    0.105073] ERR:  [appkoruos] <mmu.c @  109> mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+[    0.105442] ERR:  [appkoruos] <mmu.c @  109> mmu: parent_heap va=0x400000000 len=0x7e90000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7e90000 (will unmap in child)
+[    0.106711] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x400000000 len=0x7e90000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7e90000 name=heap rc=0
+[    0.106966] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.107190] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.107412] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+[    0.107633] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+[    0.108897] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+[    0.109711] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+[    0.110649] ERR:  [appkoruos] <mmu.c @  109> mmu: directmap strip slot=511 base=0xffffff8000000000 tables_freed=1 (no physmap alias in child PT)
+mmu: directmap strip slot=511 base=0xffffff8000000000 tables_freed=1 (no physmap alias in child PT)
+[    0.112453] ERR:  [appkoruos] <mmu.c @  109> mmu: strip non-image leftovers pages=3145921 keep=[0x100000,0x17d000) (kernel image only)
+mmu: strip non-image leftovers pages=3145921 keep=[0x100000,0x17d000) (kernel image only)
+[    0.114144] ERR:  [appkoruos] <mmu.c @  109> mmu: grant va=0x100008a000 len=0x1000 attr=0x1 cow=0 gi=0
+mmu: grant va=0x100008a000 len=0x1000 attr=0x1 cow=0 gi=0
+[    0.115261] ERR:  [appkoruos] <mmu.c @  109> mmu: directmap slot=511 already absent in child PT
+mmu: directmap slot=511 already absent in child PT
+[    0.117539] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive child_leaves=126 child_pages=126 dm_leaves=0 parent_heap_frames_declared=0 parent_heap_frame_aliases_undeclared=0 untracked=0
+mmu: census phase=derive child_leaves=126 child_pages=126 dm_leaves=0 parent_heap_frames_declared=0 parent_heap_frame_aliases_undeclared=0 untracked=0
+[    0.119544] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive range va=0x100000 pa=0x100000 len=0x7d000
+mmu: census phase=derive range va=0x100000 pa=0x100000 len=0x7d000
+[    0.120688] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive range va=0x100008a000 pa=0x5b000 len=0x1000
+mmu: census phase=derive range va=0x100008a000 pa=0x5b000 len=0x1000
+[    0.121880] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive declared va=0x100008a000 len=0x1000 what=grant
+mmu: census phase=derive declared va=0x100008a000 len=0x1000 what=grant
+[    0.123048] ERR:  [appkoruos] <mmu.c @  109> mmu: derive done (no parent heap/stack/physmap in child PT)
+mmu: derive done (no parent heap/stack/physmap in child PT)
+[    0.124151] ERR:  [appkoruos] <main.c @   33> PASS gap1 derive (strips heap+stack)
+PASS gap1 derive (strips heap+stack)
+[    0.125833] ERR:  [appkoruos] <mmu.c @  109> mmu: ambient stack va=0x100008b000 len=0x10000 pa=0x7f8b000
+mmu: ambient stack va=0x100008b000 len=0x10000 pa=0x7f8b000
+[    0.126915] ERR:  [appkoruos] <mmu.c @  109> mmu: ambient heap va=0x100009b000 len=0x10000 pa=0x7f9d000
+mmu: ambient heap va=0x100009b000 len=0x10000 pa=0x7f9d000
+[    0.127979] ERR:  [appkoruos] <main.c @   33> PASS gap1 provision ambient
+PASS gap1 provision ambient
+[    0.129676] ERR:  [appkoruos] <main.c @   33> PASS gap1 fault: child cannot read parent heap
+PASS gap1 fault: child cannot read parent heap
+[    0.130723] ERR:  [appkoruos] <main.c @   33> PASS gap1 fault: ungranted secret
+PASS gap1 fault: ungranted secret
+[    0.131739] ERR:  [appkoruos] <main.c @   33> PASS gap1 granted readable
+PASS gap1 granted readable
+[    0.132430] ERR:  [appkoruos] <main.c @   33> PASS gap1 attenuation RO write faults
+PASS gap1 attenuation RO write faults
+[    0.133422] ERR:  [appkoruos] <main.c @   33> PASS gap1 own ambient heap writable
+PASS gap1 own ambient heap writable
+[    0.134398] ERR:  [appkoruos] <main.c @   33> PASS gap1 parent secret intact after
+PASS gap1 parent secret intact after
+[    0.135620] ERR:  [appkoruos] <mmu.c @  109> mmu: destroy child PT
+mmu: destroy child PT
+[    0.136293] ERR:  [appkoruos] <main.c @   33> == gap2 always-on AS (zero mem grants) ==
+== gap2 always-on AS (zero mem grants) ==
+[    0.137404] ERR:  [appkoruos] <mmu.c @  109> mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=0 (strip ALL parent VMAs incl heap/stack)
+[    0.138474] ERR:  [appkoruos] <mmu.c @  109> mmu: parent_heap va=0x400000000 len=0x7e90000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7e90000 (will unmap in child)
+[    0.139587] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x400000000 len=0x7e90000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7e90000 name=heap rc=0
+[    0.140601] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.141643] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.142656] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+[    0.143642] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+[    0.144658] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+[    0.145683] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+[    0.146691] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+[    0.147710] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+[    0.148762] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+[    0.149817] ERR:  [appkoruos] <mmu.c @  109> mmu: directmap strip slot=511 base=0xffffff8000000000 tables_freed=1 (no physmap alias in child PT)
+mmu: directmap strip slot=511 base=0xffffff8000000000 tables_freed=1 (no physmap alias in child PT)
+[    0.151251] ERR:  [appkoruos] <mmu.c @  109> mmu: strip non-image leftovers pages=3145920 keep=[0x100000,0x17d000) (kernel image only)
+mmu: strip non-image leftovers pages=3145920 keep=[0x100000,0x17d000) (kernel image only)
+[    0.152583] ERR:  [appkoruos] <mmu.c @  109> mmu: directmap slot=511 already absent in child PT
+mmu: directmap slot=511 already absent in child PT
+[    0.153622] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive child_leaves=125 child_pages=125 dm_leaves=0 parent_heap_frames_declared=0 parent_heap_frame_aliases_undeclared=0 untracked=0
+mmu: census phase=derive child_leaves=125 child_pages=125 dm_leaves=0 parent_heap_frames_declared=0 parent_heap_frame_aliases_undeclared=0 untracked=0
+[    0.155358] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive range va=0x100000 pa=0x100000 len=0x7d000
+mmu: census phase=derive range va=0x100000 pa=0x100000 len=0x7d000
+[    0.156341] ERR:  [appkoruos] <mmu.c @  109> mmu: derive done (no parent heap/stack/physmap in child PT)
+mmu: derive done (no parent heap/stack/physmap in child PT)
+[    0.157322] ERR:  [appkoruos] <main.c @   33> PASS gap2 derive empty bag
+PASS gap2 derive empty bag
+[    0.158252] ERR:  [appkoruos] <mmu.c @  109> mmu: ambient stack va=0x10000ab000 len=0x10000 pa=0x7fb8000
+mmu: ambient stack va=0x10000ab000 len=0x10000 pa=0x7fb8000
+[    0.159167] ERR:  [appkoruos] <mmu.c @  109> mmu: ambient heap va=0x10000bb000 len=0x10000 pa=0x7fb4000
+mmu: ambient heap va=0x10000bb000 len=0x10000 pa=0x7fb4000
+[    0.160103] ERR:  [appkoruos] <main.c @   33> PASS gap2 ambient
+PASS gap2 ambient
+[    0.160866] ERR:  [appkoruos] <main.c @   33> PASS gap2 zero-grant: parent heap fault
+PASS gap2 zero-grant: parent heap fault
+[    0.161857] ERR:  [appkoruos] <main.c @   33> PASS gap2 zero-grant: own stack ok
+PASS gap2 zero-grant: own stack ok
+[    0.162781] ERR:  [appkoruos] <mmu.c @  109> mmu: destroy child PT
+mmu: destroy child PT
+[    0.163391] ERR:  [appkoruos] <main.c @   33> == gap3 sched CR3 multi-AS ==
+== gap3 sched CR3 multi-AS ==
+[    0.164205] ERR:  [appkoruos] <mmu.c @  109> mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+[    0.165154] ERR:  [appkoruos] <mmu.c @  109> mmu: parent_heap va=0x400000000 len=0x7e90000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7e90000 (will unmap in child)
+[    0.166144] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x400000000 len=0x7e90000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7e90000 name=heap rc=0
+[    0.166997] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.167902] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.168810] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+[    0.169707] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+[    0.170590] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+[    0.171690] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+[    0.172614] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+[    0.173600] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+[    0.174508] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+[    0.175389] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x10000ab000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ab000 len=0x10000 name=child-ambient-stack rc=0
+[    0.176336] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x10000bb000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000bb000 len=0x10000 name=child-ambient-heap rc=0
+[    0.177404] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x10000cc000 len=0x1000 name=sec-b rc=0
+mmu: strip va=0x10000cc000 len=0x1000 name=sec-b rc=0
+[    0.178547] ERR:  [appkoruos] <mmu.c @  109> mmu: directmap strip slot=511 base=0xffffff8000000000 tables_freed=1 (no physmap alias in child PT)
+mmu: directmap strip slot=511 base=0xffffff8000000000 tables_freed=1 (no physmap alias in child PT)
+[    0.179884] ERR:  [appkoruos] <mmu.c @  109> mmu: strip non-image leftovers pages=3145921 keep=[0x100000,0x17d000) (kernel image only)
+mmu: strip non-image leftovers pages=3145921 keep=[0x100000,0x17d000) (kernel image only)
+[    0.181246] ERR:  [appkoruos] <mmu.c @  109> mmu: grant va=0x10000cb000 len=0x1000 attr=0x1 cow=0 gi=0
+mmu: grant va=0x10000cb000 len=0x1000 attr=0x1 cow=0 gi=0
+[    0.182177] ERR:  [appkoruos] <mmu.c @  109> mmu: directmap slot=511 already absent in child PT
+mmu: directmap slot=511 already absent in child PT
+[    0.183084] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive child_leaves=126 child_pages=126 dm_leaves=0 parent_heap_frames_declared=0 parent_heap_frame_aliases_undeclared=0 untracked=0
+mmu: census phase=derive child_leaves=126 child_pages=126 dm_leaves=0 parent_heap_frames_declared=0 parent_heap_frame_aliases_undeclared=0 untracked=0
+[    0.184566] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive range va=0x100000 pa=0x100000 len=0x7d000
+mmu: census phase=derive range va=0x100000 pa=0x100000 len=0x7d000
+[    0.185428] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive range va=0x10000cb000 pa=0x7fad000 len=0x1000
+mmu: census phase=derive range va=0x10000cb000 pa=0x7fad000 len=0x1000
+[    0.186290] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive declared va=0x10000cb000 len=0x1000 what=grant
+mmu: census phase=derive declared va=0x10000cb000 len=0x1000 what=grant
+[    0.187153] ERR:  [appkoruos] <mmu.c @  109> mmu: derive done (no parent heap/stack/physmap in child PT)
+mmu: derive done (no parent heap/stack/physmap in child PT)
+[    0.188220] ERR:  [appkoruos] <mmu.c @  109> mmu: ambient stack va=0x10000cd000 len=0x10000 pa=0x18e000
+mmu: ambient stack va=0x10000cd000 len=0x10000 pa=0x18e000
+[    0.189058] ERR:  [appkoruos] <mmu.c @  109> mmu: ambient heap va=0x10000dd000 len=0x8000 pa=0x1a0000
+mmu: ambient heap va=0x10000dd000 len=0x8000 pa=0x1a0000
+[    0.189907] ERR:  [appkoruos] <main.c @   33> PASS gap3 d0 ready
+PASS gap3 d0 ready
+[    0.190532] ERR:  [appkoruos] <mmu.c @  109> mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+mmu: pt_clone ok grants=1 (strip ALL parent VMAs incl heap/stack)
+[    0.193930] ERR:  [appkoruos] <mmu.c @  109> mmu: parent_heap va=0x400000000 len=0x7e90000 (will unmap in child)
+mmu: parent_heap va=0x400000000 len=0x7e90000 (will unmap in child)
+[    0.194837] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x400000000 len=0x7e90000 name=heap rc=0
+mmu: strip va=0x400000000 len=0x7e90000 name=heap rc=0
+[    0.195650] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000000000 len=0x15000 name=- rc=0
+[    0.196461] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+mmu: strip va=0x1000015000 len=0x15000 name=- rc=0
+[    0.197275] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+mmu: strip va=0x100002a000 len=0x25000 name=- rc=0
+[    0.198081] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+mmu: strip va=0x100004f000 len=0x15000 name=- rc=0
+[    0.198890] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+mmu: strip va=0x1000064000 len=0x25000 name=- rc=0
+[    0.199695] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+mmu: strip va=0x1000089000 len=0x1000 name=mmu-secret rc=0
+[    0.200523] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+mmu: strip va=0x100008a000 len=0x1000 name=mmu-allowed rc=0
+[    0.201487] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x100008b000 len=0x10000 name=child-ambient-stack rc=0
+[    0.202371] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x100009b000 len=0x10000 name=child-ambient-heap rc=0
+[    0.203234] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x10000ab000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000ab000 len=0x10000 name=child-ambient-stack rc=0
+[    0.204093] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x10000bb000 len=0x10000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000bb000 len=0x10000 name=child-ambient-heap rc=0
+[    0.204950] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x10000cb000 len=0x1000 name=sec-a rc=0
+mmu: strip va=0x10000cb000 len=0x1000 name=sec-a rc=0
+[    0.205769] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x10000cd000 len=0x10000 name=child-ambient-stack rc=0
+mmu: strip va=0x10000cd000 len=0x10000 name=child-ambient-stack rc=0
+[    0.206635] ERR:  [appkoruos] <mmu.c @  109> mmu: strip va=0x10000dd000 len=0x8000 name=child-ambient-heap rc=0
+mmu: strip va=0x10000dd000 len=0x8000 name=child-ambient-heap rc=0
+[    0.207488] ERR:  [appkoruos] <mmu.c @  109> mmu: directmap strip slot=511 base=0xffffff8000000000 tables_freed=1 (no physmap alias in child PT)
+mmu: directmap strip slot=511 base=0xffffff8000000000 tables_freed=1 (no physmap alias in child PT)
+[    0.208637] ERR:  [appkoruos] <mmu.c @  109> mmu: strip non-image leftovers pages=3145921 keep=[0x100000,0x17d000) (kernel image only)
+mmu: strip non-image leftovers pages=3145921 keep=[0x100000,0x17d000) (kernel image only)
+[    0.209763] ERR:  [appkoruos] <mmu.c @  109> mmu: grant va=0x10000cc000 len=0x1000 attr=0x1 cow=0 gi=0
+mmu: grant va=0x10000cc000 len=0x1000 attr=0x1 cow=0 gi=0
+[    0.210609] ERR:  [appkoruos] <mmu.c @  109> mmu: directmap slot=511 already absent in child PT
+mmu: directmap slot=511 already absent in child PT
+[    0.211588] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive child_leaves=126 child_pages=126 dm_leaves=0 parent_heap_frames_declared=0 parent_heap_frame_aliases_undeclared=0 untracked=0
+mmu: census phase=derive child_leaves=126 child_pages=126 dm_leaves=0 parent_heap_frames_declared=0 parent_heap_frame_aliases_undeclared=0 untracked=0
+[    0.213109] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive range va=0x100000 pa=0x100000 len=0x7d000
+mmu: census phase=derive range va=0x100000 pa=0x100000 len=0x7d000
+[    0.213972] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive range va=0x10000cc000 pa=0x7fb9000 len=0x1000
+mmu: census phase=derive range va=0x10000cc000 pa=0x7fb9000 len=0x1000
+[    0.214839] ERR:  [appkoruos] <mmu.c @  109> mmu: census phase=derive declared va=0x10000cc000 len=0x1000 what=grant
+mmu: census phase=derive declared va=0x10000cc000 len=0x1000 what=grant
+[    0.215762] ERR:  [appkoruos] <mmu.c @  109> mmu: derive done (no parent heap/stack/physmap in child PT)
+mmu: derive done (no parent heap/stack/physmap in child PT)
+[    0.216791] ERR:  [appkoruos] <mmu.c @  109> mmu: ambient stack va=0x10000e5000 len=0x10000 pa=0x1bc000
+mmu: ambient stack va=0x10000e5000 len=0x10000 pa=0x1bc000
+[    0.217636] ERR:  [appkoruos] <mmu.c @  109> mmu: ambient heap va=0x10000f5000 len=0x8000 pa=0x1c2000
+mmu: ambient heap va=0x10000f5000 len=0x8000 pa=0x1c2000
+[    0.218473] ERR:  [appkoruos] <main.c @   33> PASS gap3 d1 ready
+PASS gap3 d1 ready
+[    0.219370] ERR:  [appkoruos] <main.c @   33> PASS gap3 create threads
+PASS gap3 create threads
+[    0.220053] ERR:  [appkoruos] <mmu.c @  109> mmu: bind thread=0x40000d020 domain=0x1432e0
+mmu: bind thread=0x40000d020 domain=0x1432e0
+[    0.220954] ERR:  [appkoruos] <mmu.c @  109> mmu: bind thread=0x400021020 domain=0x1430a0
+mmu: bind thread=0x400021020 domain=0x1430a0
+[    0.234924] ERR:  [appkoruos] <mmu.c @  109> mmu: bind thread=0x40000d020 domain=0
+mmu: bind thread=0x40000d020 domain=0
+[    0.235928] ERR:  [appkoruos] <mmu.c @  109> mmu: bind thread=0x400021020 domain=0
+mmu: bind thread=0x400021020 domain=0
+[    0.236738] ERR:  [appkoruos] <main.c @   33> PASS gap3 both threads finished
+PASS gap3 both threads finished
+[    0.237513] ERR:  [appkoruos] <main.c @   33> PASS gap3 isolation A
+PASS gap3 isolation A
+[    0.238059] ERR:  [appkoruos] <main.c @   33> PASS gap3 isolation B
+PASS gap3 isolation B
+[    0.238606] ERR:  [appkoruos] <main.c @   33> PASS gap3 stress switches
+PASS gap3 stress switches
+[    0.239164] ERR:  [appkoruos] <main.c @   33> gap3 stress_switches=400
+gap3 stress_switches=400
+[    0.239758] ERR:  [appkoruos] <mmu.c @  109> mmu: destroy child PT
+mmu: destroy child PT
+[    0.240330] ERR:  [appkoruos] <mmu.c @  109> mmu: destroy child PT
+mmu: destroy child PT
+[    0.240966] ERR:  [appkoruos] <main.c @   33> M-SPAWN-MMU GAPS PASS
+M-SPAWN-MMU GAPS PASS
+[    0.242148] ERR:  [libukpm] <pm.c @   69> PM driver failed the operation: -5. Falling back on busy loop...

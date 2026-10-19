@@ -21,6 +21,12 @@
 #include <uk/vmem/vma_types.h>
 
 #include "mmu.h"
+#include <signal.h>
+#include <uk/plat/config.h>
+#include <uk/arch/ctx.h>
+#include <uk/lcpu.h>
+#include <uk/lcpu/auxsp.h>
+#include <uk/plat/pal/addr.h>
 #if CONFIG_LIBSYSCALL_SHIM
 #include <uk/syscall_entertab.h>
 #include <uk/syscall_exittab.h>
@@ -40,9 +46,50 @@
 
 static struct uk_pagetable *g_parent_pt;
 static struct ksp_mmu_domain *g_active_dom;
+/* Authoritative child-context test: the hardware CR3. g_active_dom and the
+ * sched/syscall counters are advisory; the exception hooks key off this. */
+#define KSP_DOM_MAX 32
+static struct ksp_mmu_domain *g_doms[KSP_DOM_MAX];
+static unsigned g_ndoms;
+
+static void dom_register(struct ksp_mmu_domain *d)
+{
+	unsigned i;
+
+	for (i = 0; i < g_ndoms; i++)
+		if (g_doms[i] == d)
+			return;
+	if (g_ndoms < KSP_DOM_MAX)
+		g_doms[g_ndoms++] = d;
+}
+
+static void dom_unregister(struct ksp_mmu_domain *d)
+{
+	unsigned i;
+
+	for (i = 0; i < g_ndoms; i++)
+		if (g_doms[i] == d) {
+			g_doms[i] = g_doms[--g_ndoms];
+			return;
+		}
+}
+
+static struct ksp_mmu_domain *dom_by_cr3(__paddr_t cr3)
+{
+	unsigned i;
+
+	for (i = 0; i < g_ndoms; i++)
+		if (g_doms[i]->live && g_doms[i]->pt.pt_pbase == cr3)
+			return g_doms[i];
+	return NULL;
+}
 static int ksp_mmu_nofault_depth;
 void ksp_mmu_nofault_begin(void);
 void ksp_mmu_nofault_end(void);
+int ksp_mmu_strip_directmap(struct ksp_mmu_domain *d);
+int ksp_mmu_strip_nonimage(struct ksp_mmu_domain *d);
+long ksp_mmu_census(struct ksp_mmu_domain *d, const char *phase,
+		    __vaddr_t *hits_out, unsigned *nhits_out);
 
 static void mlog(const char *fmt, ...)
 {
@@ -240,6 +287,10 @@ int ksp_mmu_derive(struct ksp_mmu_domain *d, struct uk_vas *parent_vas,
 		     vma->name ? vma->name : "-", rc);
 	}
 
+#if defined(__x86_64__)
+	(void)ksp_mmu_strip_directmap(d);
+	(void)ksp_mmu_strip_nonimage(d);
+#endif
 	for (i = 0; i < ngrants; i++) {
 		rc = map_grant(&d->pt, &grants[i]);
 		if (rc) {
@@ -248,13 +299,31 @@ int ksp_mmu_derive(struct ksp_mmu_domain *d, struct uk_vas *parent_vas,
 			uk_paging_pt_free(&d->pt, UK_PAGING_PAGE_FLAG_KEEP_FRAMES);
 			return rc;
 		}
+		ksp_mmu_declare(d, grants[i].va, grants[i].len, "grant");
 		mlog("mmu: grant va=0x%lx len=0x%lx attr=0x%lx cow=%d gi=%u",
 		     (unsigned long)grants[i].va, (unsigned long)grants[i].len,
 		     (unsigned long)grants[i].attr, grants[i].cow, grants[i].gi);
 	}
 
 	d->live = 1;
-	mlog("mmu: derive done (no parent heap/stack in child PT)");
+#if defined(__x86_64__)
+	rc = ksp_mmu_strip_directmap(d);
+	if (rc) {
+		mlog("mmu: directmap strip rc=%d (refuse)", rc);
+		uk_paging_pt_free(&d->pt, UK_PAGING_PAGE_FLAG_KEEP_FRAMES);
+		d->live = 0;
+		return rc;
+	}
+	if (d->parent_heap_len &&
+	    ksp_mmu_census(d, "derive", NULL, NULL) != 0) {
+		mlog("mmu: derive refuse (parent-heap frame aliased in child PT)");
+		uk_paging_pt_free(&d->pt, UK_PAGING_PAGE_FLAG_KEEP_FRAMES);
+		d->live = 0;
+		return -EPERM;
+	}
+#endif
+	dom_register(d);
+	mlog("mmu: derive done (no parent heap/stack/physmap in child PT)");
 	return 0;
 }
 
@@ -386,13 +455,21 @@ int ksp_mmu_activate(struct ksp_mmu_domain *d)
 
 	if (!d || !d->live)
 		return -EINVAL;
-	rc = uk_paging_pt_set_active(&d->pt);
-	if (rc)
-		return rc;
-	d->active = 1;
-	g_active_dom = d;
-	uk_paging_tlb_flush();
-	return 0;
+	{
+		unsigned long irqf = uk_lcpu_save_irqf();
+
+		/* Domain first: an exception between the two must see it. */
+		g_active_dom = d;
+		d->active = 1;
+		rc = uk_paging_pt_set_active(&d->pt);
+		if (rc) {
+			d->active = 0;
+			g_active_dom = NULL;
+		}
+		uk_paging_tlb_flush();
+		uk_lcpu_restore_irqf(irqf);
+	}
+	return rc;
 }
 
 int ksp_mmu_deactivate(struct ksp_mmu_domain *d)
@@ -453,6 +530,11 @@ void ksp_mmu_sched_arrive(void)
 	if (!d || !d->live)
 		return;
 	if (g_active_dom == d)
+		return;
+	/* Resumed inside a syscall (blocked, then rescheduled): the rest of
+	 * the syscall, incl. signal delivery in the exit table, runs on the
+	 * parent CR3; the syscall-exit hook enters the child CR3. */
+	if (d->sys_left)
 		return;
 	(void)uk_paging_pt_set_active(&d->pt);
 	if (g_active_dom)
@@ -521,6 +603,7 @@ void ksp_mmu_destroy(struct ksp_mmu_domain *d)
 		return;
 	if (d->active)
 		(void)ksp_mmu_deactivate(d);
+	dom_unregister(d);
 	(void)uk_paging_pt_free(&d->pt, UK_PAGING_PAGE_FLAG_KEEP_FRAMES);
 	d->live = 0;
 	mlog("mmu: destroy child PT");
@@ -559,27 +642,38 @@ __sz ksp_mmu_probe_rw(__vaddr_t va, __sz len)
 }
 
 #if CONFIG_LIBSYSCALL_SHIM
-/* Pair leave/restore only when the syscall interrupted a live child AS.
- * Do not call arrive() unbound — that would CR3-switch a thread that only
- * has priv set (bind) but was still on the parent PT. */
-static unsigned ksp_mmu_sys_left;
-
+/* Pair leave/restore per domain, not with a global counter: a child that
+ * dies inside a syscall (e.g. SIGSEGV delivery from the fault stub) never
+ * reaches the exit hook, and a global count would then leave every later
+ * child on the parent CR3 after its first syscall. Restore only for the
+ * bound thread whose domain was left on entry. */
 static void ksp_mmu_syscall_enter(struct uk_syscall_enter_ctx *ctx)
 {
+	struct ksp_mmu_domain *d = NULL;
+	__paddr_t cr3 = uk_paging_pt_read_base();
+
 	(void)ctx;
-	if (g_active_dom) {
+	if (g_parent_pt && cr3 != g_parent_pt->pt_pbase)
+		d = dom_by_cr3(cr3);
+	if (d) {
+		d->sys_left = 1;
+		g_active_dom = d; /* so sched_switch performs the leave */
 		ksp_mmu_sched_switch(NULL);
-		ksp_mmu_sys_left++;
 	}
 }
 
 static void ksp_mmu_syscall_exit(struct uk_syscall_exit_ctx *ctx)
 {
+	struct uk_thread *t = uk_thread_current();
+	struct ksp_mmu_domain *d;
+
 	(void)ctx;
-	if (ksp_mmu_sys_left) {
-		ksp_mmu_sys_left--;
-		if (!ksp_mmu_sys_left)
-			ksp_mmu_sched_arrive();
+	if (!t)
+		return;
+	d = (struct ksp_mmu_domain *)t->priv;
+	if (d && d->live && d->sys_left) {
+		d->sys_left = 0;
+		ksp_mmu_sched_arrive();
 	}
 }
 
@@ -588,10 +682,314 @@ uk_syscall_exittab_prio(ksp_mmu_syscall_exit, UK_PRIO_LATEST);
 #endif /* CONFIG_LIBSYSCALL_SHIM */
 
 #if CONFIG_LIBUKPAGING
-/* IRQ/PF CR3 leave: handlers touch parent heap; pair with arrive.
- * ksp_mmu_nofault_begin/end: PF leave disabled so uk_nofault probes see the
- * child PT (gaps / ksp_mmu_hw_probe). */
-static unsigned ksp_mmu_exc_left;
+/* ------------------------------------------------------------------------
+ * Gap 2: direct-map (physmap) aliases.
+ *
+ * The parent PT maps all RAM at UK_PAL_DIRECTMAP_AREA_START (x86_64: the
+ * whole top-level slot 511, -512 GiB). pt_clone deep-copies it, so a child
+ * could reach any parent frame (heap included) at DM_BASE + pa. We drop the
+ * slot from the child PT and free the copied subtree. All PT manipulation
+ * runs on the parent CR3 (syscall/exception enter hooks leave first), so
+ * nothing under the child CR3 needs the direct map.
+ * ---------------------------------------------------------------------- */
+#if defined(__x86_64__)
+#define KSP_DM_BASE	((__vaddr_t)UK_PAL_DIRECTMAP_AREA_START)
+#define X86_P		0x1ULL
+#define X86_PS		0x80ULL
+#define X86_ADDR	0x000ffffffffff000ULL
+#define KSP_DM_TOPIDX	((unsigned)((KSP_DM_BASE >> 39) & 511))
+
+static __vaddr_t canon(__vaddr_t v)
+{
+	return (v & (1ULL << 47)) ? (v | 0xffff000000000000ULL) : v;
+}
+
+static inline __u64 *dm_tbl(__paddr_t pa)
+{
+	return (__u64 *)(KSP_DM_BASE + pa);
+}
+
+/* lvl: 4=PML4 .. 1=PT (table level of the frame at `pa`). */
+static unsigned long dm_free_tbl(struct uk_pagetable *pt, __paddr_t pa,
+				 int lvl)
+{
+	__u64 *t = dm_tbl(pa);
+	unsigned long n = 0;
+	unsigned i;
+
+	if (lvl > 1)
+		for (i = 0; i < 512; i++) {
+			__u64 e = t[i];
+
+			if ((e & X86_P) && !(e & X86_PS))
+				n += dm_free_tbl(pt, e & X86_ADDR, lvl - 1);
+		}
+	pt->fa->ffree(pt->fa, pa, 1);
+	return n + 1;
+}
+
+int ksp_mmu_strip_directmap(struct ksp_mmu_domain *d)
+{
+	__u64 *top;
+	__u64 e;
+	unsigned long nfreed;
+
+	if (!d || d->pt.pt_vbase == UK_PAL_VADDR_INV || !d->pt.pt_vbase)
+		return -EINVAL;
+	top = (__u64 *)d->pt.pt_vbase;
+	e = top[KSP_DM_TOPIDX];
+	if (!(e & X86_P)) {
+		mlog("mmu: directmap slot=%u already absent in child PT",
+		     KSP_DM_TOPIDX);
+		return 0;
+	}
+	top[KSP_DM_TOPIDX] = 0;
+	nfreed = dm_free_tbl(&d->pt, e & X86_ADDR, 3);
+	d->dm_stripped = 1;
+	mlog("mmu: directmap strip slot=%u base=0x%lx tables_freed=%lu (no physmap alias in child PT)",
+	     KSP_DM_TOPIDX, (unsigned long)KSP_DM_BASE, nfreed);
+	return 0;
+}
+
+/* After VMA strip, the child PT holds only pt_clone leftovers. Keep the
+ * kernel image [_text, _end) (kernel-half: entry stubs, IDT/GDT/TSS,
+ * exception stacks and per-CPU data live there) and clear every other leaf:
+ * legacy/BIOS/VGA/ACPI identity ranges and the 1 TiB HT hole. Runs before
+ * grants/ambient/metadata are mapped. Child tables are private copies. */
+extern char _text[], _end[];
+
+static unsigned long strip_nonimage(__paddr_t tbl, int lvl, __vaddr_t base,
+				    __vaddr_t keep_lo, __vaddr_t keep_hi)
+{
+	__u64 *t = dm_tbl(tbl);
+	__sz span = 1ULL << (12 + 9 * (lvl - 1));
+	unsigned long n = 0;
+	unsigned i;
+
+	for (i = 0; i < 512; i++) {
+		__u64 e = t[i];
+		__vaddr_t va;
+
+		if (!(e & X86_P))
+			continue;
+		va = (lvl == 4) ? canon((__vaddr_t)i << 39) : base + i * span;
+		if (lvl == 4 && i == KSP_DM_TOPIDX)
+			continue;	/* already removed */
+		if (va >= keep_lo && va + (span - 1) < keep_hi)
+			continue;	/* fully inside the image */
+		if (lvl == 1 || (e & X86_PS)) {
+			if (va + (span - 1) < keep_lo || va >= keep_hi) {
+				t[i] = 0;
+				n += span / PG;
+			}
+			/* a large leaf straddling the image is kept (none
+			 * expected: the image is 4K-mapped) */
+			continue;
+		}
+		n += strip_nonimage(e & X86_ADDR, lvl - 1, va, keep_lo,
+				    keep_hi);
+	}
+	return n;
+}
+
+int ksp_mmu_strip_nonimage(struct ksp_mmu_domain *d)
+{
+	__vaddr_t lo = (__vaddr_t)_text & ~(PG - 1);
+	__vaddr_t hi = ((__vaddr_t)_end + PG - 1) & ~(PG - 1);
+	unsigned long n;
+
+	n = strip_nonimage(d->pt.pt_pbase, 4, 0, lo, hi);
+	mlog("mmu: strip non-image leftovers pages=%lu keep=[0x%lx,0x%lx) (kernel image only)",
+	     n, (unsigned long)lo, (unsigned long)hi);
+	return 0;
+}
+
+__vaddr_t ksp_mmu_dm_alias(__paddr_t pa)
+{
+	return KSP_DM_BASE + pa;
+}
+
+/* Raw leaf walker over a 4-level x86_64 table (read via the direct map,
+ * i.e. only on the parent CR3). */
+typedef void (*ksp_leaf_cb)(void *arg, __vaddr_t va, __paddr_t pa, __sz sz);
+
+static void walk_leaves(__paddr_t tbl, int lvl, __vaddr_t base,
+			__vaddr_t lo, __vaddr_t hi, ksp_leaf_cb cb, void *arg)
+{
+	__u64 *t = dm_tbl(tbl);
+	__sz span = 1ULL << (12 + 9 * (lvl - 1));
+	unsigned i;
+
+	for (i = 0; i < 512; i++) {
+		__u64 e = t[i];
+		__vaddr_t va;
+
+		if (!(e & X86_P))
+			continue;
+		va = (lvl == 4) ? canon((__vaddr_t)i << 39) : base + i * span;
+		if (va + (span - 1) < lo || va > hi)
+			continue;
+		if (lvl == 1 || (e & X86_PS)) {
+			cb(arg, va, (e & X86_ADDR) & ~((__u64)span - 1), span);
+			continue;
+		}
+		walk_leaves(e & X86_ADDR, lvl - 1, va, lo, hi, cb, arg);
+	}
+}
+
+#define KSP_MAXF	(1UL << 20) /* frames tracked: 4 GiB of RAM */
+void ksp_mmu_declare(struct ksp_mmu_domain *d, __vaddr_t va, __sz len,
+		     const char *label)
+{
+	if (!d || d->ndecl >= 16 || !len)
+		return;
+	d->decl[d->ndecl].va = va & ~(PG - 1);
+	d->decl[d->ndecl].len = ((va & (PG - 1)) + len + PG - 1) & ~(PG - 1);
+	d->decl[d->ndecl].label = label;
+	d->ndecl++;
+}
+
+struct census {
+	struct ksp_mmu_domain *d;
+	unsigned long declared;
+	unsigned char *bm;
+	__vaddr_t lo, hi;
+	unsigned long leaves, pages, hits, dm_leaves, untracked;
+	__vaddr_t hit_va[16];
+	unsigned nhit_va;
+	__vaddr_t big_va[48];
+	__paddr_t big_pa[48];
+	__sz big_sz[48];
+	unsigned nbig;
+	unsigned long big_overflow;
+};
+
+static void cb_heap(void *arg, __vaddr_t va, __paddr_t pa, __sz sz)
+{
+	struct census *c = arg;
+	__sz off;
+
+	for (off = 0; off < sz; off += PG) {
+		__paddr_t f = (pa + off) >> 12;
+
+		if (va + off < c->lo || va + off > c->hi)
+			continue;
+		if (f < KSP_MAXF)
+			c->bm[f >> 3] |= (unsigned char)(1u << (f & 7));
+		else
+			c->untracked++;
+	}
+}
+
+static void cb_child(void *arg, __vaddr_t va, __paddr_t pa, __sz sz)
+{
+	struct census *c = arg;
+	__sz off;
+
+	c->leaves++;
+	if (va >= KSP_DM_BASE)
+		c->dm_leaves++;
+	/* Coalesce VA/PA-contiguous leaves into ranges for the log. */
+	if (c->nbig && c->big_va[c->nbig - 1] + c->big_sz[c->nbig - 1] == va &&
+	    c->big_pa[c->nbig - 1] + c->big_sz[c->nbig - 1] == pa) {
+		c->big_sz[c->nbig - 1] += sz;
+	} else if (c->nbig < 48) {
+		c->big_va[c->nbig] = va;
+		c->big_pa[c->nbig] = pa;
+		c->big_sz[c->nbig] = sz;
+		c->nbig++;
+	} else {
+		c->big_overflow++;
+	}
+	for (off = 0; off < sz; off += PG) {
+		__paddr_t f = (pa + off) >> 12;
+
+		c->pages++;
+		if (f < KSP_MAXF && (c->bm[f >> 3] & (1u << (f & 7)))) {
+			unsigned k;
+			int decl = 0;
+
+			for (k = 0; k < c->d->ndecl; k++)
+				if (va + off >= c->d->decl[k].va &&
+				    va + off < c->d->decl[k].va +
+					       c->d->decl[k].len) {
+					decl = 1;
+					break;
+				}
+			if (decl) {
+				c->declared++;
+				continue;
+			}
+			c->hits++;
+			if (c->nhit_va < 16 &&
+			    (!c->nhit_va ||
+			     c->hit_va[c->nhit_va - 1] != va + off))
+				c->hit_va[c->nhit_va++] = va + off;
+		}
+	}
+}
+
+/* Count child-PT leaf pages whose frame belongs to the parent heap VMA
+ * (at any VA: heap VA, direct map, or any other alias). */
+long ksp_mmu_census(struct ksp_mmu_domain *d, const char *phase,
+		    __vaddr_t *hits_out, unsigned *nhits_out)
+{
+	struct census c;
+	unsigned i;
+
+	if (!d || !d->live || !d->parent_pt || !d->parent_heap_len)
+		return -EINVAL;
+	memset(&c, 0, sizeof(c));
+	c.d = d;
+	c.bm = calloc(KSP_MAXF / 8, 1);
+	if (!c.bm)
+		return -ENOMEM;
+	c.lo = d->parent_heap_va;
+	c.hi = d->parent_heap_va + d->parent_heap_len - 1;
+	walk_leaves(d->parent_pt->pt_pbase, 4, 0, c.lo, c.hi, cb_heap, &c);
+	c.lo = 0;
+	c.hi = ~(__vaddr_t)0;
+	walk_leaves(d->pt.pt_pbase, 4, 0, c.lo, c.hi, cb_child, &c);
+	free(c.bm);
+	mlog("mmu: census phase=%s child_leaves=%lu child_pages=%lu dm_leaves=%lu parent_heap_frames_declared=%lu parent_heap_frame_aliases_undeclared=%lu untracked=%lu",
+	     phase, c.leaves, c.pages, c.dm_leaves, c.declared, c.hits,
+	     c.untracked);
+	if (!strcmp(phase, "derive") || !strcmp(phase, "gate")) {
+		for (i = 0; i < c.nbig; i++)
+			mlog("mmu: census phase=%s range va=0x%lx pa=0x%lx len=0x%lx",
+			     phase, (unsigned long)c.big_va[i],
+			     (unsigned long)c.big_pa[i],
+			     (unsigned long)c.big_sz[i]);
+		if (c.big_overflow)
+			mlog("mmu: census phase=%s ranges_not_listed=%lu", phase,
+			     c.big_overflow);
+	}
+	for (i = 0; i < d->ndecl; i++)
+		mlog("mmu: census phase=%s declared va=0x%lx len=0x%lx what=%s",
+		     phase, (unsigned long)d->decl[i].va,
+		     (unsigned long)d->decl[i].len, d->decl[i].label);
+	for (i = 0; i < c.nhit_va; i++)
+		mlog("mmu: census phase=%s UNDECLARED alias va=0x%lx", phase,
+		     (unsigned long)c.hit_va[i]);
+	if (hits_out && nhits_out) {
+		for (i = 0; i < c.nhit_va && i < *nhits_out; i++)
+			hits_out[i] = c.hit_va[i];
+		*nhits_out = i;
+	}
+	return (long)c.hits;
+}
+#endif /* __x86_64__ */
+
+/* ------------------------------------------------------------------------
+ * CR3 leave/restore around every exception and IRQ (patched dispatcher).
+ * The previous event-handler pair was unsound: the IRQ controller handler
+ * returns UK_EVENT_HANDLED, which stops the chain, so the LATEST "arrive"
+ * never ran and the child resumed on the parent CR3 after any IRQ.
+ * ---------------------------------------------------------------------- */
+#define KSP_EXC_MAX 16
+static struct ksp_mmu_domain *g_exc_stack[KSP_EXC_MAX];
+static unsigned g_exc_depth;
+static unsigned long g_exc_under_child;
 
 void ksp_mmu_nofault_begin(void)
 {
@@ -604,62 +1002,161 @@ void ksp_mmu_nofault_end(void)
 		ksp_mmu_nofault_depth--;
 }
 
-static int ksp_mmu_except_leave(void *data)
+unsigned long ksp_mmu_exc_under_child(void)
 {
-	(void)data;
-	if (g_active_dom) {
-		ksp_mmu_sched_switch(NULL);
-		ksp_mmu_exc_left++;
+	return g_exc_under_child;
+}
+
+void uk_plat_native_except_enter_hook(void)
+{
+	struct ksp_mmu_domain *d = NULL;
+	__paddr_t cr3 = uk_paging_pt_read_base();
+
+	if (g_parent_pt && cr3 != g_parent_pt->pt_pbase)
+		d = dom_by_cr3(cr3);
+	if (g_exc_depth < KSP_EXC_MAX)
+		g_exc_stack[g_exc_depth] = d;
+	g_exc_depth++;
+	if (d) {
+		/* Handlers (vmem, timer, console) touch the parent heap, which
+		 * is absent from the child PT: run them on the parent CR3. */
+		g_exc_under_child++;
+		(void)uk_paging_pt_set_active(g_parent_pt);
+		if (g_active_dom == d) {
+			g_active_dom = NULL;
+			d->active = 0;
+		}
+		if (d->parent_vas)
+			(void)uk_vas_set_active(d->parent_vas);
+		uk_paging_tlb_flush();
 	}
-	return UK_EVENT_HANDLED_CONT;
 }
 
-static int ksp_mmu_except_arrive(void *data)
+void uk_plat_native_except_exit_hook(void)
 {
-	(void)data;
-	if (ksp_mmu_exc_left) {
-		ksp_mmu_exc_left--;
-		if (!ksp_mmu_exc_left)
-			ksp_mmu_sched_arrive();
+	struct ksp_mmu_domain *d = NULL;
+
+	if (!g_exc_depth)
+		return;
+	g_exc_depth--;
+	if (g_exc_depth < KSP_EXC_MAX) {
+		d = g_exc_stack[g_exc_depth];
+		g_exc_stack[g_exc_depth] = NULL;
 	}
-	return UK_EVENT_HANDLED_CONT;
+	if (d && d->live) {
+		g_active_dom = d;
+		d->active = 1;
+		(void)uk_paging_pt_set_active(&d->pt);
+		uk_paging_tlb_flush();
+	}
 }
 
-static int ksp_mmu_pf_leave(void *data)
+/* ------------------------------------------------------------------------
+ * Gap 3: child page fault on an ungranted address -> real SIGSEGV.
+ *
+ * A #PF taken under a Spawn child's CR3 from child context (not the aux
+ * stack, not a uk_nofault probe) is an MMU domain violation. The handler
+ * logs the reason, then returns into a kernel-text stub (mapped in every
+ * child PT, executed on the child CR3) that issues a real
+ * kill(getpid(), SIGSEGV) syscall. The stock posix-process exit path
+ * (uk_signal_deliver) then applies the child's SIGSEGV disposition:
+ * SIG_DFL terminates it (wait: WIFSIGNALED, WTERMSIG == SIGSEGV); an
+ * installed handler runs on the child CR3. If the handler returns, the
+ * faulting access cannot be retried meaningfully, so the stub follows with
+ * SIGKILL. Stock Unikraft would instead UK_CRASH the whole image for a
+ * SIG_DFL fault (sys_error_handler). Uses only exported syscalls.
+ * ---------------------------------------------------------------------- */
+#if defined(__x86_64__)
+void ksp_mmu_segv_stub(void);
+__asm__(
+	".pushsection .text\n"
+	".globl ksp_mmu_segv_stub\n"
+	".type ksp_mmu_segv_stub,@function\n"
+	"ksp_mmu_segv_stub:\n\t"
+	"andq $-16, %rsp\n\t"
+	"movl $39, %eax\n\t"		/* getpid */
+	"syscall\n\t"
+	"movl %eax, %edi\n\t"
+	"pushq %rdi\n\t"
+	"pushq %rdi\n\t"
+	"movl $11, %esi\n\t"		/* SIGSEGV */
+	"movl $62, %eax\n\t"		/* kill */
+	"syscall\n\t"
+	"popq %rdi\n\t"
+	"popq %rdi\n\t"
+	"movl $9, %esi\n\t"		/* handler returned: SIGKILL */
+	"movl $62, %eax\n\t"
+	"syscall\n\t"
+	"movl $137, %edi\n\t"
+	"movl $231, %eax\n\t"		/* exit_group */
+	"syscall\n\t"
+	"ud2\n"
+	".size ksp_mmu_segv_stub, .-ksp_mmu_segv_stub\n"
+	".popsection\n");
+
+static unsigned long g_child_faults;
+
+unsigned long ksp_mmu_child_faults(void)
 {
-	struct ksp_mmu_domain *d = g_active_dom;
-
-	(void)data;
-	if (ksp_mmu_nofault_depth)
-		return UK_EVENT_HANDLED_CONT;
-	/*
-	 * Stay on child CR3 for the fault (so SIGSEGV/nofault see the child PT).
-	 * Only block parent-VAS demand-paging; IRQ/syscall still leave via their
-	 * own hooks when kernel heap is required.
-	 */
-	if (d && d->parent_vas)
-		d->parent_vas->flags |= UK_VAS_FLAG_NO_PAGING;
-	return UK_EVENT_HANDLED_CONT;
+	return g_child_faults;
 }
 
-static int ksp_mmu_pf_arrive(void *data)
+static int ksp_mmu_pf_child(void *data)
 {
-	struct ksp_mmu_domain *d = g_active_dom;
+	struct uk_lcpu_except_err_ctx *ctx = data;
+	struct uk_lcpu_regs *regs;
+	struct ksp_mmu_domain *d;
+	__uptr auxsp, sp, ip;
+	__vaddr_t va;
+	__u64 ec;
+	unsigned int lvl;
+	__pte_t pte;
+	int parent_mapped;
+	const char *klass;
 
-	(void)data;
+	if (!g_exc_depth || g_exc_depth > KSP_EXC_MAX)
+		return UK_EVENT_NOT_HANDLED;
+	d = g_exc_stack[g_exc_depth - 1];
+	if (!d)
+		return UK_EVENT_NOT_HANDLED;	/* not under a child CR3 */
 	if (ksp_mmu_nofault_depth)
-		return UK_EVENT_HANDLED_CONT;
-	if (d && d->parent_vas)
-		d->parent_vas->flags &= ~UK_VAS_FLAG_NO_PAGING;
-	return UK_EVENT_HANDLED_CONT;
+		return UK_EVENT_NOT_HANDLED;	/* probe: nofault fixes up */
+	regs = (struct uk_lcpu_regs *)uk_lcpu_except_err_ctx_get_regs(ctx);
+	auxsp = uk_pcpuvar_lval(uk_lcpu_get_current_idx_in_except(),
+				UK_LCPU_AUXSP_SYM);
+	sp = uk_lcpu_regs_get(regs, RSP);
+	ip = uk_lcpu_regs_get(regs, RIP);
+	va = (__vaddr_t)uk_lcpu_except_err_ctx_get_fault_addr(ctx);
+	if (!auxsp || SP_IN_AUXSP(sp, auxsp) ||
+	    ip == (__uptr)ksp_mmu_segv_stub) {
+		/* Kernel context: fall through to the stock chain (which
+		 * crashes loudly with its own report). */
+		d->kfaults++;
+		return UK_EVENT_NOT_HANDLED;
+	}
+	ec = uk_lcpu_x86_64_except_err_ctx_get_error_code(ctx);
+	lvl = UK_PAL_PAGE_LEVEL;
+	parent_mapped = (d->parent_pt &&
+			 !uk_paging_pt_walk(d->parent_pt, va & ~(PG - 1), &lvl,
+					    NULL, &pte) &&
+			 UK_PAL_PT_Lx_PTE_PRESENT(pte, lvl));
+	klass = (va >= KSP_DM_BASE) ? "directmap-alias" :
+		parent_mapped ? "parent-mapped-ungranted" : "unmapped";
+	/* ISR-safe only: the child's TLS (%fs) is live here, so no printing,
+	 * no uk_thread_current(). Record in the domain (.bss); ksp_wait logs
+	 * the kill-with-reason line from normal context. */
+	g_child_faults++;
+	d->fault_va = va;
+	d->fault_ip = ip;
+	d->fault_ec = ec;
+	d->fault_class = klass;
+	d->faulted++;
+	/* Resume the child (exit hook restores its CR3) in the stub. */
+	uk_lcpu_regs_set(regs, RIP, (__uptr)ksp_mmu_segv_stub);
+	return UK_EVENT_HANDLED;
 }
 
-UK_EVENT_HANDLER_PRIO(UK_LCPU_EXCEPT_EVENT_IRQ, ksp_mmu_except_leave,
+UK_EVENT_HANDLER_PRIO(UK_LCPU_EXCEPT_EVENT_ERR_PAGE_FAULT, ksp_mmu_pf_child,
 		      UK_PRIO_EARLIEST);
-UK_EVENT_HANDLER_PRIO(UK_LCPU_EXCEPT_EVENT_IRQ, ksp_mmu_except_arrive,
-		      UK_PRIO_LATEST);
-UK_EVENT_HANDLER_PRIO(UK_LCPU_EXCEPT_EVENT_ERR_PAGE_FAULT, ksp_mmu_pf_leave,
-		      UK_PRIO_EARLIEST);
-UK_EVENT_HANDLER_PRIO(UK_LCPU_EXCEPT_EVENT_ERR_PAGE_FAULT, ksp_mmu_pf_arrive,
-		      UK_PRIO_LATEST);
+#endif /* __x86_64__ */
 #endif /* CONFIG_LIBUKPAGING */

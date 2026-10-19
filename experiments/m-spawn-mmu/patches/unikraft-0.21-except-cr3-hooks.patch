@@ -1,0 +1,51 @@
+--- a/plat/native/arch/x86_64/except.c	2026-10-19 22:51:56.064442156 +0200
++++ b/plat/native/arch/x86_64/except.c	2026-10-19 22:51:56.076442156 +0200
+@@ -266,6 +266,20 @@
+ 		UK_EVENT_PTR(UK_PLAT_NATIVE_EXCEPT_EVENT_ERR_SECURITY),
+ };
+ 
++/* koru-os (M-SPAWN-MMU): guaranteed enter/exit hooks around exception and
++ * IRQ dispatch. A handler returning UK_EVENT_HANDLED stops the event chain,
++ * so CR3 leave/restore cannot be done with event handlers alone. Undefined
++ * weak (not weak definitions: libraries are partially linked and a local
++ * weak default would bind internally); lib/koruspawn provides them. Not
++ * called on paths that jump away or crash.
++ */
++void uk_plat_native_except_enter_hook(void) __attribute__((weak));
++void uk_plat_native_except_exit_hook(void) __attribute__((weak));
++#define KORU_EXC_ENTER() do { if (uk_plat_native_except_enter_hook) \
++	uk_plat_native_except_enter_hook(); } while (0)
++#define KORU_EXC_EXIT() do { if (uk_plat_native_except_exit_hook) \
++	uk_plat_native_except_exit_hook(); } while (0)
++
+ void uk_plat_native_except_err_handler(int trapnr,
+ 				       struct uk_plat_native_regs *regs,
+ 				       __u64 error_code)
+@@ -282,11 +296,14 @@
+ 		.cr2 = uk_arch_x86_64_rdcr2(),
+ 	};
+ 
++	KORU_EXC_ENTER();
+ 	rc = uk_raise_event_ptr(trap_event_table[trapnr], &ctx);
+ 	if (unlikely(rc < 0))
+ 		uk_pr_crit("event handler returned error: %d\n", rc);
+-	else if (rc != UK_EVENT_NOT_HANDLED)
++	else if (rc != UK_EVENT_NOT_HANDLED) {
++		KORU_EXC_EXIT();
+ 		return;
++	}
+ 
+ 	if (trap_event_table[trapnr] ==
+ 		UK_EVENT_PTR(UK_PLAT_NATIVE_EXCEPT_EVENT_UNHANDLED))
+@@ -324,9 +341,11 @@
+ 
+ 	ctx.regs = regs;
+ 	ctx.irq = irq;
++	KORU_EXC_ENTER();
+ 	rc = uk_raise_event(UK_PLAT_NATIVE_EXCEPT_EVENT_IRQ, &ctx);
+ 	if (unlikely(rc < 0))
+ 		UK_CRASH("IRQ event handler returned error: %d\n", rc);
++	KORU_EXC_EXIT();
+ 
+ #if CONFIG_LIBUKPLAT_NATIVE_ECTX_ISR_ASSERTIONS
+ 	uk_plat_native_ectx_assert_equal(ectx);

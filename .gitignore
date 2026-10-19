@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+# never commit disk images, raw captures, WADs or DOOM material
+**/disk.img
+*.img
+*.ppm
+serial.raw
+*.wad
+*.WAD
+notes/evidence/*doom*
+snap.bin

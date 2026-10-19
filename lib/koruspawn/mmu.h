@@ -35,6 +35,17 @@ struct ksp_mmu_domain {
 	/* Parent heap VA range (for fault-on-violation tests). */
 	__vaddr_t parent_heap_va;
 	__sz parent_heap_len;
+	int dm_stripped;
+	int sys_left;
+	/* Gap 3: last MMU violation (recorded ISR-safe in the PF handler). */
+	unsigned faulted, kfaults;
+	__vaddr_t fault_va;
+	unsigned long fault_ip, fault_ec;
+	const char *fault_class;	/* syscall entered from this domain's CR3 */
+	/* Declared parent-heap pages the child may see: grants and kernel-half
+	 * metadata (thread/uktls/ectx/auxsp). Census reports anything else. */
+	struct { __vaddr_t va; __sz len; const char *label; } decl[16];
+	unsigned ndecl;
 };
 
 int ksp_mmu_derive(struct ksp_mmu_domain *d, struct uk_vas *parent_vas,
@@ -73,5 +84,17 @@ int ksp_mmu_is_mem_as(const char *as);
 int ksp_mmu_parse_mem_as(const char *as, __vaddr_t *va_out);
 
 struct uk_pagetable *ksp_mmu_parent_pt(void);
+
+/* Gap 2: drop the direct map (physmap) from the child PT; DM alias of a PA. */
+int ksp_mmu_strip_directmap(struct ksp_mmu_domain *d);
+__vaddr_t ksp_mmu_dm_alias(__paddr_t pa);
+/* Count child-PT pages whose frame is a parent-heap frame (any VA). */
+long ksp_mmu_census(struct ksp_mmu_domain *d, const char *phase,
+		    __vaddr_t *hits_out, unsigned *nhits_out);
+unsigned long ksp_mmu_exc_under_child(void);
+unsigned long ksp_mmu_child_faults(void);
+void ksp_mmu_declare(struct ksp_mmu_domain *d, __vaddr_t va, __sz len,
+		     const char *label);
+
 
 #endif

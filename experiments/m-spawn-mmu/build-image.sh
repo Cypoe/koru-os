@@ -14,6 +14,9 @@ fi
 P="$HERE/patches/unikraft-0.21-sched-cr3-switch.patch"
 grep -q ksp_mmu_sched_switch .unikraft/unikraft/lib/uksched/include/uk/sched_impl.h 2>/dev/null || \
   patch -d .unikraft/unikraft -p1 < "$P"
+PX="$HERE/patches/unikraft-0.21-except-cr3-hooks.patch"
+grep -q KORU_EXC_ENTER .unikraft/unikraft/plat/native/arch/x86_64/except.c 2>/dev/null || \
+  patch -d .unikraft/unikraft -p1 < "$PX"
 rm -f .config.m-spawn-mmu_qemu-x86_64 .unikraft/build/config
 rm -f .unikraft/build/appkoruos/*.o 2>/dev/null || true
 UK_CFLAGS="-std=gnu17" kraft build --arch x86_64 --plat qemu --no-prompt --log-type basic

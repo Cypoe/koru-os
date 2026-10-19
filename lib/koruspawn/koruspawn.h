@@ -79,6 +79,10 @@ int ksp_grant_mem(int child, unsigned long va, unsigned long len,
 int ksp_mmu_info(int child, unsigned long *parent_heap_va,
 		 unsigned long *parent_heap_len, unsigned long *ambient_heap_va);
 /* 1=mapped under child PT, 0=hardware fault, <0 error. want_write=1 probes RW. */
+/* Gap 2: direct-map alias of the frame behind parent VA `va`. */
+int ksp_mmu_alias(int child, unsigned long va, unsigned long *alias);
+/* Undeclared parent-heap frames visible in the child PT (0 = isolated). */
+long ksp_mmu_census_child(int child, const char *phase);
 int ksp_mmu_hw_probe(int child, unsigned long va, int want_write);
 
 #endif /* KORUSPAWN_H */

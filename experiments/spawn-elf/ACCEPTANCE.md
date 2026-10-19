@@ -41,4 +41,13 @@ Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`).
 
 External ELF runs on **child CR3** (kernel-half + syscall/IRQ CR3 leave). E0–E12 plus M
 (hw parent-heap fault + RO attenuation under child CR3) PASS 3/3
-(`evidence/elf-cr3-accept/`). Spawn acceptance: **ready for Fabian review**, not accepted.
+(`evidence/elf-cr3-accept/`). Spawn acceptance: **not yet ready (gaps listed)** (review of `d1dc650`: R1 open, DESIGN-0001 §8.6.7d), not accepted.
+
+## Review gaps R2/R3 (2026-10-19 ~22:45 CEST)
+
+`evidence/elf-gap23-accept/run-{1,2,3}/`: SPAWN-ELF PASS 3/3. New checks: G2 (direct-map
+slot stripped; census undeclared=0 at derive and gate; non-image leftovers stripped; alias
+readable in parent, faults in child) and G3 (7 touch cases → status 139 / WTERMSIG=11 with
+a logged `reason=mmu-violation` line, including `directmap-alias` and
+`parent-mapped-ungranted`; RO-grant read survives; 20 ms sleep then touch → SIGSEGV; no
+kernel-context fault). `elf-cr3-accept/` (d1dc650) predates the latent IRQ-CR3 bug fix.

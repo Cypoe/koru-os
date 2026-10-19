@@ -6,8 +6,50 @@
 #include <unistd.h>
 #include <uk/sched.h>
 #include "koruspawn.h"
+#include "mmu.h"
 
 static void section(const char *s) { printf("\n== %s ==\n", s); }
+
+/* Gap 3: spawn /bin/hello with an env grant naming an address to touch.
+ * Optional RO mem grant (ro_va). Returns ksp_wait status (128+sig if
+ * signaled). */
+static char t_va[32], t_mode[4], t_sleep[16];
+static int touch_child(const char *label, unsigned long va, const char *mode,
+		       int sleep_us, unsigned long ro_va)
+{
+	struct ksp_grant g;
+	int c, st = -1;
+
+	c = ksp_reserve("/bin/hello", 256 * 1024);
+	if (c < 0)
+		return -1000;
+	g = (struct ksp_grant){ .as="fd/1", .from="console", .verbs="write",
+				.value="console", .across_exec=0 };
+	ksp_grant(c, &g);
+	snprintf(t_va, sizeof(t_va), "0x%lx", va);
+	snprintf(t_mode, sizeof(t_mode), "%s", mode);
+	g = (struct ksp_grant){ .as="env/KORU_TOUCH", .from="test", .verbs="read",
+				.value=t_va, .across_exec=0 };
+	ksp_grant(c, &g);
+	g = (struct ksp_grant){ .as="env/KORU_TOUCH_MODE", .from="test",
+				.verbs="read", .value=t_mode, .across_exec=0 };
+	ksp_grant(c, &g);
+	if (sleep_us) {
+		snprintf(t_sleep, sizeof(t_sleep), "%d", sleep_us);
+		g = (struct ksp_grant){ .as="env/KORU_SLEEP_US", .from="test",
+					.verbs="read", .value=t_sleep,
+					.across_exec=0 };
+		ksp_grant(c, &g);
+	}
+	if (ro_va && ksp_grant_mem(c, ro_va, 4096, "read", 0))
+		return -1001;
+	if (ksp_seal(c) || ksp_start(c) || ksp_wait(c, &st))
+		return -1002;
+	ksp_reap(c);
+	printf("T %s: va=0x%lx mode=%s status=%d%s\n", label, va, mode, st,
+	       st == 128 + 11 ? " (SIGSEGV)" : "");
+	return st;
+}
 
 int main(void)
 {
@@ -98,6 +140,52 @@ int main(void)
 		}
 		printf("M: ELF status=%d\n", st);
 		ksp_reap(c);
+
+		/* Gap 2: direct-map alias of the parent-heap probe frame. */
+		{
+			unsigned long alias = 0;
+			int ar, cr;
+			__sz pn;
+
+			c = ksp_reserve("/bin/hello", 256 * 1024);
+			g = (struct ksp_grant){ .as="fd/1", .from="console",
+						.verbs="write", .value="console",
+						.across_exec=0 };
+			ksp_grant(c, &g);
+			if (ksp_seal(c)) { printf("FAIL A seal\n"); return 1; }
+			ksp_mmu_info(c, &parent_heap, &parent_hlen, &amb);
+			ar = ksp_mmu_alias(c, parent_heap, &alias);
+			pn = ksp_mmu_probe_r((__vaddr_t)alias, 1);
+			printf("A: parent_heap=0x%lx dm_alias=0x%lx rc=%d parent_readable=%d same_byte=%d\n",
+			       parent_heap, alias, ar, (int)pn,
+			       pn ? (*(volatile unsigned char *)alias ==
+				     *(volatile unsigned char *)parent_heap) : 0);
+			cr = ksp_mmu_hw_probe(c, alias, 0);
+			printf("A: hw_probe dm_alias rc=%d (0=fault expected)\n", cr);
+			printf("A: census undeclared=%ld\n",
+			       ksp_mmu_census_child(c, "test"));
+			ksp_abandon(c);
+			strncpy(heap_env, "", sizeof(heap_env));
+			(void)ro_env;
+
+			/* Gap 3: real child dereferences -> SIGSEGV. */
+			section("T touch");
+			printf("T: exc_under_child_before=%lu\n",
+			       ksp_mmu_exc_under_child());
+			touch_child("parent-heap-read", parent_heap, "r", 0, 0);
+			touch_child("parent-heap-write", parent_heap, "w", 0, 0);
+			touch_child("dm-alias-read", alias, "r", 0, 0);
+			/* pt_clone leftovers: firmware/ACPI RAM at the top of
+			 * guest memory (identity, parent-mapped) and legacy VGA. */
+			touch_child("fw-identity-read", 0x7fe0000UL, "r", 0, 0);
+			touch_child("vga-identity-read", 0xb8000UL, "r", 0, 0);
+			touch_child("ro-grant-write", ro_va, "w", 0, ro_va);
+			touch_child("ro-grant-read", ro_va, "r", 0, ro_va);
+			touch_child("after-sleep-parent-heap", parent_heap, "r",
+				    20000, 0);
+			printf("T: exc_under_child_after=%lu\n",
+			       ksp_mmu_exc_under_child());
+		}
 		free(ro_page);
 	}
 

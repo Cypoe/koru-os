@@ -33,6 +33,7 @@ ap $U $U/lib/syscall_shim/include/uk/syscall.h "$P/unikraft-0.21-syscall-shim-en
 ap $U $U/lib/ukprint/include/uk/print.h "$P/unikraft-0.21-ukprint-stubbed-refusal-log.patch"
 ap $U $U/lib/vfscore/task.c "$PELF/unikraft-0.21-vfscore-spawn-path-gate.patch"
 ap $U $U/lib/uksched/include/uk/sched_impl.h "$REPO/experiments/m-spawn-mmu/patches/unikraft-0.21-sched-cr3-switch.patch"
+ap $U $U/plat/native/arch/x86_64/except.c "$REPO/experiments/m-spawn-mmu/patches/unikraft-0.21-except-cr3-hooks.patch"
 
 rm -f .config.spawn-elf_qemu-x86_64 .unikraft/build/config
 UK_CFLAGS="-std=gnu17" kraft build --arch x86_64 --plat qemu --no-prompt --log-type basic

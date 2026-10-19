@@ -48,4 +48,4 @@ checker, which was then dry-run on that log after its `abandon` wording was patc
 
 ## M-SPAWN-MMU gaps (2026-10-19)
 
-Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **ready for Fabian review**, not accepted. ELF child-CR3 remaining (see DESIGN-0001 M-SPAWN-MMU row).
+Gaps 1–3 PASS 3/3 under TCG (`experiments/m-spawn-mmu/`). Spawn acceptance: **not yet ready (gaps listed)** (review of `d1dc650`: R1 open, DESIGN-0001 §8.6.7d), not accepted. ELF child-CR3 remaining (see DESIGN-0001 M-SPAWN-MMU row).
