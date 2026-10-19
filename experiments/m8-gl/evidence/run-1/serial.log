@@ -1,0 +1,73 @@
+[    0.108541] ERR:  [appkoruos] <evdev_linux.c @  325> koru-os: INFO input rows bound: /dev/input/event0 -> koru-os i8042 keyboard (set 1)
+[    0.109701] ERR:  [appkoruos] <ps2kbd.c @  265> koru-os: INFO input.ps2: i8042 cfg 0x71 -> 0x61, enable-scan ack 0xfa, IRQ 1, bind 0
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=32 blocks=262144 free=54372 inodes=2048 free=1573
+[    0.120859] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.167262] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.167984] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.168535] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.168777] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.171556] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.175662] ERR:  [libposix_process] <deprecated.c @  302> koru-os: STUBBED __uk_syscall_r_prctl()
+m8-init: start
+[    0.196663] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.254484] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.254856] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.263222] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+gloff: client extensions: EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+gloff: platform surfaceless
+[    2.709603] ERR:  [libuksched] <sched.c @  434> koru-os: STUBBED __uk_syscall_r_sched_getaffinity()
+[    2.712352] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS memfd_create (nr 319)
+gloff: EGL 1.5 vendor Mesa Project
+gloff: GL_RENDERER llvmpipe (LLVM 19.1.7, 128 bits)
+gloff: GL_VERSION OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+gloff: FBO status 0x8cd5
+gloff: frame 0 glError 0x0 fnv1a64 9c784fad9c82cce9
+gloff: frame 0 px 0,0 = 26 51 76 255
+gloff: frame 0 px 128,128 = 67 68 120 255
+gloff: frame 0 px 128,60 = 112 113 29 255
+gloff: frame 0 px 60,40 = 210 42 3 255
+gloff: frame 0 px 200,40 = 36 216 3 255
+gloff: frame 0 px 255,255 = 26 51 76 255
+gloff: frame 1 glError 0x0 fnv1a64 5be5b6b059035ef9
+gloff: frame 1 px 0,0 = 26 51 76 255
+gloff: frame 1 px 128,128 = 68 69 118 255
+gloff: frame 1 px 128,60 = 26 51 76 255
+gloff: frame 1 px 60,40 = 26 51 76 255
+gloff: frame 1 px 200,40 = 225 7 23 255
+gloff: frame 1 px 255,255 = 26 51 76 255
+gloff: done, exit 0
+m8-init: gloff exit status 0
+[    5.462733] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    5.527860] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    5.528135] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    5.537150] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+gloff: client extensions: EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+MESA-LOADER: failed to retrieve device information
+MESA-LOADER: failed to retrieve device information
+MESA-LOADER: failed to retrieve device information
+kmsro: driver missing
+[    7.966233] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS memfd_create (nr 319)
+gloff: platform gbm on /dev/dri/card0, backend drm
+gloff: EGL 1.5 vendor Mesa Project
+gloff: GL_RENDERER llvmpipe (LLVM 19.1.7, 128 bits)
+gloff: GL_VERSION OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+gloff: FBO status 0x8cd5
+gloff: frame 0 glError 0x0 fnv1a64 9c784fad9c82cce9
+gloff: frame 0 px 0,0 = 26 51 76 255
+gloff: frame 0 px 128,128 = 67 68 120 255
+gloff: frame 0 px 128,60 = 112 113 29 255
+gloff: frame 0 px 60,40 = 210 42 3 255
+gloff: frame 0 px 200,40 = 36 216 3 255
+gloff: frame 0 px 255,255 = 26 51 76 255
+gloff: frame 1 glError 0x0 fnv1a64 5be5b6b059035ef9
+gloff: frame 1 px 0,0 = 26 51 76 255
+gloff: frame 1 px 128,128 = 68 69 118 255
+gloff: frame 1 px 128,60 = 26 51 76 255
+gloff: frame 1 px 60,40 = 26 51 76 255
+gloff: frame 1 px 200,40 = 225 7 23 255
+gloff: frame 1 px 255,255 = 26 51 76 255
+gloff: done, exit 0
+m8-init: gloff exit status 0
+koru-os: init exited with status 0
+koruext2: unmount: 711968 blocks in 22249 requests, 1842147 cache hits

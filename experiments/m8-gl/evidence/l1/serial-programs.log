@@ -1,0 +1,132 @@
+m8-init: start
+gloff: client extensions: EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+gloff: platform surfaceless
+gloff: EGL 1.5 vendor Mesa Project
+gloff: GL_RENDERER llvmpipe (LLVM 19.1.7, 128 bits)
+gloff: GL_VERSION OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+gloff: FBO status 0x8cd5
+gloff: frame 0 glError 0x0 fnv1a64 9c784fad9c82cce9
+gloff: frame 0 px 0,0 = 26 51 76 255
+gloff: frame 0 px 128,128 = 67 68 120 255
+gloff: frame 0 px 128,60 = 112 113 29 255
+gloff: frame 0 px 60,40 = 210 42 3 255
+gloff: frame 0 px 200,40 = 36 216 3 255
+gloff: frame 0 px 255,255 = 26 51 76 255
+gloff: frame 1 glError 0x0 fnv1a64 5be5b6b059035ef9
+gloff: frame 1 px 0,0 = 26 51 76 255
+gloff: frame 1 px 128,128 = 68 69 118 255
+gloff: frame 1 px 128,60 = 26 51 76 255
+gloff: frame 1 px 60,40 = 26 51 76 255
+gloff: frame 1 px 200,40 = 225 7 23 255
+gloff: frame 1 px 255,255 = 26 51 76 255
+gloff: done, exit 0
+m8-init: gloff exit status 0
+gloff: client extensions: EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+pci id for fd 3: 1234:1111, driver (null)
+pci id for fd 4: 1234:1111, driver (null)
+kmsro: driver missing
+gloff: platform gbm on /dev/dri/card0, backend drm
+gloff: EGL 1.5 vendor Mesa Project
+gloff: GL_RENDERER llvmpipe (LLVM 19.1.7, 128 bits)
+gloff: GL_VERSION OpenGL ES 3.2 Mesa 25.0.7-2+deb13u1
+gloff: FBO status 0x8cd5
+gloff: frame 0 glError 0x0 fnv1a64 9c784fad9c82cce9
+gloff: frame 0 px 0,0 = 26 51 76 255
+gloff: frame 0 px 128,128 = 67 68 120 255
+gloff: frame 0 px 128,60 = 112 113 29 255
+gloff: frame 0 px 60,40 = 210 42 3 255
+gloff: frame 0 px 200,40 = 36 216 3 255
+gloff: frame 0 px 255,255 = 26 51 76 255
+gloff: frame 1 glError 0x0 fnv1a64 5be5b6b059035ef9
+gloff: frame 1 px 0,0 = 26 51 76 255
+gloff: frame 1 px 128,128 = 68 69 118 255
+gloff: frame 1 px 128,60 = 26 51 76 255
+gloff: frame 1 px 60,40 = 26 51 76 255
+gloff: frame 1 px 200,40 = 225 7 23 255
+gloff: frame 1 px 255,255 = 26 51 76 255
+gloff: done, exit 0
+m8-init: gloff exit status 0
+==== STRACE-C s1
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ------------------
+ 32.57    0.025876         131       197           mmap
+ 21.47    0.017059          60       283           brk
+  7.48    0.005941          97        61        10 openat
+  6.55    0.005207          89        58           mprotect
+  5.40    0.004294         204        21           write
+  4.86    0.003860          68        56           close
+  3.86    0.003063        1021         3           ioctl
+  3.43    0.002723          56        48           read
+  3.17    0.002516           9       263           futex
+  3.06    0.002430         127        19           munmap
+  2.63    0.002092          39        53         1 fstat
+  1.56    0.001241         310         4           getdents64
+  0.91    0.000723         361         2           memfd_create
+  0.71    0.000568         284         2           ftruncate
+  0.51    0.000405         405         1           sysinfo
+  0.36    0.000289         144         2           fcntl
+  0.24    0.000189           6        29        22 readlink
+  0.20    0.000159          11        14           getpid
+  0.19    0.000147          36         4           getuid
+  0.12    0.000097          32         3         1 newfstatat
+  0.10    0.000080          40         2           pread64
+  0.08    0.000061          61         1           prlimit64
+  0.07    0.000058          58         1         1 lseek
+  0.07    0.000056          14         4           getegid
+  0.07    0.000055          13         4           getgid
+  0.06    0.000051          25         2           rt_sigprocmask
+  0.06    0.000051          25         2           getrandom
+  0.04    0.000035           8         4           geteuid
+  0.04    0.000035          35         1           arch_prctl
+  0.04    0.000035          35         1           rseq
+  0.04    0.000030          30         1           set_tid_address
+  0.04    0.000028          28         1           set_robust_list
+  0.00    0.000000           0         1         1 access
+  0.00    0.000000           0         1           execve
+  0.00    0.000000           0         1           sched_getaffinity
+------ ----------- ----------- --------- --------- ------------------
+100.00    0.079454          69      1150        36 total
+==== END s1
+==== STRACE-C s2
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ------------------
+ 32.41    0.024087         119       201           mmap
+ 15.67    0.011649          40       288           brk
+ 10.05    0.007467          92        81        22 openat
+  7.80    0.005798          21       264           futex
+  7.16    0.005320          90        59           mprotect
+  5.07    0.003767         156        24           write
+  4.29    0.003189          52        61           read
+  3.78    0.002806          43        64         1 fstat
+  3.35    0.002488          41        60           close
+  2.65    0.001967          56        35        26 readlink
+  1.87    0.001392          99        14           ioctl
+  0.97    0.000721          40        18           munmap
+  0.58    0.000429         143         3         1 newfstatat
+  0.52    0.000388         194         2           memfd_create
+  0.49    0.000361          25        14           getpid
+  0.40    0.000299          74         4           getdents64
+  0.33    0.000247          30         8           geteuid
+  0.32    0.000241          30         8           getegid
+  0.30    0.000226          28         8           getuid
+  0.29    0.000213          26         8           getgid
+  0.24    0.000182          36         5           fcntl
+  0.22    0.000167         167         1           execve
+  0.22    0.000161          80         2           ftruncate
+  0.18    0.000135          67         2           getrandom
+  0.14    0.000103          51         2           pread64
+  0.14    0.000102         102         1         1 access
+  0.10    0.000071          35         2           rt_sigprocmask
+  0.07    0.000053          53         1           sched_getaffinity
+  0.07    0.000050          50         1           prlimit64
+  0.06    0.000046          46         1           sysinfo
+  0.06    0.000044          44         1           arch_prctl
+  0.05    0.000039          39         1           set_tid_address
+  0.05    0.000038          38         1           rseq
+  0.05    0.000036          36         1         1 lseek
+  0.05    0.000036          36         1           set_robust_list
+------ ----------- ----------- --------- --------- ------------------
+100.00    0.074318          59      1247        52 total
+==== END s2
+l1-init: done
+[   11.860224] reboot: Power down
