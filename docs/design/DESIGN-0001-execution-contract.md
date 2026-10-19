@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:15: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:16: M8 split, M8a acceptance frozen, §0.4) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -366,7 +366,7 @@ means the test is first run against a Linux guest to produce the expected trace.
 | DS4 | input driver silo | silo:lkl `virtio_input` (evdev) or silo:kolibri `usbhid`/`ps2` translated to `input.*` | M7 passes through it | D |
 | M6 | KMS scanout of a dumb buffer | L2 + DS3 (L1 trace first); M6 uses a native provider instead ("M6 decision" below, Q28) | libdrm `modetest -s <conn>:<mode>` (or equivalent) draws a test pattern; screendump pixel check at known coordinates; frozen parameters in "M6 acceptance" below | **M (native provider): PASS 3/3 under TCG, 2026-10-19 13:36 CEST**: `kmsdumb` (raw ioctls, two dumb buffers, two `SETCRTC`) and unmodified libdrm `modetest -M korukms -s Virtual-1:1024x768`; all three screendumps 0 of 786,432 pixels off the independent references, and byte-identical to the L1 `bochs-drm` twin; M3/M4/M5a regressions 3/3 (`experiments/m6-kms/README.md`). Not through DS3 (Q28); no atomic, properties or vblank events yet |
 | M7 | input | L2 + DS4; M7 uses a native provider instead ("M7 decision" below, Q28) | QMP `input-send-event` key events appear in `libinput debug-events` on serial; split into M7a (evdev uAPI, frozen in "M7a acceptance") and M7b (libinput) | **M7a (native i8042 provider): PASS 3/3 under TCG, 2026-10-19 13:57 CEST**: 54/54 evdump events and unmodified `evtest` events equal the derived sequence and the L1 `atkbd` twin; M3/M4/M5a/M6 regressions 3/3 (`experiments/m7-input/README.md`). **M7b open** (B15: no sysfs/udev for libinput). Not through DS4 (Q28) |
-| M8 | GL on KMS | L2 + DS3 + Mesa llvmpipe/`kms_swrast` in userspace | `kmscube` runs; two screendumps 1 s apart differ, and both are non-black | D |
+| M8 | GL on KMS | L2 + DS3 + Mesa llvmpipe/`kms_swrast` in userspace | `kmscube` runs; two screendumps 1 s apart differ, and both are non-black; split into M8a (offscreen EGL/GBM, frozen in "M8a acceptance") and M8b (kmscube) | D (M8a frozen 14:16) |
 | M9 | **DoD-3**: Hyprland + foot | L2 + DS3 + DS4 | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | D |
 | M10 | **DoD-4**: QML exemplar | same as M9 | a quickshell bar on a layer-shell surface is visible in a screendump; editing its QML changes the next screendump without a restart | D |
 
@@ -553,6 +553,45 @@ dropped `0xaa` (LeftShift break) as a BAT code; `MSC_SCAN` for 0xE0 keys now rep
   libevdev test `< 0`).
 - **Not in M7a.** libinput (M7b, B15), DS4, the aux port (mouse), LED writes, software
   autorepeat, keymaps, more than one concurrent reader, `EVIOCGMASK`/`SMASK`, `EVIOCREVOKE`.
+
+**M8a acceptance: offscreen GL through Mesa llvmpipe (fixed 2026-10-19, 14:16 CEST, before
+any acceptance run).** The table's M8 criterion (`kmscube` on KMS, two screendumps that differ)
+is **M8b** and stays open: kmscube needs a GBM scanout surface, `drmModePageFlip` with flip
+events (`read()` and `poll()` on `/dev/dri/card0`), none of which the M6 personality serves yet.
+M8a is the offscreen step: EGL + GLES2 + llvmpipe, first without any device (Mesa surfaceless
+platform), then on the GBM platform over `/dev/dri/card0` (the native KMS provider), rendering
+into an FBO only. No new kernel code: M8a runs on the **M7a kernel binary**
+(`/workspace/m7kclean`, sha256 `68e7f446…`), whose M3/M4/M5a/M6 regressions and M7a runs
+are already 3/3. Probe boots before this freeze found and fixed only harness errors (Mesa's
+compiled-in `/usr/lib/x86_64-linux-gnu/{gbm,dri}` paths; GBM has no pbuffer configs).
+- **Programs.** `/bin/gloff` (koru-os probe, `experiments/m8-gl/gloff.c`), glibc 2.41, glvnd
+  1.7.0 `libEGL`/`libGLESv2`, Mesa 25.0.7 (`libEGL_mesa`, `libgallium`, `dri_gbm`,
+  `kms_swrast`/`libdril`), LLVM 19.1.7, all unmodified Debian 13 binaries (`mkroot.sh`). Two
+  frames of 256×256 RGBA8: clear (0.1, 0.2, 0.3) plus one RGB triangle, then the triangle
+  rotated by 90°; `glReadPixels`, FNV-1a 64 hash and probe pixels. Run twice from
+  `/etc/m8-init`: no argument (surfaceless), then `/dev/dri/card0` (GBM). QEMU `-m 1G`, TCG,
+  `-cpu qemu64` (llvmpipe reports 128-bit vectors).
+- **Gated checks** (`experiments/m8-gl/check.py`):
+  - (g1) surfaceless: EGL 1.5 vendor Mesa Project, `GL_RENDERER llvmpipe (LLVM 19.1.7, …)`,
+    `OpenGL ES 3.2 Mesa 25.0.7…`, FBO complete; frame hashes `9c784fad9c82cce9` and
+    `5be5b6b059035ef9`, which are the L1 twin's (and the box host's), `glError` 0, exit 0;
+  - (g2) independent of any oracle: both frames have the clear colour 26 51 76 255 at (0,0) and
+    (255,255); frame 0 is red-dominant at (60,40) and green-dominant at (200,40); frame 1 is
+    clear at (60,40) and red-dominant at (200,40) (the rotation moved the red corner);
+  - (g3) GBM on `/dev/dri/card0`, backend `drm`: the same strings and the same two hashes;
+  - (g4) every refusal-log row is in `experiments/m8-gl/refused-by-design.txt` (new:
+    `memfd_create`, `sched_getaffinity` stub), and the only Mesa messages are
+    `MESA-LOADER: failed to retrieve device information` (libdrm `drmGetDevice2` reads sysfs,
+    B15) and `kmsro: driver missing` (also on L1: neither `bochs-drm` nor `korukms` is a
+    render driver, so Mesa takes `kms_swrast`);
+  - (g5) both gloff runs and init exit 0; (x) no `Unikraft Crash`, disk unchanged, `e2fsck` clean.
+- **L1 twin (oracle, not a pass).** The same userland in an initramfs on Debian
+  `linux-image-6.12.113` with `bochs-drm`, same `-cpu`, `strace -f -c` (`run-l1.sh`). First run
+  2026-10-19 14:13 CEST: both runs produce the two hashes above. Differences: Linux serves
+  `memfd_create` (2 calls) and sysfs; no clone in either (1 vCPU, no rasterizer threads).
+- **Not in M8a.** M8b (`kmscube`, GBM scanout surfaces, page flip and its events), DS3,
+  llvmpipe with rasterizer threads (needs a second vCPU), the Mesa shader cache
+  (`MESA_SHADER_CACHE_DISABLE=true`), GL desktop profiles, virgl.
 
 ### 0.5 Biggest risks
 

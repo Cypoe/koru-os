@@ -1,0 +1,7 @@
+# M8a init (koru-os): offscreen GLES2 via EGL surfaceless + Mesa llvmpipe.
+echo "m8-init: start"
+export MESA_SHADER_CACHE_DISABLE=true
+/bin/gloff
+echo "m8-init: gloff exit status $?"
+/bin/gloff /dev/dri/card0
+echo "m8-init: gloff exit status $?"

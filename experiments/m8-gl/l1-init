@@ -1,0 +1,15 @@
+#!/bin/busybox sh
+# M8a L1 oracle init (Linux 6.12 Debian kernel, bochs-drm for the GBM case), same gloff.
+/bin/busybox --install -s /bin
+mount -t devtmpfs dev /dev; mount -t proc proc /proc; mount -t sysfs sys /sys
+for m in $(cat /modorder.txt); do insmod /ko/$m.ko || echo "l1-init: insmod $m failed"; done
+sleep 1
+export MESA_SHADER_CACHE_DISABLE=true
+echo "m8-init: start"
+strace -f -c -o /tmp/s1.txt /bin/gloff
+echo "m8-init: gloff exit status $?"
+strace -f -c -o /tmp/s2.txt /bin/gloff /dev/dri/card0
+echo "m8-init: gloff exit status $?"
+for f in s1 s2; do echo "==== STRACE-C $f"; cat /tmp/$f.txt; echo "==== END $f"; done
+echo "l1-init: done"
+poweroff -f

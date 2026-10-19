@@ -1,0 +1,10 @@
+# M8a (g4): refusal-log rows accepted as refused-by-design (same rule as experiments/m4-cyb).
+# Format: <name><TAB><reason>. Rows not listed fail the run. Classified 2026-10-19 14:14 CEST
+# from the probe boots, before any acceptance run.
+brk	glibc malloc falls back to mmap when brk is refused; all programs allocate normally (M3-M5a)
+rseq	glibc 2.35+ runs without rseq when the kernel refuses it (__rseq_size stays 0)
+set_robust_list	glibc ignores the failure; no program here uses robust process-shared mutexes
+STUBBED __uk_syscall_r_prctl	busybox set_task_comm() (PR_GET_NAME/PR_SET_NAME); only the ps task name is affected
+STUBBED uk_posix_clone_sysvsem	kernel-internal at init-process creation; no System V semaphore syscalls exist to share
+STUBBED __uk_syscall_r_sched_getaffinity	the stub reports CPU0 only, which is the truth for the 1-vCPU guest; Mesa sizes llvmpipe from it (L1 also sees 1 CPU and creates no rasterizer thread)
+memfd_create	Mesa llvmpipe asks for a memfd to back exportable memory (L1: 2 calls); without it llvmpipe allocates ordinary memory and offscreen rendering is unaffected (g1/g3 hashes equal L1)
