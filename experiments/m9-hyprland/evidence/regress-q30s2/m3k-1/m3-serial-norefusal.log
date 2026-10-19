@@ -1,0 +1,32 @@
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFC6DB0+0EF06DB0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=1 blocks=8192 free=5796 inodes=512 free=97
+Powered by Unikraft Ijiraq (0.21.0)
+~ # llss  //
+
+bin         dev         lost+found  tmp
+~ # ccaatt  //ddoodd11
+
+cat: can't open '/dod1': No such file or directory
+~ # sshhaa225566ssuumm  //ddoodd11
+
+sha256sum: can't open '/dod1': No such file or directory
+~ # wwcc  --cc  //ddoodd11
+
+wc: /dod1: No such file or directory
+~ # llss  --ll  //ddoodd11  //bbiinn//bbuussyybbooxx
+
+ls: /dod1: No such file or directory
+-rwxr-xr-x    1 1000     1000       2357096 Oct 19 18:48 /bin/busybox
+~ # eecchhoo  hheelllloo  ||  ttrr  aa--zz  AA--ZZ
+
+HELLO
+~ # eexxiitt  33
+
+koru-os: init exited with status 3
+koruext2: unmount: 38912 blocks in 1216 requests, 106374 cache hits

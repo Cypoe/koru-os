@@ -1,0 +1,13 @@
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+02FC6DB0+02F06DB0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=1 blocks=8192 free=5796 inodes=512 free=97
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.118090] ERR:  [appelfloader] <main.c @  216> Program name missing (no argv[1])
+koru-os: init exited with status 1
+koruext2: unmount: 96 blocks in 3 requests, 21 cache hits
+[    0.123798] ERR:  [libukpm] <pm.c @   69> PM driver failed the operation: -5. 

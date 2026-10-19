@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/workspace/koru-os-repo/experiments/m8-gl/check.py", line 4, in <module>
+    run, rbdf = sys.argv[1], sys.argv[2]
+                             ~~~~~~~~^^^
+IndexError: list index out of range

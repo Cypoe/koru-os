@@ -1,0 +1,20 @@
+# Q30 stage-2 regression board (2026-10-19 20:53 CEST, Europe/Berlin)
+# accel=tcg (no KVM). Tree tip at measurement includes Q30s2 spawn-compat.
+
+M9 / Q30 stage 2 (accept-q30s2-run-{1,2,3}): CHECKS PASS + STAGE2 CHECKS PASS 3/3
+M3 (m3ok-{1,2,3}): M3 ACCEPTANCE PASS 3/3
+M4: CHECKS PASS 3/3
+M5: CHECKS PASS 3/3
+M6: CHECKS PASS 3/3
+M7a: CHECKS PASS 3/3
+M7b: CHECKS PASS 3/3
+M8a: CHECKS PASS 3/3
+M8b: CHECKS PASS 3/3
+spawn skeleton: SPAWN PASS 3/3 (+ SPAWN-compile PASS)
+NID: NID PASS 3/3 (+ NID-compile PASS); kernel sha256 d6ab5c534510a104997a07a168dc69a861999fcb9a63bf77e7e8f8e154d6ce8f
+Slice A: SLICE-A PASS 3/3 (+ SLICE-compile PASS)
+spawn-elf: SPAWN-ELF PASS 3/3
+
+Notes:
+- M3 first attempt used elfloader as writer (FAIL); counted runs use M2 writer koru_qemu-x86_64 (m3ok-*).
+- NID first attempt used pre-via=probe binary (N3 FAIL vs check.py @ 5ad7948); counted runs use /workspace/nlc build.

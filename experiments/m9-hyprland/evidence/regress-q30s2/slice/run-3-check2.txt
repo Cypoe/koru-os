@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/workspace/koru-os-repo/experiments/slice-a/check.py", line 11, in <module>
+    art = {n: h for h, n in (l.split() for l in open(artf) if l.strip())}
+                                                ~~~~^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/workspace/nidreg/slice/koruos/slice/opcodes.txt'

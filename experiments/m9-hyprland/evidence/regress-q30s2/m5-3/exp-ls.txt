@@ -1,0 +1,8 @@
+bin
+dev
+etc
+lib
+lib64
+lost+found
+tmp
+usr

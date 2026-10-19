@@ -1,0 +1,19 @@
+NID FAIL
+NID FAIL
+NID FAIL
+art=/workspace/nidreg/slice/koruos/slice/artifacts.txt
+/workspace/rzc/slice/koruos/slice/artifacts.txt
+/workspace/koru-os-repo/experiments/slice-a/evidence/artifacts.txt
+SLICE-compile PASS
+SLICE-A PASS
+SLICE-A PASS
+SLICE-A PASS
+ok   E12 vfork+execve compat + roster 0: 
+ok   E0 no CRIT/crash: 
+SPAWN-ELF PASS
+ok   E12 vfork+execve compat + roster 0: 
+ok   E0 no CRIT/crash: 
+SPAWN-ELF PASS
+ok   E12 vfork+execve compat + roster 0: 
+ok   E0 no CRIT/crash: 
+SPAWN-ELF PASS

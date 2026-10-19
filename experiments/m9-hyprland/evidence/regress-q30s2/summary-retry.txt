@@ -1,0 +1,44 @@
+retry start 20:43:49 CEST
+M3 ACCEPTANCE FAIL
+M3 ACCEPTANCE FAIL
+M3 ACCEPTANCE FAIL
+PASS (d) refusal log empty or refused-by-design only: 12 ENOSYS rows, 2 STUBBED rows, names ['STUBBED __uk_syscall_r_prctl', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'rseq', 'set_robust_list']
+PASS (x) no Unikraft Crash
+CHECKS PASS
+m4-1 PASS
+PASS (d) refusal log empty or refused-by-design only: 12 ENOSYS rows, 2 STUBBED rows, names ['STUBBED __uk_syscall_r_prctl', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'rseq', 'set_robust_list']
+PASS (x) no Unikraft Crash
+CHECKS PASS
+m4-2 PASS
+PASS (d) refusal log empty or refused-by-design only: 12 ENOSYS rows, 2 STUBBED rows, names ['STUBBED __uk_syscall_r_prctl', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'rseq', 'set_robust_list']
+PASS (x) no Unikraft Crash
+CHECKS PASS
+m4-3 PASS
+PASS (x) no Unikraft Crash
+CHECKS PASS
+PASS (x) no Unikraft Crash
+CHECKS PASS
+PASS (x) no Unikraft Crash
+CHECKS PASS
+PASS (x) no Unikraft Crash
+CHECKS PASS
+CHECKS PASS
+PASS (x) disk unchanged, e2fsck clean
+M7 RUN PASS
+PASS (x) no Unikraft Crash
+CHECKS PASS
+CHECKS PASS
+PASS (x) disk unchanged, e2fsck clean
+M7 RUN PASS
+PASS (x) no Unikraft Crash
+CHECKS PASS
+CHECKS PASS
+PASS (x) disk unchanged, e2fsck clean
+M7 RUN PASS
+CHECKS PASS
+CHECKS PASS
+CHECKS PASS
+CHECKS PASS
+CHECKS PASS
+CHECKS PASS
+retry end 20:48:36 CEST

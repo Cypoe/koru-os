@@ -1,0 +1,6 @@
+1.001 attach
+3.573 detach
+7.074 attach
+9.343 detach
+9.358 qemu exit=0
+wall_s=9.359 accel=tcg

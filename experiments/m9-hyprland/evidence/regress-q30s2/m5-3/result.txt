@@ -1,0 +1,15 @@
+mkfs e2fsck exit=0 (koru-root: 440/1024 files (3.9% non-contiguous), 13738/32768 blocks)
+qemu exit=0 wall_s=31.018 (includes the scripted 3 s pauses)
+PASS (m1) musl hello argc=3, rc=42: ['M5 hello from /bin/hello-musl, argc=3, getenv(PATH)=/bin', 'rc=42']
+PASS (m2) glibc hello argc=2, rc=42: ['M5 hello from /bin/hello-glibc, argc=2, getenv(PATH)=/bin', 'rc=42']
+PASS (m3) GNU ls / equals host listing: ['bin', 'dev', 'etc', 'lib', 'lib64', 'lost+found', 'tmp', 'usr']
+PASS (m4) GNU ls / | GNU wc -l = 8: ['8']
+PASS (m5) dynamic busybox ls / | wc -l = 8: ['8']
+PASS (m6) GNU sha256sum equals host: ['f8cf211acfb9b9ea720cbe63093e802858c8c7037c23618f66e447a48bdba4f3  /etc/m5-data']
+PASS (m7) GNU sort | head -3 equals host: ['002b4b4c line 436', '003e181a line 490', '00745130 line 52']
+PASS (m8) exit 5 seen as init exit status 5
+PASS (d) refusal log classified: 48 rows, names ['STUBBED __uk_syscall_r_prctl', 'STUBBED __uk_syscall_r_sched_getaffinity', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'prlimit64 resource 5', 'rseq', 'set_robust_list', 'statx']
+PASS (x) no Unikraft Crash
+CHECKS PASS
+PASS (x) disk unchanged, e2fsck clean
+M5a RUN PASS

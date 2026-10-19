@@ -1,9 +1,10 @@
-# M9 acceptance init (koru-os). Markers on the serial console drive the host (drive-m9.py).
-# Q30 stage 1 (2026-10-19): Hyprland launches foot via spawn-compat (fork->posix_spawn
-# interposer on CExecutor::spawnRawProc). Init-launched foot --pty workaround is off
-# (M9_FOOT_PTY=0). korupty still backs foot's shell so foot itself does not fork (B21).
+# M9 acceptance init (koru-os). Q30 stage 2: Hyprland->foot via spawn-compat with
+# hyprland.children explicit grants (not posix-inherit). Markers drive drive-m9.py.
 export HOME=/tmp XDG_CACHE_HOME=/tmp/cache XDG_RUNTIME_DIR=/tmp/xdg PATH=/bin:/usr/bin LIBSEAT_BACKEND=noop LANG=C.UTF-8 SHELL=/bin/sh
 mkdir -p /tmp/cache /tmp/xdg; chmod 700 /tmp/xdg
+# Negative path target: must not be openable by foot under hyprland.children.
+echo SECRET > /tmp/ungranted-secret
+chmod 600 /tmp/ungranted-secret
 echo "m9-init: start"
 exec 3<>/dev/korupty0
 /bin/sh -i < /dev/korupty0s > /dev/korupty0s 2>&1 &
@@ -23,12 +24,15 @@ if [ "${M9_FOOT_PTY:-0}" = 1 ]; then
 fi
 i=0; while [ $i -lt 120 ] && ! /usr/bin/hyprctl -j clients | grep -q '"class": "foot"'; do sleep 1; i=$((i+1)); done
 echo "m9-init: foot mapped after ${i}s"
+# Rights census written by foot's LD_PRELOAD ctor
+i=0; while [ $i -lt 30 ] && [ ! -s /tmp/rights-census.txt ]; do sleep 1; i=$((i+1)); done
+echo "m9-init: rights-census begin"; cat /tmp/rights-census.txt 2>/dev/null; echo; echo "m9-init: rights-census end"
 i=0; while [ $i -lt 180 ] && [ ! -s /tmp/dod3 ]; do sleep 1; i=$((i+1)); done
 echo "m9-init: dod3 wait ${i}s"
 sleep 2
 echo "m9-init: clients begin"; /usr/bin/hyprctl -j clients; echo; echo "m9-init: clients end"
-tar -cf /dev/korusnap /tmp/dod3 && echo "m9-init: snapshot written"
+tar -cf /dev/korusnap /tmp/dod3 /tmp/rights-census.txt && echo "m9-init: snapshot written"
 echo "m9-init: foot log"; tail -c 2000 /tmp/foot.out 2>/dev/null
-echo "m9-init: hyprland exec log"; grep -n -e executor -e 'Fail to fork' -e spawn-compat /tmp/hl.out | tail -20
+echo "m9-init: hyprland exec log"; grep -n -e executor -e 'Fail to fork' -e spawn-compat -e hyprland.children /tmp/hl.out | tail -40
 echo "m9-init: end"
 sleep 30

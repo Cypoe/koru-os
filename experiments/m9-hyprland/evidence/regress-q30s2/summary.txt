@@ -1,0 +1,27 @@
+kernel 595f8c052016e5a8ead7b6c44bc953c9006bd86b902244e305e0035aa5a9f369
+regress start 20:35:28 CEST
+M3 ACCEPTANCE FAIL
+M3 ACCEPTANCE FAIL
+M3 ACCEPTANCE FAIL
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-1'
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-2'
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-3'
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-1'
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-2'
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-3'
+CHECKS PASS
+CHECKS PASS
+CHECKS PASS
+/workspace/koru-os-repo/experiments/m7-input/run-m7.sh: line 7: $4: unbound variable
+/workspace/koru-os-repo/experiments/m7-input/run-m7.sh: line 7: $4: unbound variable
+/workspace/koru-os-repo/experiments/m7-input/run-m7.sh: line 7: $4: unbound variable
+CHECKS PASS
+CHECKS PASS
+CHECKS PASS
+IndexError: list index out of range
+IndexError: list index out of range
+IndexError: list index out of range
+IndexError: list index out of range
+IndexError: list index out of range
+IndexError: list index out of range
+m3-m8 end 20:43:21 CEST

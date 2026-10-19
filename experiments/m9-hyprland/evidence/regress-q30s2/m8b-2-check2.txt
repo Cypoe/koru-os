@@ -1,0 +1,6 @@
+PASS (c1) kmscube: EGL 1.5 Mesa, llvmpipe, >=3 progress lines, 149 frames, exit 0, 150 flips: 5 progress lines, last ('149', '10.120106', '14.723166')
+PASS (c2) two screendumps 1 s apart: 1280x800, grey background, cube 5-50 %, not black, differ >= 1 %: 1280x800 non-grey [200455, 197532] black [1, 1] differing 206646
+PASS (c3) refusal log classified: 19 rows, names ['REFUSED DRM_IOCTL_MODE_ADDFB2 format 0x34325258 flags 0x2', 'STUBBED __uk_syscall_r_prctl', 'STUBBED __uk_syscall_r_sched_getaffinity', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'rseq', 'set_robust_list']
+PASS (c4) Mesa messages only the classified ones: ['MESA-LOADER: failed to retrieve device information', 'kmsro: driver missing']
+PASS (x) no Unikraft Crash, init exit 0
+CHECKS PASS

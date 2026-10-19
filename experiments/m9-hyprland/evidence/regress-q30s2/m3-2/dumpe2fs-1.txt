@@ -1,0 +1,38 @@
+Filesystem volume name:   koru-root
+Last mounted on:          <not available>
+Filesystem UUID:          21c0c6da-d75b-4535-9adc-ff38b3bc07dd
+Filesystem magic number:  0xEF53
+Filesystem revision #:    1 (dynamic)
+Filesystem features:      (none)
+Filesystem flags:         signed_directory_hash 
+Default mount options:    user_xattr acl
+Filesystem state:         clean
+Errors behavior:          Continue
+Filesystem OS type:       Linux
+Inode count:              512
+Block count:              8192
+Reserved block count:     409
+Overhead clusters:        69
+Free blocks:              5796
+Free inodes:              97
+First block:              1
+Block size:               1024
+Fragment size:            1024
+Blocks per group:         8192
+Fragments per group:      8192
+Inodes per group:         512
+Inode blocks per group:   64
+Filesystem created:       Mon Oct 19 20:35:51 2026
+Last mount time:          n/a
+Last write time:          Mon Oct 19 20:35:51 2026
+Mount count:              0
+Maximum mount count:      -1
+Last checked:             Mon Oct 19 20:35:51 2026
+Check interval:           0 (<none>)
+Reserved blocks uid:      0 (user root)
+Reserved blocks gid:      0 (group root)
+First inode:              11
+Inode size:               128
+Default directory hash:   half_md4
+Directory Hash Seed:      f6cd4e15-d64c-4a2e-81f0-7e0c3db730e0
+

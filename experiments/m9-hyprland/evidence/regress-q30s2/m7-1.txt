@@ -1,0 +1,1 @@
+/workspace/koru-os-repo/experiments/m7-input/run-m7.sh: line 7: $4: unbound variable

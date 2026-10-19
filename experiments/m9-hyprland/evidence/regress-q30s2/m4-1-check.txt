@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/workspace/koru-os-repo/experiments/m4-cyb/check.py", line 4, in <module>
+    raw = open(sys.argv[1], "rb").read()
+          ~~~~^^^^^^^^^^^^^^^^^^^
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-1'

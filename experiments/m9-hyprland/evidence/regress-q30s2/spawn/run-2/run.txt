@@ -1,0 +1,2 @@
+qemu exit=0 wall_s=0.276 accel=tcg
+37abae7105ffa655b07f78b218de0d2bff3b77dfb29550d70ff51eebe9806023  /workspace/spc2/koruos/spawn/tests/.unikraft/build/koru_qemu-x86_64

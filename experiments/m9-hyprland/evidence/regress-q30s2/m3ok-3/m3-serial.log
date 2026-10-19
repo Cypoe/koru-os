@@ -1,0 +1,232 @@
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFC6DB0+0EF06DB0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+[    0.110237] ERR:  [appkoruos] <evdev_linux.c @  421> koru-os: INFO input rows bound: /dev/input/event0 -> koru-os i8042 keyboard (set 1)
+[    0.111206] ERR:  [appkoruos] <ps2kbd.c @  280> koru-os: INFO input.ps2: i8042 cfg 0x71 -> 0x61, enable-scan ack 0xfa, IRQ 1, bind 0
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=1 blocks=8192 free=5786 inodes=512 free=96
+[    0.123489] ERR:  [appkoruos] <korusysfs.c @  194> koru-os: sysfs: mount ramfs on /sys failed (-2); no /sys view
+[    0.132778] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.181241] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.181949] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.182517] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.182803] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    0.185219] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    0.188690] ERR:  [libposix_process] <deprecated.c @  302> koru-os: STUBBED __uk_syscall_r_prctl()
+~ # llss  //
+
+[    3.897109] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    3.897832] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    3.898643] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    3.899364] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    3.901897] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+bin         dev         dod1        lost+found  tmp
+~ # ccaatt  //ddoodd11
+
+[    5.907961] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    5.909351] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    5.911119] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    5.912454] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    5.916769] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxels
+gnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkry
+mtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxe
+szgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdk
+yfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjq
+elszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipw
+kryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovc
+qxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubi
+wdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtaho
+cjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnu
+ipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmta
+ovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszg
+ubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfm
+ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxels
+gnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkry
+mtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxe
+tahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxel
+zgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr
+fmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqx
+lszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwd
+ryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcj
+xelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubip
+dkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahov
+jqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnub
+pwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtah
+vcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgn
+bipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmt
+hovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelsz
+nubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryf
+tahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxel
+zgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr
+fmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqx
+mtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxe
+szgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdk
+yfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjq
+elszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipw
+kryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovc
+qxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubi
+wdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtaho
+cjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnu
+ipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmta
+ovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszg
+ubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfm
+ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxels
+gnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkry
+mtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxe
+szgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdk
+yfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjq
+fmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqx
+lszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwd
+ryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcj
+xelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubip
+dkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahov
+jqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnub
+pwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtah
+vcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgn
+bipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmt
+hovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelsz
+nubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryf
+tahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxel
+zgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr
+fmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqx
+lszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwd
+ryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcj
+yfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjq
+elszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipw
+kryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovc
+qxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubi
+wdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtaho
+cjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnu
+ipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmta
+ovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszg
+ubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfm
+ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxels
+gnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkry
+mtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxe
+szgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdk
+yfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjq
+elszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipw
+kryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovc
+ryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcj
+xelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubip
+dkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahov
+jqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnub
+pwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtah
+vcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgn
+bipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmt
+hovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelsz
+nubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryf
+tahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxel
+zgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr
+fmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqx
+lszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwd
+ryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcj
+xelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubip
+dkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahov
+kryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovc
+qxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubi
+wdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtaho
+cjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnu
+ipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmta
+ovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszg
+ubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfm
+ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxels
+gnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkry
+mtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxe
+szgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdk
+yfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjq
+elszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipw
+kryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovc
+qxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubi
+wdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtaho
+dkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahov
+jqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnub
+pwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtah
+vcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgn
+bipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmt
+hovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelsz
+nubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryf
+tahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxel
+zgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr
+fmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqx
+lszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwd
+ryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcj
+xelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubip
+dkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahov
+jqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnub
+pwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtah
+wdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtaho
+cjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnu
+ipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmta
+ovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszg
+ubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfm
+ahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxels
+gnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkry
+mtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxe
+szgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdk
+yfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjq
+elszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipw
+kryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovc
+qxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubi
+wdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtaho
+cjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnu
+ipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmta
+pwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtah
+vcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgn
+bipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmt
+hovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelsz
+nubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryf
+tahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxel
+zgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkr
+fmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqx
+lszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwd
+ryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcj
+xelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubip
+dkryfmtahovcjqxelszgnubipwdkryfmtahovcjqxelszgnubipwdkryfmtahov
+jqxelszgnubipwdk~ # sshhaa225566ssuumm  //ddoodd11
+
+[    7.886949] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    7.887647] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    7.888588] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    7.889413] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    7.892108] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+8b2e9313cc19831e67483730ba6f6080c40a2472675635d8899410e94f6967ce  /dod1
+~ # wwcc  --cc  //ddoodd11
+
+[    9.885806] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    9.886513] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[    9.887451] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[    9.888220] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[    9.890692] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+10000 /dod1
+~ # llss  --ll  //ddoodd11  //bbiinn//bbuussyybbooxx
+
+[   11.886340] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   11.887042] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   11.887812] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   11.888451] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   11.890894] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+-rwxr-xr-x    1 1000     1000       2357096 Oct 19 18:50 /bin/busybox
+-rw-r--r--    1 0        0            10000 Jan  1  1970 /dod1
+~ # eecchhoo  hheelllloo  ||  ttrr  aa--zz  AA--ZZ
+
+[   13.889571] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   13.890371] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   13.891335] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   13.892165] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   13.896410] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   13.932754] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   13.933412] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+[   13.934291] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS set_robust_list (nr 273)
+[   13.934980] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS rseq (nr 334)
+[   13.937331] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2822> koru-os: ENOSYS brk (nr 12)
+HELLO
+~ # eexxiitt  33
+
+koru-os: init exited with status 3
+koruext2: unmount: 39328 blocks in 1229 requests, 106472 cache hits

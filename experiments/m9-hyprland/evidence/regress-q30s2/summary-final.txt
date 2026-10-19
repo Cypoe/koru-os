@@ -1,0 +1,56 @@
+=== Q30s2 regression summary 2026-10-19 20:53 CEST ===
+NID kernel: d6ab5c534510a104997a07a168dc69a861999fcb9a63bf77e7e8f8e154d6ce8f
+nid-1: NID PASS
+nid-2: NID PASS
+nid-3: NID PASS
+slice-1: SLICE-A PASS
+slice-2: SLICE-A PASS
+slice-3: SLICE-A PASS
+spelf-1: SPAWN-ELF PASS
+spelf-2: SPAWN-ELF PASS
+spelf-3: SPAWN-ELF PASS
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/summary-final.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/summary-retry.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/summary-sns2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/summary-spawn-nid-slice.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/summary.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-1-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-2-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-3-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-1-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-2-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-3-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m6-1-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m6-2-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m6-3-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m7-1-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m7-2-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m7-3-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m7b-1-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m7b-2-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m7b-3-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8a-1-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8a-2-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8a-3-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8b-1-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8b-2-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8b-3-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-1-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-2-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m4-3-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-1-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-2-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-3-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m7a-1-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m7a-2-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m7a-3-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8a-1-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8a-2-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8a-3-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8b-1-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8b-2-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m8b-3-check2.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/spawn/run-1-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/spawn/run-2-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/spawn/run-3-check.txt
+/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/nid/run-1/check.txt

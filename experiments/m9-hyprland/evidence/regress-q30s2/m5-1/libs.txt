@@ -1,0 +1,9 @@
+libc.so.6
+libcap.so.2
+libcrypto.so.3
+libm.so.6
+libpcre2-8.so.0
+libresolv.so.2
+libselinux.so.1
+libz.so.1
+libzstd.so.1

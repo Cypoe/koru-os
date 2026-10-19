@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/workspace/koru-os-repo/experiments/m5-dyn/check.py", line 4, in <module>
+    log = open(sys.argv[1], encoding="utf-8", errors="replace").read().split("\n")
+          ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/m5-2'

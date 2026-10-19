@@ -1,0 +1,19 @@
+sns start 20:51:23 CEST
+SPAWN PASS
+SPAWN PASS
+SPAWN PASS
+SPAWN-compile PASS
+ValueError: not enough values to unpack (expected 2, got 1)
+ValueError: not enough values to unpack (expected 2, got 1)
+ValueError: not enough values to unpack (expected 2, got 1)
+NID-compile PASS
+ValueError: not enough values to unpack (expected 3, got 1)
+ValueError: not enough values to unpack (expected 3, got 1)
+ValueError: not enough values to unpack (expected 3, got 1)
+FileNotFoundError: [Errno 2] No such file or directory: '/workspace/nidreg/slice/koruos/slice/opcodes.txt'
+FileNotFoundError: [Errno 2] No such file or directory: '/workspace/nidreg/slice/koruos/slice/opcodes.txt'
+FileNotFoundError: [Errno 2] No such file or directory: '/workspace/nidreg/slice/koruos/slice/opcodes.txt'
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/spelf/run-1'
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/spelf/run-2'
+IsADirectoryError: [Errno 21] Is a directory: '/workspace/koru-os-repo/experiments/m9-hyprland/evidence/regress-q30s2/spelf/run-3'
+sns end 20:52:20 CEST

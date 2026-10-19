@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/workspace/koru-os-repo/experiments/slice-a/check.py", line 5, in <module>
+    run, artf, gates = sys.argv[1:4]
+    ^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 1)
