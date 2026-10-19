@@ -1,0 +1,5 @@
+DS0-image run 1: DS0-image PASS
+DS0-image run 2: DS0-image PASS
+DS0-image run 3: DS0-image PASS
+kernel: f23b92cdc6f0ec50f1b9dfd96eaf21bfb9098e76f4a30e4fd51f4d82ae84e2d5  /workspace/sl-ds0/koruos/silo/tests/.unikraft/build/koru_qemu-x86_64
+(DS0 rebuilt 18:38 CEST from koru/silo with the same toolchain; Slice A changes no kernel patch and no shared lib, so the Linux-ABI milestones M3-M9 are not affected)

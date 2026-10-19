@@ -1,0 +1,4 @@
+kernel sha256 7a0c15019b7396485957c07f40398184a44a4aa08aec4ab718d7ef1168af1528 size=197504 B (built 18:47 CEST from 88516f4, workdir /workspace/slk, koru-libs ff5cb559, Unikraft 0.21.0 via kraft stable, Zig 0.15.2, TCG)
+libkoruapp.a size=55488 B
+build wall 17 s (build-slice.sh, warm kraft cache)
+note: an earlier build from the same commit gave sha256 05f818b3cfac7c1c... ; kraft builds are not byte-reproducible here, so the sha identifies this kernel, not the commit

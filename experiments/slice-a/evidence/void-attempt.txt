@@ -1,0 +1,5 @@
+VOID attempt 18:46-18:47 CEST (not counted): the first build-slice.sh call was wrapped in /usr/bin/time, which does not exist on the box, so check-negatives.sh ran against a missing workdir and wrote 'SLICE-compile FAIL'. All three runs then gave S9-S14 PASS and x FAIL (gates file only).
+Re-run 18:48 CEST: gates first, then a rebuild, then three runs; check.py and check-negatives.sh unchanged (88516f4).
+void run-1: S9 PASS S10 PASS S11 PASS S12 PASS S13 PASS S14 PASS x FAIL SLICE-A FAIL 
+void run-2: S9 PASS S10 PASS S11 PASS S12 PASS S13 PASS S14 PASS x FAIL SLICE-A FAIL 
+void run-3: S9 PASS S10 PASS S11 PASS S12 PASS S13 PASS S14 PASS x FAIL SLICE-A FAIL 

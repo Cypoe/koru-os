@@ -1,4 +1,4 @@
-# Slice A acceptance (frozen 2026-10-19 about 18:50 CEST, before the first counted run)
+# Slice A acceptance (frozen 2026-10-19 18:46 CEST in commit 88516f4, before the first counted run)
 
 The slice is defined in DESIGN-0001 §11.4. The checks are implemented in `check.py` and
 `check-negatives.sh` exactly as committed together with this file; a change to either after
