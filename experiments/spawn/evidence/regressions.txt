@@ -1,0 +1,12 @@
+regressions 19:34:13–19:37:06 CEST (realize/run-counted.sh + NID image 3/3)
+slice-run-1: S14 PASS
+slice-run-2: S14 PASS
+slice-run-3: S14 PASS
+ds0-run-1: DS0-image PASS
+ds0-run-2: DS0-image PASS
+ds0-run-3: DS0-image PASS
+AS EXPECTED: negative_contradict.k exit=1 :: refused: author line CONFIG_LIBUKSCHEDCOOP: 'y' contradicts derived CONFIG_LIBUKSCHEDCOOP=n phase=configure
+R6 PASS
+nid run 1: NID PASS / L1 PASS (build-time link phase agrees with the run)
+nid run 2: NID PASS / L1 PASS (build-time link phase agrees with the run)
+nid run 3: NID PASS / L1 PASS (build-time link phase agrees with the run)

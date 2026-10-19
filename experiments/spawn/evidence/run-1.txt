@@ -1,0 +1,14 @@
+ok   S1 empty-by-default rights (only the ambient set): child 2
+ok   S2 manifest = bag = what the child sees; seam enforces verbs: child 3 manifest=[('fd/1', 'write'), ('env/TERM', 'read')] seen=[('fd/1', 'write'), ('env/TERM', 'read')]
+ok   S3 over-grant / unheld handle / max_bag refused: 
+ok   S4 address-space copy refused (fork, @caller, grant): 
+ok   S5 seal refuses uncovered imports: child 6
+ok   S6 spawn authority (image set, max_children): 
+ok   S7 start mints running only on evidence: child 7
+ok   S8 roster n -> n+1 -> n, none left: ['roster: 0', 'roster: 1', 'roster: 0', 'roster: 0']
+ok   S9 identities never reused: [2, 3, 4, 5, 6, 7]
+ok   S10 compile gates: SPAWN-compile PASS
+ok   S11 done, no FAIL/crash: 
+SPAWN PASS
+qemu exit=0 wall_s=0.319 accel=tcg
+89c33a21239b386ffc1e03f69b03f151bec182d680205134cc1e89f6c202fc98  /workspace/spc/koruos/spawn/tests/.unikraft/build/koru_qemu-x86_64

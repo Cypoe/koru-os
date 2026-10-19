@@ -1,0 +1,11 @@
+image: /workspace/spc/koruos/spawn/tests/.unikraft/build/koru_qemu-x86_64.dbg
+root: ukplat_entry2; functions: 472, reachable directly: 93
+largest frames: output_emitted.main_module.flow0=72256, output_emitted.koru_koruos.koru_spawn.seal_event.handler=1424, output_emitted.koru_koruos.koru_spawn.grant_event.handler=1344, output_emitted.koru_koruos.koru_spawn.reserve_event.handler=1288, output_emitted.koru_koruos.koru_spawn.start_event.handler=1176, output_emitted.koru_koruos.koru_spawn.retire=1168
+demand, direct edges only: 74208 B
+indirect call sites reachable: 19; each charged 2992 B (largest acyclic demand among 308 address-taken functions: output_emitted.koru_koruos.koru_spawn.censusMain)
+demand, conservative: 77192 B
+worst chain: ukplat_entry2(16) -> uk_boot_entry(112) -> do_main(48) -> main(16) -> koru_main(16) -> output_emitted.main_module.flow0(72256) -> output_emitted.koru_koruos.koru_spawn.seal_event.handler(1424) -> Io.Writer.printValue__anon_3835(16) -> Io.Writer.printIntAny__anon_5416(120) -> Io.Writer.alignBufferOptions(64) -> Io.Writer.splatByteAll(112) -> <indirect: 2992>
+recursion cycles cut: 0
+root address-taken (excluded as indirect target): True
+derived stack: 131072 B
+verdict: FITS (conservative 77192 B <= 131072 B)

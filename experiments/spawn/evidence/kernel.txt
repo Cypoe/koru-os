@@ -1,0 +1,4 @@
+89c33a21239b386ffc1e03f69b03f151bec182d680205134cc1e89f6c202fc98  /workspace/spc/koruos/spawn/tests/.unikraft/build/koru_qemu-x86_64
+193200 B
+   text	   data	    bss	    dec	    hex	filename
+ 165952	   6920	 245760	 418632	  66348	/workspace/spc/koruos/spawn/tests/.unikraft/build/koru_qemu-x86_64.dbg

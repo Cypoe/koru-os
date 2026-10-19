@@ -1,0 +1,5 @@
+FAIL S1 empty-by-default rights (only the ambient set): child 2
+FAIL S3 over-grant / unheld handle / max_bag refused: 
+ok   S11 done, no FAIL/crash: 
+SPAWN FAIL
+mutations in a copy of run-1 serial.log: an extra 'sees fd/1' line for the empty child; the over-grant refusal reason changed

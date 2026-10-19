@@ -1,0 +1,7 @@
+R2 ok   CONFIG_LIBUKALLOC: derived y, resolved y
+R2 ok   CONFIG_LIBUKALLOCBBUDDY: derived y, resolved y
+R2 ok   CONFIG_LIBUKBOOT_INITNOSCHED: derived y, resolved y
+R2 ok   CONFIG_LIBUKSCHEDCOOP: derived n, resolved n
+R2 ok   CONFIG_STACK_SIZE_PAGE_ORDER: derived 5, resolved 5
+R3 ok   no-scheduler row: 0 scheduler symbols in the image
+R2/R3 PASS

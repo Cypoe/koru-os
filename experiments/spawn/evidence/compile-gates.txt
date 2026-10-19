@@ -1,0 +1,7 @@
+control compiles: control_minimal.k
+control compiles: control_abandon.k
+REJECTED as expected: negative_start_unsealed.k :: error[KORU030]: Phantom state mismatch: expected 'koruos.spawn:sealed' but got 'koruos.spawn:staged!' for argument 'c'
+REJECTED as expected: negative_grant_after_seal.k :: error[KORU030]: Phantom state mismatch: expected 'koruos.spawn:staged' but got 'koruos.spawn:sealed!' for argument 'c'
+REJECTED as expected: negative_reap_running.k :: error[KORU030]: Phantom state mismatch: expected 'koruos.spawn:exited' but got 'koruos.spawn:running!' for argument 'c'
+REJECTED as expected: negative_child_leaked.k :: error[KORU030]: Resource 'u' obligation <running!> was not discharged. Call: wait
+SPAWN-compile PASS
