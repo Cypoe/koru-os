@@ -1,0 +1,13 @@
+ok   N1 NID and interface ids recomputed: 35 ids checked, 0 mismatches
+ok   N2 foreign -> canonical -> export, two names one interface: bound lines 25,28
+ok   N3 unbound NID: loud refusal, no call: refusals at 31,33; no out line before 35
+ok   N4 no silent overwrite: line 10
+ok   N5 admission: descriptor mismatch, unlinked export, orphan evolve: lines 12,14,16
+ok   N6 NID collision refused (4-bit table): open5: refused reason=nid collision at=create c/t/1/f02 -> koruos.clock.monotonic@1 => clock_uk_v1:now other=c/t/1/f01
+ok   N7 retarget: same NID, new provider, stale refused: lines 38,39,42,43
+ok   N8 evolve, don't mutate: lines 52,55,57
+ok   N9 both tables closed clean, done, no FAIL/crash: closes=['close: outstanding=0', 'close: outstanding=0']
+ok   N10 compile gates: NID-compile PASS
+NID PASS
+qemu exit=0 wall_s=0.297 accel=tcg
+d6ab5c534510a104997a07a168dc69a861999fcb9a63bf77e7e8f8e154d6ce8f  /workspace/nlc/koruos/nid/tests/.unikraft/build/koru_qemu-x86_64

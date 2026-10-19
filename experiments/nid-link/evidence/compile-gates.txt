@@ -1,0 +1,5 @@
+control compiles: control_minimal.k
+REJECTED as expected: negative_call_after_release.k :: error[KORU030]: Use-after-discharge: binding 'r.b' was already discharged and cannot be used
+REJECTED as expected: negative_resolve_after_close.k :: error[KORU030]: Use-after-discharge: binding 't' was already discharged and cannot be used
+AUTO-DISCHARGED as expected: autodischarge_binding_release.k (koruc emitted release)
+NID-compile PASS

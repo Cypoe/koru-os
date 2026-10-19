@@ -1,0 +1,62 @@
+SeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+01F86E00+01EC6E00 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+nid: begin
+row 0: create foreign=c/libc/1/fputs nid=op2qbSMIgP4 -> interface=koruos.console.write@1 iid=dFZeIRcfgH4 -> export=console_com1_v1:write
+refused: row="create c/libc/1/fputs -> koruos.clock.monotonic@1 => clock_uk_v1:now" reason=create would overwrite a bound foreign name (use evolve) other=koruos.console.write@1 phase=configure
+open1: refused reason=create would overwrite a bound foreign name (use evolve)
+refused: row="create c/libc/1/fputs -> koruos.console.write@2 => console_com1_v1:write" reason=provider export realizes another interface other=koruos.console.write@1 phase=configure
+open2: refused reason=provider export realizes another interface other=koruos.console.write@1
+refused: row="create c/libc/1/fputs -> koruos.console.write@1 => console_virtio_v1:write" reason=provider export not in this realization other=console_virtio_v1:write phase=configure
+open3: refused reason=provider export not in this realization other=console_virtio_v1:write
+refused: row="evolve c/libc/1/fputs -> koruos.console.write@2 => console_com1_v2:write" reason=evolve without a parent row other=none phase=configure
+open4: refused reason=evolve without a parent row
+row 0: create foreign=c/t/1/f00 nid=EAAAAAAAAAA -> interface=koruos.clock.monotonic@1 iid=S5EZINTIuNY -> export=clock_uk_v1:now
+row 1: create foreign=c/t/1/f01 nid=4AAAAAAAAAA -> interface=koruos.clock.monotonic@1 iid=S5EZINTIuNY -> export=clock_uk_v1:now
+refused: row="create c/t/1/f02 -> koruos.clock.monotonic@1 => clock_uk_v1:now" reason=nid collision other=c/t/1/f01 phase=configure
+open5: refused reason=nid collision at=create c/t/1/f02 -> koruos.clock.monotonic@1 => clock_uk_v1:now other=c/t/1/f01
+row 0: create foreign=c/libc/1/fputs nid=op2qbSMIgP4 -> interface=koruos.console.write@1 iid=dFZeIRcfgH4 -> export=console_com1_v1:write
+row 1: create foreign=linux/x86_64/1/write nid=eRqEQmqzMVM -> interface=koruos.console.write@1 iid=dFZeIRcfgH4 -> export=console_com1_v1:write
+row 2: create foreign=c/libc/1/clock_gettime nid=Bxj3PPUdakk -> interface=koruos.clock.monotonic@1 iid=S5EZINTIuNY -> export=clock_uk_v1:now
+table: open rows=3 nid_bits=64
+bound: foreign=c/libc/1/fputs nid=op2qbSMIgP4 -> row 0 -> interface=koruos.console.write@1 iid=dFZeIRcfgH4 -> export=console_com1_v1:write gen=1 arm=unikraft/qemu-x86_64 via=resolve
+out: hello via c/libc/1/fputs
+call: n=24
+bound: foreign=linux/x86_64/1/write nid=eRqEQmqzMVM -> row 1 -> interface=koruos.console.write@1 iid=dFZeIRcfgH4 -> export=console_com1_v1:write gen=1 arm=unikraft/qemu-x86_64 via=resolve
+out: hello via linux/x86_64/1/write
+call: n=30
+refused: foreign=c/libc/1/puts nid=WXSxCpbNP58 arm=unikraft/qemu-x86_64 phase=link missing=correspondence row offered=[none] via=probe
+unbound: foreign=c/libc/1/puts nid=WXSxCpbNP58 phase=link missing=correspondence row offered=[none]
+refused: foreign=c/libc/2/fputs nid=AaVbDaC0b6I arm=unikraft/qemu-x86_64 phase=link missing=correspondence row offered=[c/libc/1/fputs] via=probe
+unbound: foreign=c/libc/2/fputs nid=AaVbDaC0b6I phase=link missing=correspondence row offered=[c/libc/1/fputs]
+bound: foreign=c/libc/1/clock_gettime nid=Bxj3PPUdakk -> row 2 -> interface=koruos.clock.monotonic@1 iid=S5EZINTIuNY -> export=clock_uk_v1:now gen=1 arm=unikraft/qemu-x86_64 via=resolve
+clock: ns=123767720
+refused: retarget koruos.console.write@2 to=console_tag_v1:write reason=export realizes koruos.console.write@1 phase=configure
+retarget: refused reason=provider export realizes another interface
+retarget: interface=koruos.console.write@1 -> export=console_tag_v1:write rows=2 gen=2 (NIDs unchanged)
+retarget: rows=2 gen=2
+stale: row 0 interface=koruos.console.write@1 binding gen=1 row gen=2: refused at use, not redirected
+stale: held=1 now=2
+bound: foreign=c/libc/1/fputs nid=op2qbSMIgP4 -> row 0 -> interface=koruos.console.write@1 iid=dFZeIRcfgH4 -> export=console_tag_v1:write gen=2 arm=unikraft/qemu-x86_64 via=resolve
+out[tag]: re-resolved after retarget
+table1: c/libc/1/fputs nid=op2qbSMIgP4 -> koruos.console.write@1 -> console_tag_v1:write gen=2
+table1: linux/x86_64/1/write nid=eRqEQmqzMVM -> koruos.console.write@1 -> console_tag_v1:write gen=2
+table1: c/libc/1/clock_gettime nid=Bxj3PPUdakk -> koruos.clock.monotonic@1 -> clock_uk_v1:now gen=1
+table3: refusals=2
+close: outstanding=0
+nid: evolve
+row 0: create foreign=c/libc/1/fputs nid=op2qbSMIgP4 -> interface=koruos.console.write@1 iid=dFZeIRcfgH4 -> export=console_com1_v1:write
+row 1: evolve foreign=c/libc/1/fputs nid=op2qbSMIgP4 -> interface=koruos.console.write@2 iid=8OgLweDyj8w -> export=console_com1_v2:write (occludes a parent row)
+occluded: row 0 by row 1
+table: open rows=2 nid_bits=64
+bound: foreign=c/libc/1/fputs nid=op2qbSMIgP4 -> row 1 -> interface=koruos.console.write@2 iid=8OgLweDyj8w -> export=console_com1_v2:write gen=1 arm=unikraft/qemu-x86_64 via=resolve
+out2: hello via the evolved row
+table1: c/libc/1/fputs nid=op2qbSMIgP4 -> koruos.console.write@1 -> console_com1_v1:write OCCLUDED by row 1
+table1: c/libc/1/fputs nid=op2qbSMIgP4 -> koruos.console.write@2 -> console_com1_v2:write gen=1
+table3: refusals=0
+close: outstanding=0
+nid: done

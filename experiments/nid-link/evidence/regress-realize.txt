@@ -1,0 +1,15 @@
+Regression after koru/realize gained the link phase: ../realize/run-counted.sh, 2026-10-19 19:25:06-19:27:24 CEST, TCG
+slice-config: R2/R3 PASS
+silo-config: R2/R3 PASS
+slice-stack: verdict: FITS (conservative 76544 B <= 131072 B)
+silo-stack: verdict: FITS (conservative 74216 B <= 131072 B)
+slice-compile-gates: SLICE-compile PASS
+negatives: R6 PASS
+slice run 1: SLICE-A PASS
+ds0 run 1: DS0-image PASS
+slice run 2: SLICE-A PASS
+ds0 run 2: DS0-image PASS
+slice run 3: SLICE-A PASS
+ds0 run 3: DS0-image PASS
+c9db4afd71a3b4ff0989f32dfc3857a98f1a86a31c929cae07313dcadb18ff56  /workspace/nlreg/slice/koruos/slice/tests/.unikraft/build/koru_qemu-x86_64
+b28e4a25838eb5b64d10515622a2008b7feb5a3e1684af8a42689585726c79ef  /workspace/nlreg/silo/koruos/silo/tests/.unikraft/build/koru_qemu-x86_64

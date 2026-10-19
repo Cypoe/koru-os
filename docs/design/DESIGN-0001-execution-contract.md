@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance); 19:05: obligation-derived kconfig (`koruc … realize gen`) measured, §11.1 result; 19:17: NID binding layer `koruos/nid` N1–N10 3/3 PASS, regressions 3/3, §11.6, Q3 answered by work) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance); 19:05: obligation-derived kconfig (`koruc … realize gen`) measured, §11.1 result; 19:17: NID binding layer `koruos/nid` N1–N10 3/3 PASS, regressions 3/3, §11.6, Q3 answered by work; 19:27: build-time resolution via realize table 3, L1–L4 PASS, §11.7) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -1239,7 +1239,7 @@ Resolution happens at the earliest phase that has the information:
 |---|---|---|
 | import | the platform namespace is absent | `src/config.zig`: `unikraft` resolves to two candidate layouts, and a miss is a loud "module not found", never a fallback (V) |
 | compile | an obligation is undischarged, a branch is unhandled, or a ref target is unknown | phantom checker (`KORU030` use-after-discharge, V in `unikraft/store/README.md`); `store.refs.kz` refuses with `KORU161` (V) |
-| configure | a required interface has no row for the selected platform arm | **D**: this note's first slice (§11) |
+| configure | a required interface has no row for the selected platform arm | **M** for `koruos/nid` programs (§11.7): `realize gen` refuses a required import with no row, a wrong version, a refused table or a NID collision, before an image exists; Unikraft rows §11.1 |
 | link | a symbol is unshimmed or unbound | **D** (plex-os `libc_shim` today returns `-1` at runtime; see `notes/plex-os-study.md`) |
 | run | a binding is stale (generation), a lease has expired, or budget is exhausted | partial: plex-net `execute_flow` and `UCANLease` (read, plex-shell) |
 
@@ -2379,7 +2379,7 @@ Evidence: `experiments/slice-a/evidence/`.
 
 1. Concordance registration (§2.3): every koru-os term cited or added.
 2. Obligation-derived kconfig (§11.1). *2026-10-19 19:05: S1, S2 and R6 met, S4 partly, S3 and the RAM floor owed (§11.1 result).*
-3. The NID binding layer: rows, admission and refusal (§3.2–§3.6, §11.2, Slice A S9–S11). *2026-10-19 19:16: `koruos/nid` N1–N10 3/3 PASS under TCG, regressions 3/3 (§11.6).*
+3. The NID binding layer: rows, admission and refusal (§3.2–§3.6, §11.2, Slice A S9–S11). *2026-10-19 19:16: `koruos/nid` N1–N10 3/3 PASS under TCG, regressions 3/3 (§11.6); 19:27: build-time refusal of required imports via realize table 3, L1–L4 PASS (§11.7).*
 4. **SASOS ascent** over one address space (§6.1a), with the **counting wall as a measured
    spike** inside it. The design is closed (§8.5); the measurement is the work.
 5. Protection bits.
@@ -2462,8 +2462,44 @@ foreign import (scheme/ns/version/name) --NID--> correspondence row --> canonica
 - artifact hashes on exports (Slice A has them; this lift names artifacts only);
 - signed rows (Q3 item 4);
 - the cross-image handle of §8.4;
-- the link phase proper. Resolution runs at boot inside the image; a build-time pass
-  that refuses before an image exists is the next step, through `koruos/realize` table 3.
+- ~~the link phase proper~~: done in §11.7.
+
+
+### 11.7 Build-time resolution: required imports refused before an image exists (result, 2026-10-19 19:23–19:27 CEST, M under TCG)
+
+This closes the configure and link rows of §3.4 for `koruos/nid` programs. `koruos/realize`
+now evaluates the binding chain during `koruc <boot.k> realize gen`:
+
+- the export table is read from the `koruos/nid` module's host lines, the same lines that
+  are compiled into the image;
+- literal `open` manifests are admitted with the lift's rules;
+- literal `resolve`/`probe` are looked up in the lexically enclosing table, and a literal
+  `retarget` is applied on its `ok` arm.
+
+The lift distinguishes two lookups:
+
+- **`resolve` is a required import** (§3.0: "each required interface resolves to …"). If it
+  cannot bind, it becomes a table-3 refusal with `phase=configure`, no Kraftfile is written,
+  and so no image exists (§3.5).
+- **`probe` is an optional lookup.** It is only predicted; its run-time refusal is a branch
+  the program handles.
+
+**Result** (`experiments/nid-link/`, checks frozen in `5ad7948`):
+
+- **L1, agreement:** the 16 build-time predictions equal the image's 16 run-time outcomes
+  in order and field for field, 3/3.
+- **L2, refusals:** four required-import refusals before any image: no row, another
+  version, a refused table, a 4-bit NID collision. The controls are accepted.
+- **L3:** N1–N10 still hold 3/3.
+- **L4:** Slice A and DS0 regressions 3/3.
+
+**Limits:**
+
+- Literals only; a non-literal required name is refused at build time ("use probe").
+- Table scope is lexical.
+- The admission rules exist twice (lift and realize), and L1 measures that the two agree.
+  Sharing one implementation waits on Q33.
+- Generations and staleness stay run-time facts.
 
 ---
 

@@ -1,0 +1,4 @@
+d6ab5c534510a104997a07a168dc69a861999fcb9a63bf77e7e8f8e154d6ce8f  /workspace/nlc/koruos/nid/tests/.unikraft/build/koru_qemu-x86_64
+209584 B
+   text	   data	    bss	    dec	    hex	filename
+ 184546	   6920	 241664	 433130	  69bea	/workspace/nlc/koruos/nid/tests/.unikraft/build/koru_qemu-x86_64.dbg

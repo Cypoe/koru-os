@@ -1,0 +1,7 @@
+AS EXPECTED: build_control.k exit=0 kraftfile=yes :: predict: resolve foreign=c/libc/1/fputs nid=op2qbSMIgP4 table=#0 -> bound row 0 interface=koruos.console.write@1 export=console_com1_v1:write
+AS EXPECTED: build_probe_unbound.k exit=0 kraftfile=yes :: predict: probe foreign=c/libc/1/puts nid=WXSxCpbNP58 table=#0 -> refused missing=correspondence row offered=[none]
+AS EXPECTED: build_unbound.k exit=1 kraftfile=no :: refused: foreign=c/libc/1/puts nid=WXSxCpbNP58 arm=unikraft/qemu-x86_64 phase=configure missing=correspondence row offered=[none] via=resolve (required)
+AS EXPECTED: build_wrong_version.k exit=1 kraftfile=no :: refused: foreign=c/libc/2/fputs nid=AaVbDaC0b6I arm=unikraft/qemu-x86_64 phase=configure missing=correspondence row offered=[c/libc/1/fputs] via=resolve (required)
+AS EXPECTED: build_refused_table.k exit=1 kraftfile=no :: refused: foreign=c/libc/1/fputs arm=unikraft/qemu-x86_64 phase=configure missing=table (create would overwrite a bound foreign name (use evolve)) via=resolve (required)
+AS EXPECTED: build_collision.k exit=1 kraftfile=no :: refused: foreign=c/t/1/g31 nid=EAAAAAAAAAA arm=unikraft/qemu-x86_64 phase=configure missing=unique nid (collides with a row for another foreign name) offered=[none] via=resolve (required)
+L2 PASS
