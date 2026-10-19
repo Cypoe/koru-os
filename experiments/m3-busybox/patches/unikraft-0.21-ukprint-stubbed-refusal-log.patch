@@ -1,0 +1,13 @@
+--- a/lib/ukprint/include/uk/print.h
++++ b/lib/ukprint/include/uk/print.h
+@@ -180,8 +180,9 @@
+ 	uk_printk_once(UK_PRINT_KLVL_CRIT, (fmt), ##__VA_ARGS__)
+ 
+ /* Warning for stubbed functions */
++/* koru-os refusal log: a stubbed call is a refusal that reports success */
+ #define UK_WARN_STUBBED() \
+-	uk_pr_warn_once("%s() stubbed\n", __func__)
++	uk_pr_err_once("koru-os: STUBBED %s()\n", __func__)
+ 
+ /* DEPRECATED: Please use UK_WARN_STUBBED instead */
+ #ifndef WARN_STUBBED

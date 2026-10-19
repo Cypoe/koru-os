@@ -171,7 +171,12 @@ every gated item holds, and M4 passes only with 3/3 runs.
     a local patch that logs each one at error level as `koru-os: ENOSYS <name>`. A row is
     `refused-by-design` only if the program's observable behaviour is unaffected (for
     example a probe with a documented fallback), with the reason written down; any other
-    row fails the run.
+    row fails the run. *Amended 2026-10-19, before any acceptance run:* the first trial
+    boot showed that `clock_nanosleep(CLOCK_MONOTONIC)` was a stub that returned 0 without
+    sleeping (B10), a refusal that reports success and so never reaches the `-ENOSYS` log.
+    The refusal log therefore also includes every `UK_WARN_STUBBED` call site, logged once
+    as `koru-os: STUBBED <symbol>()`, and those rows are classified the same way.
+    The classified rows live in `experiments/m4-cyb/refused-by-design.txt`.
   - (x) no `Unikraft Crash`; the disk image is byte-identical before and after the boot; the
     host `e2fsck -fn` stays clean.
 - **Not gated in M4: (e).** The display path on this arm is the serial console plus Unikraft

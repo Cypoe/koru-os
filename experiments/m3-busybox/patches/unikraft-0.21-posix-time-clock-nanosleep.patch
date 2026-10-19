@@ -1,0 +1,44 @@
+--- a/lib/posix-time/time.c
++++ b/lib/posix-time/time.c
+@@ -271,11 +271,38 @@
+ 			   const struct timespec *request,
+ 			   struct timespec *remain)
+ {
+-	if ((clockid == CLOCK_REALTIME) && !(flags & TIMER_ABSTIME))
++	struct timespec now, rel;
++	__nsec target, cur;
++	int rc;
++
++	/* koru-os B10: upstream returned 0 at once for every clock except a
++	 * relative CLOCK_REALTIME sleep, so clock_nanosleep(CLOCK_MONOTONIC)
++	 * (used by Rust std::thread::sleep, musl, and others) did not sleep.
++	 */
++	switch (clockid) {
++	case CLOCK_REALTIME:
++	case CLOCK_MONOTONIC:
++	case CLOCK_BOOTTIME:
++		break;
++	default:
++		return -EINVAL;
++	}
++	if (!(flags & TIMER_ABSTIME))
+ 		return uk_sys_nanosleep(request, remain);
+ 
+-	UK_WARN_STUBBED();
+-	return 0;
++	if (!request || request->tv_nsec < 0 || request->tv_nsec > 999999999)
++		return -EINVAL;
++	rc = uk_sys_clock_gettime(clockid, &now);
++	if (rc)
++		return rc;
++	target = (__nsec) request->tv_sec * 1000000000L + request->tv_nsec;
++	cur = (__nsec) now.tv_sec * 1000000000L + now.tv_nsec;
++	if (target <= cur)
++		return 0;
++	rel.tv_sec = ukarch_time_nsec_to_sec(target - cur);
++	rel.tv_nsec = ukarch_time_subsec(target - cur);
++	/* remain is not updated for TIMER_ABSTIME (POSIX) */
++	return uk_sys_nanosleep(&rel, NULL);
+ }
+ 
+ UK_SYSCALL_R_DEFINE(int, clock_nanosleep, clockid_t, clockid, int, flags,

@@ -1,0 +1,13 @@
+# M4 (d): syscall-shim -ENOSYS rows accepted as refused-by-design.
+# Format: <syscall name><TAB><reason; must say why observable behaviour is unaffected>
+# A row not listed here fails the run.
+# Rows below were classified on 2026-10-18 after the first trial boot showed them (busybox
+# startup, glibc 2.41 static-pie), before any acceptance run. Each is a startup probe with a
+# documented glibc fallback; busybox already passed M3 3/3 with all three refused.
+brk	glibc malloc treats a failed brk as "no MORECORE" and falls back to mmap (sysmalloc); busybox allocates normally (M3 3/3)
+rseq	glibc 2.35+ registers rseq at startup and runs without it when the kernel refuses (__rseq_size stays 0); only sched_getcpu acceleration is lost
+set_robust_list	glibc ignores the failure; only robust process-shared mutexes would be affected, and neither busybox nor the stand-in uses them
+# Added 2026-10-19 after the refusal log was extended to stubbed calls (UK_WARN_STUBBED, logged
+# once per call site), before any acceptance run. Names of stubbed rows carry the prefix
+# "STUBBED " and the kernel symbol of the stub.
+STUBBED __uk_syscall_r_prctl	busybox set_task_comm() calls prctl(PR_GET_NAME/PR_SET_NAME); the stub returns 0 without effect, so only the task name shown by ps is unchanged; no M4 check depends on it

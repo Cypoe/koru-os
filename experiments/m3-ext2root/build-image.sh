@@ -22,9 +22,12 @@ ap .unikraft/unikraft .unikraft/unikraft/drivers/virtio/ring/virtio_ring.c "$P/u
 ap .unikraft/apps/elfloader .unikraft/apps/elfloader/elf_ctx.c "$P/app-elfloader-empty-arg.patch"
 # B9 (M4): SIGCHLD must wake a parent in rt_sigsuspend()/pause() (hush `wait`)
 ap .unikraft/unikraft .unikraft/unikraft/lib/posix-process/exit.c "$P/unikraft-0.21-posix-process-sigchld-wake.patch"
+# B10 (M4): clock_nanosleep(CLOCK_MONOTONIC / TIMER_ABSTIME) returned 0 without sleeping
+ap .unikraft/unikraft .unikraft/unikraft/lib/posix-time/time.c "$P/unikraft-0.21-posix-time-clock-nanosleep.patch"
 # M4 (refusal log, DESIGN-0001 §0.2 M4 (d)): KORU_REFUSAL_LOG=1 logs every syscall-shim -ENOSYS at error level
 if [ "${KORU_REFUSAL_LOG:-0}" = 1 ]; then
   ap .unikraft/unikraft .unikraft/unikraft/lib/syscall_shim/include/uk/syscall.h "$P/unikraft-0.21-syscall-shim-enosys-log.patch"
+  ap .unikraft/unikraft .unikraft/unikraft/lib/ukprint/include/uk/print.h "$P/unikraft-0.21-ukprint-stubbed-refusal-log.patch"
 fi
 rm -f .config.m3-ext2root_qemu-x86_64 .unikraft/build/config
 UK_CFLAGS="-std=gnu17" kraft build --arch x86_64 --plat qemu --no-prompt --log-type basic

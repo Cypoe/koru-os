@@ -1,0 +1,11 @@
+#!/bin/busybox sh
+# T-CYB init (DESIGN-0001 §0.2, M4 acceptance): run the STAND-IN, k = 3 s, SIGUSR1, report.
+echo "t-cyb-init: start"
+/bin/ascii-animator /assets/80x24.anim &
+pid=$!
+sleep 3
+kill -USR1 $pid
+wait $pid
+s=$?
+echo "t-cyb-init: ascii-animator exit status $s"
+exit $s
