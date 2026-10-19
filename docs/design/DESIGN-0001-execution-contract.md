@@ -364,7 +364,7 @@ means the test is first run against a Linux guest to produce the expected trace.
 | DS2 | Kolibri driver silo, first driver | L2 + silo:kolibri (KolibriOS driver-service personality) | an unmodified KolibriOS `.sys` network or input driver (`RTL8139`/`pcnet32` on QEMU `rtl8139`/`pcnet`, or `ps2mouse4d`) loads in the silo. Its imports either bind to rows or are refused by name. `net.*` frames or `input.*` events cross the silo boundary (serial log) | D |
 | DS3 | GPU driver silo | silo:lkl `virtio_gpu` on `virtio-gpu-pci`, or silo:kolibri `vmwgfx` on `vmware-svga` | the silo exposes only the `kms.*` rows of Appendix C.3; M6 passes through it | D |
 | DS4 | input driver silo | silo:lkl `virtio_input` (evdev) or silo:kolibri `usbhid`/`ps2` translated to `input.*` | M7 passes through it | D |
-| M6 | KMS scanout of a dumb buffer | L2 + DS3 (L1 trace first) | libdrm `modetest -s <conn>:<mode>` (or equivalent) draws a test pattern; screendump pixel check at known coordinates | D |
+| M6 | KMS scanout of a dumb buffer | L2 + DS3 (L1 trace first); M6 uses a native provider instead ("M6 decision" below, Q28) | libdrm `modetest -s <conn>:<mode>` (or equivalent) draws a test pattern; screendump pixel check at known coordinates; frozen parameters in "M6 acceptance" below | D (acceptance frozen 2026-10-19 13:34 CEST) |
 | M7 | input | L2 + DS4 | QMP `input-send-event` key events appear in `libinput debug-events` on serial | D |
 | M8 | GL on KMS | L2 + DS3 + Mesa llvmpipe/`kms_swrast` in userspace | `kmscube` runs; two screendumps 1 s apart differ, and both are non-black | D |
 | M9 | **DoD-3**: Hyprland + foot | L2 + DS3 + DS4 | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | D |
@@ -415,6 +415,75 @@ it. The arm is therefore rebuilt with `CONFIG_STACK_SIZE_PAGE_ORDER=7` (512 KiB)
 - **Regression.** M3 acceptance and M4 (a)–(d) each pass 3/3 on the same kernel.
 - **Out of scope for M5a.** A musl-built busybox, `dlopen`, threads, and the remaining
   DESIGN M5 wording (an `ash` with `fork`; hush is NOMMU/vfork, Q19).
+
+**M6 decision: where the KMS driver lives (2026-10-19, 13:34 CEST).** The table above names
+"L2 + DS3" for M6. M6 instead binds the `kms.*` rows to a **native koru-os provider** for
+QEMU `bochs-display` (`lib/korukms`), and DS3 stays open. The reasons, against §0.6:
+- §0.6 governs *foreign* driver code: Linux (LKL) and KolibriOS drivers enter only as silo
+  personalities, never in the core (R-SILO-1). A koru-os driver written from the device's
+  register layout is not foreign code. M2 set the precedent ("vfscore + ext2 driver, **or**
+  DS1"): the native path proves the rows, and the silo path re-binds the same rows later.
+- The contract that M7–M10 depend on is the `kms.*` row set and the Linux DRM uAPI above it,
+  not the provider. `lib/korukms/kms_rows.h` is that seam. DS3 replaces `bochs.c` with a
+  silo membrane; the DRM personality, the programs and the tests do not change.
+- DS3 is the largest unknown in this note (Q25: an LKL host port onto Unikraft, PCI/IRQ/DMA
+  from inside a silo). Gating every graphics milestone on it first would leave M7–M9
+  untestable for an unknown time.
+- `virtio-gpu` natively was rejected for M6: the Unikraft 0.21 virtio-pci driver is legacy
+  only (V, `drivers/virtio/pci/virtio_pci.c`), and virtio-gpu is a virtio 1.0 device.
+  `bochs-display` is a linear framebuffer with 10 DISPI registers, so the provider is about
+  300 lines and every line can be read against QEMU's device model.
+- Whether DoD-3 ("drivers in driver silos", §0) accepts a native koru provider for the GPU,
+  or requires DS3, is Fabian's call (Q28). Until he rules, M9 is reported as "native KMS
+  provider", never as "through DS3".
+
+**M6 acceptance: KMS scanout of a dumb buffer (fixed 2026-10-19, 13:34 CEST, before any
+acceptance run).** Probe boots before this freeze found and fixed: the posix-mmap hook symbol
+was localized by `exportsyms.uk` (mmap fell back to the file VMA, `EOPNOTSUPP`), and devfs
+readdir listed the root inside `/dev/dri`. The L1 twin ran once before the freeze (below).
+- **Arm.** The M5a arm (Unikraft 0.21 + app-elfloader + `koruext2fs` root, B6/B8/B9/B10/B12
+  and the refusal log) plus `lib/korukms` and two patches
+  (`experiments/m6-kms/patches/`: devfs one-level subdirectories with `st_rdev`; the
+  posix-mmap device-memory hook). QEMU `-vga none -device bochs-display` (16 MiB VRAM),
+  TCG only.
+- **Programs.** Both run from the ext2 root under the M3 hush (`/etc/m6-init`), dynamically
+  linked against glibc 2.41:
+  - `/bin/kmsdumb` (koru-os test, raw DRM ioctls, no libdrm): finds the connector and the
+    1024×768 mode, creates two XRGB8888 dumb buffers, maps them with `mmap()`, fills pattern A
+    and pattern B (`experiments/m6-kms/kmsdumb.c`), scans out A (`SETCRTC`), then B, then probes
+    `DRM_CLIENT_CAP_ATOMIC`, removes the fbs and buffers, exits 0;
+  - `/usr/bin/modetest` from Debian `libdrm-tests` 2.4.124, unmodified, with Debian
+    `libdrm2` 2.4.124: `sleep 4 | modetest -M korukms -s Virtual-1:1024x768` (the libdrm SMPTE
+    pattern in a dumb buffer, legacy `SETCRTC`, waits for stdin EOF, tears down).
+  Nothing of this is committed except `kmsdumb.c`.
+- **Screendumps.** The host takes a QEMU monitor `screendump` 1 s after each marker line
+  (`kmsdumb: PHASE A`, `kmsdumb: PHASE B`, modetest's `setting mode`) appears on the serial log.
+- **Gated checks.** Expected frames come from `expected.py`, which renders pattern A, pattern B
+  and libdrm's `fill_smpte_rgb32` independently of the guest.
+  - (k1) kmsdumb reports a connected connector of type 15 (Virtual) with a 1024x768 mode and
+    two dumb buffers with fb ids, and prints `kmsdumb: done, exit 0`;
+  - (k2) the PHASE A screendump is 1024×768 and equals pattern A with **0** mismatched pixels;
+  - (k3) the PHASE B screendump equals pattern B with 0 mismatched pixels (a second `SETCRTC`
+    re-points scanout);
+  - (k4) modetest prints `setting mode 1024x768-60.00Hz on connectors Virtual-1, crtc 32`,
+    its screendump equals the SMPTE reference with 0 mismatched pixels, and m6-init reports
+    `modetest exit status 0`;
+  - (k5) refusal is loud: kmsdumb's atomic probe returns `-1` with errno 95 (`EOPNOTSUPP`), and
+    the log has `REFUSED linux.ioctl.DRM_IOCTL_SET_CLIENT_CAP cap 3 (kms)`. Every refusal-log
+    row (`ENOSYS`, `STUBBED`, `REFUSED`) is in `experiments/m6-kms/refused-by-design.txt`
+    (rule as in M4);
+  - (k6) `koru-os: init exited with status 0`;
+  - (x) no `Unikraft Crash`; the disk is byte-identical across the boot; `e2fsck -fn` is clean.
+- **Regression.** M3, M4 (a)–(d) and M5a each pass 3/3 on the M6 kernel (their own harnesses,
+  without a display device).
+- **L1 twin (oracle, not a pass).** The same `kmsdumb` and `modetest` binaries on Debian
+  `linux-image-6.12.113+deb13-amd64` with `bochs-drm` (initramfs, TCG, `strace -f`), same
+  screendump points and references (`run-l1.sh`). First run 2026-10-19 13:33 CEST: all three
+  frames exact (0 mismatched pixels); ioctl histograms filed. Known, accepted differences:
+  Linux serves properties (`GETPROPERTY` ×16 in modetest), two planes, 15 modes, accepts
+  atomic, and implements legacy gamma.
+- **Not in M6.** DS3 and R-SILO-4 (no silo yet), atomic KMS and properties, page-flip and
+  vblank events, PRIME, cursor planes, virtio-gpu, more than one DRM client.
 
 ### 0.5 Biggest risks
 
@@ -1353,6 +1422,9 @@ or 9P reader.
     the koru licence itself (README says MIT; no LICENSE file).
 27. **KolibriOS DRM snapshot.** Which Linux version does `drivers/video/drm` track,
     and does `vmwgfx` there drive QEMU's `vmware-svga` today?
+28. **Native KMS provider and DoD-3.** M6 binds `kms.*` to a native koru-os
+    `bochs-display` provider (§0.4 "M6 decision"). Does DoD-3 accept a native koru driver
+    for the GPU, or must the display path go through a driver silo (DS3) for DoD-3 to count?
 
 ---
 
