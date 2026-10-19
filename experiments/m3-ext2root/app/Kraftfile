@@ -93,7 +93,7 @@ unikraft:
     CONFIG_LIBVFSCORE: 'y'
     CONFIG_OPTIMIZE_DEADELIM: 'y'
     CONFIG_PAGING: 'y'
-    CONFIG_STACK_SIZE_PAGE_ORDER: 4 # 128 * 4K = 512K
+    CONFIG_STACK_SIZE_PAGE_ORDER: 7 # 2^7 pages = 512 KiB; also the stack of every execve()d program (B12; order 4 was 64 KiB)
     CONFIG_UKPLAT_KSP_SIZE: 32768
     CONFIG_UKPLAT_MEMREGION_MAX_COUNT: 64
 
