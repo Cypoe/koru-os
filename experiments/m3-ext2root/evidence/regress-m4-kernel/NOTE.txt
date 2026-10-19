@@ -1,0 +1,2 @@
+M3 acceptance rerun on the M4 kernel (B9+B10+refusal log, sha256 ebe189b7...), 2026-10-19 ~13:02 CEST, TCG: 3/3 PASS.
+The first rerun failed only the `ls /` check because refusal-log lines pushed the listing out of its -A3 window; run-acceptance.sh now filters those lines first (check-script change only).

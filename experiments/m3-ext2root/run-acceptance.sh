@@ -50,7 +50,9 @@ $S/e2fsck -fn disk.img > e2fsck-2-after-m3.txt 2>&1; e2=$?
 ok=1
 chk() { if eval "$2"; then echo "PASS $1" >> result.txt; else echo "FAIL $1" >> result.txt; ok=0; fi; }
 chk "M2 wrote /dod1, host e2fsck clean, debugfs equals pattern" '[ $e1 = 0 ] && [ "$(cat dod1.ok)" = 1 ] && grep -q "M2 guest: complete" m2-serial.log'
-chk "M3 ls / lists dod1 and bin" 'grep -A3 "^~ # llss  //$" m3-serial.log | grep -q "dod1" && grep -A3 "^~ # llss  //$" m3-serial.log | grep -qw "bin"'
+# kernels built with KORU_REFUSAL_LOG=1 interleave refusal-log lines; drop them before the -A3 window
+grep -v "koru-os: ENOSYS\|koru-os: STUBBED" m3-serial.log > m3-serial-norefusal.log
+chk "M3 ls / lists dod1 and bin" 'grep -A3 "^~ # llss  //$" m3-serial-norefusal.log | grep -q "dod1" && grep -A3 "^~ # llss  //$" m3-serial-norefusal.log | grep -qw "bin"'
 chk "M3 cat /dod1 shows the pattern" 'grep -q "^$(python3 -c "print(\"\".join(chr(ord(\"a\")+((i*7)%26)) for i in range(63)))")$" m3-serial.log'
 chk "M3 sha256sum /dod1 equals host pattern sha256" 'grep -q "^$(cat pattern.sha256)  /dod1" m3-serial.log'
 chk "M3 wc -c /dod1 = 10000" 'grep -q "^10000 /dod1" m3-serial.log'
