@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance); 19:05: obligation-derived kconfig (`koruc … realize gen`) measured, §11.1 result; 19:17: NID binding layer `koruos/nid` N1–N10 3/3 PASS, regressions 3/3, §11.6, Q3 answered by work; 19:27: build-time resolution via realize table 3, L1–L4 PASS, §11.7; 19:37: Spawn skeleton S1–S11 3/3, §8.6.7a; 20:00: replace/detach/revoke/nested + Unikraft provider + loud compat, external ELF child E0–E12 3/3, skeleton S1–S13 3/3, §8.6.7b; 20:05: Spawn lib acceptance conditional (Fabian), MMU follow-up M-SPAWN-MMU recorded, DoD-2 reformulated per Q19; 20:22: M9 PASS 3/3 under TCG via Q30 stage 1 spawn-compat (h2a), B20 closed for M9; 20:35: Q30 stage 2 explicit hyprland.children grants + negatives 3/3, regressions 3/3; 21:08: M-SPAWN-MMU steps 2–4 PASS 3/3 (bag→PT, CoW grant, CR3 AS), regressions M9/spawn/spawn-elf/Slice A 3/3; Spawn conditional acceptance proposed ready for Fabian review; 21:48: M-SPAWN-MMU gaps 1–3 PASS 3/3 (heap/stack unmapped, always-on AS, sched CR3 multi-AS); spawn-elf/spawn/NID/Slice A/M3–M8b 3/3; ELF child-CR3 closed for spawn-elf (kernel-half+syscall CR3 leave); M9+STAGE2 recounted 3/3 (QMP hardened); foot still not on child CR3 (M9 kernel lacks koruspawn MMU); Spawn **ready for Fabian review**, not accepted; 23:15: label reverted per Fabian's review of `d1dc650` to **not yet ready (gaps listed)**; review gaps R2 (direct-map/non-granted frames stripped from child PTs, alias tested) and R3 (child PF on ungranted address → real SIGSEGV via CR3 exception hooks) PASS 3/3 for spawn-elf and m-spawn-mmu; three latent CR3 bugs in `d1dc650` found and fixed; R1 (foot on child CR3 in the M9 kernel) **open**) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37; 18:40: whitepaper ch.06/08 analysis folded in: counting wall closed at design level via §8.5 (M owed), §2.3 concordance gate (ccomp matrix is the seed), §4.1 FASM dialect no / KolibriOS donor-only, §8.7 whitepaper↔koru correspondence, §11.5 work list, Q38; 18:46: Slice A checks frozen (`88516f4`); 18:48: Slice A 3/3 PASS under TCG, §11.4 result; 18:59: Q19 closed by Fabian (DoD-2 reformulated only after Spawn-lib acceptance); 19:05: obligation-derived kconfig (`koruc … realize gen`) measured, §11.1 result; 19:17: NID binding layer `koruos/nid` N1–N10 3/3 PASS, regressions 3/3, §11.6, Q3 answered by work; 19:27: build-time resolution via realize table 3, L1–L4 PASS, §11.7; 19:37: Spawn skeleton S1–S11 3/3, §8.6.7a; 20:00: replace/detach/revoke/nested + Unikraft provider + loud compat, external ELF child E0–E12 3/3, skeleton S1–S13 3/3, §8.6.7b; 20:05: Spawn lib acceptance conditional (Fabian), MMU follow-up M-SPAWN-MMU recorded, DoD-2 reformulated per Q19; 20:22: M9 PASS 3/3 under TCG via Q30 stage 1 spawn-compat (h2a), B20 closed for M9; 20:35: Q30 stage 2 explicit hyprland.children grants + negatives 3/3, regressions 3/3; 21:08: M-SPAWN-MMU steps 2–4 PASS 3/3 (bag→PT, CoW grant, CR3 AS), regressions M9/spawn/spawn-elf/Slice A 3/3; Spawn conditional acceptance proposed ready for Fabian review; 21:48: M-SPAWN-MMU gaps 1–3 PASS 3/3 (heap/stack unmapped, always-on AS, sched CR3 multi-AS); spawn-elf/spawn/NID/Slice A/M3–M8b 3/3; ELF child-CR3 closed for spawn-elf (kernel-half+syscall CR3 leave); M9+STAGE2 recounted 3/3 (QMP hardened); foot still not on child CR3 (M9 kernel lacks koruspawn MMU); Spawn **ready for Fabian review**, not accepted; 23:15: label reverted per Fabian's review of `d1dc650` to **not yet ready (gaps listed)**; review gaps R2 (direct-map/non-granted frames stripped from child PTs, alias tested) and R3 (child PF on ungranted address → real SIGSEGV via CR3 exception hooks) PASS 3/3 for spawn-elf and m-spawn-mmu; three latent CR3 bugs in `d1dc650` found and fixed; R1 (foot on child CR3 in the M9 kernel) **open**; 23:30: R1 scoped from measured facts (foot = dynamic glibc PIE via app-elfloader; ukvmem demand-pages, so an ownership-checked demand-mirror PF resolver is needed; clone requires CLONE_VM; memfd = contiguous frames, a clean shared-frame grant), 7-step plan in §8.6.7d, implementation not started; follow-up **M-SPAWN-RING3** (children in ring 3) recorded, not started; isolation stated as **fault isolation, not adversarial**; label stays **not yet ready (gaps listed)**) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -387,6 +387,7 @@ means the test is first run against a Linux guest to produce the expected trace.
 | M4 | **T-CYB** (§0.2) | L2 (L1 trace first) | (a)–(d) gated, (e) open; frozen parameters in §0.2 "M4 acceptance for the stand-in" | **M (stand-in): (a)–(d) PASS 3/3 under TCG, 2026-10-19 12:55 CEST; (e) open** (`experiments/m4-cyb/README.md`); needed fixes B9, B10. Full T-CYB still waits for boot-animator (Q18) and a UTF-8 display path |
 | M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | **M5a (M): PASS 3/3 under TCG, 2026-10-19 13:06 CEST**: musl and glibc `ld.so`, GNU coreutils 9.7, dynamic busybox shell pipeline; M3 and M4 regressions 3/3 on the same kernel (`experiments/m5-dyn/README.md`); needed fix B12. Open: musl-built busybox, `dlopen`, threads; `fork` clause superseded by Spawn (DoD-2 reformulated 20:05; M-SPAWN-MMU owed for unconditional caps) |
 | M-SPAWN-MMU | MMU-enforced Spawn caps + dissected fork (follow-up to conditional Spawn-lib acceptance) | L2 + rung 2 (`unikraft/paging`) | per-child page tables; object ≠ vaddr ≠ permission ≠ residency; CoW/share only as an explicit grant; hostile child cannot read ungranted parent pages (M under TCG) | **Gaps 1–3 PASS 3/3** (reconfirmed after ELF-CR3). **ELF child-CR3 PASS 3/3** (2026-10-19 ~22:17 CEST): chosen path = **kernel-half** (boot text/.bss + dual-mapped ambient stack/heap + auxsp/uktls/thread metadata pages; never full parent heap) **+ syscall/IRQ CR3 leave** + naked CR3 gate after parent `ctx_switch`; AT_RANDOM/AT_EXECFN on child stack (`lib/koruelf/elf_ctx.c`). spawn-elf E0–E12+M (hw parent-heap fault + RO attenuation under child CR3) 3/3 (`experiments/spawn-elf/evidence/elf-cr3-accept/`). Rejected: per-child arena alone; CR3-only without assist. **Review of `d1dc650` (2026-10-19 ~23:15 CEST), gaps R1–R3, see §8.6.7d:** R2 direct-map PML4[511] + all non-image `pt_clone` leftovers stripped, census undeclared=0, alias faults in child: PASS 3/3. R3 child PF → `kill(getpid(),SIGSEGV)` → WTERMSIG=11 (status 139) + logged reason: PASS 3/3. **R1 open:** M9 foot not on child CR3 (m9k4 elfloader has no koruspawn MMU). Spawn: **not yet ready (gaps listed)**, not accepted. Q33 open. |
+| M-SPAWN-RING3 | Spawn children in ring 3 (user mode), so a hostile child cannot write CR3 or kernel `.data` (follow-up to M-SPAWN-MMU; recorded 2026-10-19 ~23:30 CEST) | L2 + rung 2 + a user/supervisor split (U/S page bits, `syscall`/`sysret` or `iret` entry, TSS RSP0) | child code runs at CPL 3; kernel image and all kernel data mapped supervisor-only in the child PT; a child write to CR3, an IDT/GDT load, or a write to kernel `.data` is a #GP/#PF in the child that becomes SIGSEGV/SIGILL, never kernel state (M under TCG, hostile probes) | D, **not started** (Fabian: do not start yet). Prerequisite: R1. Until it lands, Spawn isolation is **fault isolation, not adversarial** (§8.6.7d) |
 | DS2 | Kolibri driver silo, first driver | L2 + silo:kolibri (KolibriOS driver-service personality) | an unmodified KolibriOS `.sys` network or input driver (`RTL8139`/`pcnet32` on QEMU `rtl8139`/`pcnet`, or `ps2mouse4d`) loads in the silo. Its imports either bind to rows or are refused by name. `net.*` frames or `input.*` events cross the silo boundary (serial log) | D |
 | DS3 | GPU driver silo | silo:lkl `virtio_gpu` on `virtio-gpu-pci`, or silo:kolibri `vmwgfx` on `vmware-svga` | the silo exposes only the `kms.*` rows of Appendix C.3; M6 passes through it | D |
 | DS4 | input driver silo | silo:lkl `virtio_input` (evdev) or silo:kolibri `usbhid`/`ps2` translated to `input.*` | M7 passes through it | D |
@@ -2183,18 +2184,76 @@ syscall (crashed in `uk_signal_deliver` in the sleep test). All three are replac
 CR3-keyed exception hooks and a per-domain `sys_left` flag. The d1dc650 claim "ELF
 child-CR3 closed" therefore held only between interrupts.
 
-**R1 (open).** foot spawned by Hyprland via `hyprland.children` still runs on the
-parent CR3: the M9 kernel (m9k4) is built without koruspawn MMU. Closing it needs:
-ukvmem VMA ownership and mirroring of post-spawn `mmap`s into the child PT; binding of
-`clone()`d threads to the child domain; explicit shm/memfd grants for `wl_shm` buffers
-shared with Hyprland; koruspawn MMU in the m9k4 elfloader path; then M9+STAGE2 3/3 with a
-foot-side probe of a parent heap address and its direct-map alias that must fault.
-Not attempted in this round.
+**R1 (open; scoped 2026-10-19 ~23:30 CEST, implementation not started).** foot spawned
+by Hyprland via `hyprland.children` still runs on the parent CR3: the M9 kernel (m9k4,
+`595f8c05…`) is built without koruspawn MMU. Measured facts that shape the design:
 
-**Residuals (disclosed, not gaps of this review).** Ring 0 only: kernel `.data`/`.bss`
-stay RW in the child and a hostile child could write CR3 or kernel state, so the
-isolation holds against buggy or seam-bypassing loads, not against privileged
-instructions. Kernel-half metadata pages (`uk_thread`, uktls, ectx, auxsp) are parent
+- foot is a **dynamic glibc PIE** (`/lib64/ld-linux-x86-64.so.2`; NEEDED libm, pixman,
+  wayland-client/cursor, xkbcommon, fontconfig, utf8proc, fcft, libc and their closure),
+  launched by `posix_spawnp` → Unikraft vfork/execve → **app-elfloader**, not by
+  `lib/koruelf`. The spawn-elf child-CR3 path (static-pie, ambient stack/heap
+  dual-mapped by our own loader, no shared libs, no threads, no post-start mmap) does
+  **not** carry over.
+- **ukvmem demand-pages.** Anonymous and stack VMAs are populated on first touch
+  (`vma_op_anon_fault`, `vma_op_stack_fault`, `vmem_pagefault`); `MAP_POPULATE` only when
+  asked, and glibc/ld.so do not ask. Mirroring at `mmap` time is therefore insufficient:
+  foot's first touch of a fresh page faults on its child CR3, and today's R3 handler
+  rightly kills that as `unmapped`.
+- `clone()` requires `CLONE_VM` (single address space): foot's threads are `uk_thread`s
+  in the shared VAS, so binding a thread means tagging it (`t->priv` = domain) at clone.
+- **memfd/wl_shm is a clean shared-frame grant.** korumemfd backs a memfd with
+  physically contiguous frames and returns their `paddr` to every `mmap` through the
+  posix-mmap device hook. Measured in M9: 5 memfd slots, including the two `wl_shm`
+  buffers of 4000 KiB and 3792 KiB. A grant can therefore name exact frames.
+
+Plan (each item a separate measured step, in this order):
+
+1. **Wire the R2/R3 base into m9k4.** Apply the except CR3-hook patch and the
+   syscall-shim enter/exit hooks to the m9k4 tree; link `lib/koruspawn` (MMU on) next to
+   app-elfloader. Gate: M9+STAGE2 still 3/3 with no domain created (no behaviour change).
+2. **Domain at execve.** On the `hyprland.children` execve of foot, derive a child PT
+   (image + strip as R2) and own foot's ELF, ld.so, stack, brk and TLS VMAs.
+3. **Ownership-checked demand mirror** (central change). Child #PF at a VA inside a
+   VMA the domain owns → resolve via `vmem_pagefault` on the parent PT, copy the leaf
+   into the child PT, resume. Any other VA → SIGSEGV as R3 (classes unchanged). Risk:
+   `vmem_pagefault` allocates frames and takes locks from exception context, the same
+   area as the earlier ISR hangs; it may need a deferral path.
+4. **mmap/munmap/mprotect/brk/mremap** from the domain at syscall exit: record ownership,
+   mirror protection changes, unmap and flush on `munmap`; **budget** per domain (VMA
+   count and bytes), refused loudly over budget.
+5. **Thread binding.** `clone()` from a domain thread → child `uk_thread` gets the same
+   domain and starts on its CR3; sched switch keys off `t->priv`.
+6. **Shared-frame grant for memfd** (and dma-buf, if foot uses one; with `wl_shm` it
+   does not): mapping a memfd from the domain maps exactly that object's frames, declared
+   in the census as `grant:memfd/<slot>`; Hyprland keeps its own mapping.
+7. **Acceptance:** M9+STAGE2 3/3 with a hardware negative from foot's domain: a
+   parent-heap probe and a direct-map alias probe each SIGSEGV with a logged reason,
+   while foot still renders (screendump + `hyprctl clients`), plus full regressions 3/3.
+
+Estimate: several working sessions; one M9 boot under TCG takes minutes, and items 3
+and 5 need debugger iterations.
+
+**Threat model, stated plainly.** Today's Spawn isolation is **fault isolation, not
+adversarial isolation.** Children run in **ring 0**: kernel `.data`/`.bss` stay RW in
+the child PT, and nothing stops a child from executing `mov cr3`, `lidt`, `wrmsr` or
+writing kernel state. What is measured is that a buggy or seam-bypassing child
+*reading or writing* an ungranted parent page faults and dies with SIGSEGV. What is
+**not** claimed is protection against a child that deliberately runs privileged
+instructions. Every acceptance label for Spawn carries this caveat until
+M-SPAWN-RING3 lands.
+
+**Follow-up M-SPAWN-RING3 (recorded 2026-10-19 ~23:30 CEST; not started, by instruction).**
+Run Spawn children in ring 3: child mappings carry U=1, kernel image and data U=0
+(supervisor-only); entry via `syscall`/`sysret` (or `iret`) with a TSS RSP0 kernel
+stack; exception and IRQ entry from CPL 3 switch stacks. A hostile child that writes
+CR3, loads an IDT/GDT or writes kernel `.data` then takes #GP/#PF and becomes
+SIGSEGV/SIGILL. That turns the fault isolation into adversarial isolation. Evidence:
+M under TCG with hostile probes (CR3 write, `lidt`, kernel `.data` write, `wrmsr`), each
+killing only the child. Prerequisite: R1. Open questions: Unikraft's app-elfloader and
+syscall shim assume CPL 0 (`syscall` is trapped in ring 0 today); `%fs`/`%gs` swap
+(`swapgs`); SMEP/SMAP under TCG.
+
+**Other residuals (disclosed, not gaps of this review).** Kernel-half metadata pages (`uk_thread`, uktls, ectx, auxsp) are parent
 heap frames, declared in the census; the auxsp page may hold neighbouring objects.
 
 **Regressions on the R2/R3 tree (2026-10-19, TCG):** spawn-elf 3/3, m-spawn-mmu 3/3,

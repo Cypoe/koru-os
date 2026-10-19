@@ -9,6 +9,7 @@ Q19 closed 2026-10-19 (about 18:59 CEST) by Fabian: DoD-2 is reformulated only a
 **Q30 stage 2 (2026-10-19 ~20:35 CEST):** `hyprland.children` explicit grants for Hyprland→foot (env allowlist, close parent fds, userspace path gate + rights census). Negatives measured (ungranted path EACCES, planted fd absent). M9 still PASS 3/3; regressions M3–M8b/M7b + Slice A + NID + spawn + spawn-elf 3/3 under TCG. Loud `posix-inherit` remains for unknown simple cmds. MMU caps still M-SPAWN-MMU.
 **M-SPAWN-MMU steps 2–4 (2026-10-19 ~21:08 CEST):** bag→PT, CoW grant, CR3 AS probe PASS 3/3 under TCG; M9/spawn/spawn-elf/Slice A regressions 3/3. Spawn conditional acceptance **proposed ready for Fabian review** (not accepted).
 **Review of `d1dc650` (2026-10-19 ~23:15 CEST):** label reverted to **not yet ready (gaps listed)**. R2 (direct-map/non-granted frames stripped, alias tested) and R3 (child PF → real SIGSEGV) PASS 3/3; three latent CR3 bugs in `d1dc650` fixed. **R1 open:** foot not on child CR3 in the M9 kernel (DESIGN-0001 §8.6.7d).
+**2026-10-19 ~23:30 CEST:** R1 scoped (7-step plan, §8.6.7d), not implemented. Follow-up **M-SPAWN-RING3** recorded, not started. Today's Spawn isolation is **fault isolation, not adversarial** (children run in ring 0).
 
 
 | # | blocker | status | affects | evidence | needed |

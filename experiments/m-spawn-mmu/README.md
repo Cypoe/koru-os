@@ -19,7 +19,9 @@ Spawn lib acceptance status: **not yet ready (gaps listed)** (Fabian's review of
 ## Remaining
 
 - **R1:** foot (Hyprland child) on child CR3 in the M9 kernel + foot-side hw negative.
-- Ring 0 residual; kernel-half metadata pages are parent heap frames (declared).
+- R1 scoped in DESIGN-0001 §8.6.7d (demand-mirror PF resolver, mmap mirroring with budget, clone thread binding, memfd shared-frame grant, m9k4 wiring); not implemented.
+- **Fault isolation, not adversarial:** children run in ring 0 and could write CR3 or kernel `.data`. Follow-up **M-SPAWN-RING3** (ring 3 children) recorded, not started.
+- Kernel-half metadata pages are parent heap frames (declared).
 - Q33 open → keep pushes to Cypoe/koru-os only; no GPL/images/WAD.
 
 ## Build / run
