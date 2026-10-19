@@ -1,0 +1,13 @@
+mkfs e2fsck exit=0 (koru-root: 426/1024 files (0.2% non-contiguous), 4708/16384 blocks)
+qemu exit=0 wall_s=7.89 (boot to QMP quit)
+PASS (i1) /dev/input/event0 is char 13,64: crw-------    0 0        0          13,  64 Jan  1  1970 event0
+PASS (i2) evdump identity, bits, nonblock, grab
+PASS (i3) evdump events == derived sequence: 54 events, expected 54
+PASS (i3) evdump summary and exit 0: evdump: DONE keys 18 syns 18 msc 18 polls 18 nonmonotonic 0 esc yes
+PASS (i4) unmodified evtest: version, ID, EV_KEY/KEY_ESC, a+b events in order: 12 evtest events == expected
+PASS (i5) refusal log classified: 20 rows, names ['STUBBED __uk_syscall_r_prctl', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'rseq', 'set_robust_list']
+PASS (i6) no dropped events, no ring drops: [('0', '0', '0', '0', '0'), ('54', '54', '0', '18', '0')]
+PASS (x) no Unikraft Crash
+CHECKS PASS
+PASS (x) disk unchanged, e2fsck clean
+M7 RUN PASS

@@ -1,0 +1,15 @@
+1.30 seen 'evdump: READY'
+1.91 sent k
+2.31 sent o
+2.71 sent r
+3.11 sent u
+3.62 sent shift+1
+4.02 sent ret
+4.42 sent up
+4.83 sent esc
+5.13 seen 'evdump: DONE'
+5.13 seen 'Testing ... (interrupt to exit)'
+6.23 sent a
+6.63 sent b
+6.93 seen 'code 48 (KEY_B), value 0'
+7.93 quit sent

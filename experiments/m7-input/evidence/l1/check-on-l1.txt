@@ -1,0 +1,9 @@
+FAIL (i1) /dev/input/event0 is char 13,64: no ls line
+PASS (i2) evdump identity, bits, nonblock, grab
+PASS (i3) evdump events == derived sequence: 54 events, expected 54
+FAIL (i3) evdump summary and exit 0: evdump: DONE keys 18 syns 18 msc 18 polls 18 nonmonotonic 0 esc yes
+PASS (i4) unmodified evtest: version, ID, EV_KEY/KEY_ESC, a+b events in order: 12 evtest events == expected
+PASS (i5) refusal log classified: 0 rows, names []
+FAIL (i6) no dropped events, no ring drops: []
+PASS (x) no Unikraft Crash
+CHECKS FAIL
