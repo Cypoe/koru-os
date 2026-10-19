@@ -1,0 +1,280 @@
+// koruos/realize: obligation-derived Unikraft configuration (DESIGN-0001 §11.1).
+//
+// `koruc main.k realize gen` replaces `koruc main.k unikraft gen` for koru-os images. It
+// writes the same Makefile.uk (derived from `unikraft:image`, as koru-libs `unikraft`
+// does), but the Kraftfile's kconfig is no longer a hand list:
+//
+//   1. Walk the program's flows and collect every interface it actually invokes
+//      (module + tor), plus the Koru runtime itself.
+//   2. Map each used interface to a row: kconfig deltas, a declared stack demand, the
+//      resources it needs outside Kconfig, and the evidence for the row.
+//   3. Write the derived deltas, then the author's `unikraft:kconfig` lines as reported
+//      policy overrides. An author line that contradicts a derived requirement is a
+//      refusal. A used, non-system module with no row is a refusal. A refusal writes no
+//      Kraftfile.
+//   4. Write `realize.txt`: the three tables of §3.5
+//      (interface -> row -> kconfig, resource -> mechanism -> cost, missing -> refusal).
+//
+// CONFIG_STACK_SIZE_PAGE_ORDER is derived from the declared demand of the used rows
+// (instead of koru-libs' hard pin of 6). The build then measures the reachable stack
+// demand of the linked kernel (experiments/realize/stack-demand.py) and refuses the
+// image if the measurement exceeds the derived stack.
+//
+// Rows live here for now (koru-libs' modules cannot carry them without a push to koru-libs).
+
+~import std/compiler
+
+~std/compiler:command.declare {
+    "name": "realize",
+    "description": "Derive Makefile.uk, Kraftfile and realize.txt from the interfaces the program uses"
+}
+
+~[comptime|command]pub tor realize {
+    program: *const Program,
+    allocator: __koru_std.mem.Allocator,
+    argv: []string,
+}
+
+~proc realize|zig {
+    _ = argv;
+    const Row = struct {
+        module: []const u8, // module qualifier as the parser spells it
+        tor_prefix: []const u8, // "" = any tor of the module
+        iface: []const u8, // the interface name reported in the tables
+        kconfig: []const []const u8, // "CONFIG_X=v"
+        stack: u64, // declared stack demand, bytes
+        resources: []const u8, // outside Kconfig: "mechanism: cost"
+        evidence: []const u8,
+    };
+    const rows = [_]Row{
+        .{ .module = "", .tor_prefix = "", .iface = "koru.runtime", .kconfig = &.{ "CONFIG_LIBUKALLOC=y", "CONFIG_LIBUKALLOCBBUDDY=y" }, .stack = 16384, .resources = "heap: posix_memalign/free from the emitted flow prologue", .evidence = "V: output_emitted.zig declares extern posix_memalign/free; 16384 B is an allowance for the C side (C until stack-demand.py measures it)" },
+        .{ .module = "std.io", .tor_prefix = "print", .iface = "std.io:print", .kconfig = &.{}, .stack = 65536, .resources = "console: fputs(stdout) on the Unikraft console", .evidence = "V: emitted print formats into `var __kb: [65536]u8` on the stack (koru BUILD.md: order 4 = 64 KiB overflows)" },
+        .{ .module = "koruos.slice", .tor_prefix = "", .iface = "koruos/slice", .kconfig = &.{}, .stack = 4096, .resources = "clock: ukplat_monotonic_clock (plat, always linked); view: isa-debugcon port 0x402 (QEMU device); heap: malloc/free", .evidence = "V: koru/slice/index.kz externs; frames <= 1 KiB buffers" },
+        .{ .module = "koruos.silo", .tor_prefix = "", .iface = "koruos/silo", .kconfig = &.{}, .stack = 4096, .resources = "cpu: rdrand (QEMU -cpu +rdrand); heap: malloc/free", .evidence = "V: koru/silo/index.kz rdrand64 and externs" },
+        .{ .module = "unikraft.sched", .tor_prefix = "", .iface = "unikraft/sched", .kconfig = &.{ "CONFIG_LIBUKSCHED=y", "CONFIG_LIBUKSCHEDCOOP=y", "CONFIG_LIBUKBOOT_INITSCHEDCOOP=y" }, .stack = 4096, .resources = "threads: worker stack STACK_SIZE + aux stack + TLS per thread", .evidence = "V: koru-libs unikraft/sched README (ukschedcoop, cooperative)" },
+    };
+    // When no used interface needs a scheduler, ask for none. Whether Unikraft honours it is
+    // checked after the build against the resolved .config (check-config.py).
+    const nosched = [_][]const u8{ "CONFIG_LIBUKBOOT_INITNOSCHED=y", "CONFIG_LIBUKSCHEDCOOP=n" };
+
+    const unquote = struct {
+        fn go(v: []const u8) []const u8 {
+            if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') return v[1 .. v.len - 1];
+            return v;
+        }
+    }.go;
+
+    // ---- 1. collect used interfaces
+    const Used = struct { module: []const u8, tor: []const u8 };
+    var used = std.ArrayListUnmanaged(Used){};
+    defer used.deinit(allocator);
+    const Walk = struct {
+        fn add(list: *std.ArrayListUnmanaged(Used), al: __koru_std.mem.Allocator, mq: []const u8, tor: []const u8) void {
+            for (list.items) |u| if (std.mem.eql(u8, u.module, mq) and std.mem.eql(u8, u.tor, tor)) return;
+            list.append(al, .{ .module = mq, .tor = tor }) catch {};
+        }
+        fn inv(list: *std.ArrayListUnmanaged(Used), al: __koru_std.mem.Allocator, i: anytype) void {
+            const mq = i.path.module_qualifier orelse return;
+            if (i.path.segments.len == 0) return;
+            add(list, al, mq, i.path.segments[0]);
+        }
+        fn cont(list: *std.ArrayListUnmanaged(Used), al: __koru_std.mem.Allocator, c: anytype) void {
+            if (c.node) |n| switch (n) {
+                .invocation => |i| inv(list, al, i),
+                .label_with_invocation => |l| inv(list, al, l.invocation),
+                else => {},
+            };
+            for (c.continuations) |cc| cont(list, al, cc);
+        }
+    };
+
+    var app_name: []const u8 = "";
+    var extra = std.ArrayListUnmanaged([]const u8){};
+    defer extra.deinit(allocator);
+    var author = std.ArrayListUnmanaged([]const u8){};
+    defer author.deinit(allocator);
+
+    for (program.items) |item| {
+        if (item != .flow) continue;
+        const flow = item.flow;
+        Walk.cont(&used, allocator, flow.body);
+        const mq = flow.inv().path.module_qualifier orelse continue;
+        if (!std.mem.eql(u8, mq, "koru.unikraft") and !std.mem.eql(u8, mq, "unikraft")) continue;
+        if (flow.inv().path.segments.len != 1) continue;
+        const seg = flow.inv().path.segments[0];
+        for (flow.inv().args) |arg| {
+            if (std.mem.eql(u8, seg, "image")) {
+                if (std.mem.eql(u8, arg.name, "name")) app_name = unquote(arg.value) else if (std.mem.eql(u8, arg.name, "source")) {
+                    const body = std.mem.trim(u8, arg.value, " \t\r\n");
+                    if (body.len > 0) extra.append(allocator, body) catch return;
+                }
+            } else if (std.mem.eql(u8, seg, "kconfig") and std.mem.eql(u8, arg.name, "source")) {
+                var it = std.mem.splitScalar(u8, arg.value, '\n');
+                while (it.next()) |raw| {
+                    const line = std.mem.trim(u8, raw, " \t\r\n");
+                    if (line.len != 0) author.append(allocator, line) catch return;
+                }
+            }
+        }
+    }
+    if (app_name.len == 0) {
+        std.debug.print("realize: refused: no unikraft:image declared\n", .{});
+        std.process.exit(2);
+    }
+
+    // ---- 2. rows for the used interfaces
+    var report = std.ArrayListUnmanaged(u8){};
+    defer report.deinit(allocator);
+    const rw = report.writer(allocator);
+    var derived = std.ArrayListUnmanaged([]const u8){};
+    defer derived.deinit(allocator);
+    var stack: u64 = 0;
+    var refusals: u32 = 0;
+    var need_sched = false;
+    const system_prefixes = [_][]const u8{ "std.compiler", "std.build", "std.deps", "std.control", "std.testing", "koru.unikraft", "unikraft", "koruos.realize", "koru" };
+
+    rw.writeAll("# realize.txt: generated by `koruc <file> realize gen` (koruos/realize, DESIGN-0001 §11.1)\n\n") catch return;
+    rw.writeAll("## table 1: interface -> row -> kconfig\n") catch return;
+    var hit = [_]bool{false} ** rows.len;
+    hit[0] = true;
+    rw.print("used: koru.runtime (always)\n", .{}) catch return;
+    for (used.items) |u| {
+        var sys = false;
+        for (system_prefixes) |p| if (std.mem.eql(u8, u.module, p)) {
+            sys = true;
+        };
+        if (std.mem.eql(u8, u.module, "unikraft")) sys = true;
+        if (sys) continue;
+        var found = false;
+        for (rows, 0..) |r, ri| {
+            if (r.module.len == 0) continue;
+            if (!std.mem.eql(u8, r.module, u.module)) continue;
+            if (r.tor_prefix.len != 0 and !std.mem.startsWith(u8, u.tor, r.tor_prefix)) continue;
+            found = true;
+            hit[ri] = true;
+        }
+        if (!found) {
+            // std modules other than the rows above need nothing from Kconfig, but say so
+            if (std.mem.startsWith(u8, u.module, "std.")) {
+                rw.print("used: {s}:{s} -> no row needed (std, pure)\n", .{ u.module, u.tor }) catch return;
+                continue;
+            }
+            refusals += 1;
+            rw.print("refused: interface={s}:{s} arm=unikraft/qemu-x86_64 phase=configure missing=realize row offered=none\n", .{ u.module, u.tor }) catch return;
+            continue;
+        }
+        rw.print("used: {s}:{s}\n", .{ u.module, u.tor }) catch return;
+    }
+    for (rows, 0..) |r, ri| {
+        if (!hit[ri]) continue;
+        if (std.mem.eql(u8, r.iface, "unikraft/sched")) need_sched = true;
+        rw.print("row: {s} stack={d} kconfig=", .{ r.iface, r.stack }) catch return;
+        for (r.kconfig, 0..) |k, i| {
+            rw.print("{s}{s}", .{ if (i == 0) "" else ",", k }) catch return;
+            derived.append(allocator, k) catch return;
+        }
+        if (r.kconfig.len == 0) rw.writeAll("none") catch return;
+        rw.print(" evidence=\"{s}\"\n", .{r.evidence}) catch return;
+        stack += r.stack;
+    }
+    if (!need_sched) {
+        rw.writeAll("row: no-scheduler (no used interface needs one) kconfig=") catch return;
+        for (nosched, 0..) |k, i| {
+            rw.print("{s}{s}", .{ if (i == 0) "" else ",", k }) catch return;
+            derived.append(allocator, k) catch return;
+        }
+        rw.writeAll("\n") catch return;
+    }
+
+    // stack: smallest order >= 4 whose stack holds the declared demand plus 25 %
+    const want = stack + stack / 4;
+    var order: u6 = 4;
+    while ((@as(u64, 4096) << order) < want) order += 1;
+    const sk = std.fmt.allocPrint(allocator, "CONFIG_STACK_SIZE_PAGE_ORDER={d}", .{order}) catch return;
+    defer allocator.free(sk);
+    derived.append(allocator, sk) catch return;
+
+    rw.writeAll("\n## table 2: resource -> mechanism -> cost\n") catch return;
+    rw.print("resource: stack -> CONFIG_STACK_SIZE_PAGE_ORDER={d} ({d} B) -> declared demand {d} B + 25 % = {d} B\n", .{ order, @as(u64, 4096) << order, stack, want }) catch return;
+    for (rows, 0..) |r, ri| if (hit[ri]) {
+        rw.print("resource: {s} -> {s}\n", .{ r.iface, r.resources }) catch return;
+    };
+
+    // ---- 3. author lines: policy overrides, refused if they contradict a derived line
+    rw.writeAll("\n## table 3: missing / contradicted -> refusal\n") catch return;
+    const keyOf = struct {
+        fn go(l: []const u8) []const u8 {
+            const i = std.mem.indexOfAny(u8, l, ":=") orelse return l;
+            return std.mem.trim(u8, l[0..i], " ");
+        }
+    }.go;
+    const valOf = struct {
+        fn go(l: []const u8) []const u8 {
+            const i = std.mem.indexOfAny(u8, l, ":=") orelse return "";
+            return std.mem.trim(u8, l[i + 1 ..], " '\"");
+        }
+    }.go;
+    for (author.items) |a| {
+        var contradicted = false;
+        for (derived.items) |d| {
+            if (std.mem.eql(u8, keyOf(a), keyOf(d)) and !std.mem.eql(u8, valOf(a), valOf(d))) {
+                refusals += 1;
+                contradicted = true;
+                rw.print("refused: author line {s} contradicts derived {s} phase=configure\n", .{ a, d }) catch return;
+            }
+        }
+        if (!contradicted) rw.print("override: author policy {s} (not derived; reported)\n", .{a}) catch return;
+    }
+    if (refusals == 0) rw.writeAll("refusals: none\n") catch return;
+
+    const rf = std.fs.cwd().createFile("realize.txt", .{}) catch return;
+    rf.writeAll(report.items) catch {};
+    rf.close();
+    if (refusals != 0) {
+        std.fs.cwd().deleteFile("Kraftfile") catch {};
+        std.debug.print("realize: {d} refusal(s), no Kraftfile written; see realize.txt\n", .{refusals});
+        std.process.exit(3);
+    }
+
+    // ---- Makefile.uk (same derivation as koru-libs unikraft:image)
+    const lib_name = std.fmt.allocPrint(allocator, "app{s}", .{app_name}) catch return;
+    defer allocator.free(lib_name);
+    const prefix = std.ascii.allocUpperString(allocator, lib_name) catch return;
+    defer allocator.free(prefix);
+    {
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(allocator);
+        const w = buf.writer(allocator);
+        w.writeAll("# Generated by koruc from ~unikraft:image via koruos/realize — do not edit.\n") catch return;
+        w.print("$(eval $(call addlib,{s}))\n\n", .{lib_name}) catch return;
+        w.print("{s}_SRCS-y += $({s}_BASE)/main.c\n", .{ prefix, prefix }) catch return;
+        w.print("{s}_ALIBS-y += $({s}_BASE)/lib{s}app.a\n", .{ prefix, prefix, app_name }) catch return;
+        if (extra.items.len > 0) w.writeAll("\n") catch return;
+        for (extra.items) |line| {
+            w.writeAll(line) catch return;
+            w.writeAll("\n") catch return;
+        }
+        const f = std.fs.cwd().createFile("Makefile.uk", .{}) catch return;
+        defer f.close();
+        f.writeAll(buf.items) catch return;
+    }
+    // ---- Kraftfile: derived lines first, then author policy
+    {
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(allocator);
+        const w = buf.writer(allocator);
+        w.writeAll("# Generated by koruc via koruos/realize — derived from the used interfaces (realize.txt).\n") catch return;
+        w.writeAll("spec: v0.6\n") catch return;
+        w.print("name: {s}\n\n", .{app_name}) catch return;
+        w.writeAll("unikraft:\n  version: stable\n  kconfig:\n") catch return;
+        for (derived.items) |d| w.print("    {s}: '{s}'\n", .{ keyOf(d), valOf(d) }) catch return;
+        for (author.items) |a| w.print("    {s}\n", .{a}) catch return;
+        w.writeAll("\ntargets:\n  - qemu/x86_64\n") catch return;
+        const f = std.fs.cwd().createFile("Kraftfile", .{}) catch return;
+        defer f.close();
+        f.writeAll(buf.items) catch return;
+    }
+    std.debug.print("realize: Makefile.uk, Kraftfile ({d} derived, {d} author) and realize.txt written; stack order {d}\n", .{ derived.items.len, author.items.len, order });
+}
+
+const std = @import("std");

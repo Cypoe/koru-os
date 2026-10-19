@@ -4,6 +4,8 @@ Q28 closed 2026-10-19 15:55 CEST by Fabian: native providers first (DoD-3 counts
 
 Q29 ruled 2026-10-19 about 18:20 CEST by Fabian: M9 is **not** passed and stays open, and (h2) is not amended. First a Spawn design: a dissected fork with explicit rights bags, no wholesale POSIX fork, the lib in `Cypoe/koru-libs`, vfork/execve only as a thin, loud compat layer (DESIGN-0001 §8.6; open follow-ups Q30–Q34).
 
+Q19 closed 2026-10-19 (about 18:59 CEST) by Fabian: DoD-2 is reformulated only after the Spawn lib passes its acceptance, not yet. B20 and M5's `fork` clause stay open until then (DESIGN-0001 §12 Q19).
+
 | # | blocker | status | affects | evidence | needed |
 |---|---|---|---|---|---|
 | B1 | **KVM unusable.** `/dev/kvm` is rw for the box user (`crw-rw-rw-`), but vCPU creation oopses the host kernel (`kvm_spurious_fault` in `vmx_vcpu_create`, 6.12.94+). The oops was already in the log before this work | open; KVM is **not** to be touched again; TCG only | speed of every QEMU milestone, M8–M10 most | `experiments/m1-blk/evidence/kvm-oops-dmesg-excerpt.txt`, `run-kvm-attempt.txt` | working nested VMX on the box host |

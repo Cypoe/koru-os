@@ -1,0 +1,8 @@
+// Fixture: a lift that has no realize row (koru/realize/index.kz). Used only by
+// negative_unrowed.k to prove realize refuses instead of guessing a configuration.
+
+~pub tor census { } -> u32
+
+~proc census|zig {
+    return 7;
+}
