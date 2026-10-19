@@ -1,0 +1,30 @@
+# M9 acceptance init (koru-os). Markers on the serial console drive the host (drive-m9.py).
+export HOME=/tmp XDG_CACHE_HOME=/tmp/cache XDG_RUNTIME_DIR=/tmp/xdg PATH=/bin:/usr/bin LIBSEAT_BACKEND=noop LANG=C.UTF-8 SHELL=/bin/sh
+mkdir -p /tmp/cache /tmp/xdg; chmod 700 /tmp/xdg
+echo "m9-init: start"
+/usr/bin/Hyprland --i-am-really-stupid -c /etc/m9-hyprland.lua > /tmp/hl.out 2>&1 &
+i=0; while [ $i -lt 150 ] && ! grep -q 'Running on WAYLAND_DISPLAY' /tmp/hl.out; do sleep 1; i=$((i+1)); done
+echo "m9-init: compositor ready after ${i}s"
+export HYPRLAND_INSTANCE_SIGNATURE=$(ls /tmp/xdg/hypr | head -n 1)
+echo "m9-init: signature $HYPRLAND_INSTANCE_SIGNATURE"
+echo "m9-init: monitors begin"; /usr/bin/hyprctl -j monitors; echo; echo "m9-init: monitors end"
+# (h2) frozen trigger
+echo "m9-init: dispatch exec begin"; /usr/bin/hyprctl dispatch exec foot; echo "rc=$?"; echo "m9-init: dispatch exec end"
+sleep 5
+echo "m9-init: clients after exec begin"; /usr/bin/hyprctl -j clients; echo; echo "m9-init: clients after exec end"
+# foot without fork: displays an existing pty; the shell runs on its slave (lib/korupty)
+if [ "${M9_FOOT_PTY:-1}" = 1 ]; then
+  exec 3<>/dev/korupty0
+  /bin/sh -i < /dev/korupty0s > /dev/korupty0s 2>&1 &
+  WAYLAND_DISPLAY=wayland-1 /usr/bin/foot --pty=/dev/korupty0 > /tmp/foot.out 2>&1 &
+fi
+i=0; while [ $i -lt 120 ] && ! /usr/bin/hyprctl -j clients | grep -q '"class": "foot"'; do sleep 1; i=$((i+1)); done
+echo "m9-init: foot mapped after ${i}s"
+i=0; while [ $i -lt 180 ] && [ ! -s /tmp/dod3 ]; do sleep 1; i=$((i+1)); done
+echo "m9-init: dod3 wait ${i}s"
+sleep 2
+echo "m9-init: clients begin"; /usr/bin/hyprctl -j clients; echo; echo "m9-init: clients end"
+tar -cf /dev/korusnap /tmp/dod3 && echo "m9-init: snapshot written"
+echo "m9-init: foot log"; tail -c 2000 /tmp/foot.out
+echo "m9-init: end"
+sleep 30

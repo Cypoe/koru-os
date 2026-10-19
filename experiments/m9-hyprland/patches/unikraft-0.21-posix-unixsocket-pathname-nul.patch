@@ -1,0 +1,27 @@
+--- a/lib/posix-unixsocket/unixsock-bind.c
++++ b/lib/posix-unixsocket/unixsock-bind.c
+@@ -32,14 +32,21 @@
+ struct unix_addr_entry **unix_addr_get(const char *name, size_t namelen)
+ {
+ 	struct unix_addr_entry **p;
++	/* koru-os M9: a pathname name ends at its first NUL, as on Linux; the
++	 * address length may or may not count it or more (hyprctl passes
++	 * sizeof(struct sockaddr_un), Hyprland the string length). Abstract
++	 * names (leading NUL) keep their exact length.
++	 */
++	size_t n = (namelen && name[0]) ? strnlen(name, namelen) : namelen;
+ 
+-	for (p = &hash_tbl[unix_addr_hash(name, namelen)];
++	for (p = &hash_tbl[unix_addr_hash(name, n)];
+ 	     *p;
+ 	     p = &(*p)->next) {
+ 		struct unix_addr_entry *ent = *p;
++		size_t en = (ent->namelen && ent->name[0])
++			? strnlen(ent->name, ent->namelen) : ent->namelen;
+ 
+-		if (namelen == ent->namelen &&
+-		    !memcmp(name, ent->name, namelen))
++		if (n == en && !memcmp(name, ent->name, n))
+ 			break;
+ 	}
+ 	return p;
