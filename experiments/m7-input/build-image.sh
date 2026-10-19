@@ -40,5 +40,8 @@ ap $U $U/lib/posix-poll/epoll.c "$P7/unikraft-0.21-posix-poll-legacy-epf.patch"
 # M7b
 P7B="$REPO/experiments/m7b-libinput/patches"
 ap $U $U/lib/vfscore/main.c "$P7B/unikraft-0.21-vfscore-fstatat-nofollow.patch" "koru-os M7b"
+# M9
+P9="$REPO/experiments/m9-hyprland/patches"
+ap .unikraft/apps/elfloader .unikraft/apps/elfloader/elf_load.c "$P9/app-elfloader-execve-errno.patch" "koru-os: use the raw syscall"
 rm -f .config.m7-input_qemu-x86_64 .unikraft/build/config
 UK_CFLAGS="-std=gnu17" kraft build --arch x86_64 --plat qemu --no-prompt --log-type basic
