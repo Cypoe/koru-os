@@ -1,0 +1,33 @@
+L1 (host Linux 6.12.94+, TCG n/a): /workspace/m4build/ascii-animator sha256 c4e5583be12fae21…, SIGUSR1 after 1 s, strace -f, 2026-10-19 12:55 CEST
+PASS (a) Detected TTY size: 80x24: source: default; TIOCGWINSZ failed errno=25
+PASS STAND-IN label
+PASS (b) >= 24 consecutive asset-identical frames from frame 1 (asset order, wrapping): 25 trailers, 25 verified in order
+PASS (c) ESC[2J ESC[1;1H then SIGUSR1/exit 0 line: 25 frames, 1.002 s
+PASS (d) refusal log empty or refused-by-design only: 0 ENOSYS rows, 0 STUBBED rows, names []
+PASS (x) no Unikraft Crash
+syscall histogram (strace -f):
+     29 write
+     26 mmap
+     25 clock_nanosleep
+      6 rt_sigaction
+      4 munmap
+      2 sigaltstack
+      2 read
+      2 brk
+      1 stat
+      1 set_tid_address
+      1 rt_sigreturn
+      1 rt_sigprocmask
+      1 poll
+      1 open
+      1 mprotect
+      1 ioctl
+      1 fstat
+      1 fcntl
+      1 exit_group
+      1 execve
+      1 close
+      1 arch_prctl
+ioctl(1, TIOCGWINSZ, 0x7fffb70f8a90) = -1 ENOTTY (Inappropriate ioctl for device)
+rt_sigaction(SIGUSR1, {sa_handler=0x7f2e740bf3e3, sa_mask=[], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7
+clock_nanosleep(CLOCK_MONOTONIC, 0, {tv_sec=0, tv_nsec=41560638}, 0x7fffb70f8910) = 0
