@@ -8,6 +8,9 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 K=$1; BB=$2; R=$3; INIT=$4; OUT=$5; TMO=${6:-600}; S=/usr/sbin; MEM=${MEM:-2G}
+# resolve inputs before cd "$OUT" (a relative <init> used to fail silently and fall back to
+# whatever etc/m9-init the root already held)
+K=$(realpath "$K"); BB=$(realpath "$BB"); R=$(realpath "$R"); INIT=$(realpath -e "$INIT") || { echo "init not found: $4"; exit 2; }
 rm -rf "$OUT"; mkdir -p "$OUT/root"; cd "$OUT"
 cp -a "$R/." root/; mkdir -p root/{bin,tmp,dev,sys,run,proc,etc,var/cache}
 cp "$BB" root/bin/busybox

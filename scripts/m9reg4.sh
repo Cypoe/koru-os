@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 cd /workspace/koru-os-repo/experiments
-K=/workspace/m9k4/.unikraft/build/m7-input_qemu-x86_64; BB=/workspace/m3/busybox-1.37.0/busybox
-M2K=/workspace/m2img/koruos/ext2/tests/.unikraft/build/koru_qemu-x86_64; R=/workspace/m9reg4; A=/workspace/m9reg4-m7b
+K=${K:-/workspace/m9k4/.unikraft/build/m7-input_qemu-x86_64}; BB=/workspace/m3/busybox-1.37.0/busybox
+M2K=/workspace/m2img/koruos/ext2/tests/.unikraft/build/koru_qemu-x86_64; R=${R:-/workspace/m9reg4}; A=${A:-/workspace/m9reg4-m7b}
 UDZ=/workspace/m7bin/src/libudev-zero/libudev.so.1
 rm -rf $R $A; mkdir -p $R $A
 for i in 1 2 3; do echo "m7b-$i $(date +%H:%M:%S)"; m7b-libinput/run-m7b.sh $K $BB /workspace/m7bin/root $UDZ $A/run-$i > /dev/null 2>&1; echo "m7b-$i $(tail -1 $A/run-$i/result.txt)"; done

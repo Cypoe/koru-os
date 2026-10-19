@@ -12,7 +12,7 @@ P="$REPO/experiments/m3-busybox/patches"; P6="$REPO/experiments/m6-kms/patches";
 export PATH=/workspace/tc/zig-x86_64-linux-0.15.2:/workspace/tc/kraft:$PATH
 mkdir -p "$W" && cd "$W"
 cp "$HERE/app/Kraftfile" "$HERE/app/Makefile.uk" "$HERE/app/Config.uk" "$HERE/app/exitstatus.c" .
-rm -rf koruext2fs korukms koruinput korusysfs korusnap korupty korumemfd && mkdir koruext2fs korukms koruinput korusysfs korusnap korupty korumemfd
+rm -rf koruext2fs korukms koruinput korusysfs korusnap korupty korumemfd koruspawn && mkdir koruext2fs korukms koruinput korusysfs korusnap korupty korumemfd
 "$REPO/lib/koruext2fs/build-core.sh" >/dev/null
 cp -r "$REPO/lib/koruext2fs/ext2fs_vfs.c" "$REPO/lib/koruext2fs/Makefile.uk" "$REPO/lib/koruext2fs/build" koruext2fs/
 cp "$REPO"/lib/korukms/*.c "$REPO"/lib/korukms/*.h "$REPO/lib/korukms/Makefile.uk" korukms/
@@ -21,6 +21,14 @@ cp "$REPO"/lib/korusysfs/*.c "$REPO"/lib/korusysfs/*.h "$REPO/lib/korusysfs/Make
 cp "$REPO"/lib/korusnap/*.c "$REPO/lib/korusnap/Makefile.uk" korusnap/ # M9
 cp "$REPO"/lib/korupty/*.c "$REPO/lib/korupty/Makefile.uk" korupty/ # M9
 cp "$REPO"/lib/korumemfd/*.c "$REPO/lib/korumemfd/Makefile.uk" korumemfd/ # M9
+# M-SPAWN-MMU R1 (step 1): koruspawn MMU core only (mmu.c), not the Spawn seam/koruelf.
+# KORU_SPAWN_MMU=0 rebuilds the pre-R1 kernel.
+if [ "${KORU_SPAWN_MMU:-1}" = 1 ]; then
+  mkdir koruspawn && cp "$REPO/lib/koruspawn/mmu.c" "$REPO/lib/koruspawn/mmu.h" koruspawn/
+  printf '%s\n' '# staged by build-image.sh (KORU_SPAWN_MMU=1)' \
+    'APPKORUOS_SRCS-$(CONFIG_LIBUKPAGING) += $(KORUSPAWN_DIR)/mmu.c' \
+    'APPKORUOS_CINCLUDES-y += -I$(KORUSPAWN_DIR)' > koruspawn/Makefile.m9.uk
+fi
 if [ ! -d .unikraft/unikraft ]; then
   [ -d "$W_SRC/.unikraft/unikraft" ] || { echo "run experiments/m3-busybox/build-image.sh first (fetches sources)"; exit 1; }
   mkdir -p .unikraft && cp -r "$W_SRC/.unikraft/unikraft" "$W_SRC/.unikraft/apps" "$W_SRC/.unikraft/libs" .unikraft/
@@ -54,5 +62,11 @@ ap $U $U/lib/posix-poll/epoll.c "$P9/unikraft-0.21-posix-poll-epoll-sigmask.patc
 ap $U $U/lib/posix-poll/poll.c "$P9/unikraft-0.21-posix-poll-ppoll-sigmask.patch" "koru-os M9"
 ap $U $U/lib/vfscore/main.c "$P9/unikraft-0.21-vfscore-devshm.patch" "koru-os M9"
 ap $U $U/lib/posix-mmap/mmap.c "$P9/unikraft-0.21-posix-mmap-device-refusal.patch" "a device that refuses"
+# M-SPAWN-MMU R1 step 1: sched CR3 switch + exception CR3 hooks (weak, inert without a domain)
+if [ "${KORU_SPAWN_MMU:-1}" = 1 ]; then
+  PM="$REPO/experiments/m-spawn-mmu/patches"
+  ap $U $U/lib/uksched/include/uk/sched_impl.h "$PM/unikraft-0.21-sched-cr3-switch.patch" "M-SPAWN-MMU"
+  ap $U $U/plat/native/arch/x86_64/except.c "$PM/unikraft-0.21-except-cr3-hooks.patch" "KORU_EXC_ENTER"
+fi
 rm -f .config.m7-input_qemu-x86_64 .unikraft/build/config
 UK_CFLAGS="-std=gnu17" kraft build --arch x86_64 --plat qemu --no-prompt --log-type basic

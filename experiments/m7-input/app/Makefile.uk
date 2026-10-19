@@ -14,3 +14,7 @@ KORUPTY_DIR := $(APPKORUOS_BASE)/korupty
 include $(KORUPTY_DIR)/Makefile.uk
 KORUMEMFD_DIR := $(APPKORUOS_BASE)/korumemfd
 include $(KORUMEMFD_DIR)/Makefile.uk
+# M-SPAWN-MMU R1 step 1: koruspawn MMU core (domains, CR3 hooks, child PF -> SIGSEGV).
+# Present only when build-image.sh stages it (KORU_SPAWN_MMU=1, the default).
+KORUSPAWN_DIR := $(APPKORUOS_BASE)/koruspawn
+-include $(KORUSPAWN_DIR)/Makefile.m9.uk

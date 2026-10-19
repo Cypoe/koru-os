@@ -1,0 +1,21 @@
+R1 step 1 (2026-10-19, Europe/Berlin CEST; TCG only): R2/R3 base wired into the M9 kernel.
+Kernel /workspace/m9k5 m7-input_qemu-x86_64 sha256 07e0ef34e68e4db7... (built 23:14 CEST)
+  = m7-input/build-image.sh with KORU_SPAWN_MMU=1 (default): lib/koruspawn mmu.c linked,
+    sched CR3 switch patch + except CR3 hook patch applied. No domain is created (no
+    execve/Spawn caller in this kernel), so every hook returns early: no behaviour change.
+  Rebuild from the committed sources reproduces it except the 4-byte embedded build
+  timestamp (251722db... at 23:25 CEST; cmp: 4 bytes, the time string).
+
+Gate
+  M9 + Q30 STAGE2        3/3  CHECKS PASS / STAGE2 CHECKS PASS     run-{1,2,3}/
+  M3 M4 M5a M6 M7 M8a M8b M7b 3/3 each (24/24)                     regress-m3-m8b-m7b.txt
+  (spawn, NID, Slice A, spawn-elf, m-spawn-mmu use other kernels; unchanged since be9fd77.)
+
+Fixes found on the way (in this commit)
+  - experiments/m-spawn-mmu/patches/unikraft-0.21-sched-cr3-switch.patch was malformed
+    (hunk counts); fresh trees could not apply it. Regenerated from the msmmu tree against
+    the pinned unikraft stable tarball; same content.
+  - run-m9.sh copied <init> after cd into the output dir, so a relative path silently fell
+    back to the root's etc/m9-init. Inputs are now resolved first. The earlier recount-gap23
+    used the fallback copy, which is byte-identical to m9-accept-init (cmp), so that
+    evidence stands.

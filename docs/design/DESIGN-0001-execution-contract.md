@@ -2233,6 +2233,14 @@ Plan (each item a separate measured step, in this order):
 Estimate: several working sessions; one M9 boot under TCG takes minutes, and items 3
 and 5 need debugger iterations.
 
+**R1 progress log** (one commit per step; TCG; Europe/Berlin CEST):
+
+- **Step 1 done (2026-10-19 ~23:25).** M9 kernel `07e0ef34…` (m7-input build, `KORU_SPAWN_MMU=1`
+  default): koruspawn `mmu.c` linked, sched CR3 switch + except CR3 hooks applied, no domain
+  created, so no behaviour change. M9+STAGE2 3/3, M3–M8b/M7b 3/3
+  (`experiments/m9-hyprland/evidence/r1-step1/BOARD.txt`). Fixed on the way: malformed sched
+  patch; `run-m9.sh` relative-init fallback (earlier evidence unaffected, init identical).
+
 **Threat model, stated plainly.** Today's Spawn isolation is **fault isolation, not
 adversarial isolation.** Children run in **ring 0**: kernel `.data`/`.bss` stay RW in
 the child PT, and nothing stops a child from executing `mov cr3`, `lidt`, `wrmsr` or
