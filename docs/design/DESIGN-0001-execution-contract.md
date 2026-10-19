@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -266,7 +266,7 @@ the two parsers is debt.
     (macOS/arm64, TCG).
 - **Missing / risk:**
   - `fork()` semantics in a single-address-space unikernel are unknown. Shells fork,
-    and `posix_spawn`/`vfork` may suffice for `ash` with job control off (Q19).
+    and `posix_spawn`/`vfork` may suffice for `ash` with job control off (Q19). *2026-10-19 18:20: no POSIX fork; the process model is Spawn (§8.6).*
   - A tty line discipline is needed (canonical mode, `termios`, `TIOCGWINSZ`, job
     control signals).
   - `/bin/ascii-animator` is missing (Q18).
@@ -367,7 +367,7 @@ means the test is first run against a Linux guest to produce the expected trace.
 | M6 | KMS scanout of a dumb buffer | L2 + DS3 (L1 trace first); M6 uses a native provider instead ("M6 decision" below, Q28) | libdrm `modetest -s <conn>:<mode>` (or equivalent) draws a test pattern; screendump pixel check at known coordinates; frozen parameters in "M6 acceptance" below | **M (native provider): PASS 3/3 under TCG, 2026-10-19 13:36 CEST**: `kmsdumb` (raw ioctls, two dumb buffers, two `SETCRTC`) and unmodified libdrm `modetest -M korukms -s Virtual-1:1024x768`; all three screendumps 0 of 786,432 pixels off the independent references, and byte-identical to the L1 `bochs-drm` twin; M3/M4/M5a regressions 3/3 (`experiments/m6-kms/README.md`). Not through DS3 (Q28); no atomic, properties or vblank events yet |
 | M7 | input | L2 + DS4; M7 uses a native provider instead ("M7 decision" below, Q28) | QMP `input-send-event` key events appear in `libinput debug-events` on serial; split into M7a (evdev uAPI) and M7b (libinput) | **M7a PASS 3/3** (13:57). **M7b PASS 3/3 under TCG, 2026-10-19 15:07 CEST**: unmodified Debian `libinput debug-events --device /dev/input/event0` (1.28.1) over the kernel sysfs view (`lib/korusysfs`) and libudev-zero; 18 KEYBOARD_KEY lines = derived = L1 (udevd and libudev-zero twins); M3/M4/M5a/M6/M7a/M8a/M8b regressions 3/3 (`experiments/m7b-libinput/README.md`). B15 resolved. Not through DS4 (Q28) |
 | M8 | GL on KMS | L2 + DS3 + Mesa llvmpipe/`kms_swrast` in userspace | `kmscube` runs; two screendumps 1 s apart differ, and both are non-black; split into M8a (offscreen EGL/GBM, frozen in "M8a acceptance") and M8b (kmscube) | **M8a: PASS 3/3 under TCG, 2026-10-19 14:15 CEST**: unmodified Mesa 25.0.7 llvmpipe (LLVM 19.1.7) renders offscreen via EGL surfaceless and via EGL on GBM over `/dev/dri/card0`; frame hashes equal the L1 twin's, probe pixels as derived (`experiments/m8-gl/README.md`). **M8b: PASS 3/3 under TCG, 2026-10-19 14:26 CEST**: unmodified Debian `kmscube` on `/dev/dri/card0` (GBM surface, `kms_swrast`/llvmpipe, legacy page flips with flip events), 149 frames at 13–14 fps, two screendumps 1 s apart differ in ~206,000 of 1,024,000 pixels, cube visible; L1 `bochs-drm` twin alike at ~20 fps; M3/M4/M5a/M6/M7a/M8a regressions 3/3 on the M8b kernel. Native KMS provider, not DS3 (Q28); no vblank pacing |
-| M9 | **DoD-3**: Hyprland + foot | L2 + native `bochs-display` and i8042 providers (Q28 closed 15:55: native first; DS3/DS4 as a later milestone of their own) | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | **counted 17:43–17:47 CEST: not passed as frozen**: (h1), (h2b), (h3), (h4), (h5), (x) 3/3; (h2a) `hyprctl dispatch exec foot` fails 3/3 (no fork, B20; Q29 open). foot runs as a window via `foot --pty` + `lib/korupty` (B21); regressions M3–M8b and M7b 3/3 on the M9 kernel |
+| M9 | **DoD-3**: Hyprland + foot | L2 + native `bochs-display` and i8042 providers (Q28 closed 15:55: native first; DS3/DS4 as a later milestone of their own) | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | **counted 17:43–17:47 CEST: not passed as frozen**: (h1), (h2b), (h3), (h4), (h5), (x) 3/3; (h2a) `hyprctl dispatch exec foot` fails 3/3 (no fork, B20). **M9 open** (Q29 ruled 18:20: not passed, (h2) not amended; met only via Spawn, §8.6, Q30). foot runs as a window via `foot --pty` + `lib/korupty` (B21); regressions M3–M8b and M7b 3/3 on the M9 kernel |
 | M10 | **DoD-4**: QML exemplar | same as M9 | a quickshell bar on a layer-shell surface is visible in a screendump; editing its QML changes the next screendump without a restart | D |
 
 Every row above has an **L1 twin run** that produces the reference trace and
@@ -809,7 +809,7 @@ stay in place (Q28 with Fabian); nothing here builds a silo path or prejudges th
   `experiments/m9-hyprland/evidence/accept-run-{1,2,3}` (screendumps as sha256 only).
   Regressions on the same kernel (17:46–17:53): M7b 3/3, then M3, M4 (a)–(d), M5a, M6, M7, M8a
   and M8b each 3/3 (`evidence/regress-m9-accept`). No L1 twin run yet (an oracle, never a pass).
-- **Q29 (open, for Fabian):** (h2) as frozen requires Hyprland to start foot (`hyprctl dispatch
+- **Q29 (ruled 2026-10-19 about 18:20 CEST: M9 stays open, (h2) not amended, Spawn design first, §8.6 and §12 Q29–Q30):** (h2) as frozen requires Hyprland to start foot (`hyprctl dispatch
   exec foot`), and that needs fork. Choices: (a) amend (h2) so that the screendump shows the foot
   window started by init as `foot --pty` (then the counted runs above pass all other checks
   3/3); (b) keep (h2) and make spawning work, either a process model with fork (Q19) or a
@@ -1506,6 +1506,269 @@ indirection, so revocation does not require counting holders:
   - Frozen snapshot regions need neither counting nor revocation for safety (§6.4).
   - This is the concrete form of the counting-wall question (§12).
 
+### 8.6 Spawn: minting a child (a dissected fork)
+
+*DRAFT 2026-10-19 18:20–18:45 CEST, written after Fabian's ruling on Q29. Everything in this
+section is design (D) unless a sentence carries another class. No code exists yet and nothing
+here has been measured.*
+
+**The ruling (Fabian, 2026-10-19 about 18:20 CEST), restated:**
+
+1. M9 is **not** passed and stays open. The Spawn design comes first.
+2. No wholesale POSIX `fork`. Fork as a library has to be **dissected**: ownership,
+   provenance and rights stay visible, and a child does not inherit all rights unless they are
+   explicitly granted. An opaque fork is a bad fit for obligations and NIDs.
+3. The library's home is **koru-libs** (the `Cypoe/koru-libs` fork of `korulang/koru-libs`,
+   whose `unikraft/` already holds `sched`, `blk`, `vmem`, `paging`, …). This is probably also
+   the home of the recent OS lifts. Unikraft's `vfork`/`execve` may stay as a thin, **loud**
+   compatibility layer under that model; it is not the model.
+4. Upstreaming a dissected spawn or fork to Unikraft or korulang is a later, separate ask.
+   Fabian has already named fork as a good upstream candidate once it is dissected.
+
+#### 8.6.1 What `fork` bundles
+
+`fork()` is one call that makes about a dozen separate decisions, all of them implicitly and all
+in favour of "copy everything". `execve()` then makes a few more. Spawn takes each decision
+apart and makes it a separate, recorded step. The left column is POSIX (C, POSIX.1-2024 and
+Linux man pages); the right column is the Spawn rule.
+
+| # | what `fork`/`exec` decide implicitly | Spawn rule | Unikraft 0.21 today |
+|---|---|---|---|
+| F1 | a new identity (pid), never named in advance | the child identity `{instance, generation}` is **minted** by `reserve`, before anything runs, and is never reused | pid from posix-process (V) |
+| F2 | a copy of the whole address space (COW) | **refused, not grantable** on every arm. The child starts at an image entry point; nothing continues in two contexts ("returns twice" does not exist) | refused: `clone` without `CLONE_VM` → "Multiple address spaces are not supported" (V, B20) |
+| F3 | a copy of the whole fd table | **nothing inherited.** Every fd the child sees, 0/1/2 included, is a grant | the vfork child gets its own fd table (V by behaviour: hush pipelines and redirections work, M3/M5) |
+| F4 | credentials (uid/gid/capabilities) | **no ambient credentials.** Authority is only what the bag holds; the compat layer may *report* uid 0, it grants nothing | single user, everything is root (V) |
+| F5 | the environment | **no variable inherited.** Each variable is a grant (name and value recorded) | copied by `execve` from `envp` (V) |
+| F6 | cwd, root, umask | the child's path resolution starts at a **granted directory handle**; no ambient `/` | one global vfs (V) |
+| F7 | signal dispositions and mask; the right to signal others | the child may signal nobody. The parent's only power over the child is the verb set on its child handle (`kill` is a verb). SIGCHLD becomes the completion of the parent's obligation | uksignal; SIGCHLD into a vfork parent crashes (B22) |
+| F8 | the parent/child relation: `wait`, reaping, zombies, reparenting to init | **reaping is an obligation** of whoever holds the child handle. Reparenting is an explicit `detach` to a named supervisor, never a side effect of a parent's death | posix-process `wait4` (V) |
+| F9 | the right to spawn again | not inherited. A child spawns only with an **attenuated spawn authority** in its bag (allowed images, maximum bag, maximum number of children) | anything may vfork (V) |
+| F10 | shared memory: `MAP_SHARED` regions, SysV shm, memfds | none, except frozen snapshot regions (§6.4, free to share) and explicit grants of a mutable region, recorded on both sides | one address space: everything is reachable (V) |
+| F11 | session, process group, controlling tty | only through a granted pty handle (with the verbs that make it a controlling tty) | korupty + posix-process groups (V, M9 probe 8) |
+| F12 | `exec`: replace the image, keep the fds without `CLOEXEC`, reset the handlers | `replace` is a verb the child needs in its bag ("may become an image in set S"). Grants **do not** survive exec unless marked `across_exec`. This inverts the POSIX default, where `CLOEXEC` is the opt-out | app-elfloader `execve` (V); stack size B12 |
+| F13 | `pthread_atfork` handlers, lock state, other threads | not applicable: nothing is copied, so there is no lock state to repair | — |
+
+#### 8.6.2 The model: a child is minted with an explicit rights bag
+
+A **child** is a record in `std/store`, not a pointer:
+
+```
+child {
+  identity:   { instance, generation }          -- minted by reserve, never reused (F1)
+  image:      { artifact, closure[] }            -- content hash of the program + its loader
+                                                 --   closure (ld.so, DT_NEEDED), read+exec only
+  requires:   [ interface ]                      -- the image's imports (its NIDs, §3.1)
+  bag:        [ grant ]                          -- frozen by seal
+  lineage:    { parent: instance, verb: create (spawn) | evolve (replace) }
+  supervisor: holder of the reap obligation      -- the parent, or a named supervisor after detach
+  manifest:   evidence ref                       -- table emitted at seal (8.6.5)
+}
+
+grant {
+  handle:     { row, slot, epoch }               -- a rung-1 handle (§8.4), never a raw fd or pointer
+  verbs:      subset of the parent's verbs on it  -- attenuation only, never amplification
+  as:         { scheme, name }                    -- how the child names it: linux.fd 0, env WAYLAND_DISPLAY,
+                                                 --   path /run/xdg/wayland-1, ...
+  provenance: { granted_by: parent identity, from: parent handle, at, why }
+  lease:      <= the parent's lease on the same handle
+  across_exec: bool                              -- default false (F12)
+}
+```
+
+The grants **are** correspondence rows in the sense of §3.2. The `foreign` side is how the child
+names the right (fd 3, `$WAYLAND_DISPLAY`, `/usr/share/fonts`). The `interface` and `provider`
+sides are the parent's handle. Lineage records who granted what. The evidence field holds the
+seal manifest. A child's imports resolve **only** against its bag plus a short **ambient set**
+that every child gets without a grant. The ambient set is listed and kept small:
+
+- its own memory within the bag's page budget;
+- reading the monotonic clock;
+- `exit`;
+- yield.
+
+Anything else that the image imports and that the bag does not cover is a refusal: at `seal`
+when the image's imports are known statically (the configure phase, §3.4), otherwise at the
+first call (the run phase). The refusal has the fixed shape (§3.4).
+
+**Phantom states**, in the shape of `unikraft/sched`. Each state is minted only on evidence, as
+`<ran!>` is there:
+
+| tor | takes | mints | meaning |
+|---|---|---|---|
+| `reserve` | a spawn authority, an image ref | `<staged!>` | identity minted, image hashed and its closure resolved; nothing runs |
+| `grant` | `<!staged>`, a parent handle, verbs, name, lease | `<staged!>` | one grant appended to the bag, with provenance; refused if the verbs exceed the parent's |
+| `seal` | `<!staged>` | `<sealed!>` | bag frozen; imports checked against bag + ambient set; manifest emitted |
+| `start` | `<!sealed>` | `<running!>` | **only on evidence** that the child executed its entry (a flag set by the child's first instruction, as in `sched:run`); otherwise `\| stalled` and the handle stays `<sealed!>` |
+| `wait` | `<!running>` | `<exited!>` + status | |
+| `reap` | `<!exited>` | — | the record is retired; slots and pages are reclaimed |
+| `detach` | `<!running>`, a supervisor handle | — | the reap obligation moves to the named supervisor (Hyprland's "leave it to init"); greppable |
+| `abandon` | `<!staged\|!sealed>` | — | the child never ran; the escape, named for what it is |
+| `revoke` | a grant in a live child's bag | — | epoch bump (§8.5); the child's next use fails with `revoked` |
+| `replace` | `<!running>` held by the child itself, an image ref | `<running!>` | exec: requires `replace` for that image in the bag; keeps only `across_exec` grants; lineage `evolve`, generation + 1 |
+
+There are two disposals for a live child (`reap` after `wait`, or `detach`) and a third for one
+that never ran (`abandon`). That is deliberate: B5 found that `koruc` auto-discharges an
+obligation that has exactly one disposal, so a leaked child (a zombie) is a compile error only
+if there are at least two.
+
+**What is refused by default** (grantable only explicitly; F-numbers from the table above):
+
+- every fd, including stdin, stdout and stderr (F3). There is a convenience grant `stdio(a, b, c)`,
+  but it is still three recorded grants;
+- every environment variable (F5);
+- every path: no ambient root or cwd (F6). The image closure is the one read+exec grant that
+  `reserve` makes, and it is listed;
+- signalling anyone (F7);
+- spawning (F9);
+- every mutable shared region (F10);
+- tty control (F11);
+- sockets and endpoints: a connect right names one endpoint, never a directory.
+
+**What is refused on every arm and cannot be granted:**
+
+- copying an address space (F2);
+- continuing at the caller's instruction pointer in a second context;
+- amplification: a grant with verbs the parent does not hold;
+- a lease longer than the parent's own;
+- reusing a child identity.
+
+**What the rung means here (honesty).** On rung 0 and 1 (Unikraft today: one address space, one
+page table, cooperative scheduler) the bag is enforced **at the binding seam**: the syscall shim,
+the fd table and path resolution. A child that ignores the seam can still read any memory of the
+image, and nothing preempts a child that spins (B22). So on these rungs Spawn is a
+**provenance and correctness boundary, not a security boundary**: every right is named, recorded
+and revocable for code that goes through the seam. Containing a hostile child needs rung 2 (one
+protection domain per child, §8.4, `unikraft/paging`). The model and the tors stay the same; only
+the enforcing rung moves up. The manifest states the rung at which each bag is enforced.
+
+#### 8.6.3 How exec fits
+
+There are two cases:
+
+- **Spawn of a new image.** `reserve` names the image. This is the only way a new program starts.
+  `posix_spawn` and `vfork`+`execve` map onto it (8.6.4); "fork then exec" collapses into it.
+- **A running child replaces its own image** (`execve` without `vfork`, e.g. `exec foot` in a
+  script, or busybox re-executing itself). This is `replace`: the identity stays, the generation
+  goes up, the artifact changes, and lineage says `evolve`. The new image's imports must be
+  covered by the surviving bag, or `replace` refuses **before** the old image is torn down. This
+  is unlike POSIX, where a failed exec after the point of no return kills the process.
+
+Signal handlers, timers and threads never survive `replace`. Memory is the new image's, plus
+only those frozen regions that are granted `across_exec`.
+
+#### 8.6.4 The compatibility layer (Linux ABI on L2): thin and loud
+
+The layer translates Linux process calls into Spawn calls. It runs inside the image (koru-os
+`lib/`, C, until the Koru lift has a C-ABI entry). Every translation it makes prints one line
+(`spawn-compat: …`) and records a manifest row. "Loud" means that every right the layer grants
+because POSIX would have inherited it is **visible** as such (`provenance.why = posix-inherit`),
+never silent.
+
+| Linux call | translation | what stays refused |
+|---|---|---|
+| `posix_spawn(path, file_actions, attrs, argv, envp)` | `reserve(path)`; then one grant per fd that is open and not `CLOEXEC` after the file actions (each `why = posix-inherit`, or `why = file-action` if a file action named it); one grant per `envp` entry; `seal`; `start`. `POSIX_SPAWN_SETSID` / `SETPGROUP` need a tty or group grant | fds beyond a per-image limit; env beyond the policy list (a policy row may narrow `posix-inherit` to a listed set) |
+| `vfork()` … `execve()` | the vfork child runs in the parent's context as today, and is **not** yet a Spawn child. At `execve` the layer does `reserve` + grants from the then-current fd table and `envp` + `seal` + `start`, and the parent resumes. `_exit` before `execve` is `abandon` | anything the child does to shared memory between `vfork` and `execve` is the caller's risk, as in POSIX; it is logged as `vfork-window` (B11, B22 live here) |
+| `clone` without `CLONE_VM`, `fork()` | **refused** (`ENOSYS` plus a refusal row), as now | a fork-as-vfork opt-in is deliberately **not** offered: see the Hyprland note below |
+| `execve()` outside a vfork window | `replace` | as 8.6.3 |
+| `wait4` / `waitpid` | `wait` + `reap` on a held child handle | waiting on a pid the caller does not hold: `ECHILD` + row |
+| `kill(pid, sig)` | a verb on a held child handle | a pid not held: `EPERM` + row |
+| `setsid`, `setpgid`, `TIOCSCTTY` | need the matching grant | otherwise `EPERM` + row |
+
+The layer is under the model, not beside it. A Linux program cannot reach a child except through
+`reserve`/`seal`, and every right a Linux child holds appears in a manifest.
+
+#### 8.6.5 Hyprland's `dispatch exec` and foot
+
+**What Hyprland does today (C, source read 2026-10-19).** The executor logs "Fail to fork" (V,
+B20). hyprutils `CProcess::runAsync` (`src/os/Process.cpp`, `main` branch) does a **double fork**:
+
+1. The child resets its signal mask and forks the grandchild.
+2. The grandchild calls `setenv` for each variable, `dup2`s the stdio fds and calls `execvp`.
+3. The child writes the grandchild's pid into a pipe and `_exit`s.
+4. The parent reads the pid and reaps the child, leaving the grandchild to init.
+
+Whether 0.56's `hl.dsp.exec_cmd` reaches this code or Hyprland's own spawn path is still to be
+read from the 0.56.2 source. Either way it is fork-then-exec with work between the two.
+
+**Why fork-as-vfork is not offered.** Under vfork semantics the grandchild's `setenv` and
+`strdup` would write into **Hyprland's** heap and `environ`. Every `exec` would mutate the
+compositor's environment, and a failed exec would leak into it. That is exactly the opaque shared
+state the ruling excludes.
+
+**Stage 1 (compat, the path that can close M9's (h2)).**
+
+- Patch the executor, a small patch to hyprutils and, if separate, to Hyprland. Replace the
+  double fork with one `posix_spawn` that carries an explicit `envp` and explicit file actions, and
+  then `detach` the child to init. "Leave it to init" becomes the recorded `detach`.
+- koru-os supplies a **policy row** `hyprland.children`, the bag every Hyprland child may receive:
+  - stdio to Hyprland's log or `/dev/null`;
+  - connect to the one Wayland socket;
+  - `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE`;
+  - read on fonts, fontconfig and `/etc`;
+  - the image set `{foot}`;
+  - a spawn authority for foot's own child, limited to the image `/bin/sh` with a bag of the
+    pty slave.
+- foot forks its shell after setting up the pty slave (B21). The same treatment applies: foot's
+  spawn is `posix_spawn` with `SETSID` and the slave as fds 0–2 (a patch to foot), under the
+  attenuated authority it was granted.
+
+  This is **nested attenuation**: Hyprland ⊇ foot ⊇ sh. Each level can only narrow. The manifests
+  form a chain whose lineage the acceptance can check.
+- `--pty=/dev/korupty0` remains the M9 probe workaround (B21) until then.
+
+**Stage 2 (native).** Hyprland holds no spawn authority of its own. It sends a spawn request (an
+image ref and a requested bag) to a **supervisor** (init on koru-os). The supervisor checks the
+request against `hyprland.children`, mints the child and returns only a `wait`/`kill` handle.
+This is the shape in which a compositor cannot start anything its policy does not name.
+
+#### 8.6.6 Evidence
+
+Classes as everywhere in this note (V verified by reading or running, M measured, C carried
+claim, D design). L1 (hosted Linux) is an oracle and trace source only and never counts (Q17).
+
+- **Compile-time (V once built):** the sched-style gates.
+  - `koruc --check` passes.
+  - Negatives refused with `KORU030`:
+    - `start` without `seal`;
+    - `grant` after `seal`;
+    - `reap` without `wait`;
+    - a leaked child (a dangling `<running>` handle);
+    - `replace` called with the parent's handle.
+  - A positive control: an `abandon` escape that compiles.
+- **Run-time (M, under TCG, 3/3):**
+  - a child prints its fd census (`fcntl(F_GETFD)` over 0..1023) and its environment, and both
+    equal the bag exactly;
+  - a revoked grant fails with `revoked` at its next use;
+  - an amplifying grant is refused at `grant`;
+  - a `replace` into an image whose imports the bag does not cover is refused, and the old image
+    keeps running;
+  - the roster brackets the run (`n → n+1 → n`) and no zombie remains after `reap`;
+  - the manifest emitted at `seal` equals the requested bag.
+- **Compat (M):**
+  - every `spawn-compat:` line names the call, the image hash and the grants, with `why`;
+  - a `fork()` is refused with a row;
+  - for the Hyprland stage 1 chain, the manifests Hyprland → foot → sh are present, each a subset
+    of its parent's.
+- **Per-milestone:** M9 (h2) as frozen is met only when the frozen trigger
+  (`hyprctl dispatch exec foot`) starts foot through Spawn (stage 1 or 2), measured 3/3, with
+  the regressions. The (h2) wording is **not** amended (Q29 ruling).
+
+#### 8.6.7 Where the code lives
+
+| part | home | why |
+|---|---|---|
+| the Spawn interface: child record, grant, manifest, tors, phantom states, refusal shapes | **koru-libs** (`Cypoe/koru-libs`), arm-independent | the model belongs to the ecosystem, not to one OS; identity is not location (§3.1) |
+| the Unikraft provider (`unikraft/spawn`): binds posix-process process creation, the per-process fd table and app-elfloader's image loading, with a layout proof and an `UK_ASSERT` census as in `unikraft/sched` | **koru-libs** `unikraft/spawn` | a lift of Unikraft primitives, no koru-os policy. Open: app-elfloader's loader is an application, not a library (Q32) |
+| a hosted provider (`posix_spawn`, `pidfd`, `close_range`) | koru-libs, later | an L1 oracle for the semantics, never a pass |
+| the compat layer (8.6.4), C | **koru-os** `lib/koruspawn` (later, calling the lift through a C-ABI seam such as `tests/wrapper.zig`) | Linux-ABI personality policy: what "loud" prints, which `posix-inherit` is allowed |
+| policy rows (`init.children`, `hyprland.children`, foot's attenuation), the Hyprland/hyprutils/foot patches, acceptance runners | **koru-os** | per-image policy and DoD evidence |
+| the local Unikraft 0.21 patches | koru-os, until upstreamed | upstreaming is a separate ask (ruling 4) |
+| the recent OS lifts (`korumemfd`, `korupty`, `korusnap`, `korusysfs`, `koruinput`, `korukms`, `koruext2fs`) | candidates for koru-libs `unikraft/*` | they are C today. Moving one means re-lifting it in Koru with phantom states and gates, not copying it. Order and criteria are Q33 |
+
+Nothing in this section has been written as code. Nothing has been pushed to `Cypoe/koru-libs`:
+it is another remote, and this work's push authorisation covers `Cypoe/koru-os` only. Upstream
+(Unikraft, korulang, hyprwm, foot) is untouched.
+
 ## 9. Associative memory: a clear-text model first, tensors later
 
 ### 9.1 What ch.08 claims (C) and what exists (V)
@@ -1745,6 +2008,12 @@ or 9P reader.
 19. **`fork` on Unikraft.** Does `posix-process` provide `fork` semantics good enough
     for busybox `ash`, or only `vfork`/`clone`? If only the latter, is a spawn-only
     shell acceptable for DoD-2?
+    *Answered in part (V, M3–M5a): posix-process gives `vfork` and `clone` with `CLONE_VM` plus
+    `execve`, and no `fork` (B20).* **Direction ruled 2026-10-19 about 18:20 CEST by Fabian:** no
+    wholesale POSIX fork. The process model is Spawn (§8.6), a dissected fork with explicit rights
+    bags. `vfork`/`execve` stay only as a thin, loud compatibility layer under it (§8.6.4). Still
+    open for Fabian: hush (NOMMU/vfork) is the DoD-2 shell in M5a. Does "spawn-only shell"
+    settle DoD-2, given that `ash` with `fork` is no longer a goal?
 20. **QML required?** *Closed (Fabian, DRAFT 5):* QML is one example. It is the
     canonical exemplar for DoD-4; HTML fragments and components are separate tracks.
     Note: the Hyprland compositor itself needs no Qt, and noctalia v5 dropped
@@ -1781,6 +2050,30 @@ or 9P reader.
     Meilenstein danach."** DoD-3 (M9) counts with the native `bochs-display` (KMS) and i8042
     (input) providers. The silo variant (DS3 for the GPU, DS4 for input) becomes a milestone of
     its own after M9; it is not a DoD-3 requirement.
+29. **M9 (h2) needs Hyprland to start foot, which needs fork.** *Ruled 2026-10-19 about
+    18:20 CEST by Fabian:* M9 is not passed and stays open, and (h2) is **not** amended. A Spawn
+    design comes first (§8.6). (h2) is met only when the frozen trigger starts foot through Spawn
+    (§8.6.5, stage 1 or 2), measured 3/3.
+30. **Which Spawn stage closes M9 (h2)?** Is stage 1 enough, or must (h2) wait for stage 2?
+    Stage 1 is: `posix_spawn` in the patched hyprutils/Hyprland executor and in foot, running
+    through the compat layer that mints Spawn children. Stage 2 is: Hyprland holds no spawn
+    authority and asks a supervisor. Related: are small patches to hyprutils, Hyprland and foot
+    acceptable, given that fork-as-vfork is rejected (§8.6.5)?
+31. **`posix-inherit` default in the compat layer.** Should the compat layer be POSIX-faithful
+    (every non-`CLOEXEC` fd becomes a recorded grant) or listed-only (a policy row names what a
+    given image's children may inherit, and the rest is dropped with a row)? The draft allows
+    both and leaves the default open.
+32. **app-elfloader's loader.** `unikraft/spawn` must load an image for a child. app-elfloader is
+    an application, not a library, in Unikraft 0.21. May the lift carry a local split of it, or
+    should spawn wait for an upstream library form?
+33. **Moving the OS lifts to koru-libs.** In which order should `korumemfd`, `korupty`,
+    `korusnap`, `korusysfs`, `koruinput`, `korukms` and `koruext2fs` move, and by which
+    criterion? Each move is a re-lift in Koru with gates, not a copy. Pushing to
+    `Cypoe/koru-libs` also needs its own authorisation; it is a different remote from
+    `Cypoe/koru-os`.
+34. **Ambient set and rung.** Is the ambient set right: memory within budget, the monotonic
+    clock, `exit` and yield? Does Spawn on rung 0/1 count for DoD purposes as a provenance
+    boundary (§8.6.2), with containment of a hostile child deferred to rung 2?
 
 ---
 
@@ -1946,7 +2239,7 @@ milestone is the L1 `strace -f` trace, not this table.
 | `linux.sys.{mmap,munmap,mprotect,brk,madvise}` | posix-mmap, ukvmem (C) | | M3 |
 | `linux.sys.{clone,clone3,futex,set_tid_address,set_robust_list,rseq}` | posix-process multithreading, posix-futex (C) | `rseq`: REFUSE with `ENOSYS` is acceptable to glibc, but must be logged | M4 |
 | `linux.sys.{execve,wait4,exit_group,kill,getpid,getppid}` | posix-process (C) | | M3 |
-| `linux.sys.fork` / `vfork` | unknown (Q19) | gates real shells | M5 |
+| `linux.sys.fork` / `vfork` | `fork`: refused (no `CLONE_VM`-less clone, B20); `vfork`: posix-process, compat layer under Spawn (§8.6.4) | gates real shells; Hyprland `exec` (M9 h2) | M5, M9 |
 | `linux.sys.{rt_sigaction,rt_sigprocmask,rt_sigreturn,sigaltstack}` | uksignal (C) | SIGUSR1 delivery is the T-CYB end condition | M4 |
 | `linux.sys.{epoll_create1,epoll_ctl,epoll_wait,eventfd2,pipe2,socketpair}` | posix-event, posix-pipe, posix-unixsocket (C) | tokio reactor | M4 |
 | `linux.sys.{clock_gettime,nanosleep,clock_nanosleep}` | posix-time (C) | | M4 |
