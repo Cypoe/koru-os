@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes; 15:32: seat + udev monitor + card0 enumeration pass, next stop PRIME (B18), §0.4; 15:50: B18 resolved, Hyprland renders its first frame, `/tmp/dod3` policy decided; 15:55: Q28 closed by Fabian (native first, DS3/DS4 later as a milestone of their own); 17:15: foot runs as a Hyprland window (probe 8); 17:42: M9 check decisions; 17:43–17:47: M9 counted 3/3, not passed as frozen ((h2a) needs fork, Q29), regressions 3/3; 18:20: Q29 ruled by Fabian, M9 stays open; 18:45: §8.6 Spawn (dissected fork) drafted, Q19 directed, Q30–Q34 opened; 18:30: execution-contract guidance from Fabian folded in: §3.0 layering, §3.1 identity records, §3.6 interface descriptor and binding admission, §3.7 two obligations, §3.8 memoized resolution, §6.1a one address-space regime and reservation costs, §8.6.8 Spawn cross-links, Q35–Q36; 18:35: second paste folded in: §3.0 binding chain, §3.1 NID scope, §3.2 resolution scope, §3.6 narrow ABI claim, §7 session refinement and operational test, §11.0 realization graph, §11.4 Slice A, §0.4 priority vs ladder, Q37) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -376,6 +376,24 @@ screendumps. That twin is filed as oracle evidence and is never counted as a pas
 Order of risk: M2 and M3 are bounded engineering. M5 is gated by `fork` (Q19). DS1 and
 DS3 are gated by the LKL host port onto Unikraft and by device access from inside a
 silo (Q25). DS3 is the largest item in this note, and its size is unknown.
+
+**Architectural priority vs the DoD ladder (2026-10-19 about 18:35 CEST).** *Folded in 2026-10-19 about 18:35 CEST from Fabian's second paste (authoritative guidance; the wording here is this note's).*
+
+- The **next architectural priority** is the vertical slice (§11, Slice A in §11.4) and the
+  realization graph (§11.0).
+- Hyprland/M9 remains **DoD-3 evidence on the Linux-ABI arm (L2)**. It is not the first
+  architectural object, and a compositor is one renderer of the session (§7).
+
+This is a real tension: the ladder M0–M10 was ordered by DoD risk, and M9 has absorbed most of
+the recent work (Unikraft patches, korupty, Spawn §8.6 for (h2)). The two meet in Spawn: Slice A's
+supervisor (S13) and M9's `dispatch exec` both need the child record. Building Spawn for the slice
+first would serve both.
+
+How to order the two is Q37. Until Fabian rules:
+
+- M9 stays open (Q29);
+- Q30 stays open;
+- no M9 work is counted.
 
 **M5a acceptance: dynamic linking (fixed 2026-10-19, 13:02 CEST, before any acceptance run).**
 M5a is the first half of M5. It runs on the M3/M4 arm (Unikraft 0.21 + app-elfloader +
@@ -1083,6 +1101,10 @@ routes L1–L3 (§0.1) are projections. Each **required interface** resolves to 
    afterwards);
 4. a target-specific entry point or adapter.
 
+The **binding chain** runs from the program's import, through a persistent correspondence row
+(§3.2), to an ephemeral live binding (§3.3), and ends at a materialized entry or storage location
+(§3.8). Only the last link is an address.
+
 
 ### 3.1 Identity is not location
 
@@ -1118,6 +1140,11 @@ The three identities map onto three kinds of record, and none of them stands in 
 | artifact | which exact implementation bytes | build and content hashes (image, object, library) |
 | evidence | what supports the claim of satisfaction | verification receipts: test runs, measurements, proofs, reviews, each with provenance (§3.2 `evidence`) |
 
+A NID is the **naming mechanism** for mint-plus-lineage, not the whole discipline: the discipline
+is minting, evolve-don't-mutate (§3.2) and lineage. Interface identity is never equated with
+implementation identity. Two artifacts can realize one interface, and one artifact can, through
+separate rows, realize two interfaces.
+
 
 ### 3.2 Correspondence rows (persistent)
 
@@ -1132,6 +1159,13 @@ row {
   evidence:  [ { class: V|M|C|D, ref, observed_at } ]
 }
 ```
+
+**Resolution scope.** The three sides of a row are three scopes:
+
+- a **foreign import** is named by scheme + namespace or library + version + NID (how a caller
+  outside Koru names it);
+- the **canonical** name is the minted interface id + contract revision;
+- the **correspondence** links the two, and links both to a provider export.
 
 Rules:
 
@@ -1214,6 +1248,11 @@ descriptor states:
 provider's descriptor match on every field. A mismatch is a refusal **before execution**, at the
 earliest phase that knows it (§3.4), with the fixed refusal shape. Any change to a descriptor field
 is a new contract revision (evolve, §3.2), never an edit in place.
+
+**The ABI claim is narrow.** koru-os claims compatibility only at the named import and linker
+boundary: the names, descriptors and conventions above. Addresses are materialized only inside
+the selected realization (one image, one load, one service connection). No address, layout or
+offset outside that realization is part of any promise.
 
 ### 3.7 Two obligations: validated compilation and correct providers
 
@@ -1466,6 +1505,33 @@ The desktop is a **session model**, not a renderer. The session holds:
 
 Views (TUI, WebView, Qt/Quickshell, a 9P mount) are projections that attach to and
 detach from a session.
+
+*Folded in 2026-10-19 about 18:35 CEST from Fabian's second paste (authoritative guidance; the wording here is this note's).*
+
+More precisely, the session holds:
+
+- running apps and services;
+- workspaces and selected objects;
+- resource grants and live connections;
+- jobs, notifications and failures;
+- optional presentation surfaces.
+
+A **window is a view attached to an app or object**. It is neither the app's identity nor its
+lifetime. The renderers are detachable projections:
+
+```
+session ──► terminal | web view | local compositor
+```
+
+**Operational test.**
+
+- Disconnect every renderer, and apps, jobs and resources continue, and so does the session.
+- Reconnecting reconstructs a view from session state.
+- A renderer is not a privileged owner of the desktop.
+- The shell must be useful **without graphics**; that is the foundation, and graphics are a
+  view on top of it.
+
+A local compositor (Hyprland in M9) is therefore one renderer among several, not the desktop.
 
 Existing pieces:
 
@@ -2028,6 +2094,59 @@ Each requirement is testable and names its source. "Phase" refers to §3.4.
 Goal: one program, one platform arm (Unikraft), demonstrating all three parts of the
 contract.
 
+### 11.0 The realization graph, and what the slice is for
+
+*Folded in 2026-10-19 about 18:35 CEST from Fabian's second paste (authoritative guidance; the wording here is this note's).*
+
+**The first architectural object is the realization graph**: the graph built at build, load and
+service-connection time that connects a Koru program, the store (rows, evidence) and a target
+realization. Every build output explains three things, the three tables of §3.5:
+
+- interface → provider → binding;
+- resource → mechanism → cost;
+- missing → refusal.
+
+The shell **manages realized apps**; it does not define their identity. KolibriOS is a **donor**
+(§4.1), not a prerequisite.
+
+**What already crosses the boot boundary (C, `koru/examples/unikraft/BUILD.md`; S5 reproduces it):**
+
+- Koru emits a freestanding archive with a C-ABI seam, booting at 164,544 B with a 2 MB RAM floor,
+  with no syscall shim and no VFS;
+- the ELF-loader route (app-elfloader, M3–M9 here) keeps the Linux ABI.
+
+The slice does not need a bootloader or a wholesale port first.
+
+### 11.4 Slice A: a discussion-worthy prototype (D, not frozen)
+
+The smallest prototype that exercises the whole contract end to end:
+
+- **The program.** A headless task, plus bounded storage, plus a clock/event source, plus a
+  terminal status view.
+- **The steps:**
+  - **S9.** The Koru app declares a **versioned interface import** (e.g. `store.bounded@1`,
+    `clock.tick@1`).
+  - **S10.** The loader selects an **authorized** provider from the manifest (§3.0, §3.6).
+  - **S11.** The loader **rejects** an incompatible provider. A manifest that offers only a
+    provider with the wrong descriptor or contract revision is refused before execution, with
+    the fixed shape (§3.4).
+  - **S12.** A real operation runs through the selected provider: a bounded write and a read
+    back; a tick drives the task.
+  - **S13.** A supervisor tracks the task's resources and lifecycle (the Spawn child record,
+    §8.6.2: identity, bag, reap obligation).
+  - **S14.** The terminal status view **disconnects and reconnects** without terminating the
+    task. The reconnected view shows the state produced meanwhile (§7 operational test; it
+    extends S7/S8 to the target realization).
+- **Order.** S9–S14 are acceptance candidates, to be frozen before any counted run as usual.
+  Slice A can run on the Unikraft arm natively (no Linux ABI) and reuses 11.1–11.3.
+
+**Only after Slice A:**
+
+1. a second substrate (the same app realized on another arm, with the same rows);
+2. measured costs of the sparse address-space regime (§6.1a);
+3. the KolibriOS donor audit (§4.1);
+4. native boot, once the contract is worth booting.
+
 ### 11.1 Obligation-derived Unikraft configuration
 
 **Input.** A Koru program that prints, opens a 9P mount, and runs one cooperative job.
@@ -2231,6 +2350,10 @@ or 9P reader.
     multi-step change (split, remap, protection change) atomically under the cooperative
     scheduler, or does §6.1a rule 5 need a journal or a two-phase protocol? Also: what is the
     defined failure when commit cannot be backed (§6.1a rule 6)?
+37. **Slice first or M9 first?** Should the next work be Slice A (§11.4), with Spawn built
+    first for its supervisor (S13), while M9 (Spawn stage 1 for Hyprland) waits? Or do both
+    proceed in parallel? This is the tension noted in §0.4 ("Architectural priority vs the DoD
+    ladder"). It does not answer Q30.
 
 ---
 
