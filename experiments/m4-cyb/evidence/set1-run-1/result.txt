@@ -1,0 +1,15 @@
+mkfs e2fsck exit=0 (koru-root: 420/512 files (0.2% non-contiguous), 3688/16384 blocks)
+qemu exit=0 wall_s=3.435 (boot to poweroff, includes the 3 s guest sleep)
+PASS (a) Detected TTY size: 80x24: source: TIOCGWINSZ
+PASS STAND-IN label
+PASS (b) >= 24 consecutive asset-identical frames from frame 1 (asset order, wrapping): 73 trailers, 73 verified in order
+PASS (c) ESC[2J ESC[1;1H then SIGUSR1/exit 0 line: 73 frames, 3.021 s
+PASS (c) t-cyb-init reports exit status 0
+PASS (c) unikernel reports init exited with status 0
+FAIL (d) refusal log empty or refused-by-design only: 12 ENOSYS rows, 2 STUBBED rows, names ['STUBBED __uk_syscall_r_prctl', 'STUBBED uk_posix_clone_sysvsem', 'brk', 'rseq', 'set_robust_list']; unclassified ['STUBBED uk_posix_clone_sysvsem']
+PASS (x) no Unikraft Crash
+CHECKS FAIL
+PASS (x) disk unchanged, e2fsck clean
+screendump (e, not gated): P6 720 400  sha256 bed72696c0d4b497… (kept on the box, not committed)
+serial.raw 355551 bytes
+M4 RUN FAIL
