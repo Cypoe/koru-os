@@ -1,6 +1,6 @@
 # DESIGN-0001: The koru-os execution contract
 
-Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
+Status: DRAFT 5, 2026-10-18 (DRAFT 1 07:51; DRAFT 2 07:58: §2 replaced by a pointer to the ccomp concordance matrix, "arm" renamed "platform arm"; DRAFT 3 08:05: §8 security target model, §9 associative memory as a later rung, Appendices A and B; DRAFT 4 13:08: §0 Definition of Done set by Fabian (DoD-1..4, arm analysis, cyberboot, milestones M0–M10), R-DOD rows, Q16–Q22, Appendix C; DRAFT 5 19:26: Fabian's rulings: L1 is oracle only, driver silos (LKL accepted, KolibriOS second source), QML as canonical DoD-4 exemplar, DS0–DS4, R-SILO, Q17/Q20/Q21 closed, Q23–Q27; progress 20:30: DS0 in-image, M2 and M3 measured under TCG, see §0.4; progress 2026-10-19 13:10: M4 stand-in (a)–(d) 3/3, M5a 3/3, §0.4; 13:40: M6 decision (native KMS provider behind `kms.*`, DS3 open, Q28) and M6 3/3, §0.4; 14:10: M7 decision (native i8042 provider behind `input.*`, DS4 open), M7a 3/3, M7b open (B15), §0.4; 14:15: M8 split, M8a frozen and 3/3; 14:31: M8b (kmscube) 3/3, regressions 3/3, §0.4; 15:20: M7b (libinput via kernel sysfs + libudev-zero) 3/3, B15 resolved; 15:25: M9 frozen, first probes, §0.4) (Europe/Berlin, CEST). Owner: koru (agent) for Fabian Schindler.
 Scope: the first design note for koru-os. It defines the contract every platform arm must satisfy
 (identity, correspondence, binding, refusal, evidence), states what Koru already provides,
 and fixes a first vertical slice.
@@ -365,9 +365,9 @@ means the test is first run against a Linux guest to produce the expected trace.
 | DS3 | GPU driver silo | silo:lkl `virtio_gpu` on `virtio-gpu-pci`, or silo:kolibri `vmwgfx` on `vmware-svga` | the silo exposes only the `kms.*` rows of Appendix C.3; M6 passes through it | D |
 | DS4 | input driver silo | silo:lkl `virtio_input` (evdev) or silo:kolibri `usbhid`/`ps2` translated to `input.*` | M7 passes through it | D |
 | M6 | KMS scanout of a dumb buffer | L2 + DS3 (L1 trace first); M6 uses a native provider instead ("M6 decision" below, Q28) | libdrm `modetest -s <conn>:<mode>` (or equivalent) draws a test pattern; screendump pixel check at known coordinates; frozen parameters in "M6 acceptance" below | **M (native provider): PASS 3/3 under TCG, 2026-10-19 13:36 CEST**: `kmsdumb` (raw ioctls, two dumb buffers, two `SETCRTC`) and unmodified libdrm `modetest -M korukms -s Virtual-1:1024x768`; all three screendumps 0 of 786,432 pixels off the independent references, and byte-identical to the L1 `bochs-drm` twin; M3/M4/M5a regressions 3/3 (`experiments/m6-kms/README.md`). Not through DS3 (Q28); no atomic, properties or vblank events yet |
-| M7 | input | L2 + DS4; M7 uses a native provider instead ("M7 decision" below, Q28) | QMP `input-send-event` key events appear in `libinput debug-events` on serial; split into M7a (evdev uAPI, frozen in "M7a acceptance") and M7b (libinput) | **M7a (native i8042 provider): PASS 3/3 under TCG, 2026-10-19 13:57 CEST**: 54/54 evdump events and unmodified `evtest` events equal the derived sequence and the L1 `atkbd` twin; M3/M4/M5a/M6 regressions 3/3 (`experiments/m7-input/README.md`). **M7b open** (B15: no sysfs/udev for libinput). Not through DS4 (Q28) |
+| M7 | input | L2 + DS4; M7 uses a native provider instead ("M7 decision" below, Q28) | QMP `input-send-event` key events appear in `libinput debug-events` on serial; split into M7a (evdev uAPI) and M7b (libinput) | **M7a PASS 3/3** (13:57). **M7b PASS 3/3 under TCG, 2026-10-19 15:07 CEST**: unmodified Debian `libinput debug-events --device /dev/input/event0` (1.28.1) over the kernel sysfs view (`lib/korusysfs`) and libudev-zero; 18 KEYBOARD_KEY lines = derived = L1 (udevd and libudev-zero twins); M3/M4/M5a/M6/M7a/M8a/M8b regressions 3/3 (`experiments/m7b-libinput/README.md`). B15 resolved. Not through DS4 (Q28) |
 | M8 | GL on KMS | L2 + DS3 + Mesa llvmpipe/`kms_swrast` in userspace | `kmscube` runs; two screendumps 1 s apart differ, and both are non-black; split into M8a (offscreen EGL/GBM, frozen in "M8a acceptance") and M8b (kmscube) | **M8a: PASS 3/3 under TCG, 2026-10-19 14:15 CEST**: unmodified Mesa 25.0.7 llvmpipe (LLVM 19.1.7) renders offscreen via EGL surfaceless and via EGL on GBM over `/dev/dri/card0`; frame hashes equal the L1 twin's, probe pixels as derived (`experiments/m8-gl/README.md`). **M8b: PASS 3/3 under TCG, 2026-10-19 14:26 CEST**: unmodified Debian `kmscube` on `/dev/dri/card0` (GBM surface, `kms_swrast`/llvmpipe, legacy page flips with flip events), 149 frames at 13–14 fps, two screendumps 1 s apart differ in ~206,000 of 1,024,000 pixels, cube visible; L1 `bochs-drm` twin alike at ~20 fps; M3/M4/M5a/M6/M7a/M8a regressions 3/3 on the M8b kernel. Native KMS provider, not DS3 (Q28); no vblank pacing |
-| M9 | **DoD-3**: Hyprland + foot | L2 + DS3 + DS4 | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | D |
+| M9 | **DoD-3**: Hyprland + foot | L2 + DS3 + DS4; native providers until Q28 | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | **frozen 15:25 CEST** ("M9 acceptance"); first probes: foot/Hyprland/fontconfig run under forky glibc 2.43; Hyprland stops at libseat (`builtin` forks; B17). Open: seat backend (noop/seatd), then DRM backend, memfd+seals, SCM_RIGHTS; writable `/tmp/dod3` recovery |
 | M10 | **DoD-4**: QML exemplar | same as M9 | a quickshell bar on a layer-shell surface is visible in a screendump; editing its QML changes the next screendump without a restart | D |
 
 Every row above has an **L1 twin run** that produces the reference trace and
@@ -497,12 +497,10 @@ CEST).** The table names "L2 + DS4" and `libinput debug-events`. M7 is split:
 - **Personality.** Linux evdev on `/dev/input/event0` (char 13:64,
   `lib/koruinput/evdev_linux.c`): `read()` of `struct input_event`, `O_NONBLOCK`, poll/select/
   epoll readiness, the identity and bitmap ioctls, `EVIOCGRAB`, `EVIOCSCLOCKID`.
-- **M7a (this step)**: the evdev uAPI, measured with a koru-os probe and with Debian's
-  unmodified `evtest`, against the L1 `atkbd` twin. **M7b (open)**: the table's
-  `libinput debug-events`. libinput, also with `--device`, resolves the device through libudev
-  (`/sys/dev/char/13:64`, udev properties), and koru-os has no sysfs or udev view yet (B15).
-  Hyprland needs that view as well (libinput's udev backend, libseat), so it is a DoD-3 item
-  of its own and is not faked here. M7 is reported as "M7a PASS, M7b open" until then.
+- **M7a**: the evdev uAPI (PASS). **M7b (PASS 15:07)**: the table's `libinput debug-events`,
+  over a kernel-written sysfs view (`lib/korusysfs`) and **libudev-zero** as `libudev.so.1`
+  (no udevd, no `/run/udev` database; B15 resolved, see "M7b acceptance"). systemd's libudev
+  on koru-os is B16.
 - Whether DoD-3 accepts native providers for GPU *and* input is the same question as Q28;
   Q28 now covers both.
 
@@ -693,6 +691,67 @@ on koru-os fails before any of that: its path resolution needs `statx` with `STA
   `/sys/devices/virtual/dmi` on koru-os (libinput's DMI quirks match nothing, as on L1 with QEMU).
 - **Not in M7b.** udev monitor / hotplug (netlink), seats and `ID_SEAT`, the udev database and
   rules, systemd's libudev (B16), DMI, sysfs attributes nobody read, write access to `/sys`.
+
+**M9 acceptance: Hyprland + foot (DoD-3) — frozen 2026-10-19, 15:25 CEST, before any
+acceptance run; first probes recorded the same afternoon.** The table criterion is unchanged:
+a screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients`
+lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image. Native providers
+stay in place (Q28 with Fabian); nothing here builds a silo path or prejudges the answer.
+- **Userland.** Debian forky (testing) packages, not trixie: Hyprland 0.56.2, aquamarine 0.15.1,
+  foot 1.28.0, seatd/libseat 0.9.3, Mesa 26.1.6, libinput 1.30, fonts-dejavu-core, xkeyboard-config,
+  fontconfig. Resolved and extracted under `/workspace/m9in` (`experiments/m9-hyprland/fetch.sh`,
+  `mkroot.sh`); the image carries forky's glibc 2.43 and ld.so (the trixie box cannot run them).
+  `libudev.so.1` is libudev-zero, as in M7b. polkitd, dbus, systemd, python and binutils from the
+  Depends are *not* installed (Hyprland starts without them; polkit is for portals, not for KMS).
+- **Seat.** libseat without logind. Probe result: the `builtin` backend forks an embedded
+  seatd (`libseat/backend/seatd.c:686 Could not fork: Operation not supported`); koru-os has one
+  address space (no `fork()` without `CLONE_VM`), so `builtin` is out. Next candidates, in this
+  order: `LIBSEAT_BACKEND=noop` (opens the device nodes directly, no daemon, no VT; present in
+  forky's `libseat.so.1`), then `LIBSEAT_BACKEND=seatd` with a seatd started by the init
+  script (`SEATD_VTBOUND=0`; exercises `SCM_RIGHTS`). `XDG_RUNTIME_DIR` must be set (mode 0700);
+  Hyprland aborts otherwise. Run as root with `--i-am-really-stupid` (the image has no other user).
+- **Arm.** The M7b kernel (sysfs view, libinput path, DRM personality with page flips) plus
+  whatever M9 adds; QEMU i440fx, `-vga none -device bochs-display`, TCG only, 2 GiB RAM.
+  Host: QMP keys and screendumps (`experiments/m9-hyprland/`). Hyprland runs with
+  `experiments/m9-hyprland/hyprland.lua` (stdout logs on, no animations/blur/shadows, no logo).
+- **First probes (TCG, 15:12–15:25 CEST, not a pass; `run-probe.sh`):**
+  - foot `--version`, Hyprland `--version`, `fc-match monospace` → `DejaVu Sans Mono`, seatd `-h`:
+    all exit 0 under forky's glibc 2.43.
+  - Hyprland with `LIBSEAT_BACKEND=builtin`: config manager, event loop, PointerManager come up;
+    aquamarine then fails `libseat: failed to open a seat` (fork, above) → DRM backend failed →
+    wayland fallback has no parent compositor → `CBackend::create() failed!`, abort.
+  - Refusal rows seen so far: `signalfd4`, `inotify_init1` (Hyprland only loses config reload),
+    `clone3` (glibc falls back to `clone`), non-`CLONE_VM` clones (crash reporter, `fork()` for
+    child processes — so foot must be started by the init script, not by Hyprland's `exec`),
+    `sched_get_priority_min`/`sched_getparam`/`sched_getscheduler`, STUBBED `alarm`,
+    `sched_getaffinity`.
+  - Shell side notes: an `execve()` of a missing file under `PATH` returns `EINVAL` (app-elfloader)
+    instead of `ENOENT`, so hush stops searching (probes use `PATH=/bin:/usr/bin:/usr/sbin`); a
+    process still running when init exits can crash the kernel in `sys_error_handler` (probes
+    stop Hyprland before the end).
+- **Expected next gaps (to confirm by probe, not assumed):** whether aquamarine's DRM backend
+  accepts the legacy-only personality or needs atomic KMS (`AQ_NO_ATOMIC=1` exists); GBM/EGL
+  dmabuf import with kms_swrast; `memfd_create` + seals and `SCM_RIGHTS` for foot's `wl_shm`;
+  `signalfd4` if a client needs it.
+- **Gated checks** (to be filled into `experiments/m9-hyprland/check.py` before the first
+  acceptance run; the freeze does not invent numbers):
+  - (h1) Hyprland reaches a running compositor (a socket under `$XDG_RUNTIME_DIR/hypr/` and a
+    non-empty `hyprctl -j monitors` listing the bochs connector);
+  - (h2) a screendump after `hyprctl dispatch exec foot` shows the foot window (pixel hash, or
+    a visible bounding box against a solid wallpaper, decided when the L1 twin has a reference);
+  - (h3) QMP keys of `echo DOD3 > /tmp/dod3` + Enter, typed into that foot, produce a file
+    `/tmp/dod3` with contents `DOD3\n` that the host recovers after shutdown (koruext2 is
+    currently read-only — either a ramfs `/tmp` that is snapshotted, a writable lift of
+    koruext2, or writing onto an already-writable mount; decided before measuring);
+  - (h4) `hyprctl -j clients` lists a client with `"class": "foot"`;
+  - (h5) every refusal-log row is in `refused-by-design.txt`; (x) no Unikraft Crash; disk policy
+    for (h3) is met.
+- **Regression.** M3–M8b each pass 3/3 on the M9 kernel.
+- **L1 twin (oracle).** The same Hyprland/foot binaries on Debian linux-image-6.12 + bochs-drm +
+  i8042/atkbd, with libudev-zero and `LIBSEAT_BACKEND=builtin`, same QMP and screendumps. Never
+  a pass.
+- **Not in M9.** portals / polkit / dbus user session, Xwayland, a multi-seat setup, DS3/DS4
+  (Q28), cursor themes beyond the default, a network, sound, a mouse (keyboard only, as M7).
 
 ### 0.5 Biggest risks
 

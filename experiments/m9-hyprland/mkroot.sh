@@ -23,5 +23,5 @@ cp -L "$L"/dri/kms_swrast_dri.so "$L"/dri/swrast_dri.so "$D/lib/x86_64-linux-gnu
 mkdir -p "$D/lib/x86_64-linux-gnu/dri"; for f in "$L"/dri/{kms_swrast,swrast}_dri.so; do [ -e "$f" ] && cp -L "$f" "$D/lib/x86_64-linux-gnu/dri/"; done
 cp "$UDZ" "$D/lib/x86_64-linux-gnu/libudev.so.1"
 for s in fonts fontconfig xkeyboard-config-2 X11 libinput hypr glvnd wayland-sessions icons/default; do [ -e "$S/usr/share/$s" ] && cp -a "$S/usr/share/$s" "$D/usr/share/" ; done
-cp -a "$S/etc/fonts" "$D/etc/"; [ -d "$S/etc/glvnd" ] && cp -a "$S/etc/glvnd" "$D/etc/"
+cp -a "$S/etc/fonts" "$D/etc/"; cp "$(dirname "$0")/hyprland.lua" "$D/etc/m9-hyprland.lua"; [ -d "$S/etc/glvnd" ] && cp -a "$S/etc/glvnd" "$D/etc/"
 rm -f "$D/.libs"; du -sh "$D"

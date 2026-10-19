@@ -1,0 +1,8 @@
+export HOME=/tmp XDG_CACHE_HOME=/tmp/cache XDG_RUNTIME_DIR=/tmp/xdg PATH=/bin:/usr/bin:/usr/sbin LIBSEAT_BACKEND=builtin AQ_TRACE=1 HYPRLAND_TRACE=1
+mkdir -p /tmp/cache /tmp/xdg; chmod 700 /tmp/xdg
+echo "m9-init: start"
+/usr/bin/Hyprland --i-am-really-stupid -c /etc/m9-hyprland.lua > /tmp/hl.out 2>&1; echo "m9-init: Hyprland rc $?"; grep -v "^$" /tmp/hl.out | tail -150
+echo "m9-init: Hyprland rc $?"
+echo "==== crash"; cat /tmp/cache/hyprland/*.txt 2>&1 | head -80; echo "==== end"
+echo "==== log"; find /tmp/xdg -type f; for f in $(find /tmp/xdg -name hyprland.log); do grep -v '^$' $f | tail -120; done; echo "==== end"
+echo "m9-init: end"

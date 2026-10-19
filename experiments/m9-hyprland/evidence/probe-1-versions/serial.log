@@ -1,0 +1,87 @@
+[    0.109369] ERR:  [appkoruos] <evdev_linux.c @  421> koru-os: INFO input rows bound: /dev/input/event0 -> koru-os i8042 keyboard (set 1)
+[    0.110359] ERR:  [appkoruos] <ps2kbd.c @  280> koru-os: INFO input.ps2: i8042 cfg 0x71 -> 0x61, enable-scan ack 0xfa, IRQ 1, bind 0
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=50 blocks=409510 free=98863 inodes=16400 free=15016
+[    0.130319] ERR:  [appkoruos] <korusysfs.c @  205> koru-os: INFO sysfs view on /sys: 60 entries, 0 errors
+[    0.131705] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.174277] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.174898] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.175402] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.175622] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.178193] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.181862] ERR:  [libposix_process] <deprecated.c @  302> koru-os: STUBBED __uk_syscall_r_prctl()
+[    0.194963] ERR:  [appelfloader] <elf_load.c @  938> mkdir: Failed to execute /usr/bin/mkdir: Unknown error 0
+[    0.195526] ERR:  [appelfloader] <elf_binfmt.c @   42> Could not load ELF (-22)
+[    0.195757] ERR:  [libukbinfmt] <binfmt.c @   70> binfmt loader error (-22)
+[    0.195976] ERR:  [libposix_process] <execve.c @  157> /usr/bin/mkdir: Unable to load (-22)
+sh: can't execute 'mkdir': Invalid argument
+m9-init: start
+[    0.209043] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.347988] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.348230] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.359448] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+foot version: 1.28.0 +pgo +ime +graphemes +toplevel-tag +blur -assertions
+m9-init: foot rc 0
+[    0.621041] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    1.630970] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    1.631442] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    1.806766] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    1.829756] ERR:  [libuksched] <sched.c @  434> koru-os: STUBBED __uk_syscall_r_sched_getaffinity()
+Hyprland 0.56.2 built from branch v0.56.2 at commit efb50993780079460b0cbed1363e2166a2de1d9f clean ([gha] Nix: update inputs).
+Date: Wed Aug 5 14:13:21 2026
+Tag: v0.56.2, commits: 7661
+
+Libraries:
+Hyprgraphics: built against 0.5.1, system has unknown
+Hyprutils: built against 0.14.2, system has unknown
+Hyprcursor: built against 0.1.13, system has unknown
+Hyprlang: built against 0.6.8, system has unknown
+Aquamarine: built against 0.15.0, system has unknown
+
+Version ABI string: efb50993780079460b0cbed1363e2166a2de1d9f_aq_0.15_hu_0.14_hg_0.5_hc_0.1_hlg_0.6
+no flags were set
+
+m9-init: Hyprland rc 0
+[    2.004189] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    2.104530] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    2.104821] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    2.118456] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+DejaVuSansMono.ttf: "DejaVu Sans Mono" "Book"
+m9-init: fc-match rc 0
+[    2.450152] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    2.554628] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    2.554932] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    2.567425] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    2.693080] ERR:  [appelfloader] <elf_load.c @  938> wc: Failed to execute /usr/bin/wc: Unknown error 0
+[    2.693303] ERR:  [appelfloader] <elf_binfmt.c @   42> Could not load ELF (-22)
+[    2.693420] ERR:  [libukbinfmt] <binfmt.c @   70> binfmt loader error (-22)
+[    2.693533] ERR:  [libposix_process] <execve.c @  157> /usr/bin/wc: Unable to load (-22)
+sh: can't execute 'wc': Invalid argument
+[    2.707602] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    2.746423] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    2.746676] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    2.755682] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+Usage: seatd [options]
+
+  -h		Show this help message
+  -n <fd>	FD to notify readiness on
+  -u <user>	User to own the seatd socket
+  -g <group>	Group to own the seatd socket
+  -l <loglevel>	Log-level, one of debug, info, error or silent
+  -v		Show the version number
+
+m9-init: seatd rc 0
+m9-init: end
+[    2.763663] CRIT: Unikraft Crash - Ijiraq (0.21.0)
+[    2.764871] CRIT:     _      
+[    2.764935] CRIT:   cx xo    
+[    2.764995] CRIT:   (|O|)/V  
+[    2.765055] CRIT:            
+[    2.765142] CRIT: Registers:
+[    2.765284] CRIT:  rip: 0008:0000000000133c33
+[    2.765392] CRIT:  rsp: 0000:0000001000025350 eflags: 00010287 orig_rax: 0000000000000000
+[    2.765558] CRIT:  rax: 0000000000000000 rbx: 0000001000025f80 rcx:000000047f9d10d0
+[    2.765707] CRIT:  rdx: ffffffffffffffd8 rsi: 0000001000025f80 rdi:0000000400004060
+[    2.765855] CRIT:  rbp: 0000001000025410 r08: 0000001000025f80 r09:0000000400010028
+[    2.766001] CRIT:  r10: ffff800000000000 r11: 00000000000000f0 r12:0000001000025350
+[    2.766149] CRIT:  r13: 0000001000025440 r14: 0000000400004038 r15:000000000019c260
