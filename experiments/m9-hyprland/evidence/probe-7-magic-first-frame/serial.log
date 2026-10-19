@@ -1,0 +1,253 @@
+[    0.114101] ERR:  [appkoruos] <evdev_linux.c @  421> koru-os: INFO input rows bound: /dev/input/event0 -> koru-os i8042 keyboard (set 1)
+[    0.115669] ERR:  [appkoruos] <ps2kbd.c @  280> koru-os: INFO input.ps2: i8042 cfg 0x71 -> 0x61, enable-scan ack 0xfa, IRQ 1, bind 0
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=50 blocks=409515 free=98867 inodes=16400 free=15015
+[    0.141858] ERR:  [appkoruos] <korusysfs.c @  205> koru-os: INFO sysfs view on /sys: 60 entries, 0 errors
+[    0.143740] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.201144] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.201963] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.202504] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.202803] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.206045] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.211061] ERR:  [libposix_process] <deprecated.c @  302> koru-os: STUBBED __uk_syscall_r_prctl()
+[    0.307540] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.307890] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.308244] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.308477] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.310769] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.357578] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.357814] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.358327] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.358607] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.361181] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+m9-init: start
+[    0.642527] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    1.611303] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    1.611717] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    1.787651] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    1.811187] ERR:  [libuksched] <sched.c @  434> koru-os: STUBBED __uk_syscall_r_sched_getaffinity()
+[    1.955308] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS sched_get_priority_min (nr 147)
+[    1.955662] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS sched_getparam (nr 143)
+[    1.955858] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS sched_getscheduler (nr 145)
+[    1.962581] ERR:  [libposix_process] <deprecated.c @  337> Ignore updating resource 7: cur = 1024, max = 1024
+[    1.965826] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS signalfd4 (nr 289)
+[    1.983473] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS inotify_init1 (nr 294)
+[    2.039637] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS clone3 (nr 435)
+[    2.049298] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    2.092063] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    2.092270] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    2.092851] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    2.093094] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    2.095662] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    2.210423] ERR:  [appkoruos] <drm_linux.c @  116> koru-os: REFUSED linux.ioctl.DRM_IOCTL_SET_CLIENT_CAP cap 3 (kms)
+[    2.234970] ERR:  [appkoruos] <drm_linux.c @  119> koru-os: REFUSED linux.ioctl.DRM_IOCTL_nr_0xc6 (kms)
+[    5.491112] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS memfd_create (nr 319)
+[    5.508462] ERR:  [appkoruos] <drm_linux.c @  119> koru-os: REFUSED linux.ioctl.DRM_IOCTL_nr_0xc6 (kms)
+[    5.516998] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS memfd_create (nr 319)
+[    5.578725] ERR:  [libposix_process] <clone.c @  216> CLONE_VM not set: Multiple address spaces are not supported
+[    5.601471] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS memfd_create (nr 319)
+[    6.962827] ERR:  [appkoruos] <evdev_linux.c @  144> koru-os: REFUSED linux.ioctl.0xc0406400 (evdev)
+[    7.250932] ERR:  [libposix_process] <clone.c @  216> CLONE_VM not set: Multiple address spaces are not supported
+[    7.376679] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[   14.362476] ERR:  [libposix_process] <clone.c @  216> CLONE_VM not set: Multiple address spaces are not supported
+[   14.363254] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS faccessat2 (nr 439)
+[   14.564653] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS inotify_add_watch (nr 254)
+m9-init: after 120s
+[  122.158570] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.158879] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.160006] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[  122.160318] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[  122.163143] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.243129] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.243392] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.244401] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[  122.244677] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[  122.247405] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 1016d29400
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 83 sec 22 usec 523991 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 1016d45a40
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 84 sec 22 usec 557878 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 101c8e86c0
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 85 sec 22 usec 588017 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 1016d29400
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 86 sec 22 usec 620152 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 1016d45a40
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 87 sec 22 usec 651484 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 101c8e86c0
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 88 sec 22 usec 685191 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 1016d29400
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 89 sec 22 usec 717846 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 1016d45a40
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 90 sec 22 usec 748695 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 101c8e86c0
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 91 sec 22 usec 778643 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 5, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 1016d29400
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 92 sec 22 usec 800907 crtc 32
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 6, needsFrame true, isPageFlipPending false, frameEventScheduled false
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 1016d45a40
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: CDRMOutput::scheduleFrame: reason 8, needsFrame false, isPageFlipPending true, frameEventScheduled false
+TRACE from aquamarine ]: drm: pf event seq 93 sec 22 usec 832404 crtc 32
+TRACE from aquamarine ]: drm: Committed a buffer, updating state
+TRACE from aquamarine ]: drm: CDRMFB: buffer has drmfb attachment with fb 101c8e86c0
+DEBUG from aquamarine ]: Supported EGL client extensions: (16) EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_base EGL_KHR_client_get_all_proc_addresses EGL_EXT_client_extensions EGL_KHR_debug EGL_EXT_platform_device EGL_EXT_explicit_device EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_EXT_platform_x11 EGL_KHR_platform_x11 EGL_EXT_platform_xcb EGL_MESA_platform_gbm EGL_KHR_platform_gbm EGL_MESA_platform_surfaceless
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: [EGL] Command eglQueryDeviceStringEXT errored out with EGL_BAD_PARAMETER (0x12300): eglQueryDeviceStringEXT
+ERR from aquamarine ]: CDRMRenderer(drm): Can't create renderer, no matching devices found
+ERR from aquamarine ]: drm: initMgpu: no renderer
+ERR from aquamarine ]: drm: Failed to update renderer state for Virtual-1 on applyCommit
+TRACE from aquamarine ]: drm: pf event seq 94 sec 22 usec 855329 crtc 32
+[  122.376242] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.376510] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.377671] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[  122.377944] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[  122.382282] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.445139] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.445374] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.446408] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[  122.446654] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[  122.449283] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+/tmp/xdg:
+total 0
+drwx------    0 0        0                0 Oct 19 13:43 .
+drwxrwxrwx    0 0        0                0 Oct 19 13:43 ..
+drwx------    0 0        0                0 Oct 19 13:43 hypr
+-rw-r-----    0 0        0                0 Oct 19 13:43 wayland-1.lock
+
+/tmp/xdg/hypr:
+total 0
+drwx------    0 0        0                0 Oct 19 13:43 .
+drwx------    0 0        0                0 Oct 19 13:43 ..
+drwx------    0 0        0                0 Oct 19 13:44 efb50993780079460b0cbed1363e2166a2de1d9f_1792417434_1820079921
+[  122.505850] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.506080] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.507105] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[  122.507387] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[  122.511722] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.567862] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.568116] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.569259] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[  122.569534] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[  122.572102] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.623209] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.623444] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.624449] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[  122.624689] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[  122.628992] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+m9-init: end

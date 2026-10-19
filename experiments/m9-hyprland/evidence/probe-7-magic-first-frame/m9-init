@@ -1,0 +1,10 @@
+export HOME=/tmp XDG_CACHE_HOME=/tmp/cache XDG_RUNTIME_DIR=/tmp/xdg PATH=/bin:/usr/bin:/usr/sbin LIBSEAT_BACKEND=noop AQ_TRACE=1
+mkdir -p /tmp/cache /tmp/xdg; chmod 700 /tmp/xdg
+echo "m9-init: start"
+/usr/bin/Hyprland --i-am-really-stupid -c /etc/m9-hyprland.lua > /tmp/hl.out 2>&1 &
+sleep 120
+echo "m9-init: after 120s"
+grep -v '^$' /tmp/hl.out | tail -150
+ls -la /tmp/xdg /tmp/xdg/hypr 2>&1 | head -12
+kill $(pidof Hyprland) 2>/dev/null; sleep 5
+echo "m9-init: end"

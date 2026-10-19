@@ -8,6 +8,12 @@
  * M8b adds legacy page flip with DRM_MODE_PAGE_FLIP_EVENT: the flip takes effect at
  * once (no vblank wait; there is no vblank interrupt on bochs-display) and its
  * DRM_EVENT_FLIP_COMPLETE is read() from the fd, with poll/select/epoll readiness.
+ * M9 (B18) adds PRIME: a dumb buffer can be exported as a dma-buf fd and imported
+ * back to its handle. Each buffer slot has a devfs node dri/.koru-dmabuf<N>; the
+ * exported fd is an open file of that node (size via lseek(SEEK_END), mmap of the
+ * whole buffer, DMA_BUF_IOCTL_SYNC accepted). The buffer lives while its GEM handle
+ * or any dma-buf file is open, as on Linux. Only buffers of this device can be
+ * imported (there is no other dma-buf exporter on koru-os).
  * Every ioctl outside the subset is refused loudly:
  *   koru-os: REFUSED linux.ioctl.<name> (kms)
  * and returns the errno a Linux driver without that feature returns.
@@ -33,6 +39,9 @@
 #include "korusysfs.h"
 #include "drm_uapi.h"
 
+/* raw syscalls (negative errno) */
+long uk_syscall_r_open(long, long, long);
+
 #define ID_PLANE     31
 #define ID_CRTC      32
 #define ID_ENCODER   33
@@ -42,13 +51,17 @@
 #define MAX_BOS 16
 #define MAX_FBS 16
 
-struct bo { int used; uint32_t handle; uint64_t off, size; uint32_t w, h, pitch; };
+struct bo { int used; uint32_t handle; uint64_t off, size; uint32_t w, h, pitch;
+	    int hrefs, dmaopen; };
+struct kms_prime { uint32_t handle, flags; int32_t fd; };
+#define DMA_BUF_BASE 'b'
 struct fb { int used; uint32_t id, w, h, pitch, handle; uint64_t off; };
 
 static struct {
 	struct kms_provider *p;
 	struct device *dev;
 	struct bo bos[MAX_BOS];
+	struct device *dmadev[MAX_BOS];	/* B18: dri/.koru-dmabuf<N> */
 	struct fb fbs[MAX_FBS];
 	uint32_t next_handle, next_fb;
 	/* CRTC state */
@@ -60,6 +73,9 @@ static struct {
 		uint32_t tv_sec, tv_usec, sequence, crtc_id; } evq[8];
 	unsigned int ev_head, ev_tail;
 	uint32_t flip_seq;
+	uint64_t dpms;	/* M9: connector DPMS property (legacy) */
+	int opens;	/* M9: open files of card0 (aquamarine opens it twice) */
+	uint32_t magic;
 	unsigned long flips;
 	struct uk_waitq wq;
 	struct uk_list_head ecbs;
@@ -73,7 +89,7 @@ static const char *drm_nr_name(unsigned nr)
 {
 	switch (nr) {
 #define N(x) case DRM_NR_##x: return "DRM_IOCTL_" #x;
-	N(VERSION) N(GET_UNIQUE) N(GET_MAGIC) N(SET_VERSION) N(GEM_CLOSE)
+	N(VERSION) N(GET_UNIQUE) N(GET_MAGIC) N(AUTH_MAGIC) N(SET_VERSION) N(GEM_CLOSE)
 	N(GET_CAP) N(SET_CLIENT_CAP) N(SET_MASTER) N(DROP_MASTER)
 	N(PRIME_HANDLE_TO_FD) N(PRIME_FD_TO_HANDLE)
 	N(MODE_GETRESOURCES) N(MODE_GETCRTC) N(MODE_SETCRTC) N(MODE_CURSOR)
@@ -117,9 +133,169 @@ static void put_str(size_t *len, char *dst, const char *s)
 static struct bo *bo_get(uint32_t h)
 {
 	for (int i = 0; i < MAX_BOS; i++)
-		if (K.bos[i].used && K.bos[i].handle == h)
+		if (K.bos[i].used && K.bos[i].hrefs > 0 && K.bos[i].handle == h)
 			return &K.bos[i];
 	return NULL;
+}
+
+/* the buffer is released when neither its handle nor a dma-buf file is open */
+static void bo_put(struct bo *b)
+{
+	if (b->hrefs <= 0 && !b->dmaopen)
+		b->used = 0; /* fbs keep their offset; Linux keeps a ref */
+}
+
+static int dmabuf_slot(struct device *dev)
+{
+	for (int i = 0; i < MAX_BOS; i++)
+		if (K.dmadev[i] && K.dmadev[i] == dev)
+			return i;
+	return -1;
+}
+
+static int prime_to_fd(struct kms_prime *a)
+{
+	struct bo *b = bo_get(a->handle);
+	struct vfscore_file *f;
+	char path[40];
+	long fd;
+
+	if (!b)
+		return ENOENT;
+	if (a->flags & ~(O_CLOEXEC | O_RDWR | O_ACCMODE))
+		return EINVAL;
+	snprintf(path, sizeof(path), "/dev/dri/.koru-dmabuf%d", (int)(b - K.bos));
+	fd = uk_syscall_r_open((long)path, (long)(O_RDWR | (a->flags & O_CLOEXEC)), 0);
+	if (fd < 0)
+		return (int)-fd;
+	f = vfscore_get_file((int)fd);
+	if (f) {
+		if (f->f_dentry && f->f_dentry->d_vnode)
+			f->f_dentry->d_vnode->v_size = b->size;
+		fdrop(f);
+	}
+	a->fd = (int32_t)fd;
+	return 0;
+}
+
+static int prime_to_handle(struct kms_prime *a)
+{
+	struct vfscore_file *f = vfscore_get_file(a->fd);
+	struct vnode *vp;
+	int i = -1;
+
+	if (!f)
+		return EBADF;
+	if (f->f_dentry && (vp = f->f_dentry->d_vnode) && vp->v_type == VCHR)
+		i = dmabuf_slot(vp->v_data);
+	fdrop(f);
+	if (i < 0 || !K.bos[i].used)
+		return EINVAL; /* Linux: not a dma-buf of an importable exporter */
+	/* same object, same handle. Handles are global, not per open file as on
+	 * Linux; a reference per import keeps a handle that another file still
+	 * uses alive (a superset of Linux: a double import needs two closes) */
+	K.bos[i].hrefs++;
+	a->handle = K.bos[i].handle;
+	return 0;
+}
+
+/* M9: the KMS properties a legacy-KMS compositor reads (aquamarine needs the
+ * plane "type" and sets the connector "DPMS"); no atomic properties yet */
+#define PROP_TYPE        60
+#define PROP_DPMS        61
+#define PROP_NON_DESKTOP 62
+#define PROP_LINK_STATUS 63
+#define OBJ_CRTC      0xccccccccU
+#define OBJ_CONNECTOR 0xc0c0c0c0U
+#define OBJ_ENCODER   0xe0e0e0e0U
+#define OBJ_PLANE     0xeeeeeeeeU
+#define PROP_RANGE     (1U << 1)
+#define PROP_IMMUTABLE (1U << 2)
+#define PROP_ENUM      (1U << 3)
+struct kms_get_property { uint64_t values_ptr, enum_blob_ptr; uint32_t prop_id, flags;
+	char name[32]; uint32_t count_values, count_enum_blobs; };
+struct kms_prop_enum { uint64_t value; char name[32]; };
+struct kms_conn_set_property { uint64_t value; uint32_t prop_id, connector_id; };
+struct kms_obj_set_property { uint64_t value; uint32_t prop_id, obj_id, obj_type; };
+static const struct kms_prop {
+	uint32_t id, flags; const char *name; int n; const char *en[4];
+	uint64_t lo, hi;
+} props[] = {
+	{ PROP_TYPE, PROP_ENUM | PROP_IMMUTABLE, "type", 3,
+	  { "Overlay", "Primary", "Cursor" }, 0, 0 },
+	{ PROP_DPMS, PROP_ENUM, "DPMS", 4, { "On", "Standby", "Suspend", "Off" }, 0, 0 },
+	{ PROP_NON_DESKTOP, PROP_RANGE | PROP_IMMUTABLE, "non-desktop", 0, { 0 }, 0, 1 },
+	{ PROP_LINK_STATUS, PROP_ENUM, "link-status", 2, { "Good", "Bad" }, 0, 0 },
+};
+
+static int get_property(struct kms_get_property *g)
+{
+	const struct kms_prop *p = NULL;
+
+	for (unsigned i = 0; i < sizeof(props) / sizeof(props[0]); i++)
+		if (props[i].id == g->prop_id)
+			p = &props[i];
+	if (!p)
+		return ENOENT;
+	g->flags = p->flags;
+	memset(g->name, 0, sizeof(g->name));
+	strncpy(g->name, p->name, sizeof(g->name) - 1);
+	if (p->flags & PROP_ENUM) {
+		if (g->count_values >= (uint32_t)p->n && g->values_ptr)
+			for (int i = 0; i < p->n; i++)
+				((uint64_t *)(uintptr_t)g->values_ptr)[i] = i;
+		if (g->count_enum_blobs >= (uint32_t)p->n && g->enum_blob_ptr)
+			for (int i = 0; i < p->n; i++) {
+				struct kms_prop_enum *e = &((struct kms_prop_enum *)
+					(uintptr_t)g->enum_blob_ptr)[i];
+
+				e->value = i;
+				memset(e->name, 0, sizeof(e->name));
+				strncpy(e->name, p->en[i], sizeof(e->name) - 1);
+			}
+		g->count_values = g->count_enum_blobs = p->n;
+	} else {
+		if (g->count_values >= 2 && g->values_ptr) {
+			((uint64_t *)(uintptr_t)g->values_ptr)[0] = p->lo;
+			((uint64_t *)(uintptr_t)g->values_ptr)[1] = p->hi;
+		}
+		g->count_values = 2;
+		g->count_enum_blobs = 0;
+	}
+	return 0;
+}
+
+/* properties of one object: ids and current values */
+static int obj_props(uint32_t obj, uint32_t *ids, uint64_t *vals)
+{
+	int n = 0;
+
+#define P(i, v) do { if (ids) ids[n] = (i); if (vals) vals[n] = (v); n++; } while (0)
+	if (obj == ID_PLANE)
+		P(PROP_TYPE, 1); /* DRM_PLANE_TYPE_PRIMARY */
+	if (obj == ID_CONNECTOR) {
+		P(PROP_DPMS, K.dpms);
+		P(PROP_NON_DESKTOP, 0);
+		P(PROP_LINK_STATUS, 0);
+	}
+#undef P
+	return n;
+}
+
+static int set_property(uint32_t obj, uint32_t prop, uint64_t v)
+{
+	if (obj != ID_CONNECTOR && obj != ID_PLANE && obj != ID_CRTC)
+		return ENOENT;
+	if (obj == ID_CONNECTOR && prop == PROP_DPMS) {
+		if (v > 3)
+			return EINVAL;
+		/* bochs-display has no power states; the scanout follows SETCRTC */
+		K.dpms = v;
+		return 0;
+	}
+	if (obj == ID_CONNECTOR && prop == PROP_LINK_STATUS)
+		return v == 0 ? 0 : EINVAL; /* Linux: only GOOD may be set */
+	return EINVAL; /* immutable or not on this object */
 }
 
 static struct fb *fb_get(uint32_t id)
@@ -260,6 +436,11 @@ static int kms_ioctl(struct device *dev __unused, unsigned long cmd, void *arg)
 		u->unique_len = 0; /* no bus id: drmOpenByName accepts it */
 		return 0;
 	}
+	case DRM_NR_GET_MAGIC: /* single master, every file is authenticated */
+		*(uint32_t *)arg = ++K.magic;
+		return 0;
+	case DRM_NR_AUTH_MAGIC:
+		return *(uint32_t *)arg && *(uint32_t *)arg <= K.magic ? 0 : EINVAL;
 	case DRM_NR_SET_VERSION: /* interface 1.4 is all we speak */
 		return refuse(cmd, NULL, EINVAL);
 	case DRM_NR_SET_MASTER:
@@ -272,13 +453,17 @@ static int kms_ioctl(struct device *dev __unused, unsigned long cmd, void *arg)
 		case DRM_CAP_DUMB_BUFFER: c->value = 1; return 0;
 		case DRM_CAP_DUMB_PREFERRED_DEPTH: c->value = 24; return 0;
 		case DRM_CAP_DUMB_PREFER_SHADOW: c->value = 0; return 0;
-		case DRM_CAP_PRIME: c->value = 0; return 0;
+		case DRM_CAP_PRIME: c->value = 3; return 0; /* IMPORT | EXPORT */
+		case DRM_CAP_CURSOR_WIDTH:
+		case DRM_CAP_CURSOR_HEIGHT:
+			c->value = 64; return 0; /* Linux default; no cursor plane */
 		case DRM_CAP_TIMESTAMP_MONOTONIC: c->value = 1; return 0;
 		case DRM_CAP_ADDFB2_MODIFIERS: c->value = 0; return 0;
+		case DRM_CAP_CRTC_IN_VBLANK_EVENT:
+			c->value = 1; return 0; /* flip events carry crtc_id */
 		case DRM_CAP_VBLANK_HIGH_CRTC:
 		case DRM_CAP_ASYNC_PAGE_FLIP:
 		case DRM_CAP_PAGE_FLIP_TARGET:
-		case DRM_CAP_CRTC_IN_VBLANK_EVENT:
 		case DRM_CAP_SYNCOBJ:
 		case DRM_CAP_SYNCOBJ_TIMELINE:
 			c->value = 0; return 0;
@@ -371,7 +556,15 @@ static int kms_ioctl(struct device *dev __unused, unsigned long cmd, void *arg)
 			*(uint32_t *)(uintptr_t)c->encoders_ptr = ID_ENCODER;
 		c->count_modes = n;
 		c->count_encoders = 1;
-		c->count_props = 0;
+		{
+			uint32_t np = obj_props(ID_CONNECTOR, NULL, NULL);
+
+			if (c->props_ptr && c->prop_values_ptr && c->count_props >= np)
+				obj_props(ID_CONNECTOR,
+					  (uint32_t *)(uintptr_t)c->props_ptr,
+					  (uint64_t *)(uintptr_t)c->prop_values_ptr);
+			c->count_props = np;
+		}
 		c->encoder_id = K.mode_valid ? ID_ENCODER : 0;
 		c->connector_type = DRM_MODE_CONNECTOR_VIRTUAL;
 		c->connector_type_id = 1;
@@ -384,12 +577,44 @@ static int kms_ioctl(struct device *dev __unused, unsigned long cmd, void *arg)
 	}
 	case DRM_NR_MODE_OBJ_GETPROPERTIES: {
 		struct drm_mode_obj_get_properties *o = arg;
+		uint32_t t = o->obj_id == ID_CRTC ? OBJ_CRTC
+			   : o->obj_id == ID_CONNECTOR ? OBJ_CONNECTOR
+			   : o->obj_id == ID_PLANE ? OBJ_PLANE
+			   : o->obj_id == ID_ENCODER ? OBJ_ENCODER : 0;
+		uint32_t np;
 
-		if (o->obj_id != ID_CRTC && o->obj_id != ID_CONNECTOR
-		    && o->obj_id != ID_PLANE && o->obj_id != ID_ENCODER)
+		if (!t || (o->obj_type && o->obj_type != t))
 			return ENOENT;
-		o->count_props = 0; /* no properties until atomic (M9) */
+		np = obj_props(o->obj_id, NULL, NULL);
+		if (o->props_ptr && o->prop_values_ptr && o->count_props >= np)
+			obj_props(o->obj_id, (uint32_t *)(uintptr_t)o->props_ptr,
+				  (uint64_t *)(uintptr_t)o->prop_values_ptr);
+		o->count_props = np;
 		return 0;
+	}
+	case DRM_NR_MODE_GETPROPERTY:
+		return get_property(arg);
+	case DRM_NR_MODE_SETPROPERTY: {
+		struct kms_conn_set_property *sp = arg;
+
+		return set_property(sp->connector_id, sp->prop_id, sp->value);
+	}
+	case DRM_NR_MODE_OBJ_SETPROPERTY: {
+		struct kms_obj_set_property *sp = arg;
+
+		return set_property(sp->obj_id, sp->prop_id, sp->value);
+	}
+	case DRM_NR_MODE_CURSOR:
+	case DRM_NR_MODE_CURSOR2: {
+		/* no cursor plane: what Linux returns for a CRTC without cursor
+		 * support; a hide request (handle 0, no move) is accepted */
+		struct { uint32_t flags, crtc_id; int32_t x, y; uint32_t w, h, handle; } *cu = arg;
+
+		if (cu->crtc_id != ID_CRTC)
+			return ENOENT;
+		if ((cu->flags & 0x01) && !cu->handle && !(cu->flags & 0x02))
+			return 0;
+		return refuse(cmd, NULL, ENXIO);
 	}
 	case DRM_NR_MODE_GETPLANERESOURCES: {
 		struct drm_mode_get_plane_res *r = arg;
@@ -431,7 +656,7 @@ static int kms_ioctl(struct device *dev __unused, unsigned long cmd, void *arg)
 		if (rc)
 			return rc;
 		K.bos[i] = (struct bo){ 1, K.next_handle++, off, size,
-					d->width, d->height, d->pitch };
+					d->width, d->height, d->pitch, 1, 0 };
 		memset((char *)K.p->vram_virt + off, 0, size);
 		d->handle = K.bos[i].handle;
 		d->size = size;
@@ -452,9 +677,14 @@ static int kms_ioctl(struct device *dev __unused, unsigned long cmd, void *arg)
 
 		if (!b)
 			return ENOENT;
-		b->used = 0; /* fbs keep their offset; Linux keeps a ref */
+		b->hrefs--;
+		bo_put(b);
 		return 0;
 	}
+	case DRM_NR_PRIME_HANDLE_TO_FD:
+		return prime_to_fd(arg);
+	case DRM_NR_PRIME_FD_TO_HANDLE:
+		return prime_to_handle(arg);
 	case DRM_NR_MODE_ADDFB: {
 		struct drm_mode_fb_cmd *f = arg;
 
@@ -594,17 +824,69 @@ static int kms_poll(struct device *dev __unused, unsigned int *revents,
 
 static int kms_open(struct device *dev __unused, int mode __unused)
 {
+	K.opens++;
 	return 0;
 }
 
 static int kms_close(struct device *dev __unused)
 {
-	K.ev_tail = K.ev_head;	/* Linux drops a closing client's pending events */
+	/* Linux drops a closing client's pending events; events are not per
+	 * file here, so only the last close drops them */
+	if (--K.opens <= 0) {
+		K.opens = 0;
+		K.ev_tail = K.ev_head;
+	}
 	if (K.flips)
 		uk_pr_err("koru-os: INFO kms: card0 closed after %lu page flips\n",
 			  K.flips);
 	return 0;
 }
+
+/* B18: dma-buf files */
+static int dmabuf_open(struct device *dev, int mode __unused)
+{
+	int i = dmabuf_slot(dev);
+
+	if (i < 0 || !K.bos[i].used)
+		return ENXIO;
+	K.bos[i].dmaopen++;
+	return 0;
+}
+
+static int dmabuf_close(struct device *dev)
+{
+	int i = dmabuf_slot(dev);
+
+	if (i >= 0 && K.bos[i].dmaopen > 0) {
+		K.bos[i].dmaopen--;
+		bo_put(&K.bos[i]);
+	}
+	return 0;
+}
+
+static int dmabuf_ioctl(struct device *dev __unused, unsigned long cmd,
+			void *arg __unused)
+{
+	/* DMA_BUF_IOCTL_SYNC: CPU access brackets; VRAM is coherent */
+	if (((cmd >> 8) & 0xff) == DMA_BUF_BASE && (cmd & 0xff) == 0)
+		return 0;
+	uk_pr_err("koru-os: REFUSED linux.ioctl.0x%lx (dma-buf)\n", cmd);
+	return ENOTTY;
+}
+
+static struct devops dmabuf_devops = {
+	.open = dmabuf_open,
+	.close = dmabuf_close,
+	.read = (devop_read_t)devop_eperm,
+	.write = (devop_write_t)devop_eperm,
+	.ioctl = dmabuf_ioctl,
+};
+
+static struct driver dmabuf_drv = {
+	.devops = &dmabuf_devops,
+	.devsz = 0,
+	.name = "korukms-dmabuf",
+};
 
 static struct devops kms_devops = {
 	.open = kms_open,
@@ -636,6 +918,13 @@ int kms_rows_bind(struct kms_provider *p)
 	if (rc)
 		return -rc;
 	K.dev->rdev = makedev(226, 0);
+	for (int i = 0; i < MAX_BOS; i++) {
+		char n[32];
+
+		snprintf(n, sizeof(n), "dri/.koru-dmabuf%d", i);
+		if (device_create(&dmabuf_drv, n, D_CHR, &K.dmadev[i]))
+			K.dmadev[i] = NULL;
+	}
 	{	/* M7b sysfs view: <provider device>/drm/card0 */
 		char d[160], l[180], t[170];
 		const char *par = p->sys_parent ? p->sys_parent : "virtual";
@@ -660,8 +949,20 @@ int koruos_dev_mmap(struct vfscore_file *f, off_t offset, size_t len,
 	struct vnode *vp;
 	uint64_t o;
 
-	if (!K.p || !f || !f->f_dentry || !(vp = f->f_dentry->d_vnode)
-	    || vp->v_data != K.dev)
+	if (!K.p || !f || !f->f_dentry || !(vp = f->f_dentry->d_vnode))
+		return -ENODEV;
+	if (vp->v_type == VCHR && dmabuf_slot(vp->v_data) >= 0) {
+		struct bo *b = &K.bos[dmabuf_slot(vp->v_data)];
+
+		if (b->used && offset >= 0 && (uint64_t)offset + len <= b->size) {
+			*paddr = K.p->vram_phys + b->off + offset;
+			return 0;
+		}
+		uk_pr_err("koru-os: REFUSED linux.sys.mmap dma-buf offset 0x%lx len %lu (outside the buffer)\n",
+			  (unsigned long)offset, (unsigned long)len);
+		return -EINVAL;
+	}
+	if (vp->v_data != K.dev)
 		return -ENODEV;
 	if ((uint64_t)offset < MAP_BASE)
 		goto bad;

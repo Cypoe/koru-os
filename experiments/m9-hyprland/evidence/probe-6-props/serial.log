@@ -1,0 +1,189 @@
+[    0.109800] ERR:  [appkoruos] <evdev_linux.c @  421> koru-os: INFO input rows bound: /dev/input/event0 -> koru-os i8042 keyboard (set 1)
+[    0.110632] ERR:  [appkoruos] <ps2kbd.c @  280> koru-os: INFO input.ps2: i8042 cfg 0x71 -> 0x61, enable-scan ack 0xfa, IRQ 1, bind 0
+koruext2: mounted blkdev 0 read-only: bs=1024 groups=50 blocks=409515 free=98867 inodes=16400 free=15015
+[    0.132300] ERR:  [appkoruos] <korusysfs.c @  205> koru-os: INFO sysfs view on /sys: 60 entries, 0 errors
+[    0.133541] ERR:  [libuklock] <semaphore.c @   23> koru-os: STUBBED uk_posix_clone_sysvsem()
+Powered by Unikraft Ijiraq (0.21.0)
+[    0.174074] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.174672] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.175155] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.175355] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.177986] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.181470] ERR:  [libposix_process] <deprecated.c @  302> koru-os: STUBBED __uk_syscall_r_prctl()
+[    0.283131] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.283431] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.283741] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.283951] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.286559] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.322399] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.322575] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    0.322867] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    0.323048] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    0.325129] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+m9-init: start
+[    0.570037] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    1.499677] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    1.500039] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    1.660614] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    1.682190] ERR:  [libuksched] <sched.c @  434> koru-os: STUBBED __uk_syscall_r_sched_getaffinity()
+[    1.815380] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS sched_get_priority_min (nr 147)
+[    1.815707] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS sched_getparam (nr 143)
+[    1.815933] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS sched_getscheduler (nr 145)
+[    1.822324] ERR:  [libposix_process] <deprecated.c @  337> Ignore updating resource 7: cur = 1024, max = 1024
+[    1.838657] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS signalfd4 (nr 289)
+[    1.855232] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS inotify_init1 (nr 294)
+[    1.908952] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS clone3 (nr 435)
+[    1.918508] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    1.965365] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    1.965554] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    1.966103] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[    1.966327] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[    1.968640] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[    2.075302] ERR:  [appkoruos] <drm_linux.c @  114> koru-os: REFUSED linux.ioctl.DRM_IOCTL_SET_CLIENT_CAP cap 3 (kms)
+[    2.097692] ERR:  [appkoruos] <drm_linux.c @  117> koru-os: REFUSED linux.ioctl.DRM_IOCTL_nr_0x11 (kms)
+[    2.097964] ERR:  [appkoruos] <drm_linux.c @  117> koru-os: REFUSED linux.ioctl.DRM_IOCTL_nr_0xc6 (kms)
+[    2.099376] ERR:  [appkoruos] <drm_linux.c @  117> koru-os: REFUSED linux.ioctl.DRM_IOCTL_nr_0x11 (kms)
+[    2.099716] ERR:  [appkoruos] <drm_linux.c @  114> koru-os: REFUSED linux.ioctl.DRM_IOCTL_GET_MAGIC (kms)
+[    2.107308] ERR:  [libposix_process] <alarm.c @   13> koru-os: STUBBED __uk_syscall_r_alarm()
+[    2.109118] ERR:  [libposix_process] <clone.c @  216> CLONE_VM not set: Multiple address spaces are not supported
+[    2.109732] ERR:  [libposix_process] <clone.c @  216> CLONE_VM not set: Multiple address spaces are not supported
+m9-init: after 120s
+[  122.028512] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.028804] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.029486] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[  122.029793] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[  122.032803] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.089622] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.089842] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[  122.090392] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS set_robust_list (nr 273)
+[  122.090640] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS rseq (nr 334)
+[  122.093071] ERR:  [libsyscall_shim] <uk_syscall6_do.c @ 2807> koru-os: ENOSYS brk (nr 12)
+[ WARNING ] Running Hyprland with superuser privileges might damage your system
+DEBUG ]: User-specified config location: '/etc/m9-hyprland.lua'
+Superuser privileges check is omitted. I hope you know what you're doing.
+Welcome to Hyprland!
+                                                  
+                     YY    UJ                     
+                    YYY    UUJ                    
+                   XXXY    UUUU                   
+                  zXXXX    UUUUU                  
+                zzzzX        UUUUJ                
+               cczzz          UUUUJ               
+             vccccz            UUUUUJ             
+            vvcccc              UUUUUJ            
+           vvvvv                  UUUUJ           
+          uuuvv                    UUUUJ          
+         uuuuu                      UUUUU         
+        nnnuu                        UUUUU        
+       nnnnn                          YUUUU       
+       xxnn                            YUUU       
+       xxxn                            YYUU       
+      xxxx                              YYUU      
+      rxxx                              YYYY      
+      rrrx                              YYYY      
+       rrrx                            XXXY       
+       rrrr                            XXXX       
+        rrrr                          zzXX        
+         rrrr                        zzzz         
+          rrrrr                    ccczz          
+           rrrrrx                vccccc           
+             rrrrxxxx        uuvvvvvc             
+                rrxxxxxxnnnnuuuuuv                
+                    xxxxxnnnnu                    
+WARN ]: Failed to get old pthread scheduling priority
+[!!WARNING!!] XDG_RUNTIME_DIR looks non-standard. Proceeding anyways...
+DEBUG ]: Old rlimit: soft -> 1024, hard -> 1024
+DEBUG ]: New rlimit: soft -> 1024, hard -> 1024
+WARN ]: WARNING: Hyprland is being launched without start-hyprland. This is highly advised against.
+DEBUG ]: Creating the EventLoopManager!
+DEBUG ]: Creating the KeybindManager!
+DEBUG ]: Creating the AnimationManager!
+DEBUG ]: Creating the DynamicPermissionManager!
+DEBUG ]: Creating the MonitorState!
+DEBUG ]: Creating the WorkspaceState!
+DEBUG ]: Creating the ConfigManager!
+DEBUG ]: [cfg] Config is either explicit or special.
+DEBUG ]: [cfg] Config is lua, loading lua mgr
+ERR ]: CConfigWatcher couldn't open an inotify node. Config will not be automatically reloaded
+DEBUG ]: Creating the Error Overlay!
+DEBUG ]: Creating the LayoutManager!
+DEBUG ]: Creating the TokenManager!
+DEBUG ]: Creating the EventManager!
+DEBUG ]: Creating the PointerManager!
+DEBUG ]: Creating the AsyncResourceGatherer!
+DEBUG from aquamarine ]: Creating an Aquamarine backend!
+DEBUG from aquamarine ]: [libseat] [libseat/libseat.c:62] Seat opened with backend 'noop'
+WARN from aquamarine ]: libinput: plugin support is not available in this libinput build
+DEBUG from aquamarine ]: [libinput] event0  - koru-os i8042 keyboard (set 1): is tagged by udev as: Keyboard
+DEBUG from aquamarine ]: [libinput] event0  - koru-os i8042 keyboard (set 1): device is a keyboard
+DEBUG from aquamarine ]: drm: Enumerated device /sys/devices/pci0000:00/0000:00:03.0/drm/card0
+DEBUG from aquamarine ]: libseat: Device /dev/dri/card0 supports kms
+TRACE from aquamarine ]: drm: Device /dev/dri/card0 has 0 builtin panels
+DEBUG from aquamarine ]: drm: Found 1 GPUs
+DEBUG from aquamarine ]: drm: Starting backend for /dev/dri/card0, with driver korukms
+DEBUG from aquamarine ]: drm: Registered gpu /dev/dri/card0
+WARN from aquamarine ]: drm: failed to set DRM_CLIENT_CAP_ATOMIC, falling back to legacy
+DEBUG from aquamarine ]: drm: drmProps.supportsAsyncCommit: true
+DEBUG from aquamarine ]: drm: drmProps.supportsAddFb2Modifiers: false
+DEBUG from aquamarine ]: drm: drmProps.supportsTimelines: false
+DEBUG from aquamarine ]: drm: found 1 CRTCs
+DEBUG from aquamarine ]: drm: Plane 31 has type 1
+DEBUG from aquamarine ]: drm: Plane 31 has 1 formats
+TRACE from aquamarine ]: drm: | Format XR24
+DEBUG from aquamarine ]: drm: Basic init pass for gpu /dev/dri/card0
+DEBUG from aquamarine ]: drm: Scanning connectors for /dev/dri/card0
+DEBUG from aquamarine ]: drm: Scanning connector id 34
+DEBUG from aquamarine ]: drm: Initializing connector id 34
+DEBUG from aquamarine ]: drm: Connector gets name Virtual-1
+ERR from aquamarine ]: drm: Connector has neither crtc_id nor encoder_id
+DEBUG from aquamarine ]: drm: Connector 34 connection state: 1
+DEBUG from aquamarine ]: drm: Rechecking CRTCs
+DEBUG from aquamarine ]: drm: connector Virtual-1, has crtc -1, will be rechecked
+DEBUG from aquamarine ]: drm: connected slot 0 crtc 32 assigned to Virtual-1
+DEBUG from aquamarine ]: drm: Connector Virtual-1 connected
+DEBUG from aquamarine ]: drm: Connecting connector Virtual-1, CRTC ID 32
+DEBUG from aquamarine ]: drm: Dumping detected modes:
+DEBUG from aquamarine ]: drm: Mode 0: 1280x800@74.99Hz  (preferred)
+DEBUG from aquamarine ]: drm: Mode 1: 1024x768@60.00Hz 
+DEBUG from aquamarine ]: drm: Mode 2: 800x600@60.32Hz 
+DEBUG from aquamarine ]: drm: Mode 3: 640x480@59.94Hz 
+DEBUG from aquamarine ]: drm: Physical size [Vector2D: x: 325, y: 203] (mm)
+ERR from aquamarine ]: drm: failed to parse edid
+DEBUG from aquamarine ]: drm: Description    (Virtual-1)
+DEBUG from aquamarine ]: drm: connector Virtual-1 crtc is incapable of vrr: props.vrr_capable -> 0, crtc->props.vrr_enabled -> 0
+DEBUG from aquamarine ]: drm: Explicit sync unsupported
+DEBUG from aquamarine ]: drm: connector Virtual-1 crtc doesn't support CTM
+DEBUG from aquamarine ]: drm: connector Virtual-1 crtc doesn't support HDR (0)
+DEBUG from aquamarine ]: drm: connector Virtual-1 crtc doesn't support Colorspace (0)
+DEBUG from aquamarine ]: drm: gpu /dev/dri/card0 becomes primary drm
+DEBUG from aquamarine ]: DRM Dumb: created a dumb allocator
+DEBUG from aquamarine ]: Starting the Aquamarine backend!
+DEBUG from aquamarine ]: Starting the Wayland backend!
+ERR from aquamarine ]: Wayland backend cannot start: wl_display_connect failed (is a wayland compositor running?)
+ERR from aquamarine ]: Requested backend (wayland) could not start, enabling fallbacks
+ERR from aquamarine ]: Implementation wayland failed, erasing.
+DEBUG from aquamarine ]: reopenDRMNode: drmModeCreateLease failed, falling back to open
+DEBUG from aquamarine ]: reopenDRMNode: opening node /dev/dri/card0
+ERR from aquamarine ]: reopenDRMNode: drmGetMagic failed: Invalid argument
+CRIT from aquamarine ]: Failed to create an allocator (reopenDRMNode failed)
+CRIT ]: m_pAqBackend couldn't start! This usually means aquamarine could not find a GPU or encountered some issues. Make sure you're running either on a tty or on a Wayland session, NOT an X11 one.
+CRIT ]: Critical error thrown: CBackend::create() failed!
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  CBackend::create() failed!
+Hyprland has crashed :( Consult the crash report at /tmp/cache/hyprland/hyprlandCrashReport4.txt for more information.
+terminate called recursively
+[  122.111156] CRIT: [libuksched] <thread.c @  151> Assertion failure: (!((t)->flags & (0x010)) && ((t)->flags & (0x008)))
+[  122.111818] CRIT: Unikraft Crash - Ijiraq (0.21.0)
+[  122.112948] CRIT:     _      
+[  122.113016] CRIT:   cx xo    
+[  122.113071] CRIT:   (|O|)/V  
+[  122.113124] CRIT:            
+[  122.113191] CRIT: Registers:
+[  122.113326] CRIT:  rip: 0008:0000000000153b38
+[  122.113434] CRIT:  rsp: 0010:000000100141e2e0 eflags: 00010006 orig_rax: 0000000000000000
+[  122.113584] CRIT:  rax: 0000000000000001 rbx: 0000000400698020 rcx:0000000000000001
+[  122.113717] CRIT:  rdx: 00000000001a0cf0 rsi: 0000000000000007 rdi:0000000000000000
+[  122.113848] CRIT:  rbp: 000000100141e2f0 r08: 0000000000000018 r09:0000000000000781
+[  122.113976] CRIT:  r10: 00000000001850ad r11: 00000000000003d4 r12:0000000000000000
+[  122.114107] CRIT:  r13: 000000047f961020 r14: 0000001c6e63edcd r15:0000000000000000
+[  122.

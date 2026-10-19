@@ -83,6 +83,7 @@ struct drm_mode_obj_get_properties {
 #define DRM_NR_VERSION            0x00
 #define DRM_NR_GET_UNIQUE         0x01
 #define DRM_NR_GET_MAGIC          0x02
+#define DRM_NR_AUTH_MAGIC         0x11
 #define DRM_NR_SET_VERSION        0x07
 #define DRM_NR_GEM_CLOSE          0x09
 #define DRM_NR_GET_CAP            0x0c
