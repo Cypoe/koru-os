@@ -1,0 +1,34 @@
+// koruos/native — the freestanding provider for the `koru-native` arm.
+//
+// runtime.zig carries the two contracts the emitted backend declares as
+// externs: the heap (posix_memalign/free over a bump region) and the console
+// (fputs/stdout/stderr routed to COM1 115200 8N1). The rows below attach
+// koru-native bindings to the always-on runtime and print interfaces —
+// the declaring module is provenance; the declared `iface` names what the
+// binding serves (DESIGN-0001 §11.1). Every other interface still refuses
+// on this arm until its provider family exists; the gap enumeration in
+// notes/arm-gap-enumeration.md is the work order.
+
+~import koruos/realize
+
+~koruos/realize:row {
+    "iface": "koru.runtime",
+    "binds": [
+        {
+            "arm": "koru-native",
+            "mechanism": "native-runtime",
+            "deltas": ["src:koru/native/runtime.zig"]
+        }
+    ]
+}
+
+~koruos/realize:row {
+    "iface": "std.io:print",
+    "binds": [
+        {
+            "arm": "koru-native",
+            "mechanism": "native-runtime",
+            "deltas": ["src:koru/native/runtime.zig"]
+        }
+    ]
+}

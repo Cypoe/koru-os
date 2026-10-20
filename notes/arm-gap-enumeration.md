@@ -52,6 +52,32 @@ blk last (first real device driver).
 - `koruos/slice` has no linuxu binding: `isa-debugcon` is a QEMU port device;
   `outb` in linuxu userspace traps. First honest per-arm gap in the catalog.
 
+## Landed: the first provider (`koruos/native`, post-0d49358)
+
+`koru/native/` is the first `koru-native` provider family: `runtime.zig`
+compiles freestanding (`zig build-obj -target x86_64-freestanding-none`)
+and carries the exact contract the emitted backend declares — the
+flow-prologue heap (`posix_memalign`/`free` over a 4 MiB bump region;
+`free` is a no-op until the spawn seam lands) and `__kout`'s console
+(`fputs`/`stdout`/`stderr` routed to COM1 115200 8N1 — real hardware,
+QEMU `-serial`, and a debug board alike; deliberately not isa-debugcon).
+
+Its `index.kz` declares two `koruos/realize:row` blocks whose `iface`
+targets `koru.runtime` and `std.io:print` — bindings merged onto the
+builtin rows with `koruos.native` provenance, mechanism `native-runtime`,
+payload `deltas=src:koru/native/runtime.zig`. Measured:
+
+- program importing `koruos/native` → `manifest-koru-native.txt` written,
+  2 bound (`bind: koru.runtime -> native-runtime`, `bind: std.io:print
+  -> native-runtime`), no refusals;
+- program *not* importing it → both interfaces still refuse. The provider
+  is opt-in: a substrate is a lift you import, not ambient magic.
+
+Remaining gap families, unchanged order: entropy+clock (silo/nid/slice),
+spawn seam, blk transport, debug channel — plus the boot entry itself
+(multiboot/UEFI stub calling the emitted entry; the runtime provides
+symbols, not `_start`).
+
 ## Semantics (fixed in this slice)
 
 - A used interface whose row exists but has no binding for the selected arm is a
