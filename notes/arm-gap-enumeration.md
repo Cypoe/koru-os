@@ -73,9 +73,24 @@ payload `deltas=src:koru/native/runtime.zig`. Measured:
 - program *not* importing it → both interfaces still refuse. The provider
   is opt-in: a substrate is a lift you import, not ambient magic.
 
-Remaining gap families, unchanged order: entropy+clock (silo/nid/slice),
-spawn seam, blk transport, debug channel — plus the boot entry itself
-(multiboot/UEFI stub calling the emitted entry; the runtime provides
+Second wave (same provider, more contracts): `runtime.zig` grew
+`ukplat_monotonic_clock` — TSC calibrated once against the i8253 PIT
+channel 2 (1.193182 MHz, ~10 ms once, no guessed frequency). Measured on
+the real boot programs (`import koruos/native` added — opt-in holds):
+
+- `boot_silo` → 3 bound, manifest written (entropy is the `rdrand`
+  instruction in the lift itself — `needs:cpu rdrand` rides the bind
+  deltas);
+- `boot_nid` → 3 bound (clock + heap + console);
+- `boot_slice` → 3 bound (the debug view stays `isa-debugcon` — QEMU
+  `-debugcon` only; writes silently drop on real hw, so a native debug
+  channel remains an open provider);
+- `boot_spawn` → still 12 refusals — correct: its externs resolve but
+  there is no process substrate beneath; the spawn seam is its own
+  family (M-SPAWN-MMU), not a runtime.zig append.
+
+Remaining gap families: spawn seam, blk transport, a real debug channel,
+plus the boot entry itself (multiboot/UEFI stub; runtime.zig provides
 symbols, not `_start`).
 
 ## Semantics (fixed in this slice)

@@ -22,16 +22,14 @@ fn outb(port: u16, value: u8) void {
         :
         : [value] "{al}" (value),
           [port] "N{dx}" (port),
-        : .{ .memory = true }
-    );
+        : .{ .memory = true });
 }
 
 fn inb(port: u16) u8 {
     return asm volatile ("inb %[port], %[result]"
         : [result] "={al}" (-> u8),
         : [port] "N{dx}" (port),
-        : .{ .memory = true }
-    );
+        : .{ .memory = true });
 }
 
 var serial_ready = false;
@@ -94,4 +92,51 @@ export fn posix_memalign(memptr: *?*anyopaque, alignment: usize, size: usize) ca
 
 export fn free(ptr: ?*anyopaque) callconv(.c) void {
     _ = ptr;
+}
+
+// ---- clock contract -------------------------------------------------------
+
+// ukplat_monotonic_clock() -> u64 ns — what koruos/nid, koruos/slice and
+// koruos/spawn extern. Implemented on the TSC, calibrated once at first
+// read against the i8253 PIT channel 2 (1.193182 MHz, always present):
+// no guessed frequency, no boot input. Honest bounds: monotonic ticks on
+// the boot CPU only (unsynchronized across cores, TSC-invariant assumed),
+// ~10 ms calibration stall once, PIT-window accuracy.
+const PIT_CH2: u16 = 0x42;
+const PIT_MODE: u16 = 0x43;
+const PC_SPEAKER: u16 = 0x61;
+const PIT_HZ: u64 = 1_193_182;
+
+fn rdtsc() u64 {
+    var lo: u32 = undefined;
+    var hi: u32 = undefined;
+    asm volatile ("rdtsc"
+        : [lo] "={eax}" (lo),
+          [hi] "={edx}" (hi),
+        :
+        : .{ .memory = true });
+    return (@as(u64, hi) << 32) | lo;
+}
+
+var tsc_hz: u64 = 0;
+
+fn calibrateTsc() u64 {
+    if (tsc_hz != 0) return tsc_hz;
+    const window: u64 = 11932; // ~10 ms at 1.193182 MHz
+    const sb = inb(PC_SPEAKER);
+    outb(PC_SPEAKER, (sb & 0xFC) | 0x01); // ch2 gate on, speaker off
+    outb(PIT_MODE, 0xB0); // ch2, lobyte/hibyte, mode 0 (one-shot)
+    outb(PIT_CH2, @truncate(window));
+    outb(PIT_CH2, @truncate(window >> 8));
+    const t0 = rdtsc();
+    while (inb(PC_SPEAKER) & 0x20 == 0) {} // OUT rises at terminal count
+    tsc_hz = (rdtsc() - t0) * PIT_HZ / window;
+    return tsc_hz;
+}
+
+export fn ukplat_monotonic_clock() callconv(.c) u64 {
+    const hz = calibrateTsc();
+    const t = rdtsc();
+    // t/hz ~ seconds; split so the remainder term cannot overflow u64.
+    return (t / hz) * 1_000_000_000 + (t % hz) * 1_000_000_000 / hz;
 }

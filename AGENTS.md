@@ -24,10 +24,12 @@ koruc <prog>.k realize matrix                # -> arm-matrix.txt: row catalog x 
 Artifacts land in the *working directory* — run fixture programs from a
 scratch dir, not the repo root, or generated files dirty `git status`.
 
-`realize-marks.txt` (gen mode) commits every solver verdict in
-`@witness("relation","site","arm<-mechanism","verdict","payload")` shape —
-`admission` for bind/refuse/waive, `declaration` for malformed rows —
-with `declared_by`/`bind_by` provenance and the row's evidence grade.
+`<stem>.marks` (gen mode) — the command marks channel — commits every solver
+verdict in `@witness("relation","site","arm<-mechanism","verdict","payload")`
+shape — `admission` for bind/refuse/waive, `declaration` for malformed rows —
+with `declared_by`/`bind_by` provenance and the row's evidence grade. The
+channel validates the wire invariants at commit and the compiler names the
+artifact; `verify/witness/WitnessCheck.lean` re-decides both relations.
 `rows.json` (matrix mode) is the resolved catalog as data;
 `check-realize.sh` re-counts it independently — the matrix is re-decided,
 not trusted.

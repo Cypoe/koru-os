@@ -5,9 +5,12 @@ branch. koru-os authored the **consumer side** — a real corpus in the
 committed-verdict shape, exercised in the wild. The emission and
 re-decision legs are upstream.
 
-## What koru-os now produces (M-class today, corpus-shaped)
+## What koru-os now produces
 
-- `realize-marks.txt` — every solver verdict as
+- `<stem>.marks` — every solver verdict minted through the upstream
+  command-marks channel (`emitter_helpers.commitCommandMark`, flushed by
+  the backend after dispatch; `command_exit_code` is honored *after* the
+  flush, so refused runs still land their corpus). Line shape:
   `@witness("kind","site","arm<-mechanism","verdict","payload")`.
   - `admission` — demanded iface bound / refused / waived (std-pure), incl.
     the always-on `koru.runtime` row. Payload carries `row=<iface>`,
@@ -37,19 +40,28 @@ mark. The koru-os corpus is the worked example of this factorization.
 
 ## Asks for the verification session (koru:ccomp / verify-path)
 
-1. **Commands as witness producers.** `[command]` procs (`|zig`) can read
-   the AST and write files but cannot mint `.marks` — that channel is
-   built for passes (auto-discharge, transforms). Realize *is* a solver:
-   its admit/refuse output should be mark-minted, not text-written. The
-   open mechanism question: may a command commit marks (or should a
-   sanctioned post-command pass re-emit them from `realize-marks.txt`-shaped
-   data)? koru-os has the corpus either way — the leg is the minting path.
-2. **Checker-side relations for `admission` / `declaration`.**
-   WitnessCheck.lean re-decides committed lines; these relations are the
-   vocabulary it would need — admission = re-run the row-match over the
-   committed payload (iface, arm, mechanism, provenance); declaration =
-   re-parse/refuse by the same rules. The corpus already exercises both;
-   the relation implementations are upstream.
+1. ~~**Commands as witness producers.**~~ **LANDED upstream.** Commands
+   mint marks via `commitCommandMark(al, kind, site, arrow, verdict,
+   payload)` — wire invariants (non-empty, no `"`/CR/LF) are validated at
+   commit, the backend flushes `<stem>.marks` after dispatch, and
+   `command_exit_code` is applied *after* the flush so a refused run
+   still commits its verdicts. `realize` rides it now; measured marks
+   for bound/refused/waived and declaration refusals. **Measured 10/10
+   in `check-realize.sh`.** Open follow-up inside this ask: whether
+   `WitnessCheck.lean` can re-decide the command-minted lines yet (ask 2).
+2. ~~**Checker-side relations for `admission` / `declaration`.**~~
+   **LANDED upstream (working tree).** `WitnessCheck.lean` grew a
+   `@witness` mark parser, `ruleAdmission`/`ruleDeclaration` rulings
+   (the verdict is FORCED by the committed payload's evidence shape —
+   the catalog stays solver-side), the `admission_bound_mechanism`
+   theorem, corpus-level `admissionCheck` (one verdict per (site,arm),
+   one arm per `.marks` file — splice detection), and `witness_gate.sh`
+   consumes golden/forged/drift marks corpora. Caught in the wild and
+   fixed: `row=` names the serving row's declared iface, so tor-scoped
+   demands (`site=koruos.silo:open` ← `row=koruos/silo`) need a
+   `rowServesSite` correspondence — module row or tor-prefix row —
+   landed with pins. Measured: every tor-scoped silo/spawn mark from
+   real runs re-decides (12+14 lines, 0 bad).
 3. **`|c[verified]` minting.** The census counts it; nothing produces it.
    Proc-level contract checks (`requires`/`preserves`/`obliges` over user
    procs) are decidable because koru-os's vocabularies are finite —
@@ -67,8 +79,9 @@ mark. The koru-os corpus is the worked example of this factorization.
    ready-made consumer.
 5. **`[flow-eval]` emission** (doc's named hole): koruc doesn't emit
    flow-eval claims; the semantics kernel consumes hand-authored corpora.
-   `realize-marks.txt` is the same pattern — koru-os side authored the
-   corpus; the ask is the emission leg, in both cases.
+   realize's `<stem>.marks` showed the pattern end-to-end — a solver
+   minted its verdict corpus the day the channel opened; the ask is the
+   emission leg for flow-eval, in the same shape.
 
 ## Relation inventory (what the vocabulary still lacks)
 

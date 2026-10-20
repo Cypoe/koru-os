@@ -15,14 +15,18 @@ emits a verdict: **bound / refused / waived**. Unikraft is one arm of
 four (`unikraft/qemu-x86_64`, `unikraft/linuxu-x86_64`, `hosted`,
 `koru-native`); refusals name the missing axis.
 
-## What it produces today (M-class, corpus-shaped)
+## What it produces today
 
 `koruc <prog>.k realize gen --arm <a>` writes `realize.txt` (human
-report), `realize-marks.txt` (**the corpus**), plus `manifest-<arm>.txt`
-or Kraftfile/Makefile.uk. `realize matrix` writes `arm-matrix.txt` +
-`rows.json` (resolved catalog as data — a re-decider input).
+report), `<stem>.marks` (**the corpus — minted through the upstream
+command-marks channel**, `emitter_helpers.commitCommandMark`; the backend
+flushes after dispatch and honors `command_exit_code` only *after* the
+flush, so refused runs still commit their verdicts), plus
+`manifest-<arm>.txt` or Kraftfile/Makefile.uk. `realize matrix` writes
+`arm-matrix.txt` + `rows.json` (resolved catalog as data — a re-decider
+input).
 
-`realize-marks.txt` — every verdict in the upstream mark shape:
+`<stem>.marks` — every verdict in the upstream mark shape:
 
 ```
 @witness("admission","koru.runtime","koru-native<-native-runtime","bound","row=koru.runtime declared_by=builtin bind_by=koruos.native grade=V")
@@ -40,11 +44,10 @@ does not own), `grade=` (evidence class V/M/C/D), `reason=` tag.
 
 ## The asks (upstream legs)
 
-1. **Commands as witness producers.** `realize` is a `|zig` command proc;
-   `.marks` minting is a pass-channel feature (auto-discharge,
-   transforms). Open mechanism question: may a command commit marks, or
-   should a post-command pass re-emit them from the marks-shaped file?
-   koru-os has the corpus either way — the leg is the minting path.
+1. ~~**Commands as witness producers.**~~ **LANDED** — `commitCommandMark`
+   validates wire invariants at commit, `flushCommandMarks` writes
+   `<stem>.marks`, `command_exit_code` lets a refused run commit before
+   exiting. `realize` rides it (measured 10/10 `check-realize.sh`).
 2. **Checker-side relations.** `admission` = re-run the row-match over the
    committed payload; `declaration` = re-parse/refuse by the same rules.
    Vocabulary stays finite and checker-pinned; koru-os proves the

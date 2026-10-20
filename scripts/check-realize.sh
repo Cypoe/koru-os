@@ -97,27 +97,43 @@ else bad "tnat native (rc=$RC)"; fi
 # the verdicts must also land in the witness-shaped corpus, and the marks
 # must name the *bind's* provenance (koruos/native), not just the row's
 if grep -q 'admission","koru.runtime","koru-native<-native-runtime","bound".*bind_by=koruos.native' \
-   "$WORK/realize-marks.txt" 2>/dev/null \
+   "$WORK/tnat.marks" 2>/dev/null \
    && grep -q 'admission","std.io:print","koru-native<-native-runtime","bound"' \
-   "$WORK/realize-marks.txt"; then
+   "$WORK/tnat.marks"; then
     ok "verdicts committed in @witness mark shape"
-else bad "realize-marks.txt missing/misattributed"; fi
-rm -f "$WORK"/manifest-*.txt "$WORK"/realize.txt "$WORK"/realize-marks.txt
+else bad "tnat.marks missing/misattributed"; fi
+rm -f "$WORK"/manifest-*.txt "$WORK"/realize.txt "$WORK"/*.marks
 
 run_k tnoimp gen --arm koru-native
 if [ "$RC" -ne 0 ] && [ ! -f "$WORK/manifest-koru-native.txt" ] \
    && grep -q "missing=binding" "$WORK/realize.txt" 2>/dev/null \
    && grep -q 'admission","koru.runtime","koru-native<-none","refused"' \
-      "$WORK/realize-marks.txt" 2>/dev/null; then
+      "$WORK/tnoimp.marks" 2>/dev/null; then
     ok "koru-native refuses without the provider import (mark + line)"
 else bad "tnoimp native (rc=$RC)"; fi
 
 # a malformed declaration must refuse in both surfaces (text + marks)
 run_k negative_badrow gen
 if grep -q 'declaration","rzfix.badrow","decl<-parsed","refused","binds-0-lacks-arm-or-mechanism"' \
-   "$WORK/realize-marks.txt" 2>/dev/null; then
+   "$WORK/negative_badrow.marks" 2>/dev/null; then
     ok "declaration refusals committed as marks"
 else bad "badrow mark missing"; fi
+
+# the native provider binds the clock/entropy lifts it serves — boot_silo
+# with koruos/native imported must bind all 11 silo tors on koru-native
+FIX_SILO="$(cygpath -m "$ROOT/koru/silo/tests" 2>/dev/null || echo "$ROOT/koru/silo/tests")"
+sed -e "s|{{ ENTRY }}|$FIX_SILO|g" \
+    -e "s|unikraft: .*|unikraft: $LIBS/unikraft|" \
+    -e '0,/^import /s//import koruos\/native\nimport /' \
+    "$ROOT/koru/silo/tests/boot_silo.k" > "$WORK/tsilo_nat.k"
+run_k tsilo_nat gen --arm koru-native
+if [ -f "$WORK/manifest-koru-native.txt" ] \
+   && grep -q "bind: koruos/silo -> native-runtime" "$WORK/manifest-koru-native.txt" \
+   && grep -q 'admission","koruos.silo:open","koru-native<-native-runtime","bound".*bind_by=koruos.silo' \
+      "$WORK/tsilo_nat.marks" 2>/dev/null; then
+    ok "koru-native binds the silo lift (entropy+heap+console)"
+else bad "tsilo_nat native (rc=$RC)"; fi
+rm -f "$WORK"/manifest-*.txt "$WORK"/realize.txt "$WORK"/*.marks
 
 # --- matrix: the printed projection must re-decide from the catalog data ---
 run_k tnat matrix

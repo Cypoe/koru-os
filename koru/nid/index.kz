@@ -34,7 +34,9 @@
 ~import koruos/realize
 
 // realize row: which arms can serve this lift and how — a typed declaration,
-// harvested by the realize command (DESIGN-0001 §11.1).
+// harvested by the realize command (DESIGN-0001 §11.1). The koru-native clock
+// is TSC calibrated once against PIT ch2 (koru/native/runtime.zig) —
+// monotonic ns, not wall time.
 ~koruos/realize:row {
     "iface": "koruos/nid",
     "stack": 4096,
@@ -42,7 +44,9 @@
     "evidence": "V: koru/nid/index.kz externs; frames <= 1 KiB buffers",
     "binds": [
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
-        { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" }
+        { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" },
+        { "arm": "koru-native", "mechanism": "native-runtime",
+          "deltas": ["src:koru/native/runtime.zig"] }
     ]
 }
 

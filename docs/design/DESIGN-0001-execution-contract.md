@@ -2610,13 +2610,14 @@ program bound `koruos/silo` on `hosted` via its own `host-libc` binding, inherit
 the module's stack/resources by deferral). Unset row fields defer to the earlier
 declaration; set-and-different is a contradiction refusal. Duplicate (iface, arm)
 bindings refuse naming both provenances. Every verdict — admission (bind, refuse,
-waive) and declaration (malformed row) — is also committed to `realize-marks.txt`
-in `@witness` mark shape with `declared_by`/`bind_by` provenance and the evidence
-grade: kind names a decidable *relation*, the domain rides the payload as data.
-`realize matrix` additionally writes `rows.json` (the resolved catalog) so the
-printed matrix is re-decidable by an independent consumer (`scripts/check-realize.sh`
-recounts it). This is the corpus the witness channel would consume when commands
-gain the ability to mint marks — the verdict surface is corpus-shaped today.
+waive) and declaration (malformed row) — is minted through the command-marks
+channel (`emitter_helpers.commitCommandMark`) and flushed by the backend to
+`<stem>.marks` in `@witness` shape with `declared_by`/`bind_by` provenance and the
+evidence grade; `command_exit_code` is honored *after* the flush so a refused run
+still commits its corpus. Kind names a decidable *relation*, the domain rides the
+payload as data. `realize matrix` additionally writes `rows.json` (the resolved
+catalog) so the printed matrix is re-decidable by an independent consumer
+(`scripts/check-realize.sh` recounts it).
 
 ### 11.2 One binding refusal
 

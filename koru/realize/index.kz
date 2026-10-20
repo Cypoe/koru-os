@@ -127,12 +127,29 @@
     for (builtin_rows) |r| rows.append(allocator, r) catch return;
     var malformed = std.ArrayListUnmanaged(u8){};
     defer malformed.deinit(allocator);
-    // Solver verdicts in @witness mark shape — the committed-corpus surface.
-    // kind names a decidable relation (admission, declaration), never a domain
-    // noun; the domain rides the site/payload as data. When the .marks channel
-    // opens to commands this file is what a checker re-decides.
-    var marks = std.ArrayListUnmanaged(u8){};
-    defer marks.deinit(allocator);
+    // Solver verdicts ride the command marks channel: commitCommandMark
+    // validates the wire invariants and the backend flushes `<stem>.marks`
+    // after dispatch. kind names a decidable relation (admission,
+    // declaration), never a domain noun; the domain rides site/payload as
+    // data. The line format never lives here.
+    const eh = @import("emitter_helpers");
+    const commit_mark = struct {
+        fn go(
+            al: __koru_std.mem.Allocator,
+            kind: []const u8,
+            comptime site_fmt: []const u8, site_args: anytype,
+            comptime arrow_fmt: []const u8, arrow_args: anytype,
+            verdict: []const u8,
+            comptime payload_fmt: []const u8, payload_args: anytype,
+        ) void {
+            const site = std.fmt.allocPrint(al, site_fmt, site_args) catch return;
+            const arrow = std.fmt.allocPrint(al, arrow_fmt, arrow_args) catch return;
+            const payload = std.fmt.allocPrint(al, payload_fmt, payload_args) catch return;
+            if (!eh.commitCommandMark(al, kind, site, arrow, verdict, payload)) {
+                std.debug.print("realize: mark commit refused (kind={s} site={s})\n", .{ kind, site });
+            }
+        }
+    }.go;
     const gradeOf = struct {
         fn go(e: []const u8) u8 {
             if (e.len > 1 and e[1] == ':') return e[0];
@@ -165,7 +182,6 @@
             fn go(
                 rows_l: *std.ArrayListUnmanaged(Row),
                 malformed_l: *std.ArrayListUnmanaged(u8),
-                marks_l: *std.ArrayListUnmanaged(u8),
                 al: __koru_std.mem.Allocator,
                 ra2: __koru_std.mem.Allocator,
                 prov: []const u8,
@@ -190,7 +206,7 @@
                     for (binds_in[i + 1 ..]) |b2| {
                         if (std.mem.eql(u8, b1.arm, b2.arm)) {
                             malformed_l.writer(al).print("refused: row for {s} in {s} binds arm {s} twice\n", .{ iface, prov, b1.arm }) catch {};
-                            marks_l.writer(al).print("@witness(\"declaration\",\"{s}\",\"decl<-parsed\",\"refused\",\"duplicate-arm {s} {s}\")\n", .{ prov, iface, b1.arm }) catch {};
+                            commit_mark(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "duplicate-arm {s} {s}", .{ iface, b1.arm });
                             return;
                         }
                     }
@@ -201,7 +217,7 @@
                         for (r.binds) |eb| {
                             if (std.mem.eql(u8, eb.arm, nb.arm)) {
                                 malformed_l.writer(al).print("refused: row for {s} declares arm {s} twice ({s} vs earlier {s})\n", .{ iface, nb.arm, prov, r.declared_by }) catch {};
-                                marks_l.writer(al).print("@witness(\"declaration\",\"{s}\",\"decl<-parsed\",\"refused\",\"duplicate-arm {s} {s} vs {s}\")\n", .{ prov, iface, nb.arm, r.declared_by }) catch {};
+                                commit_mark(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "duplicate-arm {s} {s} vs {s}", .{ iface, nb.arm, r.declared_by });
                                 return;
                             }
                         }
@@ -213,7 +229,7 @@
                         (evidence.len != 0 and r.evidence.len != 0 and !std.mem.eql(u8, r.evidence, evidence));
                     if (contra) {
                         malformed_l.writer(al).print("refused: row for {s} in {s} contradicts the earlier declaration by {s}\n", .{ iface, prov, r.declared_by }) catch {};
-                        marks_l.writer(al).print("@witness(\"declaration\",\"{s}\",\"decl<-parsed\",\"refused\",\"contradiction {s} vs {s}\")\n", .{ prov, iface, r.declared_by }) catch {};
+                        commit_mark(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "contradiction {s} vs {s}", .{ iface, r.declared_by });
                         return;
                     }
                     if (r.stack == 0) r.stack = stack_n;
@@ -227,7 +243,7 @@
                 }
                 if (stack_n == 0) {
                     malformed_l.writer(al).print("refused: row for {s} in {s} lacks required field \"stack\" (new row)\n", .{ iface, prov }) catch {};
-                    marks_l.writer(al).print("@witness(\"declaration\",\"{s}\",\"decl<-parsed\",\"refused\",\"new-row-lacks-stack {s}\")\n", .{ prov, iface }) catch {};
+                    commit_mark(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "new-row-lacks-stack {s}", .{iface});
                     return;
                 }
                 rows_l.append(al, .{
@@ -246,7 +262,6 @@
             fn go(
                 rows_l: *std.ArrayListUnmanaged(Row),
                 malformed_l: *std.ArrayListUnmanaged(u8),
-                marks_l: *std.ArrayListUnmanaged(u8),
                 al: __koru_std.mem.Allocator,
                 ra2: __koru_std.mem.Allocator,
                 fl: *const ast.Flow,
@@ -262,19 +277,19 @@
                 }
                 if (src.len == 0) {
                     malformed_l.writer(al).print("refused: koruos/realize:row in {s} has no source block\n", .{prov}) catch {};
-                    marks_l.writer(al).print("@witness(\"declaration\",\"{s}\",\"decl<-parsed\",\"refused\",\"no-source-block\")\n", .{prov}) catch {};
+                    commit_mark(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "no-source-block", .{});
                     return;
                 }
                 const wrapped = std.fmt.allocPrint(ra2, "{{{s}}}", .{src}) catch return;
                 const parsed = std.json.parseFromSlice(RowDecl, ra2, wrapped, .{ .ignore_unknown_fields = true }) catch {
                     malformed_l.writer(al).print("refused: koruos/realize:row in {s}: malformed JSON block ({s}:{d})\n", .{ prov, fl.location.file, fl.location.line }) catch {};
-                    marks_l.writer(al).print("@witness(\"declaration\",\"{s}\",\"decl<-parsed\",\"refused\",\"malformed-json {s}:{d}\")\n", .{ prov, fl.location.file, fl.location.line }) catch {};
+                    commit_mark(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "malformed-json {s}:{d}", .{ fl.location.file, fl.location.line });
                     return;
                 };
                 const decl = parsed.value;
                 if (decl.iface.len == 0 or decl.binds.len == 0) {
                     malformed_l.writer(al).print("refused: koruos/realize:row in {s} lacks required field \"iface\" or \"binds\"\n", .{prov}) catch {};
-                    marks_l.writer(al).print("@witness(\"declaration\",\"{s}\",\"decl<-parsed\",\"refused\",\"lacks-iface-or-binds\")\n", .{prov}) catch {};
+                    commit_mark(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "lacks-iface-or-binds", .{});
                     return;
                 }
                 const bs = ra2.alloc(Binding, decl.binds.len) catch return;
@@ -282,14 +297,14 @@
                 for (decl.binds, 0..) |bd, i| {
                     if (bd.arm.len == 0 or bd.mechanism.len == 0) {
                         malformed_l.writer(al).print("refused: koruos/realize:row in {s} binds[{d}] lacks \"arm\" or \"mechanism\"\n", .{ prov, i }) catch {};
-                        marks_l.writer(al).print("@witness(\"declaration\",\"{s}\",\"decl<-parsed\",\"refused\",\"binds-{d}-lacks-arm-or-mechanism\")\n", .{ prov, i }) catch {};
+                        commit_mark(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "binds-{d}-lacks-arm-or-mechanism", .{i});
                         ok = false;
                         break;
                     }
                     bs[i] = .{ .arm = bd.arm, .mechanism = bd.mechanism, .deltas = bd.deltas, .declared_by = prov };
                 }
                 if (!ok) return;
-                mergeDecl(rows_l, malformed_l, marks_l, al, ra2, prov, decl.iface, decl.stack, decl.resources, decl.evidence, bs);
+                mergeDecl(rows_l, malformed_l, al, ra2, prov, decl.iface, decl.stack, decl.resources, decl.evidence, bs);
             }
         }.go;
 
@@ -303,29 +318,29 @@
                 const line = std.mem.trim(u8, mi.host_line.content, " \t\r");
                 if (!std.mem.startsWith(u8, line, "const realize_row")) continue;
                 const bad = struct {
-                    fn go(ml: *std.ArrayListUnmanaged(u8), kl: *std.ArrayListUnmanaged(u8), al: __koru_std.mem.Allocator, m: []const u8, field: []const u8) void {
+                    fn go(ml: *std.ArrayListUnmanaged(u8), al: __koru_std.mem.Allocator, m: []const u8, field: []const u8) void {
                         ml.writer(al).print("refused: realize_row in module {s} lacks required field .{s}\n", .{ m, field }) catch {};
-                        kl.writer(al).print("@witness(\"declaration\",\"{s}\",\"decl<-parsed\",\"refused\",\"lacks-field {s}\")\n", .{ m, field }) catch {};
+                        commit_mark(al, "declaration", "{s}", .{m}, "decl<-parsed", .{}, "refused", "lacks-field {s}", .{field});
                     }
                 }.go;
                 const iface = nidField(line, "iface") orelse {
-                    bad(&malformed, &marks, allocator, prov, "iface");
+                    bad(&malformed, allocator, prov, "iface");
                     continue;
                 };
                 const stack_s = nidField(line, "stack") orelse {
-                    bad(&malformed, &marks, allocator, prov, "stack");
+                    bad(&malformed, allocator, prov, "stack");
                     continue;
                 };
                 const arm_s = nidField(line, "arm") orelse {
-                    bad(&malformed, &marks, allocator, prov, "arm");
+                    bad(&malformed, allocator, prov, "arm");
                     continue;
                 };
                 const mech = nidField(line, "mechanism") orelse {
-                    bad(&malformed, &marks, allocator, prov, "mechanism");
+                    bad(&malformed, allocator, prov, "mechanism");
                     continue;
                 };
                 const stack_n = std.fmt.parseInt(u64, stack_s, 10) catch {
-                    bad(&malformed, &marks, allocator, prov, "stack");
+                    bad(&malformed, allocator, prov, "stack");
                     continue;
                 };
                 const dstr = nidField(line, "deltas") orelse "";
@@ -337,7 +352,7 @@
                 }
                 const bs = ra.alloc(Binding, 1) catch return;
                 bs[0] = .{ .arm = arm_s, .mechanism = mech, .deltas = dl.items, .declared_by = prov };
-                mergeDecl(&rows, &malformed, &marks, allocator, ra, prov, iface, stack_n, nidField(line, "resources") orelse "", nidField(line, "evidence") orelse "", bs);
+                mergeDecl(&rows, &malformed, allocator, ra, prov, iface, stack_n, nidField(line, "resources") orelse "", nidField(line, "evidence") orelse "", bs);
             }
         }
 
@@ -347,7 +362,7 @@
             const prov = item.module_decl.logical_name;
             for (item.module_decl.items) |*mi| {
                 if (mi.* != .flow) continue;
-                scanFlow(&rows, &malformed, &marks, allocator, ra, &mi.flow, prov);
+                scanFlow(&rows, &malformed, allocator, ra, &mi.flow, prov);
             }
         }
 
@@ -355,7 +370,7 @@
         //    does not own (its own provider for a lift on a given arm)
         for (program.items) |*item| {
             if (item.* != .flow) continue;
-            scanFlow(&rows, &malformed, &marks, allocator, ra, &item.flow, item.flow.location.file);
+            scanFlow(&rows, &malformed, allocator, ra, &item.flow, item.flow.location.file);
         }
     }
 
@@ -531,7 +546,8 @@
     if (app_name.len == 0) {
         if (is_unikraft) {
             std.debug.print("realize: refused: no unikraft:image declared\n", .{});
-            std.process.exit(2);
+            eh.command_exit_code = 2;
+            return;
         }
         app_name = "koru";
     }
@@ -566,10 +582,10 @@
         hit[0] = false;
         refusals += 1;
         rw.print("refused: interface=koru.runtime arm={s} phase=configure missing=runtime binding for arm\n", .{arm}) catch return;
-        marks.writer(allocator).print("@witness(\"admission\",\"koru.runtime\",\"{s}<-none\",\"refused\",\"row=koru.runtime declared_by=builtin reason=missing-binding\")\n", .{arm}) catch {};
+        commit_mark(allocator, "admission", "koru.runtime", .{}, "{s}<-none", .{arm}, "refused", "row=koru.runtime declared_by=builtin reason=missing-binding", .{});
     } else {
         const rb = rows.items[0].binds[bound[0]];
-        marks.writer(allocator).print("@witness(\"admission\",\"koru.runtime\",\"{s}<-{s}\",\"bound\",\"row=koru.runtime declared_by={s} bind_by={s} grade={c}\")\n", .{ arm, rb.mechanism, rows.items[0].declared_by, rb.declared_by, gradeOf(rows.items[0].evidence) }) catch {};
+        commit_mark(allocator, "admission", "koru.runtime", .{}, "{s}<-{s}", .{ arm, rb.mechanism }, "bound", "row=koru.runtime declared_by={s} bind_by={s} grade={c}", .{ rows.items[0].declared_by, rb.declared_by, gradeOf(rows.items[0].evidence) });
     }
     rw.print("used: koru.runtime (always)\n", .{}) catch return;
     for (used.items) |u| {
@@ -614,20 +630,20 @@
                 // the interface is known but cannot be served on this arm
                 refusals += 1;
                 rw.print("refused: interface={s}:{s} arm={s} phase=configure missing=binding for arm (row serves: {s})\n", .{ u.module, u.tor, arm, served.items }) catch return;
-                marks.writer(allocator).print("@witness(\"admission\",\"{s}:{s}\",\"{s}<-none\",\"refused\",\"row={s} declared_by={s} reason=missing-binding serves={s}\")\n", .{ u.module, u.tor, arm, m_iface, m_prov, served.items }) catch {};
+                commit_mark(allocator, "admission", "{s}:{s}", .{ u.module, u.tor }, "{s}<-none", .{arm}, "refused", "row={s} declared_by={s} reason=missing-binding serves={s}", .{ m_iface, m_prov, served.items });
             } else if (std.mem.startsWith(u8, u.module, "std.")) {
                 // std modules with no row are pure codegen — no arm mechanism required
                 rw.print("used: {s}:{s} -> no row needed (std, pure)\n", .{ u.module, u.tor }) catch return;
-                marks.writer(allocator).print("@witness(\"admission\",\"{s}:{s}\",\"{s}<-std-codegen\",\"waived\",\"reason=std-pure\")\n", .{ u.module, u.tor, arm }) catch {};
+                commit_mark(allocator, "admission", "{s}:{s}", .{ u.module, u.tor }, "{s}<-std-codegen", .{arm}, "waived", "reason=std-pure", .{});
             } else {
                 refusals += 1;
                 rw.print("refused: interface={s}:{s} arm={s} phase=configure missing=realize row offered=none\n", .{ u.module, u.tor, arm }) catch return;
-                marks.writer(allocator).print("@witness(\"admission\",\"{s}:{s}\",\"{s}<-none\",\"refused\",\"reason=missing-row\")\n", .{ u.module, u.tor, arm }) catch {};
+                commit_mark(allocator, "admission", "{s}:{s}", .{ u.module, u.tor }, "{s}<-none", .{arm}, "refused", "reason=missing-row", .{});
             }
             continue;
         }
         rw.print("used: {s}:{s}\n", .{ u.module, u.tor }) catch return;
-        marks.writer(allocator).print("@witness(\"admission\",\"{s}:{s}\",\"{s}<-{s}\",\"bound\",\"row={s} declared_by={s} bind_by={s} grade={c}\")\n", .{ u.module, u.tor, arm, m_mech, m_iface, m_prov, m_bindprov, m_grade }) catch {};
+        commit_mark(allocator, "admission", "{s}:{s}", .{ u.module, u.tor }, "{s}<-{s}", .{ arm, m_mech }, "bound", "row={s} declared_by={s} bind_by={s} grade={c}", .{ m_iface, m_prov, m_bindprov, m_grade });
     }
     for (rows.items, 0..) |r, ri| {
         if (!hit[ri]) continue;
@@ -768,26 +784,13 @@
     const rf = std.fs.cwd().createFile("realize.txt", .{}) catch return;
     rf.writeAll(report.items) catch {};
     rf.close();
-    {
-        var mout = std.ArrayListUnmanaged(u8){};
-        defer mout.deinit(allocator);
-        const mw = mout.writer(allocator);
-        mw.writeAll("# realize-marks.txt: solver verdicts in @witness mark shape (koruos/realize)\n") catch {};
-        mw.writeAll("# kind = a decidable relation (admission, declaration), never a domain noun;\n") catch {};
-        mw.writeAll("# the domain rides site/payload as data. arm ") catch {};
-        mw.writeAll(arm) catch {};
-        mw.writeAll("\n") catch {};
-        mw.writeAll(marks.items) catch {};
-        const mf = std.fs.cwd().createFile("realize-marks.txt", .{}) catch return;
-        mf.writeAll(mout.items) catch {};
-        mf.close();
-    }
     if (refusals != 0) {
         std.fs.cwd().deleteFile("Kraftfile") catch {};
         std.fs.cwd().deleteFile("Makefile.uk") catch {};
         std.fs.cwd().deleteFile(mfname) catch {};
         std.debug.print("realize: {d} refusal(s), no image manifest written; see realize.txt\n", .{refusals});
-        std.process.exit(3);
+        eh.command_exit_code = 3;
+        return;
     }
     if (!is_unikraft) {
         // ---- arm manifest: the bound rows, their mechanism, and their resources

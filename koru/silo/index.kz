@@ -24,7 +24,9 @@ extern fn free(ptr: ?*anyopaque) void;
 ~import koruos/realize
 
 // realize row: which arms can serve this lift and how — a typed declaration,
-// harvested by the realize command (DESIGN-0001 §11.1).
+// harvested by the realize command (DESIGN-0001 §11.1). The koru-native bind
+// needs a CPU with rdrand (QEMU -cpu host or +rdrand); externs are just
+// malloc/free.
 ~koruos/realize:row {
     "iface": "koruos/silo",
     "stack": 4096,
@@ -32,7 +34,9 @@ extern fn free(ptr: ?*anyopaque) void;
     "evidence": "V: koru/silo/index.kz rdrand64 and externs",
     "binds": [
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
-        { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" }
+        { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" },
+        { "arm": "koru-native", "mechanism": "native-runtime",
+          "deltas": ["src:koru/native/runtime.zig", "needs:cpu rdrand (QEMU -cpu host or +rdrand)"] }
     ]
 }
 
