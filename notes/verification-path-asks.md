@@ -70,11 +70,15 @@ corpus's requirements, not by syntax first.
    `rowServesSite` correspondence — module row or tor-prefix row —
    landed with pins. Measured: every tor-scoped silo/spawn mark from
    real runs re-decides (12+14 lines, 0 bad).
-3. **`|c[verified]` minting.** The census counts it; nothing produces it.
-   Proc-level contract checks (`requires`/`preserves`/`obliges` over user
-   procs) are decidable because koru-os's vocabularies are finite —
-   typestate transitions, bag membership, effect sets. This is the
-   "restricted congruent fragment" where proc witnesses pay.
+3. **`|c[verified]` minting — decision-blocked, not work-blocked.**
+   Per the verification session: `|c[verified]` is a *parked ruling*
+   (`koru-c-lane-test-plan.md` — "parked, not repudiated… come back only
+   if measured refusal rates prove the wall costs too much") and the
+   `requires` annotation surface is Lars's ledger item. Minting the tag
+   un-parks a ruling — his call. The koru-os-side evidence stays ready:
+   proc-level `requires`/`preserves`/`obliges` over finite vocabularies
+   (typestate, bag membership, effect sets) is the decidable fragment
+   where proc witnesses pay.
 4. **Path B adjacency — now with a landed instance.** The doc's "Use B"
    (koru-transform congruence) stays open at the IR level, but the same
    shape is now *measured* at gate level: `realize matrix` commits
@@ -86,11 +90,10 @@ corpus's requirements, not by syntax first.
    (missing toolchain = failure). This is the consumer pattern
    transform-oblige wants when pre/post IR surfaces exist: commit the
    transform's input as marks, commit the derived claim, recount.
-5. **`[flow-eval]` emission** (doc's named hole): koruc doesn't emit
-   flow-eval claims; the semantics kernel consumes hand-authored corpora.
-   realize's `<stem>.marks` showed the pattern end-to-end — a solver
-   minted its verdict corpus the day the channel opened; the ask is the
-   emission leg for flow-eval, in the same shape.
+5. ~~**`[flow-eval]` emission**~~ — **already existed upstream.**
+   `comptime_eval.zig` emits flow-eval claims on the enforce path,
+   `FlowCheck` re-decides them, `310_141` pins it (`semantics gate:
+   PASS`). No leg needed.
 
 ## Relation inventory (what the vocabulary still lacks)
 
