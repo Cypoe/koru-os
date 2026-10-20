@@ -2577,9 +2577,16 @@ being merged. NID build-time admission (§11.7) now names the selected arm in it
 and link predictions. Verified: the control program's Kraftfile on the default arm is
 unchanged; `--arm hosted` binds `koru.runtime`/`std.io:print` to `host-libc` and refuses
 `koruos/silo` (no hosted binding yet); both negatives still refuse with no artifacts.
-This is the first slice of rows-as-arm-independent-contract: a new arm becomes a set of
-bindings on the row table plus an emitter for `manifest-<arm>.txt`, not a fork of the
-command.
+`unikraft/linuxu-x86_64` is the first second kconfig arm: same providers, target derived
+from the arm id (`linuxu/x86_64`). `koruos/slice` deliberately has no linuxu binding —
+isa-debugcon is a QEMU port device; `outb` in linuxu userspace traps — which makes it the
+first honest per-arm gap in the catalog. Running with an arm that has no bindings
+(`--arm koru-native`) enumerates the standalone arm's provider gap as a refusal table;
+the generated tables are recorded in `notes/arm-gap-enumeration.md`. Semantics fixed in
+the same slice: a rowed interface that lacks the selected arm refuses even when it is
+`std.*` — the `std, pure` shortcut applies only to row-less std modules. This is the
+first slice of rows-as-arm-independent-contract: a new arm becomes a set of bindings on
+the row table plus an emitter for `manifest-<arm>.txt`, not a fork of the command.
 
 ### 11.2 One binding refusal
 

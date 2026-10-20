@@ -76,26 +76,34 @@
     const rows = [_]Row{
         .{ .module = "", .tor_prefix = "", .iface = "koru.runtime", .stack = 16384, .resources = "heap: posix_memalign/free from the emitted flow prologue", .evidence = "V: output_emitted.zig declares extern posix_memalign/free; 16384 B is an allowance for the C side (C until stack-demand.py measures it)", .binds = &.{
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKALLOC=y", "CONFIG_LIBUKALLOCBBUDDY=y" } },
+            .{ .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKALLOC=y", "CONFIG_LIBUKALLOCBBUDDY=y" } },
             .{ .arm = "hosted", .mechanism = "host-libc", .deltas = &.{} },
         } },
         .{ .module = "std.io", .tor_prefix = "print", .iface = "std.io:print", .stack = 65536, .resources = "console: fputs(stdout) on the Unikraft console", .evidence = "V: emitted print formats into `var __kb: [65536]u8` on the stack (koru BUILD.md: order 4 = 64 KiB overflows)", .binds = &.{
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
+            .{ .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
             .{ .arm = "hosted", .mechanism = "host-libc", .deltas = &.{} },
         } },
         .{ .module = "koruos.slice", .tor_prefix = "", .iface = "koruos/slice", .stack = 4096, .resources = "clock: ukplat_monotonic_clock (plat, always linked); view: isa-debugcon port 0x402 (QEMU device); heap: malloc/free", .evidence = "V: koru/slice/index.kz externs; frames <= 1 KiB buffers", .binds = &.{
+            // no linuxu binding: isa-debugcon is a QEMU port device; outb on
+            // linuxu userspace traps (#GP) — the arm cannot serve the view
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
         } },
         .{ .module = "koruos.nid", .tor_prefix = "", .iface = "koruos/nid", .stack = 4096, .resources = "clock: ukplat_monotonic_clock (plat, always linked); console: fputs(stdout); heap: malloc/free", .evidence = "V: koru/nid/index.kz externs; frames <= 1 KiB buffers", .binds = &.{
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
+            .{ .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
         } },
         .{ .module = "koruos.spawn", .tor_prefix = "", .iface = "koruos/spawn", .stack = 4096, .resources = "clock: ukplat_monotonic_clock (ambient for children); console: fputs(stdout) behind the seam; heap: malloc/free (child records)", .evidence = "V: koru/spawn/index.kz externs; frames <= 1 KiB buffers", .binds = &.{
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
+            .{ .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
         } },
         .{ .module = "koruos.silo", .tor_prefix = "", .iface = "koruos/silo", .stack = 4096, .resources = "cpu: rdrand (QEMU -cpu +rdrand); heap: malloc/free", .evidence = "V: koru/silo/index.kz rdrand64 and externs", .binds = &.{
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
+            .{ .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
         } },
         .{ .module = "unikraft.sched", .tor_prefix = "", .iface = "unikraft/sched", .stack = 4096, .resources = "threads: worker stack STACK_SIZE + aux stack + TLS per thread", .evidence = "V: koru-libs unikraft/sched README (ukschedcoop, cooperative)", .binds = &.{
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKSCHED=y", "CONFIG_LIBUKSCHEDCOOP=y", "CONFIG_LIBUKBOOT_INITSCHEDCOOP=y" } },
+            .{ .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKSCHED=y", "CONFIG_LIBUKSCHEDCOOP=y", "CONFIG_LIBUKBOOT_INITSCHEDCOOP=y" } },
         } },
     };
     // When no used interface needs a scheduler, ask for none. Whether Unikraft honours it is
@@ -224,15 +232,15 @@
             }
         }
         if (!bound_here) {
-            // std modules other than the rows above need nothing from Kconfig, but say so
-            if (std.mem.startsWith(u8, u.module, "std.")) {
-                rw.print("used: {s}:{s} -> no row needed (std, pure)\n", .{ u.module, u.tor }) catch return;
-                continue;
-            }
-            refusals += 1;
             if (rowed) {
+                // the interface is known but cannot be served on this arm
+                refusals += 1;
                 rw.print("refused: interface={s}:{s} arm={s} phase=configure missing=binding for arm (row serves: {s})\n", .{ u.module, u.tor, arm, served.items }) catch return;
+            } else if (std.mem.startsWith(u8, u.module, "std.")) {
+                // std modules with no row are pure codegen — no arm mechanism required
+                rw.print("used: {s}:{s} -> no row needed (std, pure)\n", .{ u.module, u.tor }) catch return;
             } else {
+                refusals += 1;
                 rw.print("refused: interface={s}:{s} arm={s} phase=configure missing=realize row offered=none\n", .{ u.module, u.tor, arm }) catch return;
             }
             continue;
@@ -440,7 +448,19 @@
         w.writeAll("unikraft:\n  version: stable\n  kconfig:\n") catch return;
         for (derived.items) |d| w.print("    {s}: '{s}'\n", .{ keyOf(d), valOf(d) }) catch return;
         for (author.items) |a| w.print("    {s}\n", .{a}) catch return;
-        w.writeAll("\ntargets:\n  - qemu/x86_64\n") catch return;
+        // arm "unikraft/<plat>-<arch>" -> kraft target "<plat>/<arch>"
+        w.writeAll("\ntargets:\n  - ") catch return;
+        {
+            const t = arm["unikraft/".len..];
+            var saw_sep = false;
+            for (t) |ch| {
+                if (ch == '-' and !saw_sep) {
+                    saw_sep = true;
+                    w.writeAll("/") catch return;
+                } else w.print("{c}", .{ch}) catch return;
+            }
+            w.writeAll("\n") catch return;
+        }
         const f = std.fs.cwd().createFile("Kraftfile", .{}) catch return;
         defer f.close();
         f.writeAll(buf.items) catch return;
