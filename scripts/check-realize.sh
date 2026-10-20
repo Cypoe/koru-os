@@ -93,13 +93,49 @@ if [ -f "$WORK/manifest-koru-native.txt" ] \
    && grep -q "bind: std.io:print -> native-runtime" "$WORK/manifest-koru-native.txt"; then
     ok "koru-native binds runtime+print via koruos/native"
 else bad "tnat native (rc=$RC)"; fi
-rm -f "$WORK"/manifest-*.txt "$WORK"/realize.txt
+
+# the verdicts must also land in the witness-shaped corpus, and the marks
+# must name the *bind's* provenance (koruos/native), not just the row's
+if grep -q 'admission","koru.runtime","koru-native<-native-runtime","bound".*bind_by=koruos.native' \
+   "$WORK/realize-marks.txt" 2>/dev/null \
+   && grep -q 'admission","std.io:print","koru-native<-native-runtime","bound"' \
+   "$WORK/realize-marks.txt"; then
+    ok "verdicts committed in @witness mark shape"
+else bad "realize-marks.txt missing/misattributed"; fi
+rm -f "$WORK"/manifest-*.txt "$WORK"/realize.txt "$WORK"/realize-marks.txt
 
 run_k tnoimp gen --arm koru-native
 if [ "$RC" -ne 0 ] && [ ! -f "$WORK/manifest-koru-native.txt" ] \
-   && grep -q "missing=binding" "$WORK/realize.txt" 2>/dev/null; then
-    ok "koru-native refuses without the provider import"
+   && grep -q "missing=binding" "$WORK/realize.txt" 2>/dev/null \
+   && grep -q 'admission","koru.runtime","koru-native<-none","refused"' \
+      "$WORK/realize-marks.txt" 2>/dev/null; then
+    ok "koru-native refuses without the provider import (mark + line)"
 else bad "tnoimp native (rc=$RC)"; fi
+
+# a malformed declaration must refuse in both surfaces (text + marks)
+run_k negative_badrow gen
+if grep -q 'declaration","rzfix.badrow","decl<-parsed","refused","binds-0-lacks-arm-or-mechanism"' \
+   "$WORK/realize-marks.txt" 2>/dev/null; then
+    ok "declaration refusals committed as marks"
+else bad "badrow mark missing"; fi
+
+# --- matrix: the printed projection must re-decide from the catalog data ---
+run_k tnat matrix
+if [ -f "$WORK/rows.json" ] && [ -f "$WORK/arm-matrix.txt" ]; then
+    if python - "$WORK" <<'PYEOF'
+import json, re, sys, pathlib
+w = pathlib.Path(sys.argv[1])
+rows = json.loads((w / "rows.json").read_text())
+arms = rows["arms"]
+bound = {a: sum(1 for r in rows["rows"] if any(b["arm"] == a for b in r["binds"]))
+         for a in arms}
+matrix = (w / "arm-matrix.txt").read_text()
+ok = all(f"{a}: {n}/{len(rows['rows'])}" in matrix for a, n in bound.items())
+sys.exit(0 if ok else 1)
+PYEOF
+    then ok "matrix re-decides from rows.json"
+    else bad "matrix disagrees with independent recount"; fi
+else bad "matrix artifacts missing"; fi
 
 echo "---"
 echo "check-realize: $pass passed, $failn failed"

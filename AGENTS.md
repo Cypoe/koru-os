@@ -24,6 +24,14 @@ koruc <prog>.k realize matrix                # -> arm-matrix.txt: row catalog x 
 Artifacts land in the *working directory* — run fixture programs from a
 scratch dir, not the repo root, or generated files dirty `git status`.
 
+`realize-marks.txt` (gen mode) commits every solver verdict in
+`@witness("relation","site","arm<-mechanism","verdict","payload")` shape —
+`admission` for bind/refuse/waive, `declaration` for malformed rows —
+with `declared_by`/`bind_by` provenance and the row's evidence grade.
+`rows.json` (matrix mode) is the resolved catalog as data;
+`check-realize.sh` re-counts it independently — the matrix is re-decided,
+not trusted.
+
 Known arms: `unikraft/qemu-x86_64`, `unikraft/linuxu-x86_64`, `hosted`,
 `koru-native`. An arm with no binding for a demanded interface is a
 `refused:` line — that is the provider gap speaking, not an error.

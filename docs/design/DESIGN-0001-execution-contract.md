@@ -2609,7 +2609,14 @@ subset of a lift's verbs), and the declaring site is provenance, not ownership �
 program bound `koruos/silo` on `hosted` via its own `host-libc` binding, inheriting
 the module's stack/resources by deferral). Unset row fields defer to the earlier
 declaration; set-and-different is a contradiction refusal. Duplicate (iface, arm)
-bindings refuse naming both provenances.
+bindings refuse naming both provenances. Every verdict — admission (bind, refuse,
+waive) and declaration (malformed row) — is also committed to `realize-marks.txt`
+in `@witness` mark shape with `declared_by`/`bind_by` provenance and the evidence
+grade: kind names a decidable *relation*, the domain rides the payload as data.
+`realize matrix` additionally writes `rows.json` (the resolved catalog) so the
+printed matrix is re-decidable by an independent consumer (`scripts/check-realize.sh`
+recounts it). This is the corpus the witness channel would consume when commands
+gain the ability to mint marks — the verdict surface is corpus-shaped today.
 
 ### 11.2 One binding refusal
 
