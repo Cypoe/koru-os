@@ -142,9 +142,13 @@
             verdict: []const u8,
             comptime payload_fmt: []const u8, payload_args: anytype,
         ) void {
+            // the channel stores its own formatted line — our temporaries are freeable
             const site = std.fmt.allocPrint(al, site_fmt, site_args) catch return;
+            defer al.free(site);
             const arrow = std.fmt.allocPrint(al, arrow_fmt, arrow_args) catch return;
+            defer al.free(arrow);
             const payload = std.fmt.allocPrint(al, payload_fmt, payload_args) catch return;
+            defer al.free(payload);
             if (!eh.commitCommandMark(al, kind, site, arrow, verdict, payload)) {
                 std.debug.print("realize: mark commit refused (kind={s} site={s})\n", .{ kind, site });
             }
@@ -478,6 +482,32 @@
             const jf = std.fs.cwd().createFile("rows.json", .{}) catch return;
             defer jf.close();
             jf.writeAll(jbuf.items) catch return;
+            // The same catalog committed as marks: `catalog` marks are the
+            // data, `projection` marks the derived claim — a checker
+            // recounts binds per arm over the committed rows instead of
+            // trusting the printed matrix ("koru-native: 2/8" becomes a
+            // re-decidable cell, not prose).
+            for (rows.items) |r| {
+                var csv = std.ArrayListUnmanaged(u8){};
+                defer csv.deinit(allocator);
+                for (r.binds, 0..) |b, bi| {
+                    if (bi != 0) csv.append(allocator, ',') catch {};
+                    csv.appendSlice(allocator, b.arm) catch {};
+                }
+                commit_mark(allocator, "catalog", "{s}", .{r.iface}, "row<-declared", .{}, "listed", "declared_by={s} binds={s}", .{ r.declared_by, if (csv.items.len == 0) "none" else csv.items });
+            }
+            for (known_arms) |a| {
+                var n: usize = 0;
+                for (rows.items) |r| {
+                    for (r.binds) |b| {
+                        if (std.mem.eql(u8, b.arm, a)) {
+                            n += 1;
+                            break;
+                        }
+                    }
+                }
+                commit_mark(allocator, "projection", "{s}", .{a}, "matrix<-catalog", .{}, "holds", "bound={d} total={d}", .{ n, rows.items.len });
+            }
             std.debug.print("realize: arm-matrix.txt + rows.json written ({d} rows x {d} arms)\n", .{ rows.items.len, known_arms.len });
             return;
         }

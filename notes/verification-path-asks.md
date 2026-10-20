@@ -38,6 +38,14 @@ the domain (iface, arm, mechanism, provenance, evidence grade) is payload
 data. Checkers implement relations; domains are unauthorable data in the
 mark. The koru-os corpus is the worked example of this factorization.
 
+**The deferred `~decl`/facet question now has three consumers' evidence.**
+The `catalog` mark is a declaration committed as data — typed fields
+(iface, declared_by, binds), provenance, dedup (one mark per merged row),
+deferral (binds=none still counts in total) — read by three independent
+consumers: the realize producer, the `rows.json` recount, and the Lean
+checker. Whatever `~decl` becomes upstream should be shaped by *this*
+corpus's requirements, not by syntax first.
+
 ## Asks for the verification session (koru:ccomp / verify-path)
 
 1. ~~**Commands as witness producers.**~~ **LANDED upstream.** Commands
@@ -67,16 +75,17 @@ mark. The koru-os corpus is the worked example of this factorization.
    procs) are decidable because koru-os's vocabularies are finite —
    typestate transitions, bag membership, effect sets. This is the
    "restricted congruent fragment" where proc witnesses pay.
-4. **Path B adjacency.** The doc's "Use B" (koru-transform congruence) is
-   open because the emitter doesn't expose pre/post IR — what landed is
-   accounting-level (`transform-app` lines, `contract:preserves`/`obliges`).
-   koru-os's projection problem is the same shape at gate level: emitted
-   artifacts (manifest, matrix, Kraftfile) are transforms of committed
-   data, and today they're re-decided by `check-realize.sh` recounting
-   `rows.json` — a hand-rolled instance of the same re-decision the
-   transform-oblige channel wants to own. If transforms expose
-   pre/post-consumable surfaces, realize's artifact emission is a
-   ready-made consumer.
+4. **Path B adjacency — now with a landed instance.** The doc's "Use B"
+   (koru-transform congruence) stays open at the IR level, but the same
+   shape is now *measured* at gate level: `realize matrix` commits
+   `catalog` marks (the resolved rows as data) + `projection` marks
+   (one `bound=<n> total=<m>` cell per arm), and `projectionCheck` in
+   `WitnessCheck.lean` recounts each cell over the committed catalog —
+   `koru-native: 2/8` is a derived, Lean-re-decided claim, not printed
+   prose. `check-realize.sh` runs the Lean re-decision in-gate
+   (missing toolchain = failure). This is the consumer pattern
+   transform-oblige wants when pre/post IR surfaces exist: commit the
+   transform's input as marks, commit the derived claim, recount.
 5. **`[flow-eval]` emission** (doc's named hole): koruc doesn't emit
    flow-eval claims; the semantics kernel consumes hand-authored corpora.
    realize's `<stem>.marks` showed the pattern end-to-end — a solver
@@ -93,8 +102,9 @@ Beyond `admission`/`declaration`, the relations that pay for this corpus:
   formal version. Every arm binding *is* a claimed congruence — "silo on
   unikraft ≡ silo on koru-native" — currently evidence-graded prose.
 - **`derivation`** — emitted artifacts are lawful projections of committed
-  data. `check-realize.sh` recounting `rows.json` is the hand-rolled
-  instance; the transform-oblige channel is its proper owner.
+  data. **Landed for the matrix**: `catalog`+`projection` marks +
+  `projectionCheck` recount in the checker. Still open for the manifest
+  and Kraftfile projections (same pattern, same owner).
 - **`bound`** — measured resource claims (stack demand ≤ declared; the
   stack-demand.py shape is a `bound` verdict, not an admission).
 
@@ -121,12 +131,16 @@ computation.
 
 ## Honest bounds
 
-- Today all of the above is **M-class**: measured, gated, reproducible —
-  not machine-checked. `check-realize.sh` (9/9) is the gate; the Lean
-  re-decision is the upgrade.
+- `check-realize.sh` (12/12) is the gate — including the Lean
+  re-decision of admission/declaration marks and the matrix recount.
+  The remaining M→V upgrade is checker-side depth: today it re-decides
+  evidence *shape* and *corpus laws* (the catalog stays solver-side);
+  committing the catalog digest or the catalog itself is how a checker
+  could re-run the match proper.
 - Nothing in koru-os authors mark *vocabulary* — kinds stay checker-pinned
   upstream. koru-os only shapes the corpus and proves the factorization
-  suffices (admission + declaration cover the whole verdict surface).
+  suffices (admission + declaration cover the verdict surface;
+  catalog + projection cover the matrix).
 - The intent→proposition edge stays human: the row's `evidence:` field and
   the grade stamped on each mark are where that uncheckable edge is made
   legible, not hidden.

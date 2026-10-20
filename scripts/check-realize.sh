@@ -137,6 +137,27 @@ rm -f "$WORK"/manifest-*.txt "$WORK"/realize.txt "$WORK"/*.marks
 
 # --- matrix: the printed projection must re-decide from the catalog data ---
 run_k tnat matrix
+if [ -f "$WORK/tnat.marks" ] \
+   && grep -q 'catalog","koru.runtime","row<-declared","listed"' "$WORK/tnat.marks" \
+   && grep -q 'projection","koru-native","matrix<-catalog","holds","bound=' "$WORK/tnat.marks"; then
+    ok "matrix mints catalog+projection marks"
+else bad "matrix marks missing"; fi
+
+# the Lean checker recounts the projection over the committed catalog —
+# a missing toolchain is failure, never a skip
+WITNESS_DIR="${KORU_WITNESS:-/w/src/koru/verify/witness}"
+LEAN="${KORU_LEAN:-$HOME/.elan/toolchains/leanprover--lean4---v4.31.0/bin/lean.exe}"
+if [ ! -x "$LEAN" ]; then
+    for cand in "$HOME"/.elan/toolchains/leanprover--lean4---v*/bin/lean.exe; do
+        [ -x "$cand" ] && LEAN="$cand" && break
+    done
+fi
+if [ -x "$LEAN" ] && [ -f "$WITNESS_DIR/WitnessCheck.lean" ] \
+   && (cd "$WITNESS_DIR" && "$LEAN" --run WitnessCheck.lean "$WORK/tnat.marks" > "$WORK/lean_matrix.out" 2>&1) \
+   && grep -q "conformance (all must match): .*0 bad" "$WORK/lean_matrix.out"; then
+    ok "Lean recounts the projection over committed catalog marks"
+else bad "Lean projection re-decision failed (lean=$LEAN)"; sed -n '1,6p' "$WORK/lean_matrix.out" 2>/dev/null | sed 's/^/     /'; fi
+
 if [ -f "$WORK/rows.json" ] && [ -f "$WORK/arm-matrix.txt" ]; then
     if python - "$WORK" <<'PYEOF'
 import json, re, sys, pathlib

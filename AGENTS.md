@@ -30,9 +30,13 @@ shape — `admission` for bind/refuse/waive, `declaration` for malformed rows �
 with `declared_by`/`bind_by` provenance and the row's evidence grade. The
 channel validates the wire invariants at commit and the compiler names the
 artifact; `verify/witness/WitnessCheck.lean` re-decides both relations.
-`rows.json` (matrix mode) is the resolved catalog as data;
-`check-realize.sh` re-counts it independently — the matrix is re-decided,
-not trusted.
+Matrix mode mints too: `catalog` marks (the resolved rows as data) and
+`projection` marks (one `bound=<n> total=<m>` cell per arm) — the checker's
+`projectionCheck` recounts every cell over the committed catalog, so an
+`arm-matrix.txt` line like `koru-native: 2/8` is a derived, re-decidable
+claim. `rows.json` (matrix mode) is the same catalog for non-Lean
+consumers; `check-realize.sh` re-counts it independently AND runs the
+Lean re-decision (missing toolchain = failure).
 
 Known arms: `unikraft/qemu-x86_64`, `unikraft/linuxu-x86_64`, `hosted`,
 `koru-native`. An arm with no binding for a demanded interface is a
