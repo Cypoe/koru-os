@@ -101,6 +101,10 @@
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
             .{ .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
         } },
+        .{ .module = "koruos.ext2", .tor_prefix = "", .iface = "koruos/ext2", .stack = 8192, .resources = "blkdev: uk_blkdev queue ops over virtio-blk; heap: malloc/memalign/free", .evidence = "V: koru/ext2/index.kz externs uk_blkdev_*/malloc/memalign; M2 author lines name the LIBVIRTIO deltas now derived here", .binds = &.{
+            // no linuxu binding: virtio-pci/blk is a KVM-plat device, not host syscalls
+            .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKBLKDEV=y", "CONFIG_LIBVIRTIO_BLK=y", "CONFIG_LIBVIRTIO_PCI=y", "CONFIG_LIBVIRTIO_BUS=y" } },
+        } },
         .{ .module = "unikraft.sched", .tor_prefix = "", .iface = "unikraft/sched", .stack = 4096, .resources = "threads: worker stack STACK_SIZE + aux stack + TLS per thread", .evidence = "V: koru-libs unikraft/sched README (ukschedcoop, cooperative)", .binds = &.{
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKSCHED=y", "CONFIG_LIBUKSCHEDCOOP=y", "CONFIG_LIBUKBOOT_INITSCHEDCOOP=y" } },
             .{ .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKSCHED=y", "CONFIG_LIBUKSCHEDCOOP=y", "CONFIG_LIBUKBOOT_INITSCHEDCOOP=y" } },
@@ -447,7 +451,13 @@
         w.print("name: {s}\n\n", .{app_name}) catch return;
         w.writeAll("unikraft:\n  version: stable\n  kconfig:\n") catch return;
         for (derived.items) |d| w.print("    {s}: '{s}'\n", .{ keyOf(d), valOf(d) }) catch return;
-        for (author.items) |a| w.print("    {s}\n", .{a}) catch return;
+        for (author.items) |a| {
+            var dup = false;
+            for (derived.items) |d| {
+                if (std.mem.eql(u8, keyOf(a), keyOf(d)) and std.mem.eql(u8, valOf(a), valOf(d))) dup = true;
+            }
+            if (!dup) w.print("    {s}\n", .{a}) catch return;
+        }
         // arm "unikraft/<plat>-<arch>" -> kraft target "<plat>/<arch>"
         w.writeAll("\ntargets:\n  - ") catch return;
         {
