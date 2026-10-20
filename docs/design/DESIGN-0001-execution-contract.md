@@ -2602,7 +2602,14 @@ tor carrying a JSON block, harvested by the command; the host-line form stays as
 fallback for lifts that cannot import `koruos/realize`). Measured: identical
 `arm-matrix.txt`, identical Kraftfiles on qemu and linuxu; malformed blocks refuse
 naming the module, file, line and the missing field (`koru/realize/tests/badrow` +
-`negative_badrow.k`).
+`negative_badrow.k`). Follow-up same day, after poking the shape: the declared
+`iface` names what the row serves (`qual/path[:tor_prefix]` — tor-scoped rows cover a
+subset of a lift's verbs), and the declaring site is provenance, not ownership — a
+**program** may declare a binding for a lift it does not own (measured: a `.k`
+program bound `koruos/silo` on `hosted` via its own `host-libc` binding, inheriting
+the module's stack/resources by deferral). Unset row fields defer to the earlier
+declaration; set-and-different is a contradiction refusal. Duplicate (iface, arm)
+bindings refuse naming both provenances.
 
 ### 11.2 One binding refusal
 
