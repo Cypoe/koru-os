@@ -43,6 +43,16 @@
     argv: []string,
 }
 
+// A lift declares its own row by invoking `koruos/realize:row { ...json... }`
+// at module top level — the invariants idiom: data in the AST, [norun], harvested
+// after the parse by the realize command. Shape:
+//   { "iface": "koruos/x", "stack": 4096, "resources": "...", "evidence": "...",
+//     "binds": [ { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig",
+//                  "deltas": ["CONFIG_X=y"] } ] }
+// (The host-line `const realize_row = .{...}` form remains the fallback for a
+// lift that cannot import this module.)
+~[comptime|norun]pub tor row { source: Source }
+
 ~proc realize|zig {
     // ---- 0. arm selection: --arm <id> or --arm=<id>, default unikraft/qemu-x86_64
     var arm: []const u8 = "unikraft/qemu-x86_64";
@@ -75,8 +85,9 @@
     };
     // Rows that cannot be module-owned: the runtime row is not a module, print is
     // std codegen, and unikraft/sched lives in koru-libs (rows cannot ride there
-    // without a push to koru-libs). Every koruos/* lift declares its own rows in
-    // its host lines as `const realize_row = .{ ... }` — one binding per line.
+    // without a push to koru-libs). Every koruos/* lift declares its own row with
+    // a `koruos/realize:row { "iface": ..., "binds": [...] }` invocation — the
+    // invariants idiom: [norun] data in the AST, harvested after the parse.
     const builtin_rows = [_]Row{
         .{ .module = "", .tor_prefix = "", .iface = "koru.runtime", .stack = 16384, .resources = "heap: posix_memalign/free from the emitted flow prologue", .evidence = "V: output_emitted.zig declares extern posix_memalign/free; 16384 B is an allowance for the C side (C until stack-demand.py measures it)", .binds = &.{
             .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKALLOC=y", "CONFIG_LIBUKALLOCBBUDDY=y" } },
@@ -99,11 +110,14 @@
 
     // ---- row table: builtin rows + module-declared rows
     //
-    // A lift declares its own row bindings in its host lines, one binding per line:
-    //   const realize_row = .{ .iface = "koruos/x", .stack = "4096", .arm = "<arm>",
-    //     .mechanism = "<mech>", .deltas = "A=v,B=v", .resources = "...", .evidence = "..." };
+    // Two declaration shapes, both module-owned:
+    //   a) `~koruos/realize:row { "iface": ..., "stack": n, "binds": [...] }` — typed
+    //      JSON in the AST (the invariants idiom); needs `~import koruos/realize`.
+    //   b) `const realize_row = .{ .iface = "koruos/x", .stack = "4096", .arm = "<arm>",
+    //      .mechanism = "<mech>", .deltas = "A=v,B=v", .resources = "...", .evidence = "..." };`
+    //      in host lines — the fallback for a lift that cannot import this module.
     // The declaring module owns the row: it only matches invocations under that module's
-    // qualifier. A malformed declaration line is a loud refusal, never a silent skip.
+    // qualifier. A malformed declaration is a loud refusal, never a silent skip.
     var rows = std.ArrayListUnmanaged(Row){};
     defer rows.deinit(allocator);
     for (builtin_rows) |r| rows.append(allocator, r) catch return;
@@ -174,6 +188,90 @@
                     .evidence = nidField(line, "evidence") orelse "",
                     .binds = bs,
                 }) catch return;
+            }
+        }
+
+        // ---- invocation-declared rows: `koruos/realize:row { "iface": ..., "binds": [...] }`
+        // The invariants idiom — a [comptime|norun] flow carrying a JSON block, walked
+        // by this command. One flow per row (iface), binds as a typed array.
+        const BindDecl = struct {
+            arm: []const u8 = "",
+            mechanism: []const u8 = "",
+            deltas: []const []const u8 = &.{},
+        };
+        const RowDecl = struct {
+            iface: []const u8 = "",
+            stack: u64 = 0,
+            resources: []const u8 = "",
+            evidence: []const u8 = "",
+            binds: []const BindDecl = &.{},
+        };
+        for (program.items) |item| {
+            if (item != .module_decl) continue;
+            const mod = item.module_decl.logical_name;
+            for (item.module_decl.items) |*mi| {
+                if (mi.* != .flow) continue;
+                const fl = &mi.flow;
+            const mq = fl.inv().path.module_qualifier orelse continue;
+            if (!std.mem.eql(u8, mq, "koruos.realize")) continue;
+            if (fl.inv().path.segments.len != 1) continue;
+            if (!std.mem.eql(u8, fl.inv().path.segments[0], "row")) continue;
+            var src: []const u8 = "";
+            for (fl.inv().args) |arg| {
+                if (std.mem.eql(u8, arg.name, "source")) src = arg.value;
+            }
+            if (src.len == 0) {
+                malformed.writer(allocator).print("refused: koruos/realize:row in module {s} has no source block\n", .{mod}) catch {};
+                continue;
+            }
+            const wrapped = std.fmt.allocPrint(ra, "{{{s}}}", .{src}) catch return;
+            const parsed = std.json.parseFromSlice(RowDecl, ra, wrapped, .{ .ignore_unknown_fields = true }) catch {
+                malformed.writer(allocator).print("refused: koruos/realize:row in module {s}: malformed JSON block ({s}:{d}): {s}\n", .{ mod, fl.location.file, fl.location.line, src[0..@min(src.len, 80)] }) catch {};
+                continue;
+            };
+            const decl = parsed.value;
+            if (decl.iface.len == 0) {
+                malformed.writer(allocator).print("refused: koruos/realize:row in module {s} lacks required field \"iface\"\n", .{mod}) catch {};
+                continue;
+            }
+            if (decl.stack == 0) {
+                malformed.writer(allocator).print("refused: koruos/realize:row in module {s} lacks required field \"stack\"\n", .{mod}) catch {};
+                continue;
+            }
+            if (decl.binds.len == 0) {
+                malformed.writer(allocator).print("refused: koruos/realize:row in module {s} lacks required field \"binds\"\n", .{mod}) catch {};
+                continue;
+            }
+            var ok = true;
+            var bs = ra.alloc(Binding, decl.binds.len) catch return;
+            for (decl.binds, 0..) |bd, i| {
+                if (bd.arm.len == 0 or bd.mechanism.len == 0) {
+                    malformed.writer(allocator).print("refused: koruos/realize:row in module {s} binds[{d}] lacks \"arm\" or \"mechanism\"\n", .{ mod, i }) catch {};
+                    ok = false;
+                    break;
+                }
+                bs[i] = .{ .arm = bd.arm, .mechanism = bd.mechanism, .deltas = bd.deltas };
+            }
+            if (!ok) continue;
+            var merged = false;
+            for (rows.items) |*r| {
+                if (std.mem.eql(u8, r.module, mod) and std.mem.eql(u8, r.iface, decl.iface)) {
+                    const nb = ra.alloc(Binding, r.binds.len + bs.len) catch return;
+                    @memcpy(nb[0..r.binds.len], r.binds);
+                    @memcpy(nb[r.binds.len..], bs);
+                    r.binds = nb;
+                    merged = true;
+                }
+            }
+            if (!merged) rows.append(allocator, .{
+                .module = mod,
+                .tor_prefix = "",
+                .iface = decl.iface,
+                .stack = decl.stack,
+                .resources = decl.resources,
+                .evidence = decl.evidence,
+                .binds = bs,
+            }) catch return;
             }
         }
     }

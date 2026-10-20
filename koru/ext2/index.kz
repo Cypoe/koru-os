@@ -17,6 +17,21 @@
 // exposes no byte-level API another lift could call, so the sequence is repeated
 // here. That is debt, recorded in experiments/m2-ext2/README.md.
 
+~import koruos/realize
+
+// realize row: which arms can serve this lift and how — a typed declaration,
+// harvested by the realize command (DESIGN-0001 §11.1). No linuxu binding —
+// virtio-pci/blk is a KVM-plat device, not host syscalls.
+~koruos/realize:row {
+    "iface": "koruos/ext2",
+    "stack": 8192,
+    "resources": "blkdev: uk_blkdev queue ops over virtio-blk; heap: malloc/memalign/free",
+    "evidence": "V: koru/ext2/index.kz externs uk_blkdev_*/malloc/memalign; M2 author lines name the LIBVIRTIO deltas now derived here",
+    "binds": [
+        { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig", "deltas": ["CONFIG_LIBUKBLKDEV=y", "CONFIG_LIBVIRTIO_BLK=y", "CONFIG_LIBVIRTIO_PCI=y", "CONFIG_LIBVIRTIO_BUS=y"] }
+    ]
+}
+
 const std = @import("std");
 
 const UkBlkdev = opaque {};
@@ -36,9 +51,6 @@ extern fn malloc(size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn memalign(alignment: usize, size: usize) ?*anyopaque;
 
-// realize rows: one binding per line. No linuxu binding — virtio-pci/blk is a
-// KVM-plat device, not host syscalls.
-const realize_row_qemu = .{ .iface = "koruos/ext2", .stack = "8192", .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = "CONFIG_LIBUKBLKDEV=y,CONFIG_LIBVIRTIO_BLK=y,CONFIG_LIBVIRTIO_PCI=y,CONFIG_LIBVIRTIO_BUS=y", .resources = "blkdev: uk_blkdev queue ops over virtio-blk; heap: malloc/memalign/free", .evidence = "V: koru/ext2/index.kz externs uk_blkdev_*/malloc/memalign; M2 author lines name the LIBVIRTIO deltas now derived here" };
 
 const BlkConf = extern struct { nb_queues: u16 };
 const QueueInfo = extern struct { nb_max: u16, nb_min: u16, nb_align: u16, nb_is_power_of_two: c_int };

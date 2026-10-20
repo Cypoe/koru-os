@@ -1,0 +1,15 @@
+// Fixture: a lift whose koruos/realize:row declaration is malformed (binds[0]
+// lacks "arm"). Used by negative_badrow.k to prove realize refuses loudly
+// instead of silently dropping the declaration.
+~import koruos/realize
+~koruos/realize:row {
+    "iface": "koruos/badrow",
+    "stack": 4096,
+    "binds": [
+        { "mechanism": "kconfig" }
+    ]
+}
+~pub tor ping { } -> u32
+~proc ping|zig {
+    return 1;
+}

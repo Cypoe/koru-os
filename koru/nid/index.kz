@@ -31,6 +31,21 @@
 // or refuses; call needs <!live> and returns it; release needs <!live>; close needs <!open>
 // and reports outstanding bindings loudly.
 
+~import koruos/realize
+
+// realize row: which arms can serve this lift and how — a typed declaration,
+// harvested by the realize command (DESIGN-0001 §11.1).
+~koruos/realize:row {
+    "iface": "koruos/nid",
+    "stack": 4096,
+    "resources": "clock: ukplat_monotonic_clock (plat, always linked); console: fputs(stdout); heap: malloc/free",
+    "evidence": "V: koru/nid/index.kz externs; frames <= 1 KiB buffers",
+    "binds": [
+        { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
+        { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" }
+    ]
+}
+
 const std = @import("std");
 
 extern fn malloc(size: usize) ?*anyopaque;
@@ -43,9 +58,6 @@ const C = struct {
 
 pub const arm_name = "unikraft/qemu-x86_64";
 
-// realize rows: one binding per line.
-const realize_row_qemu = .{ .iface = "koruos/nid", .stack = "4096", .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = "", .resources = "clock: ukplat_monotonic_clock (plat, always linked); console: fputs(stdout); heap: malloc/free", .evidence = "V: koru/nid/index.kz externs; frames <= 1 KiB buffers" };
-const realize_row_linuxu = .{ .iface = "koruos/nid", .stack = "4096", .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = "", .resources = "clock: ukplat_monotonic_clock (plat, always linked); console: fputs(stdout); heap: malloc/free", .evidence = "V: koru/nid/index.kz externs; frames <= 1 KiB buffers" };
 
 fn logln(comptime f: []const u8, a: anytype) void {
     var b: [1024]u8 = undefined;

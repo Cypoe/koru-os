@@ -2594,7 +2594,15 @@ export table), and `realize` merges them with the three rows that cannot be modu
 (runtime, print, koru-libs' sched). A malformed `realize_row` line is a named refusal,
 never a silent skip; a lift now carries its contract with it. `realize matrix` writes
 `arm-matrix.txt`, the row×arm coverage of the imported catalog — `koru-native: 0/8` is
-the standalone arm's work order, derived not maintained.
+the standalone arm's work order, derived not maintained. 2026-10-20: module-owned rows
+graduated from host-line text to **typed AST declarations** — each lift invokes
+`~koruos/realize:row { "iface": …, "stack": …, "binds": [ { "arm", "mechanism",
+"deltas" } ] }` at module top level (the `std/invariants` idiom: a `[comptime|norun]`
+tor carrying a JSON block, harvested by the command; the host-line form stays as the
+fallback for lifts that cannot import `koruos/realize`). Measured: identical
+`arm-matrix.txt`, identical Kraftfiles on qemu and linuxu; malformed blocks refuse
+naming the module, file, line and the missing field (`koru/realize/tests/badrow` +
+`negative_badrow.k`).
 
 ### 11.2 One binding refusal
 
