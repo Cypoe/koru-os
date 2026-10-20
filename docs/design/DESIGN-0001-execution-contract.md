@@ -2587,6 +2587,14 @@ the same slice: a rowed interface that lacks the selected arm refuses even when 
 `std.*` — the `std, pure` shortcut applies only to row-less std modules. This is the
 first slice of rows-as-arm-independent-contract: a new arm becomes a set of bindings on
 the row table plus an emitter for `manifest-<arm>.txt`, not a fork of the command.
+Same-day follow-up: the catalog is now **distributed** — each `koruos/*` lift declares
+its own rows in its host lines (`const realize_row = .{ .iface …, .arm …, .mechanism … }`,
+one binding per line, parsed by the same host-line mechanism that reads koruos/nid's
+export table), and `realize` merges them with the three rows that cannot be module-owned
+(runtime, print, koru-libs' sched). A malformed `realize_row` line is a named refusal,
+never a silent skip; a lift now carries its contract with it. `realize matrix` writes
+`arm-matrix.txt`, the row×arm coverage of the imported catalog — `koru-native: 0/8` is
+the standalone arm's work order, derived not maintained.
 
 ### 11.2 One binding refusal
 

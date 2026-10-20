@@ -21,6 +21,10 @@ const std = @import("std");
 extern fn malloc(size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
 
+// realize rows: which arms can serve this lift and how (one binding per line).
+const realize_row_qemu = .{ .iface = "koruos/silo", .stack = "4096", .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = "", .resources = "cpu: rdrand (QEMU -cpu +rdrand); heap: malloc/free", .evidence = "V: koru/silo/index.kz rdrand64 and externs" };
+const realize_row_linuxu = .{ .iface = "koruos/silo", .stack = "4096", .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = "", .resources = "cpu: rdrand (QEMU -cpu +rdrand); heap: malloc/free", .evidence = "V: koru/silo/index.kz rdrand64 and externs" };
+
 const driver_rows = [_][]const u8{
     "blk.info",        "blk.read",         "blk.write",        "blk.flush",
     "net.tx",          "net.rx",           "net.link",         "kms.version",

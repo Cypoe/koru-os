@@ -39,6 +39,10 @@ const C = struct {
 pub const arm_name = "unikraft/qemu-x86_64";
 pub const rung = "0/1 (one address space; enforced at the seam)";
 
+// realize rows: one binding per line.
+const realize_row_qemu = .{ .iface = "koruos/spawn", .stack = "4096", .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = "", .resources = "clock: ukplat_monotonic_clock (ambient for children); console: fputs(stdout) behind the seam; heap: malloc/free (child records)", .evidence = "V: koru/spawn/index.kz externs; frames <= 1 KiB buffers" };
+const realize_row_linuxu = .{ .iface = "koruos/spawn", .stack = "4096", .arm = "unikraft/linuxu-x86_64", .mechanism = "kconfig", .deltas = "", .resources = "clock: ukplat_monotonic_clock (ambient for children); console: fputs(stdout) behind the seam; heap: malloc/free (child records)", .evidence = "V: koru/spawn/index.kz externs; frames <= 1 KiB buffers" };
+
 fn logln(comptime f: []const u8, a: anytype) void {
     var b: [1024]u8 = undefined;
     const s = std.fmt.bufPrintZ(&b, f ++ "\n", a) catch return;
