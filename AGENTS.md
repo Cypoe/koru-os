@@ -65,6 +65,17 @@ Boot programs (`boot_ext2`, `boot_nid`, `boot_slice`, `boot_spawn`,
 run `--arm koru-native` on them to re-measure the native gap after landing
 providers.
 
+## Before pushing
+
+```bash
+bash scripts/check-realize.sh   # 6 checks: controls bind, negatives refuse
+                                # by name, koru-native binds iff imported
+```
+
+Green means the declaration contract still says what the fixtures pin. A
+fail after an intentional semantics change means the fixture's comment and
+the expected line get updated together — never the check dropped.
+
 ## Conventions
 
 - Evidence classes V/M/C/D per README. `blocker` / `not a blocker` /
