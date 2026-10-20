@@ -133,6 +133,22 @@ if [ -f "$WORK/manifest-koru-native.txt" ] \
       "$WORK/tsilo_nat.marks" 2>/dev/null; then
     ok "koru-native binds the silo lift (entropy+heap+console)"
 else bad "tsilo_nat native (rc=$RC)"; fi
+# the spawn lift binds at its DECLARED rung: rung 0/1 (entry-function
+# children run to completion inside start, seam-enforced bag) needs only
+# heap+clock+console — all 12 tors are served by the one module row, and
+# the rung caveat must ride the bind deltas (no MMU isolation claimed)
+FIX_SPAWN="$(cygpath -m "$ROOT/koru/spawn/tests" 2>/dev/null || echo "$ROOT/koru/spawn/tests")"
+sed -e "s|{{ ENTRY }}|$FIX_SPAWN|g" \
+    -e "s|unikraft: .*|unikraft: $LIBS/unikraft|" \
+    -e '0,/^import /s//import koruos\/native\nimport /' \
+    "$ROOT/koru/spawn/tests/boot_spawn.k" > "$WORK/tspawn_nat.k"
+run_k tspawn_nat gen --arm koru-native
+if [ -f "$WORK/manifest-koru-native.txt" ] \
+   && grep -q "bind: koruos/spawn -> native-runtime" "$WORK/manifest-koru-native.txt" \
+   && grep -q "rung:0/1" "$WORK/manifest-koru-native.txt" \
+   && [ "$(grep -c 'admission","koruos.spawn:[a-z-]*","koru-native<-native-runtime","bound"' "$WORK/tspawn_nat.marks" 2>/dev/null)" -eq 12 ]; then
+    ok "koru-native binds all 12 spawn tors at declared rung 0/1"
+else bad "tspawn_nat native (rc=$RC, bound=$(grep -c 'koruos.spawn:.*bound' "$WORK/tspawn_nat.marks" 2>/dev/null))"; fi
 rm -f "$WORK"/manifest-*.txt "$WORK"/realize.txt "$WORK"/*.marks
 
 # --- matrix: the printed projection must re-decide from the catalog data ---

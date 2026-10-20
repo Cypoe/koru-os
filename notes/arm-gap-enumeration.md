@@ -85,13 +85,22 @@ the real boot programs (`import koruos/native` added — opt-in holds):
 - `boot_slice` → 3 bound (the debug view stays `isa-debugcon` — QEMU
   `-debugcon` only; writes silently drop on real hw, so a native debug
   channel remains an open provider);
-- `boot_spawn` → still 12 refusals — correct: its externs resolve but
-  there is no process substrate beneath; the spawn seam is its own
-  family (M-SPAWN-MMU), not a runtime.zig append.
+- `boot_spawn` → 3 bound (12 tors), after a corrected read. The earlier
+  "no process substrate beneath, refuse" was wrong *at the lift's
+  declared rung*: `koruos/spawn` is rung 0/1 by design — entry-function
+  children run to completion inside `start`, one address space, the
+  bag enforced at the seam. Its whole extern surface is
+  `malloc`/`free`/`ukplat_monotonic_clock`/`stdout`/`fputs` — already
+  served. The refusals were a missing binding, not a missing substrate;
+  the `koru-native` bind now exists with the caveat riding deltas
+  (`rung:0/1 … no MMU isolation`). What genuinely remains open is the
+  *MMU-isolated* spawn — real address-space separation and ELF
+  children — a different binding family (M-SPAWN-MMU), not a blocker
+  for this rung.
 
-Remaining gap families: spawn seam, blk transport, a real debug channel,
-plus the boot entry itself (multiboot/UEFI stub; runtime.zig provides
-symbols, not `_start`).
+Remaining gap families: MMU-isolated spawn (rung 2+), blk transport, a
+real debug channel, plus the boot entry itself (multiboot/UEFI stub;
+runtime.zig provides symbols, not `_start`).
 
 ## Semantics (fixed in this slice)
 

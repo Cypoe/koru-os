@@ -37,7 +37,9 @@
     "evidence": "V: koru/spawn/index.kz externs; frames <= 1 KiB buffers",
     "binds": [
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
-        { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" }
+        { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" },
+        { "arm": "koru-native", "mechanism": "native-runtime",
+          "deltas": ["src:koru/native/runtime.zig", "rung:0/1 entry-function children run to completion inside start — one address space, bag enforced at the seam, no MMU isolation"] }
     ]
 }
 
