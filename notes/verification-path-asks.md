@@ -70,6 +70,42 @@ mark. The koru-os corpus is the worked example of this factorization.
    `realize-marks.txt` is the same pattern — koru-os side authored the
    corpus; the ask is the emission leg, in both cases.
 
+## Relation inventory (what the vocabulary still lacks)
+
+Beyond `admission`/`declaration`, the relations that pay for this corpus:
+
+- **`congruence`** — equivalence between realizations (the `d<-s` arrow is
+  already a correspondence slot). K1 byte-diff is empirical congruence,
+  Alive2 is directional refinement, ISAR's OperEq/NF-agreement is the
+  formal version. Every arm binding *is* a claimed congruence — "silo on
+  unikraft ≡ silo on koru-native" — currently evidence-graded prose.
+- **`derivation`** — emitted artifacts are lawful projections of committed
+  data. `check-realize.sh` recounting `rows.json` is the hand-rolled
+  instance; the transform-oblige channel is its proper owner.
+- **`bound`** — measured resource claims (stack demand ≤ declared; the
+  stack-demand.py shape is a `bound` verdict, not an admission).
+
+And a structural note: `grade` stays **payload, not kind** — but its
+alphabet (what V/M/C/D assert) should be pinned upstream so every corpus
+means the same thing by "M". That unlocks decidable boot policy:
+"admitted set requires grade ∈ {V,M}" is a gate over marks.
+
+## ISAR correspondence (the same object at another altitude)
+
+| koru-os | isar-proofs |
+|---|---|
+| arm binding (`iface -> mechanism`) | QuotientMap — an interface quotiented onto platform primitives |
+| realize admission (bind iff row serves arm) | `try_adopt` — adopt iff a known map OperEq-matches on every probe; ISAR's is probe-sampled, realize's is declaration-checked — same gate, different evidence |
+| `check-realize` recounting `rows.json` | witnesses comparing NF-for-NF / byte-for-byte |
+| stack/resources as declared cost | `host/benches` measures feed selection while `battery` obligations gate |
+| V/M/C/D evidence grades | same intent-fidelity annotation — which ground a claim rests on |
+
+The ordering constraint that falls out of Taelin's clause and applies to
+both: **cost-based provider selection is only lawful among proven-equivalent
+alternatives.** Equivalence relation first, measured-best second —
+otherwise "fastest" selects between things that aren't the same
+computation.
+
 ## Honest bounds
 
 - Today all of the above is **M-class**: measured, gated, reproducible —
