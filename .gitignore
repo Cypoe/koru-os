@@ -9,3 +9,4 @@ serial.raw
 *.WAD
 notes/evidence/*doom*
 snap.bin
+.agents/

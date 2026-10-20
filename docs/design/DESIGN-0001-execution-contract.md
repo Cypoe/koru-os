@@ -2566,6 +2566,21 @@ with evidence) and writes `Kraftfile`, `Makefile.uk` and `realize.txt` (the thre
 - **Refusals (R6):** an unrowed lift and a contradicting author line are both refused with
   no Kraftfile written, and the control is accepted.
 
+**Progress, 2026-10-21 (M, `koruc` backend runs on the Windows box):** `realize gen`
+takes `--arm <id>` (default `unikraft/qemu-x86_64`). Rows now carry a binding set —
+`{arm, mechanism, deltas}` — and a used interface is refused when its row has no binding
+for the selected arm (`missing=binding for arm (row serves: …)`), distinct from the
+existing missing-row refusal (`offered=none`). On `unikraft/*` arms the artifacts stay
+`Kraftfile` + `Makefile.uk`; other arms write `manifest-<arm>.txt` (bound interface →
+mechanism), and author `unikraft:kconfig` lines are reported `not-applicable` instead of
+being merged. NID build-time admission (§11.7) now names the selected arm in its refusals
+and link predictions. Verified: the control program's Kraftfile on the default arm is
+unchanged; `--arm hosted` binds `koru.runtime`/`std.io:print` to `host-libc` and refuses
+`koruos/silo` (no hosted binding yet); both negatives still refuse with no artifacts.
+This is the first slice of rows-as-arm-independent-contract: a new arm becomes a set of
+bindings on the row table plus an emitter for `manifest-<arm>.txt`, not a fork of the
+command.
+
 ### 11.2 One binding refusal
 
 The same program is built with `unikraft/ninep` imported but no 9P transport row for

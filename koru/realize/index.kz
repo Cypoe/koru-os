@@ -1,6 +1,7 @@
-// koruos/realize: obligation-derived Unikraft configuration (DESIGN-0001 §11.1).
+// koruos/realize: obligation-derived platform-arm configuration (DESIGN-0001 §11.1).
 //
-// `koruc main.k realize gen` replaces `koruc main.k unikraft gen` for koru-os images. It
+// `koruc main.k realize gen [--arm <id>]` replaces `koruc main.k unikraft gen` for
+// koru-os images. On the default arm (`unikraft/qemu-x86_64`) it
 // writes the same Makefile.uk (derived from `unikraft:image`, as koru-libs `unikraft`
 // does), but the Kraftfile's kconfig is no longer a hand list:
 //
@@ -20,13 +21,20 @@
 // demand of the linked kernel (experiments/realize/stack-demand.py) and refuses the
 // image if the measurement exceeds the derived stack.
 //
+// On other arms the same resolution runs — used interfaces are matched to rows, each
+// row carries a binding per arm (`arm`, `mechanism`, `deltas`), and a used interface
+// whose row has no binding for the selected arm is a refusal naming the arm. The
+// artifact is then `manifest-<arm>.txt` (the bound interfaces and their mechanisms),
+// not a Kraftfile. The arm is part of the row lookup, so the refusal is the same
+// contract at every altitude: interface -> row -> arm binding -> mechanism.
+//
 // Rows live here for now (koru-libs' modules cannot carry them without a push to koru-libs).
 
 ~import std/compiler
 
 ~std/compiler:command.declare {
     "name": "realize",
-    "description": "Derive Makefile.uk, Kraftfile and realize.txt from the interfaces the program uses"
+    "description": "Derive an arm's build artifacts (Kraftfile+Makefile.uk, or a manifest-<arm>.txt) and realize.txt from the interfaces the program uses"
 }
 
 ~[comptime|command]pub tor realize {
@@ -36,24 +44,59 @@
 }
 
 ~proc realize|zig {
-    _ = argv;
+    // ---- 0. arm selection: --arm <id> or --arm=<id>, default unikraft/qemu-x86_64
+    var arm: []const u8 = "unikraft/qemu-x86_64";
+    {
+        var i: usize = 0;
+        while (i < argv.len) : (i += 1) {
+            if (std.mem.eql(u8, argv[i], "--arm") and i + 1 < argv.len) {
+                arm = argv[i + 1];
+                i += 1;
+            } else if (std.mem.startsWith(u8, argv[i], "--arm=")) {
+                arm = argv[i]["--arm=".len..];
+            }
+        }
+    }
+    const is_unikraft = std.mem.startsWith(u8, arm, "unikraft/");
+
+    const Binding = struct {
+        arm: []const u8, // platform arm this binding serves
+        mechanism: []const u8, // how the binding materializes ("kconfig", "host-libc", ...)
+        deltas: []const []const u8, // mechanism payload: "CONFIG_X=v" lines for kconfig
+    };
     const Row = struct {
         module: []const u8, // module qualifier as the parser spells it
         tor_prefix: []const u8, // "" = any tor of the module
         iface: []const u8, // the interface name reported in the tables
-        kconfig: []const []const u8, // "CONFIG_X=v"
         stack: u64, // declared stack demand, bytes
         resources: []const u8, // outside Kconfig: "mechanism: cost"
         evidence: []const u8,
+        binds: []const Binding, // which arms can satisfy this row, and how
     };
     const rows = [_]Row{
-        .{ .module = "", .tor_prefix = "", .iface = "koru.runtime", .kconfig = &.{ "CONFIG_LIBUKALLOC=y", "CONFIG_LIBUKALLOCBBUDDY=y" }, .stack = 16384, .resources = "heap: posix_memalign/free from the emitted flow prologue", .evidence = "V: output_emitted.zig declares extern posix_memalign/free; 16384 B is an allowance for the C side (C until stack-demand.py measures it)" },
-        .{ .module = "std.io", .tor_prefix = "print", .iface = "std.io:print", .kconfig = &.{}, .stack = 65536, .resources = "console: fputs(stdout) on the Unikraft console", .evidence = "V: emitted print formats into `var __kb: [65536]u8` on the stack (koru BUILD.md: order 4 = 64 KiB overflows)" },
-        .{ .module = "koruos.slice", .tor_prefix = "", .iface = "koruos/slice", .kconfig = &.{}, .stack = 4096, .resources = "clock: ukplat_monotonic_clock (plat, always linked); view: isa-debugcon port 0x402 (QEMU device); heap: malloc/free", .evidence = "V: koru/slice/index.kz externs; frames <= 1 KiB buffers" },
-        .{ .module = "koruos.nid", .tor_prefix = "", .iface = "koruos/nid", .kconfig = &.{}, .stack = 4096, .resources = "clock: ukplat_monotonic_clock (plat, always linked); console: fputs(stdout); heap: malloc/free", .evidence = "V: koru/nid/index.kz externs; frames <= 1 KiB buffers" },
-        .{ .module = "koruos.spawn", .tor_prefix = "", .iface = "koruos/spawn", .kconfig = &.{}, .stack = 4096, .resources = "clock: ukplat_monotonic_clock (ambient for children); console: fputs(stdout) behind the seam; heap: malloc/free (child records)", .evidence = "V: koru/spawn/index.kz externs; frames <= 1 KiB buffers" },
-        .{ .module = "koruos.silo", .tor_prefix = "", .iface = "koruos/silo", .kconfig = &.{}, .stack = 4096, .resources = "cpu: rdrand (QEMU -cpu +rdrand); heap: malloc/free", .evidence = "V: koru/silo/index.kz rdrand64 and externs" },
-        .{ .module = "unikraft.sched", .tor_prefix = "", .iface = "unikraft/sched", .kconfig = &.{ "CONFIG_LIBUKSCHED=y", "CONFIG_LIBUKSCHEDCOOP=y", "CONFIG_LIBUKBOOT_INITSCHEDCOOP=y" }, .stack = 4096, .resources = "threads: worker stack STACK_SIZE + aux stack + TLS per thread", .evidence = "V: koru-libs unikraft/sched README (ukschedcoop, cooperative)" },
+        .{ .module = "", .tor_prefix = "", .iface = "koru.runtime", .stack = 16384, .resources = "heap: posix_memalign/free from the emitted flow prologue", .evidence = "V: output_emitted.zig declares extern posix_memalign/free; 16384 B is an allowance for the C side (C until stack-demand.py measures it)", .binds = &.{
+            .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKALLOC=y", "CONFIG_LIBUKALLOCBBUDDY=y" } },
+            .{ .arm = "hosted", .mechanism = "host-libc", .deltas = &.{} },
+        } },
+        .{ .module = "std.io", .tor_prefix = "print", .iface = "std.io:print", .stack = 65536, .resources = "console: fputs(stdout) on the Unikraft console", .evidence = "V: emitted print formats into `var __kb: [65536]u8` on the stack (koru BUILD.md: order 4 = 64 KiB overflows)", .binds = &.{
+            .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
+            .{ .arm = "hosted", .mechanism = "host-libc", .deltas = &.{} },
+        } },
+        .{ .module = "koruos.slice", .tor_prefix = "", .iface = "koruos/slice", .stack = 4096, .resources = "clock: ukplat_monotonic_clock (plat, always linked); view: isa-debugcon port 0x402 (QEMU device); heap: malloc/free", .evidence = "V: koru/slice/index.kz externs; frames <= 1 KiB buffers", .binds = &.{
+            .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
+        } },
+        .{ .module = "koruos.nid", .tor_prefix = "", .iface = "koruos/nid", .stack = 4096, .resources = "clock: ukplat_monotonic_clock (plat, always linked); console: fputs(stdout); heap: malloc/free", .evidence = "V: koru/nid/index.kz externs; frames <= 1 KiB buffers", .binds = &.{
+            .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
+        } },
+        .{ .module = "koruos.spawn", .tor_prefix = "", .iface = "koruos/spawn", .stack = 4096, .resources = "clock: ukplat_monotonic_clock (ambient for children); console: fputs(stdout) behind the seam; heap: malloc/free (child records)", .evidence = "V: koru/spawn/index.kz externs; frames <= 1 KiB buffers", .binds = &.{
+            .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
+        } },
+        .{ .module = "koruos.silo", .tor_prefix = "", .iface = "koruos/silo", .stack = 4096, .resources = "cpu: rdrand (QEMU -cpu +rdrand); heap: malloc/free", .evidence = "V: koru/silo/index.kz rdrand64 and externs", .binds = &.{
+            .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{} },
+        } },
+        .{ .module = "unikraft.sched", .tor_prefix = "", .iface = "unikraft/sched", .stack = 4096, .resources = "threads: worker stack STACK_SIZE + aux stack + TLS per thread", .evidence = "V: koru-libs unikraft/sched README (ukschedcoop, cooperative)", .binds = &.{
+            .{ .arm = "unikraft/qemu-x86_64", .mechanism = "kconfig", .deltas = &.{ "CONFIG_LIBUKSCHED=y", "CONFIG_LIBUKSCHEDCOOP=y", "CONFIG_LIBUKBOOT_INITSCHEDCOOP=y" } },
+        } },
     };
     // When no used interface needs a scheduler, ask for none. Whether Unikraft honours it is
     // checked after the build against the resolved .config (check-config.py).
@@ -120,11 +163,14 @@
         }
     }
     if (app_name.len == 0) {
-        std.debug.print("realize: refused: no unikraft:image declared\n", .{});
-        std.process.exit(2);
+        if (is_unikraft) {
+            std.debug.print("realize: refused: no unikraft:image declared\n", .{});
+            std.process.exit(2);
+        }
+        app_name = "koru";
     }
 
-    // ---- 2. rows for the used interfaces
+    // ---- 2. rows for the used interfaces, bound on the selected arm
     var report = std.ArrayListUnmanaged(u8){};
     defer report.deinit(allocator);
     const rw = report.writer(allocator);
@@ -136,9 +182,21 @@
     const system_prefixes = [_][]const u8{ "std.compiler", "std.build", "std.deps", "std.control", "std.testing", "koru.unikraft", "unikraft", "koruos.realize", "koru" };
 
     rw.writeAll("# realize.txt: generated by `koruc <file> realize gen` (koruos/realize, DESIGN-0001 §11.1)\n\n") catch return;
-    rw.writeAll("## table 1: interface -> row -> kconfig\n") catch return;
+    rw.print("arm: {s}\n\n", .{arm}) catch return;
+    rw.writeAll("## table 1: interface -> row -> arm binding\n") catch return;
     var hit = [_]bool{false} ** rows.len;
+    var bound = [_]usize{0} ** rows.len;
     hit[0] = true;
+    var rt_bound = false;
+    for (rows[0].binds, 0..) |b, bi| if (std.mem.eql(u8, b.arm, arm)) {
+        bound[0] = bi;
+        rt_bound = true;
+    };
+    if (!rt_bound) {
+        hit[0] = false;
+        refusals += 1;
+        rw.print("refused: interface=koru.runtime arm={s} phase=configure missing=runtime binding for arm\n", .{arm}) catch return;
+    }
     rw.print("used: koru.runtime (always)\n", .{}) catch return;
     for (used.items) |u| {
         var sys = false;
@@ -147,39 +205,58 @@
         };
         if (std.mem.eql(u8, u.module, "unikraft")) sys = true;
         if (sys) continue;
-        var found = false;
+        var rowed = false;
+        var bound_here = false;
+        var served = std.ArrayListUnmanaged(u8){};
+        defer served.deinit(allocator);
         for (rows, 0..) |r, ri| {
             if (r.module.len == 0) continue;
             if (!std.mem.eql(u8, r.module, u.module)) continue;
             if (r.tor_prefix.len != 0 and !std.mem.startsWith(u8, u.tor, r.tor_prefix)) continue;
-            found = true;
-            hit[ri] = true;
+            rowed = true;
+            for (r.binds, 0..) |b, bi| {
+                served.writer(allocator).print("{s}{s}", .{ if (served.items.len == 0) "" else ",", b.arm }) catch {};
+                if (std.mem.eql(u8, b.arm, arm)) {
+                    hit[ri] = true;
+                    bound[ri] = bi;
+                    bound_here = true;
+                }
+            }
         }
-        if (!found) {
+        if (!bound_here) {
             // std modules other than the rows above need nothing from Kconfig, but say so
             if (std.mem.startsWith(u8, u.module, "std.")) {
                 rw.print("used: {s}:{s} -> no row needed (std, pure)\n", .{ u.module, u.tor }) catch return;
                 continue;
             }
             refusals += 1;
-            rw.print("refused: interface={s}:{s} arm=unikraft/qemu-x86_64 phase=configure missing=realize row offered=none\n", .{ u.module, u.tor }) catch return;
+            if (rowed) {
+                rw.print("refused: interface={s}:{s} arm={s} phase=configure missing=binding for arm (row serves: {s})\n", .{ u.module, u.tor, arm, served.items }) catch return;
+            } else {
+                rw.print("refused: interface={s}:{s} arm={s} phase=configure missing=realize row offered=none\n", .{ u.module, u.tor, arm }) catch return;
+            }
             continue;
         }
         rw.print("used: {s}:{s}\n", .{ u.module, u.tor }) catch return;
     }
     for (rows, 0..) |r, ri| {
         if (!hit[ri]) continue;
+        const b = r.binds[bound[ri]];
         if (std.mem.eql(u8, r.iface, "unikraft/sched")) need_sched = true;
-        rw.print("row: {s} stack={d} kconfig=", .{ r.iface, r.stack }) catch return;
-        for (r.kconfig, 0..) |k, i| {
-            rw.print("{s}{s}", .{ if (i == 0) "" else ",", k }) catch return;
-            derived.append(allocator, k) catch return;
+        if (std.mem.eql(u8, b.mechanism, "kconfig")) {
+            rw.print("row: {s} stack={d} kconfig=", .{ r.iface, r.stack }) catch return;
+            for (b.deltas, 0..) |k, i| {
+                rw.print("{s}{s}", .{ if (i == 0) "" else ",", k }) catch return;
+                derived.append(allocator, k) catch return;
+            }
+            if (b.deltas.len == 0) rw.writeAll("none") catch return;
+        } else {
+            rw.print("row: {s} stack={d} mechanism={s} deltas=none", .{ r.iface, r.stack, b.mechanism }) catch return;
         }
-        if (r.kconfig.len == 0) rw.writeAll("none") catch return;
         rw.print(" evidence=\"{s}\"\n", .{r.evidence}) catch return;
         stack += r.stack;
     }
-    if (!need_sched) {
+    if (!need_sched and is_unikraft) {
         rw.writeAll("row: no-scheduler (no used interface needs one) kconfig=") catch return;
         for (nosched, 0..) |k, i| {
             rw.print("{s}{s}", .{ if (i == 0) "" else ",", k }) catch return;
@@ -194,10 +271,14 @@
     while ((@as(u64, 4096) << order) < want) order += 1;
     const sk = std.fmt.allocPrint(allocator, "CONFIG_STACK_SIZE_PAGE_ORDER={d}", .{order}) catch return;
     defer allocator.free(sk);
-    derived.append(allocator, sk) catch return;
+    if (is_unikraft) derived.append(allocator, sk) catch return;
 
     rw.writeAll("\n## table 2: resource -> mechanism -> cost\n") catch return;
-    rw.print("resource: stack -> CONFIG_STACK_SIZE_PAGE_ORDER={d} ({d} B) -> declared demand {d} B + 25 % = {d} B\n", .{ order, @as(u64, 4096) << order, stack, want }) catch return;
+    if (is_unikraft) {
+        rw.print("resource: stack -> CONFIG_STACK_SIZE_PAGE_ORDER={d} ({d} B) -> declared demand {d} B + 25 % = {d} B\n", .{ order, @as(u64, 4096) << order, stack, want }) catch return;
+    } else {
+        rw.print("resource: stack -> host stack (OS-managed, not a kconfig knob) -> declared demand {d} B\n", .{stack}) catch return;
+    }
     for (rows, 0..) |r, ri| if (hit[ri]) {
         rw.print("resource: {s} -> {s}\n", .{ r.iface, r.resources }) catch return;
     };
@@ -240,7 +321,7 @@
             refusals += 1;
             linkrefs.writer(allocator).print("refused: koruos/nid used but its export table was not found in the module phase=configure\n", .{}) catch return;
         }
-        var ctx = NidCtx{ .al = allocator, .rep = &report, .refs = &linkrefs, .exs = exs.items };
+        var ctx = NidCtx{ .al = allocator, .rep = &report, .refs = &linkrefs, .exs = exs.items, .arm = arm };
         for (program.items) |item| {
             if (item != .flow) continue;
             nidWalk(&ctx, item.flow.body, null);
@@ -265,6 +346,10 @@
         }
     }.go;
     for (author.items) |a| {
+        if (!is_unikraft) {
+            rw.print("not-applicable: author kconfig line {s} (arm={s})\n", .{ a, arm }) catch return;
+            continue;
+        }
         var contradicted = false;
         for (derived.items) |d| {
             if (std.mem.eql(u8, keyOf(a), keyOf(d)) and !std.mem.eql(u8, valOf(a), valOf(d))) {
@@ -277,13 +362,49 @@
     }
     if (refusals == 0) rw.writeAll("refusals: none\n") catch return;
 
+    // arm slug for artifact names
+    var slug = std.ArrayListUnmanaged(u8){};
+    defer slug.deinit(allocator);
+    for (arm) |ch| slug.append(allocator, if (ch == '/' or ch == '\\' or ch == ':') '-' else ch) catch return;
+    const mfname = std.fmt.allocPrint(allocator, "manifest-{s}.txt", .{slug.items}) catch return;
+    defer allocator.free(mfname);
+
     const rf = std.fs.cwd().createFile("realize.txt", .{}) catch return;
     rf.writeAll(report.items) catch {};
     rf.close();
     if (refusals != 0) {
         std.fs.cwd().deleteFile("Kraftfile") catch {};
-        std.debug.print("realize: {d} refusal(s), no Kraftfile written; see realize.txt\n", .{refusals});
+        std.fs.cwd().deleteFile("Makefile.uk") catch {};
+        std.fs.cwd().deleteFile(mfname) catch {};
+        std.debug.print("realize: {d} refusal(s), no image manifest written; see realize.txt\n", .{refusals});
         std.process.exit(3);
+    }
+    if (!is_unikraft) {
+        // ---- arm manifest: the bound rows, their mechanism, and their resources
+        // stale Unikraft projections from an earlier run must not survive an arm switch
+        std.fs.cwd().deleteFile("Kraftfile") catch {};
+        std.fs.cwd().deleteFile("Makefile.uk") catch {};
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(allocator);
+        const w = buf.writer(allocator);
+        w.print("# manifest-{s}: generated by `koruc <file> realize gen --arm {s}` (koruos/realize)\n", .{ slug.items, arm }) catch return;
+        w.print("arm: {s}\nname: {s}\n\n", .{ arm, app_name }) catch return;
+        for (rows, 0..) |r, ri| {
+            if (!hit[ri]) continue;
+            const b = r.binds[bound[ri]];
+            w.print("bind: {s} -> {s}", .{ r.iface, b.mechanism }) catch return;
+            for (b.deltas, 0..) |d, i| w.print("{s}{s}", .{ if (i == 0) " deltas=" else ",", d }) catch return;
+            w.writeAll("\n") catch return;
+        }
+        const f = std.fs.cwd().createFile(mfname, .{}) catch return;
+        defer f.close();
+        f.writeAll(buf.items) catch return;
+        var nbound: u32 = 0;
+        for (hit) |h| {
+            if (h) nbound += 1;
+        }
+        std.debug.print("realize: {s} and realize.txt written for arm {s} ({d} bound, stack demand {d} B declared)\n", .{ mfname, arm, nbound, stack });
+        return;
     }
 
     // ---- Makefile.uk (same derivation as koru-libs unikraft:image)
@@ -455,6 +576,7 @@ const NidCtx = struct {
     rep: *std.ArrayListUnmanaged(u8),
     refs: *std.ArrayListUnmanaged(u8),
     exs: []const NidExport,
+    arm: []const u8 = "unikraft/qemu-x86_64",
     opens: u32 = 0,
     refusals: u32 = 0,
     predictions: u32 = 0,
@@ -525,7 +647,7 @@ fn nidWalk(c: *NidCtx, cont: anytype, table: ?*const NidTable) void {
                 c.rep.writer(c.al).print("predict: {s} foreign={s} -> refused table={s}\n", .{ how, f, why }) catch {};
                 if (required) {
                     c.refusals += 1;
-                    c.refs.writer(c.al).print("refused: foreign={s} arm=unikraft/qemu-x86_64 phase=configure missing=table ({s}) via=resolve (required)\n", .{ f, why }) catch {};
+                    c.refs.writer(c.al).print("refused: foreign={s} arm={s} phase=configure missing=table ({s}) via=resolve (required)\n", .{ f, c.arm, why }) catch {};
                 }
             } else {
                 const t = here.?;
@@ -559,7 +681,7 @@ fn nidWalk(c: *NidCtx, cont: anytype, table: ?*const NidTable) void {
                     c.rep.writer(c.al).print("predict: {s} foreign={s} nid={s} table=#{d} -> refused missing={s} offered=[{s}]\n", .{ how, f, nids, t.id, missing, offered }) catch {};
                     if (required) {
                         c.refusals += 1;
-                        c.refs.writer(c.al).print("refused: foreign={s} nid={s} arm=unikraft/qemu-x86_64 phase=configure missing={s} offered=[{s}] via=resolve (required)\n", .{ f, nids, missing, offered }) catch {};
+                        c.refs.writer(c.al).print("refused: foreign={s} nid={s} arm={s} phase=configure missing={s} offered=[{s}] via=resolve (required)\n", .{ f, nids, c.arm, missing, offered }) catch {};
                     }
                 }
             }
