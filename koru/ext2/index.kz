@@ -29,7 +29,7 @@
     "evidence": "V: koru/ext2/index.kz externs uk_blkdev_*/malloc/memalign; M2 author lines name the LIBVIRTIO deltas now derived here",
     "binds": [
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig", "deltas": ["CONFIG_LIBUKBLKDEV=y", "CONFIG_LIBVIRTIO_BLK=y", "CONFIG_LIBVIRTIO_PCI=y", "CONFIG_LIBVIRTIO_BUS=y"] },
-        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["provisional: legacy virtio-blk (transitional PCI, I/O-port window), one synchronous queue, polled used ring, no interrupts, no modern-capability negotiation"] }
+        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["provisional: legacy virtio-blk (transitional PCI, I/O-port window), one virtqueue, interrupt-acked ISR, used ring polled for data, no modern-capability negotiation"] }
     ]
 }
 
