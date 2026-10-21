@@ -48,28 +48,45 @@ else
     bad "aspace: selftest evidence missing: $(head -3 "$WORK/boot_hello.serial" | tr '\n' '|')"
 fi
 # ring3+spawn: an ELF64 child in its own CR3 does write() out-and-back
-# through the int 0x80 seam, exit(42) returns control to the kernel
-# reaper, and a second spawn proves launch->wait->reap->relaunch.
-if grep -qF "elf child says hi" "$WORK/boot_hello.serial" && grep -qF "ELF CHILD EXIT" "$WORK/boot_hello.serial" \
-    && grep -qF "SPAWN LOOP DONE" "$WORK/boot_hello.serial"; then
-    ok "ring3: ELF spawn loop — write/exit seam, kernel reap + relaunch"
+# through the int 0x80 seam, then exit() resumes the caller — spawn is
+# a blocking provider call returning the child's status.
+if grep -qF "elf child says hi" "$WORK/boot_hello.serial" && grep -qF "EMBED SPAWN exit=000000000000002a" "$WORK/boot_hello.serial"; then
+    ok "ring3: embedded ELF child wrote + exited through the seam"
 else
     bad "ring3: seam evidence missing: $(tail -4 "$WORK/boot_hello.serial" | tr '\n' '|')"
 fi
 
-# ext2 over the native virtio-blk provider: a blank host-made image, the
-# guest does mount -> create -> verify -> unmount and must print COMPLETE.
+# ext2 over the native virtio-blk provider: a host-made image carrying a
+# real child ELF — the guest mounts, creates+verifies, reads the ELF off
+# disk and spawns it at CPL=3 via koruos/spawn:exec, then unmounts.
 IMG="$WORK/ext2.img"
 IMGWSL="$(wsl -e wslpath -u "$(cygpath -w "$IMG")" 2>/dev/null)" || IMGWSL=""
-if [ -z "$IMGWSL" ]; then
-    bad "boot_ext2: WSL/wslpath unavailable — cannot build the ext2 image"
+ELF="$WORK/child.elf"
+ELFWSL=""
+if command -v python >/dev/null 2>&1; then
+    python "$ROOT/scripts/mk-child-elf.py" "$ELF" > /dev/null 2>&1
+    ELFWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELF")" 2>/dev/null)" || ELFWSL=""
+elif command -v py >/dev/null 2>&1; then
+    py -3 "$ROOT/scripts/mk-child-elf.py" "$(cygpath -w "$ELF")" > /dev/null 2>&1
+    ELFWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELF")" 2>/dev/null)" || ELFWSL=""
+fi
+if [ -z "$IMGWSL" ] || [ -z "$ELFWSL" ]; then
+    bad "boot_ext2: WSL/wslpath or python unavailable — cannot build the ext2 image"
 else
-    if MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 64 -O none -L koru-native "$IMGWSL" 4096 > "$WORK/mke2fs.out" 2>&1; then
+    if MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 64 -O none -L koru-native "$IMGWSL" 4096 > "$WORK/mke2fs.out" 2>&1 \
+        && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFWSL child.elf" "$IMGWSL" > "$WORK/debugfs.out" 2>&1; then
         boot_check "$ROOT/koru/native/tests/boot_ext2.k" "EXT2N COMPLETE" \
             -drive "file=$IMG,format=raw,if=none,id=d0" \
             -device virtio-blk-pci,drive=d0,disable-modern=on
+        # disk provenance: the spawned child must be the one read from ext2,
+        # not the embedded image — different message, different exit code.
+        if grep -qF "disk child says hi" "$WORK/boot_ext2.serial" && grep -qF "status=43" "$WORK/boot_ext2.serial"; then
+            ok "ext2-spawn: child.elf read from disk, spawned at CPL=3"
+        else
+            bad "ext2-spawn: disk-child evidence missing: $(tail -4 "$WORK/boot_ext2.serial" | tr '\n' '|')"
+        fi
     else
-        bad "boot_ext2: mke2fs failed: $(tail -2 "$WORK/mke2fs.out")"
+        bad "boot_ext2: image build failed: $(tail -2 "$WORK/mke2fs.out" "$WORK/debugfs.out")"
     fi
 fi
 

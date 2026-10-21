@@ -236,9 +236,8 @@ fn buildTables() bool {
     return true;
 }
 
-// Parse child_elf, map PT_LOAD pages, return e_entry.
-fn loadElf() ?usize {
-    const b = &child_elf;
+// Parse an ELF64 image, map PT_LOAD pages, return e_entry.
+fn loadElf(b: []const u8) ?usize {
     if (b.len < EHDR or b[0] != 0x7F or b[1] != 'E' or b[2] != 'L' or
         b[3] != 'F' or b[4] != 2 or b[5] != 1) return null;
     if (u16le(b, 16) != 2 or u16le(b, 18) != 0x3E) return null;
@@ -295,14 +294,17 @@ const TrapFrame = extern struct {
 };
 
 // ---- spawn primitive ------------------------------------------------------
-// The kernel captures its own rsp + a reaper continuation before dropping
-// into the child. exit() switches back to the kernel CR3 and stack and
-// jumps to the reaper — no halt, control returns. That makes the unit
-// launch -> trap -> reap -> relaunch a real spawn loop, not a one-shot.
-var saved_rsp: u64 = 0;
-var saved_rip: u64 = 0;
-var last_exit: u64 = 0;
-var spawns_left: u64 = 0;
+// koru_spawn_elf is the native-runtime provider for koruos/spawn:exec — the
+// rung-2 spawn family: the image is a caller-supplied ELF64 (ext2-loaded for
+// the disk case, embedded for the no-disk case), spawned in its own CR3 at
+// CPL=3, and its exit() RESUMES the caller: the asm below saves callee regs
+// and a resume address (1:) before iretq; the exit path in ring3_trap
+// restores kernel CR3+rsp and jmps straight into that resume label. The
+// function is a normal call from the program's perspective — spawn blocks
+// until the child exits, returns its status.
+pub export var saved_rsp: u64 = 0;
+pub export var saved_rip: u64 = 0;
+pub export var last_exit: u64 = 0;
 
 export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
     switch (f.rax) {
@@ -312,25 +314,15 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             while (i < f.rdx) : (i += 1) serPut(buf[i]);
             f.rax = f.rdx;
         },
-        60 => { // exit(code) — report, restore kernel context, jump to reaper
+        60 => { // exit(code) — resume the caller's spawn path, don't halt
             last_exit = f.rdi;
-            say("ELF CHILD EXIT ");
-            puthex(f.rdi);
-            say("\n");
-            // Restore kernel CR3 + stack, then CALL the reaper: the call
-            // pushes a return address so the callee enters with rsp%16==8
-            // like a normal call — a raw jmp enters misaligned and the
-            // callee's movaps prologue GPFs (measured).
             asm volatile (
                 \\ mov %[cr3], %%rax
                 \\ mov %%rax, %%cr3
-                \\ mov %[rsp], %%rsp
-                \\ and $-16, %%rsp
-                \\ call *%[rip]
+                \\ mov saved_rsp(%%rip), %%rsp
+                \\ jmp *saved_rip(%%rip)
                 :
                 : [cr3] "r" (@intFromPtr(&pml4)),
-                  [rsp] "r" (saved_rsp),
-                  [rip] "r" (saved_rip),
                 : .{ .memory = true });
             unreachable;
         },
@@ -379,54 +371,60 @@ comptime {
     );
 }
 
-// Reaper continuation: the exit path jumps here on the kernel stack/CR3.
-// Reports the code and relaunches while spawns remain — the spawn loop.
-fn childReaped() void {
-    say("REAPED ");
-    puthex(last_exit);
-    say("\n");
-    if (spawns_left == 0) {
-        say("SPAWN LOOP DONE\n");
-        while (true) asm volatile ("cli; hlt");
-    }
-    spawns_left -= 1;
-    demo();
-}
-
-// Boot into the ELF child. The exit seam returns control to childReaped
-// on the kernel stack; a second spawn proves the loop, not just the shot.
-pub fn run() void {
-    spawns_left = 1; // two children total, then SPAWN LOOP DONE
-    demo();
-}
-
-fn demo() void {
+// Spawn a caller-supplied ELF64 image in a fresh child space. Blocks until
+// the child exits through the seam; returns its exit code (< 0 on setup
+// refusal: -1 tables, -2 image).
+pub export fn koru_spawn_elf(image: [*]const u8, size: usize) callconv(.c) c_int {
     if (!buildTables()) {
         say("RING3 FAIL: page alloc\n");
-        return;
+        return -1;
     }
-    const entry = loadElf() orelse {
+    const entry = loadElf(image[0..size]) orelse {
         say("ELF LOAD FAIL\n");
-        return;
+        return -2;
     };
     loadTables();
-    saved_rip = @intFromPtr(&childReaped);
-    asm volatile ("mov %%rsp, %[r]"
-        : [r] "=r" (saved_rsp),
-    );
     asm volatile (
+        \\ push %rbx
+        \\ push %rbp
+        \\ push %r12
+        \\ push %r13
+        \\ push %r14
+        \\ push %r15
+        \\ mov %%rsp, saved_rsp(%%rip)
+        // consume %[cr3] before any scratch use — the lea below is free to
+        // take rax only after the input has been moved into CR3
         \\ mov %[cr3], %%rax
         \\ mov %%rax, %%cr3
+        \\ lea 1f(%%rip), %%rax
+        \\ mov %%rax, saved_rip(%%rip)
         \\ push $0x1B
         \\ push %[stk]
-        \\ push $0x202
+        // IF=0: the IDT only carries the 0x80 gate — a hardware IRQ landing
+        // at CPL=3 vectors to a null descriptor and triple-faults
+        \\ push $0x2
         \\ push $0x23
         \\ push %[rip]
         \\ iretq
+        \\ 1:
+        \\ pop %r15
+        \\ pop %r14
+        \\ pop %r13
+        \\ pop %r12
+        \\ pop %rbp
+        \\ pop %rbx
         :
         : [cr3] "r" (@intFromPtr(c_pml4)),
           [stk] "r" (@as(usize, USER_STACK_TOP)),
           [rip] "r" (entry),
         : .{ .memory = true });
-    unreachable;
+    return @intCast(last_exit);
+}
+
+// No-disk evidence path: spawn the embedded child once.
+pub fn run() void {
+    const st = koru_spawn_elf(&child_elf, child_elf.len);
+    say("EMBED SPAWN exit=");
+    puthex(@intCast(@as(u32, @bitCast(st))));
+    say("\n");
 }

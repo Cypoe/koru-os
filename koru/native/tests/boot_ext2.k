@@ -7,6 +7,7 @@ std/compiler:paths {
 
 import koruos/native
 import koruos/ext2
+import koruos/spawn
 import std/io
 
 koruos/ext2:mount(id: 0)
@@ -15,9 +16,19 @@ koruos/ext2:mount(id: 0)
         | ok c |> std/io:print.ln("ext2n: created dod1 ino={{ c.ino:d }} blocks={{ c.blocks:d }} first_block={{ c.first_block:d }}")
             |> koruos/ext2:verify(c.fs, name: "dod1", size: 10000)
                 | ok v |> std/io:print.ln("ext2n: read back dod1 ino={{ v.ino:d }} bytes={{ v.bytes:d }} content=ok")
-                    |> koruos/ext2:unmount(v.fs)
-                        | ok |> std/io:print.ln("EXT2N COMPLETE")
-                        | failed f |> std/io:print.ln("FAIL unmount: {{ f:s }}")
+                    |> koruos/ext2:fetch(v.fs, name: "child.elf")
+                        | ok r |> std/io:print.ln("ext2n: read child.elf bytes={{ r.buf.len:d }}")
+                            |> koruos/spawn:exec(image_ptr: r.buf.ptr, image_len: r.buf.len)
+                                | ok e |> std/io:print.ln("spawn: elf child exited status={{ e:d }}")
+                                    |> koruos/ext2:unmount(r.fs)
+                                        | ok |> std/io:print.ln("EXT2N COMPLETE")
+                                        | failed f |> std/io:print.ln("FAIL unmount: {{ f:s }}")
+                                | refused e |> std/io:print.ln("FAIL exec: {{ e:s }}") |> koruos/ext2:unmount(r.fs)
+                                    | ok |> _
+                                    | failed f |> std/io:print.ln("FAIL unmount: {{ f:s }}")
+                        | refused r |> std/io:print.ln("FAIL read: {{ r.reason:s }}") |> koruos/ext2:unmount(r.fs)
+                            | ok |> _
+                            | failed f |> std/io:print.ln("FAIL unmount: {{ f:s }}")
                 | mismatch x |> std/io:print.ln("FAIL verify: {{ x.reason:s }}") |> koruos/ext2:unmount(x.fs)
                     | ok |> _
                     | failed f |> std/io:print.ln("FAIL unmount: {{ f:s }}")

@@ -156,9 +156,27 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    then `SPAWN LOOP DONE`, pinned). Measured bug: a raw `jmp` into the
    reaper entered with `rsp%16==0` and the callee's `movaps` prologue
    GPF'd — the exit path `and $-16` + `call` gives a call-shaped frame.
-   Remaining rungs: ELF from ext2 (read-by-path or a loader fs), the
-   seam grown to a real ABI (SYSCALL/SYSRET, a rights-bag check per
-   call), then the rung-2 spawn provider family that binds all of it.
+   **ELF-from-ext2 landed the same day**, closing the loop into a
+   program-as-supervisor shape: `koruos/ext2` gained a `fetch` tor
+   (root-dir lookup, direct blocks, malloc'd `Buf`), `koruos/spawn`
+   gained `exec` — the rung-2 family member bound on `koru-native` to
+   a new `koru_spawn_elf(buf,len)` export in `user.zig` — and the
+   `boot_ext2` fixture mounts, fetches `/child.elf` off the virtio
+   disk, spawns it at CPL=3, reaps status 43 (`disk child says hi`,
+   distinct from the embedded child's 42), and unmounts —
+   `EXT2N COMPLETE` + `ext2-spawn` pinned in `check-boot.sh` (5/5).
+   Two measured bugs en route: an `lea 1f(%%rip),%%rax` in the
+   save/restore trampoline silently clobbered rax when LLVM had
+   already placed the `%%[cr3]` input there — the child ran with a
+   *code address* as CR3; reorder so the operand is consumed first.
+   And the iretq frame pushed RFLAGS=0x202 — IF=1 at CPL=3 let a
+   hardware IRQ vector into a null IDT descriptor (only gate 0x80
+   exists) → #GP→#DF→triple; the child now runs IF=0 until a real
+   interrupt path exists.
+   Remaining rungs: the seam grown to a real ABI (SYSCALL/SYSRET, a
+   rights-bag check per call), `exec` promoted from a lift member to
+   a declared rung-2 provider family, and ELF-by-path through a
+   general filesystem interface.
 
 ## Semantics (fixed in this slice)
 

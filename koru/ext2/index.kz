@@ -302,6 +302,47 @@ fn pattern(i: usize) u8 {
     return .{ .ok = .{ .fs = fs, .ino = ino, .blocks = nblk, .first_block = blocks[0] } };
 }
 
+// A byte buffer handed back across a tor boundary — tor arm fields only
+// admit pointers to NAMED types (no slices/optionals/anyopaque), so the
+// payload is a named extern struct.
+pub const Buf = extern struct { ptr: [*]u8, len: usize };
+
+~pub tor fetch { fs: *Fs<!mounted>, name: string }
+| ok { fs: *Fs<mounted!>, buf: *Buf }
+| refused { fs: *Fs<mounted!>, reason: string }
+
+~proc fetch|zig {
+    var dir: [BS]u8 = undefined;
+    const ino = findInRoot(fs, name, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "name not found" } };
+    const loc = inodeLoc(fs, ino);
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return .{ .refused = .{ .fs = fs, .reason = "inode read failed" } };
+    const fsize = rd32(&it, loc.off + 4);
+    if (fsize == 0 or fsize > 12 * BS) return .{ .refused = .{ .fs = fs, .reason = "size outside direct-block range" } };
+    const mode = rd16(&it, loc.off + 0);
+    if (mode & 0o170000 != 0o100000) return .{ .refused = .{ .fs = fs, .reason = "not a regular file" } };
+    const mem = malloc(fsize) orelse return .{ .refused = .{ .fs = fs, .reason = "out of memory" } };
+    const bh = malloc(@sizeOf(Buf)) orelse {
+        free(mem);
+        return .{ .refused = .{ .fs = fs, .reason = "out of memory (buf header)" } };
+    };
+    const bp: *Buf = @ptrCast(@alignCast(bh));
+    bp.* = .{ .ptr = @ptrCast(mem), .len = fsize };
+    const out: [*]u8 = @ptrCast(mem);
+    var data: [BS]u8 = undefined;
+    var off: usize = 0;
+    var k: usize = 0;
+    while (off < fsize) : (k += 1) {
+        if (!readBlock(fs, rd32(&it, loc.off + 40 + k * 4), &data)) {
+            free(mem);
+            return .{ .refused = .{ .fs = fs, .reason = "data read failed" } };
+        }
+        var q: usize = 0;
+        while (q < BS and off < fsize) : ({ q += 1; off += 1; }) out[off] = data[q];
+    }
+    return .{ .ok = .{ .fs = fs, .buf = bp } };
+}
+
 ~pub tor verify { fs: *Fs<!mounted>, name: string, size: u32 }
 | ok { fs: *Fs<mounted!>, ino: u32, bytes: u32 }
 | mismatch { fs: *Fs<mounted!>, reason: string }

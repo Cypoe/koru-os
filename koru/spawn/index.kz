@@ -39,7 +39,7 @@
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
         { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" },
         { "arm": "koru-native", "mechanism": "native-runtime",
-          "deltas": ["src:koru/native/runtime.zig", "rung:0/1 entry-function children run to completion inside start — one address space, bag enforced at the seam; provisional bind, MMU/IOMMU isolation caps are eventual (a different provider family), not claimed here"] }
+          "deltas": ["src:koru/native/runtime.zig", "src:koru/native/user.zig", "rung:0/1 entry-function children run to completion inside start — one address space, bag enforced at the seam; exec (rung 2: ELF image in own CR3 at CPL=3, int 0x80 seam) is native-runtime only — unserved on kconfig arms", "MMU/IOMMU isolation caps are eventual (a different provider family), not claimed for rung-0/1 tors"] }
     ]
 }
 
@@ -492,4 +492,24 @@ fn retire(c: *Child, how: []const u8) void {
     nauth += 1;
     logln("authority: derived holder={d} from child={d}.{d} handles={d} (nested attenuation)", .{ a.instance, c.instance, c.generation, a.nheld });
     return .{ .ok = .{ .a = a, .c = c } };
+}
+
+// ------------------------------------------------------------ rung 2: ELF children
+// exec: an external ELF64 image (e.g. read from ext2) spawned into its own
+// address space at CPL=3. The provider extern is native-runtime only; on
+// arms without it the symbol is absent and the call fails at link —
+// the honest refusal for "this arm has no process substrate".
+
+extern fn koru_spawn_elf(image: [*]const u8, size: usize) c_int;
+
+// image is a raw ELF64 byte buffer (e.g. ext2's Buf.ptr/len pair).
+~pub tor exec { image_ptr: [*]u8, image_len: usize }
+| ok i32
+| refused string
+
+~proc exec|zig {
+    const st = koru_spawn_elf(@ptrCast(image_ptr), image_len);
+    if (st < 0) return .{ .refused = "provider could not spawn the image" };
+    logln("spawn: exec elf size={d} exited status={d} (rung 2: own CR3, CPL=3, seam-brokered)", .{ image_len, st });
+    return .{ .ok = st };
 }
