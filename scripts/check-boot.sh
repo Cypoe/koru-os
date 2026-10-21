@@ -98,6 +98,13 @@ else
         else
             bad "ext2-spawn: disk-child evidence missing: $(tail -4 "$WORK/boot_ext2.serial" | tr '\n' '|')"
         fi
+        # exec-by-path folds walk→inode→load→spawn and names the identity:
+        # the inode it executed plus the object-nid minted from ext2/d0/<ino>.
+        if grep -qE "ext2n: exec child.elf ino=[0-9]+ nid=[0-9a-f]+ status=" "$WORK/boot_ext2.serial"; then
+            ok "exec-path: ELF-by-path bound inode+nid identity on the exec seam"
+        else
+            bad "exec-path: identity evidence missing: $(tail -4 "$WORK/boot_ext2.serial" | tr '\n' '|')"
+        fi
         # the bag is load-bearing: kernel-side refusal AND the child
         # observing -EACCES as a return value it can branch on.
         if grep -qF "SEAM REFUSE nr=0000000000000002" "$WORK/boot_ext2.serial" && grep -qF "getpid refused" "$WORK/boot_ext2.serial"; then

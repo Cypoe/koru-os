@@ -80,6 +80,7 @@ const BS: usize = 1024;
 
 const Fs = struct {
     dev: *UkBlkdev,
+    dev_id: u32,
     buf: [*]u8, // one block, device-aligned staging
     spb: usize, // sectors per block
     sectors: usize,
@@ -196,6 +197,7 @@ fn pattern(i: usize) u8 {
     const m = malloc(@sizeOf(Fs)) orelse return .{ .refused = "out of memory (fs)" };
     const fs: *Fs = @ptrCast(@alignCast(m));
     fs.dev = raw;
+    fs.dev_id = @intCast(id);
     fs.buf = @ptrCast(b);
     fs.spb = spb;
     fs.sectors = cap.sectors;
@@ -347,20 +349,34 @@ pub const Buf = extern struct { ptr: [*]u8, len: usize };
 | ok { fs: *Fs<mounted!>, buf: *Buf }
 | refused { fs: *Fs<mounted!>, reason: string }
 
-~proc fetch|zig {
-    var dir: [BS]u8 = undefined;
-    const ino = lookupPath(fs, path, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "path not found" } };
+const ReadErr = enum { inode_read, size_range, not_regular, oom, data_read };
+const ReadResult = union(enum) { ok: *Buf, err: ReadErr };
+
+fn readErr(e: ReadErr) []const u8 {
+    return switch (e) {
+        .inode_read => "inode read failed",
+        .size_range => "size outside direct-block range",
+        .not_regular => "not a regular file",
+        .oom => "out of memory",
+        .data_read => "data read failed",
+    };
+}
+
+// readFile: inode identity → bytes (direct blocks only). The caller's
+// path is a view; the read is always BY INODE — no path string crosses
+// this boundary.
+fn readFile(fs: *Fs, ino: u32) ReadResult {
     const loc = inodeLoc(fs, ino);
     var it: [BS]u8 = undefined;
-    if (!readBlock(fs, loc.block, &it)) return .{ .refused = .{ .fs = fs, .reason = "inode read failed" } };
+    if (!readBlock(fs, loc.block, &it)) return .{ .err = .inode_read };
     const fsize = rd32(&it, loc.off + 4);
-    if (fsize == 0 or fsize > 12 * BS) return .{ .refused = .{ .fs = fs, .reason = "size outside direct-block range" } };
+    if (fsize == 0 or fsize > 12 * BS) return .{ .err = .size_range };
     const mode = rd16(&it, loc.off + 0);
-    if (mode & 0o170000 != 0o100000) return .{ .refused = .{ .fs = fs, .reason = "not a regular file" } };
-    const mem = malloc(fsize) orelse return .{ .refused = .{ .fs = fs, .reason = "out of memory" } };
+    if (mode & 0o170000 != 0o100000) return .{ .err = .not_regular };
+    const mem = malloc(fsize) orelse return .{ .err = .oom };
     const bh = malloc(@sizeOf(Buf)) orelse {
         free(mem);
-        return .{ .refused = .{ .fs = fs, .reason = "out of memory (buf header)" } };
+        return .{ .err = .oom };
     };
     const bp: *Buf = @ptrCast(@alignCast(bh));
     bp.* = .{ .ptr = @ptrCast(mem), .len = fsize };
@@ -371,12 +387,59 @@ pub const Buf = extern struct { ptr: [*]u8, len: usize };
     while (off < fsize) : (k += 1) {
         if (!readBlock(fs, rd32(&it, loc.off + 40 + k * 4), &data)) {
             free(mem);
-            return .{ .refused = .{ .fs = fs, .reason = "data read failed" } };
+            free(bh);
+            return .{ .err = .data_read };
         }
         var q: usize = 0;
         while (q < BS and off < fsize) : ({ q += 1; off += 1; }) out[off] = data[q];
     }
-    return .{ .ok = .{ .fs = fs, .buf = bp } };
+    return .{ .ok = bp };
+}
+
+~proc fetch|zig {
+    var dir: [BS]u8 = undefined;
+    const ino = lookupPath(fs, path, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "path not found" } };
+    return switch (readFile(fs, ino)) {
+        .ok => |bp| .{ .ok = .{ .fs = fs, .buf = bp } },
+        .err => |e| .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
+    };
+}
+
+// exec: the full fold — path (a view) → inode (the identity) → ELF
+// bytes → a ring-3 process via the same seam spawn:exec uses. The tor
+// returns the identity it executed: the inode, and the object-nid
+// minted from the foreign name ext2/d<dev>/<ino> under the same
+// "koruos.nid.v1|" convention koruos/nid owns (the nid store itself
+// binds it once nid grows an object-row surface).
+extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) c_int;
+
+fn mintNid(fs: *Fs, ino: u32) u64 {
+    var fbuf: [64]u8 = undefined;
+    const foreign = std.fmt.bufPrint(&fbuf, "ext2/d{d}/{d}", .{ fs.dev_id, ino }) catch return 0;
+    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    h.update("koruos.nid.v1|");
+    h.update(foreign);
+    var d: [32]u8 = undefined;
+    h.final(&d);
+    return std.mem.readInt(u64, d[0..8], .big);
+}
+
+~pub tor exec { fs: *Fs<!mounted>, path: string, rights: u64 }
+| ok { fs: *Fs<mounted!>, status: i64, ino: u32, nid: u64 }
+| refused { fs: *Fs<mounted!>, reason: string }
+
+~proc exec|zig {
+    var dir: [BS]u8 = undefined;
+    const ino = lookupPath(fs, path, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "path not found" } };
+    const bp = switch (readFile(fs, ino)) {
+        .ok => |b| b,
+        .err => |e| return .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
+    };
+    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights);
+    free(@ptrCast(bp.ptr));
+    free(@ptrCast(bp));
+    if (st < 0) return .{ .refused = .{ .fs = fs, .reason = "spawn provider refused the image" } };
+    return .{ .ok = .{ .fs = fs, .status = st, .ino = ino, .nid = mintNid(fs, ino) } };
 }
 
 ~pub tor verify { fs: *Fs<!mounted>, path: string, size: u32 }

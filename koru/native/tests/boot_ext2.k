@@ -1,13 +1,13 @@
 // NATIVE, ext2 over our own virtio-blk: mount a host-made ext2 image on
-// koru-native, create /dod1, read it back, unmount — the same DoD-1 flow
-// the unikraft arm runs, on a substrate that owns the device itself.
+// koru-native, create /dod1, read it back, then ext2:exec — one provider
+// call folding path walk → inode identity → ELF load → ring-3 spawn —
+// then unmount, on a substrate that owns the device itself.
 std/compiler:paths {
     koruos: {{ ENTRY }}/../..
 }
 
 import koruos/native
 import koruos/ext2
-import koruos/spawn
 import std/io
 
 koruos/ext2:mount(id: 0)
@@ -16,17 +16,12 @@ koruos/ext2:mount(id: 0)
         | ok c |> std/io:print.ln("ext2n: created dod1 ino={{ c.ino:d }} blocks={{ c.blocks:d }} first_block={{ c.first_block:d }}")
             |> koruos/ext2:verify(c.fs, path: "dod1", size: 10000)
                 | ok v |> std/io:print.ln("ext2n: read back dod1 ino={{ v.ino:d }} bytes={{ v.bytes:d }} content=ok")
-                    |> koruos/ext2:fetch(v.fs, path: "child.elf")
-                        | ok r |> std/io:print.ln("ext2n: read child.elf bytes={{ r.buf.len:d }}")
-                            |> koruos/spawn:exec(image_ptr: r.buf.ptr, image_len: r.buf.len, rights: 1152921504606846978)
-                                | ok e |> std/io:print.ln("spawn: elf child exited status={{ e:d }}")
-                                    |> koruos/ext2:unmount(r.fs)
-                                        | ok |> std/io:print.ln("EXT2N COMPLETE")
-                                        | failed f |> std/io:print.ln("FAIL unmount: {{ f:s }}")
-                                | refused e |> std/io:print.ln("FAIL exec: {{ e:s }}") |> koruos/ext2:unmount(r.fs)
-                                    | ok |> _
-                                    | failed f |> std/io:print.ln("FAIL unmount: {{ f:s }}")
-                        | refused r |> std/io:print.ln("FAIL read: {{ r.reason:s }}") |> koruos/ext2:unmount(r.fs)
+                    |> koruos/ext2:exec(v.fs, path: "child.elf", rights: 1152921504606846978)
+                        | ok e |> std/io:print.ln("ext2n: exec child.elf ino={{ e.ino:d }} nid={{ e.nid:x }} status={{ e.status:d }}")
+                            |> koruos/ext2:unmount(e.fs)
+                                | ok |> std/io:print.ln("EXT2N COMPLETE")
+                                | failed f |> std/io:print.ln("FAIL unmount: {{ f:s }}")
+                        | refused e |> std/io:print.ln("FAIL exec: {{ e.reason:s }}") |> koruos/ext2:unmount(e.fs)
                             | ok |> _
                             | failed f |> std/io:print.ln("FAIL unmount: {{ f:s }}")
                 | mismatch x |> std/io:print.ln("FAIL verify: {{ x.reason:s }}") |> koruos/ext2:unmount(x.fs)
