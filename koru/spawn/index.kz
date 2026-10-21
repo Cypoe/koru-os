@@ -500,16 +500,18 @@ fn retire(c: *Child, how: []const u8) void {
 // arms without it the symbol is absent and the call fails at link —
 // the honest refusal for "this arm has no process substrate".
 
-extern fn koru_spawn_elf(image: [*]const u8, size: usize) c_int;
+extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) c_int;
 
 // image is a raw ELF64 byte buffer (e.g. ext2's Buf.ptr/len pair).
-~pub tor exec { image_ptr: [*]u8, image_len: usize }
+// rights is the child's syscall bag: a bitmask over nr — the seam
+// refuses (-EACCES) anything not granted, enforced per call.
+~pub tor exec { image_ptr: [*]u8, image_len: usize, rights: u64 }
 | ok i32
 | refused string
 
 ~proc exec|zig {
-    const st = koru_spawn_elf(@ptrCast(image_ptr), image_len);
+    const st = koru_spawn_elf(@ptrCast(image_ptr), image_len, rights);
     if (st < 0) return .{ .refused = "provider could not spawn the image" };
-    logln("spawn: exec elf size={d} exited status={d} (rung 2: own CR3, CPL=3, seam-brokered)", .{ image_len, st });
+    logln("spawn: exec elf size={d} bag={x} exited status={d} (rung 2: own CR3, CPL=3, syscall seam)", .{ image_len, rights, st });
     return .{ .ok = st };
 }

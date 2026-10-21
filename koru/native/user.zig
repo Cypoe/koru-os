@@ -1,19 +1,24 @@
-// koru/native user — ring3 execution + the embryonic syscall seam for the
-// spawn rung-2 family. The child is a real ELF64 executable: parsed,
-// PT_LOAD segments copied into freshly mapped user (U/S) pages in its own
-// CR3 domain, entered at e_entry via iretq to CPL=3.
+// koru/native user — ring3 execution + the syscall seam for the spawn
+// rung-2 family. The child is a real ELF64 executable: parsed, PT_LOAD
+// segments copied into freshly mapped user (U/S) pages in its own CR3
+// domain, entered at e_entry via iretq to CPL=3.
 //
-// The seam is a full trap frame: int 0x80 lands on TSS.rsp0, the asm stub
-// pushes all GP registers and calls ring3_trap, which dispatches on rax —
-// nr 1 = write(fd,buf,len) to serial (returns len, child CONTINUES — the
-// iretq-back direction is exercised), nr 60 = exit(code) reported on
-// serial then halt.
+// The seam is SYSCALL/SYSRET: EFER.SCE set, STAR/LSTAR/SFMASK programmed
+// in loadTables. SYSCALL does no stack switch — the entry stub saves the
+// user rsp into child_ursp, swaps to the kernel rsp0 stack, pushes the
+// full GP frame (rcx=user rip / r11=user rflags ride in the frame),
+// and calls ring3_trap. SYSRETQ restores both from the frame.
 //
-// Honest scope: the ELF image is embedded in the kernel (ext2 read-by-path
-// is a later rung), the loader handles one-page PT_LOAD ranges, exit still
-// halts rather than reaping to a parent, single shot not scheduled, the
-// ABI is int-based not SYSCALL/SYSRET. Kernel pages stay ring0-only in the
-// child space (U/S clear on identity leaves): the isolation is real.
+// Rights: child_rights is a per-spawn nr bitmask — the dispatcher
+// refuses (-EACCES, loud on serial) any nr not in the bag BEFORE
+// dispatch. This is where the spawn lift's bag model becomes
+// load-bearing: exec hands the bag down, the seam enforces it.
+//
+// Honest scope: int 0x80's gate stays installed (same dispatcher — it
+// enforces the same bag), exit still resumes the spawn caller rather
+// than scheduling, one child at a time. Kernel pages stay ring0-only
+// in the child space (U/S clear on identity leaves): the isolation is
+// real.
 
 extern var pml4: [512]u64;
 extern var pdpt: [512]u64;
@@ -54,17 +59,17 @@ fn puthex(v: u64) void {
 //   BF 01 00 00 00            mov $1, %edi        (fd)
 //   48 8D 35 15 00 00 00      lea 0x15(%rip),%rsi (msg)
 //   BA 12 00 00 00            mov $18, %edx       (len)
-//   CD 80                     int $0x80
+//   0F 05                     syscall
 //   B8 3C 00 00 00            mov $60, %eax       (exit)
 //   BF 2A 00 00 00            mov $42, %edi
-//   CD 80                     int $0x80
+//   0F 05                     syscall
 //   EB FE                     jmp $               (paranoia)
 //   "elf child says hi\n"
 const child_code = [_]u8{
     0xB8, 0x01, 0x00, 0x00, 0x00, 0xBF, 0x01, 0x00, 0x00, 0x00,
     0x48, 0x8D, 0x35, 0x15, 0x00, 0x00, 0x00, 0xBA, 0x12, 0x00,
-    0x00, 0x00, 0xCD, 0x80, 0xB8, 0x3C, 0x00, 0x00, 0x00, 0xBF,
-    0x2A, 0x00, 0x00, 0x00, 0xCD, 0x80, 0xEB, 0xFE,
+    0x00, 0x00, 0x0F, 0x05, 0xB8, 0x3C, 0x00, 0x00, 0x00, 0xBF,
+    0x2A, 0x00, 0x00, 0x00, 0x0F, 0x05, 0xEB, 0xFE,
     'e', 'l', 'f', ' ', 'c', 'h', 'i', 'l', 'd', ' ',
     's', 'a', 'y', 's', ' ', 'h', 'i', '\n',
 };
@@ -159,6 +164,41 @@ fn setIdtGate(idx: usize, handler: usize, dpl3: bool) void {
 }
 
 extern fn ring3_entry80() void;
+extern fn ring3_syscall_entry() void;
+
+// Per-child state the seam reads at ring transition. One child at a time
+// (spawn blocks), so plain globals are honest.
+pub export var child_ursp: u64 = 0; // user rsp saved across the syscall
+pub export var rsp0_val: u64 = 0; // kernel stack top for the syscall entry
+pub export var child_rights: u64 = 0; // nr bitmask — the bag, enforced
+
+// Program the SYSCALL MSRs. STAR: syscall base 0x08 (CS=0x08, SS=0x10),
+// sysret base 0x10 (SS=0x18|3=0x1B user data, CS=0x20|3=0x23 user code —
+// the gdt2 layout happens to match the required +8/+16 ordering).
+fn enableSyscall() void {
+    rsp0_val = @intFromPtr(&kstack) + kstack.len;
+    asm volatile (
+        \\ mov $0xC0000080, %ecx
+        \\ rdmsr
+        \\ or $1, %eax
+        \\ wrmsr
+        \\ mov $0xC0000081, %ecx
+        \\ movl $0x00100008, %edx
+        \\ xor %eax, %eax
+        \\ wrmsr
+        \\ mov $0xC0000082, %ecx
+        \\ mov %[lstar], %rdx
+        \\ mov %edx, %eax
+        \\ shr $32, %rdx
+        \\ wrmsr
+        \\ mov $0xC0000084, %ecx
+        \\ mov $0x200, %eax
+        \\ xor %edx, %edx
+        \\ wrmsr
+        :
+        : [lstar] "r" (@intFromPtr(&ring3_syscall_entry)),
+        : .{ .memory = true, .rax = true, .rcx = true, .rdx = true });
+}
 
 fn loadTables() void {
     patchTssDesc();
@@ -192,6 +232,7 @@ fn loadTables() void {
         :
         : [p] "r" (&idt_ptr),
         : .{ .memory = true });
+    enableSyscall();
 }
 
 // ---- child space -----------------------------------------------------------
@@ -307,12 +348,25 @@ pub export var saved_rip: u64 = 0;
 pub export var last_exit: u64 = 0;
 
 export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
+    // bag check before dispatch: an nr not granted in child_rights is a
+    // capability refusal, loud on serial AND visible to the child as
+    // -EACCES — not a silent ENOSYS.
+    if (f.rax >= 64 or (child_rights >> @as(u6, @intCast(f.rax))) & 1 == 0) {
+        say("SEAM REFUSE nr=");
+        puthex(f.rax);
+        say(" (not in child bag)\n");
+        f.rax = @bitCast(@as(i64, -13));
+        return;
+    }
     switch (f.rax) {
         1 => { // write(fd, buf, len) -> len
             const buf: [*]const u8 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
             var i: usize = 0;
             while (i < f.rdx) : (i += 1) serPut(buf[i]);
             f.rax = f.rdx;
+        },
+        2 => { // getpid — defined so "granted vs refused" is decidable
+            f.rax = 1;
         },
         60 => { // exit(code) — resume the caller's spawn path, don't halt
             last_exit = f.rdi;
@@ -371,10 +425,66 @@ comptime {
     );
 }
 
+// SYSCALL entry: the CPU lands here (LSTAR) with rcx=user rip,
+// r11=user rflags, and THE USER STACK STILL LIVE — unlike int, no TSS
+// switch happens. Swap to the kernel rsp0 stack, save the GP frame in
+// the same TrapFrame order, call the dispatcher, then sysretq (rcx/r11
+// ride back out of the frame). SFMASK already cleared IF.
+comptime {
+    asm (
+        \\ .section .text
+        \\ .globl ring3_syscall_entry
+        \\ ring3_syscall_entry:
+        \\   mov %rsp, child_ursp(%rip)
+        \\   mov rsp0_val(%rip), %rsp
+        \\   push %r15
+        \\   push %r14
+        \\   push %r13
+        \\   push %r12
+        \\   push %r11
+        \\   push %r10
+        \\   push %r9
+        \\   push %r8
+        \\   push %rbp
+        \\   push %rdi
+        \\   push %rsi
+        \\   push %rdx
+        \\   push %rcx
+        \\   push %rbx
+        \\   push %rax
+        // int's 40-byte hardware frame happened to land the callee
+        // 16-aligned; this manual path pushes 15 regs — pad 8 so
+        // ring3_trap's call site is call-conformant (movaps GPFs else).
+        // rdi takes the frame BEFORE the pad.
+        \\   mov %rsp, %rdi
+        \\   sub $8, %rsp
+        \\   call ring3_trap
+        \\   add $8, %rsp
+        \\   pop %rax
+        \\   pop %rbx
+        \\   pop %rcx
+        \\   pop %rdx
+        \\   pop %rsi
+        \\   pop %rdi
+        \\   pop %rbp
+        \\   pop %r8
+        \\   pop %r9
+        \\   pop %r10
+        \\   pop %r11
+        \\   pop %r12
+        \\   pop %r13
+        \\   pop %r14
+        \\   pop %r15
+        \\   mov child_ursp(%rip), %rsp
+        \\   sysretq
+    );
+}
+
 // Spawn a caller-supplied ELF64 image in a fresh child space. Blocks until
 // the child exits through the seam; returns its exit code (< 0 on setup
 // refusal: -1 tables, -2 image).
-pub export fn koru_spawn_elf(image: [*]const u8, size: usize) callconv(.c) c_int {
+pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) callconv(.c) c_int {
+    child_rights = rights;
     if (!buildTables()) {
         say("RING3 FAIL: page alloc\n");
         return -1;
@@ -423,7 +533,7 @@ pub export fn koru_spawn_elf(image: [*]const u8, size: usize) callconv(.c) c_int
 
 // No-disk evidence path: spawn the embedded child once.
 pub fn run() void {
-    const st = koru_spawn_elf(&child_elf, child_elf.len);
+    const st = koru_spawn_elf(&child_elf, child_elf.len, (1 << 1) | (1 << 60));
     say("EMBED SPAWN exit=");
     puthex(@intCast(@as(u32, @bitCast(st))));
     say("\n");

@@ -173,10 +173,26 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    hardware IRQ vector into a null IDT descriptor (only gate 0x80
    exists) → #GP→#DF→triple; the child now runs IF=0 until a real
    interrupt path exists.
-   Remaining rungs: the seam grown to a real ABI (SYSCALL/SYSRET, a
-   rights-bag check per call), `exec` promoted from a lift member to
-   a declared rung-2 provider family, and ELF-by-path through a
-   general filesystem interface.
+   **The seam is now the real ABI** — SYSCALL/SYSRET replaces `int
+   0x80` (its gate stays installed and lands on the same dispatcher,
+   so it enforces the same bag). EFER.SCE + STAR/LSTAR/SFMASK are
+   programmed in `loadTables`; the entry stub does the stack switch
+   SYSCALL omits — user rsp into `child_ursp`, kernel `rsp0_val`,
+   full GP frame, `sysretq` back with rcx/r11 riding the frame.
+   **The bag is load-bearing**: `exec` gained a `rights` field (nr
+   bitmask, `{write,exit}` in the fixture), `koru_spawn_elf` stores
+   it in `child_rights`, and the dispatcher refuses any ungranted nr
+   BEFORE dispatch — loud on serial (`SEAM REFUSE nr=2`) AND visible
+   to the child as `-EACCES` it can branch on (`getpid refused` — the
+   child prints its own evidence). Measured bug: SYSCALL does no
+   hardware frame push, so 15 register pushes left the callee's
+   `movaps` prologue 8 bytes off — `#GP(0)` mid-print; the int path's
+   40-byte frame had masked the same math. Pad before `call`, rdi at
+   the frame.
+   Remaining rungs: `exec` promoted from a lift member to a declared
+   rung-2 provider family, ELF-by-path through a general filesystem
+   interface, a real interrupt path (child runs IF=0 today), and the
+   bag grown from a bitmask to the lift's grant objects.
 
 ## Semantics (fixed in this slice)
 

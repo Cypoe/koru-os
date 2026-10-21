@@ -85,6 +85,13 @@ else
         else
             bad "ext2-spawn: disk-child evidence missing: $(tail -4 "$WORK/boot_ext2.serial" | tr '\n' '|')"
         fi
+        # the bag is load-bearing: kernel-side refusal AND the child
+        # observing -EACCES as a return value it can branch on.
+        if grep -qF "SEAM REFUSE nr=0000000000000002" "$WORK/boot_ext2.serial" && grep -qF "getpid refused" "$WORK/boot_ext2.serial"; then
+            ok "seam-bag: getpid refused loud + as -EACCES to the child"
+        else
+            bad "seam-bag: refusal evidence missing: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"
+        fi
     else
         bad "boot_ext2: image build failed: $(tail -2 "$WORK/mke2fs.out" "$WORK/debugfs.out")"
     fi
