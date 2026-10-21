@@ -14,6 +14,7 @@
 
 const prog = @import("program");
 const runtime = @import("runtime");
+const virtio = @import("virtio");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -21,10 +22,23 @@ comptime {
     // extern contract the program links against actually in the image.
     _ = &runtime.posix_memalign;
     _ = &runtime.free;
+    _ = &runtime.malloc;
+    _ = &runtime.memalign;
     _ = &runtime.fputs;
     _ = &runtime.ukplat_monotonic_clock;
     _ = &runtime.stdout;
     _ = &runtime.stderr;
+    _ = &runtime._uk_alloc_head;
+    _ = &virtio.uk_blkdev_get;
+    _ = &virtio.uk_blkdev_configure;
+    _ = &virtio.uk_blkdev_queue_get_info;
+    _ = &virtio.uk_blkdev_queue_configure;
+    _ = &virtio.uk_blkdev_queue_submit_one;
+    _ = &virtio.uk_blkdev_queue_finish_reqs;
+    _ = &virtio.uk_blkdev_start;
+    _ = &virtio.uk_blkdev_stop;
+    _ = &virtio.uk_blkdev_queue_unconfigure;
+    _ = &virtio.uk_blkdev_unconfigure;
 }
 
 // multiboot2 header — magic, architecture (i386), length, checksum, end tag.

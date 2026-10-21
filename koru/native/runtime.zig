@@ -94,6 +94,22 @@ pub export fn free(ptr: ?*anyopaque) callconv(.c) void {
     _ = ptr;
 }
 
+// malloc/memalign are the same bump allocator under different spellings —
+// the ext2 lift externs these names (Unikraft's uk_alloc vocabulary).
+pub export fn malloc(size: usize) callconv(.c) ?*anyopaque {
+    var p: ?*anyopaque = null;
+    if (posix_memalign(&p, 16, size) != 0) return null;
+    return p;
+}
+pub export fn memalign(alignment: usize, size: usize) callconv(.c) ?*anyopaque {
+    var p: ?*anyopaque = null;
+    if (posix_memalign(&p, alignment, size) != 0) return null;
+    return p;
+}
+// Opaque allocator token — the lift only threads it through QueueConf.a;
+// the native queue_configure ignores it, so any non-null value serves.
+pub export var _uk_alloc_head: ?*anyopaque = @ptrFromInt(1);
+
 // ---- clock contract -------------------------------------------------------
 
 // ukplat_monotonic_clock() -> u64 ns — what koruos/nid, koruos/slice and

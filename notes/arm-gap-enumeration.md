@@ -111,8 +111,18 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    `native-runtime` now owns the `_start` boundary, not just symbols.
    Known honest limits: identity-mapped, 6 MiB window, bump heap,
    multiboot info ignored (no cmdline/modules yet).
-2. **blk transport** — virtio first (QEMU arm), then NVMe/AHCI. A booted
-   image without block I/O can't provision anything.
+2. **blk transport** — **virtio done (legacy I/O-port), measured
+   2026-10-21.** `koru/native/virtio.zig` serves the same `uk_blkdev_*`
+   externs the ext2 lift consumes (transitional PCI 0x1AF4:0x1001, BAR0
+   I/O window, one synchronous queue, polled used ring). `runtime.zig`
+   adds `malloc`/`memalign`/`_uk_alloc_head`; ext2's row gained a
+   `koru-native → native-runtime` bind. Gate: `check-boot.sh` boots
+   `native/tests/boot_ext2.k` on a host-made ext2 image — full
+   mount→create→verify→unmount prints `EXT2N COMPLETE`. Honest limits:
+   transitional devices only (no modern virtio capability negotiation),
+   polling not interrupts, single queue, QEMU device needs
+   `disable-modern=on`. **Open:** NVMe/AHCI and modern virtio-pci are
+   still missing families.
 3. **Real debug channel** — `isa-debugcon` port 0x402 is QEMU-only and
    silently drops on real hardware; needed for bare-metal bring-up past
    serial alone.
