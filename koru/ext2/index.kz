@@ -408,20 +408,20 @@ fn readFile(fs: *Fs, ino: u32) ReadResult {
 // exec: the full fold — path (a view) → inode (the identity) → ELF
 // bytes → a ring-3 process via the same seam spawn:exec uses. The tor
 // returns the identity it executed: the inode, and the object-nid
-// minted from the foreign name ext2/d<dev>/<ino> under the same
-// "koruos.nid.v1|" convention koruos/nid owns (the nid store itself
-// binds it once nid grows an object-row surface).
+// BOUND in koruos/nid's object-pin store under the foreign name
+// ext2/d<dev>/<ino>. The nid lift owns minting — a program using exec
+// must carry koruos/nid or the link refuses the missing symbols.
 extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) c_int;
+extern fn koruos_nid_obj_pin(foreign: [*:0]const u8, key: u64) u64;
+extern fn koruos_nid_obj_key(nid: u64) i64;
 
-fn mintNid(fs: *Fs, ino: u32) u64 {
+// pinNid: bind (dev, ino) in the nid store; the key packs both halves so
+// resolve can verify the object is on THIS fs. nid==0 is the store's
+// refusal (collision, key-conflict, or full).
+fn pinNid(fs: *Fs, ino: u32) u64 {
     var fbuf: [64]u8 = undefined;
-    const foreign = std.fmt.bufPrint(&fbuf, "ext2/d{d}/{d}", .{ fs.dev_id, ino }) catch return 0;
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
-    h.update("koruos.nid.v1|");
-    h.update(foreign);
-    var d: [32]u8 = undefined;
-    h.final(&d);
-    return std.mem.readInt(u64, d[0..8], .big);
+    const foreign = std.fmt.bufPrintZ(&fbuf, "ext2/d{d}/{d}", .{ fs.dev_id, ino }) catch return 0;
+    return koruos_nid_obj_pin(foreign, (@as(u64, fs.dev_id) << 32) | ino);
 }
 
 ~pub tor exec { fs: *Fs<!mounted>, path: string, rights: u64 }
@@ -431,6 +431,8 @@ fn mintNid(fs: *Fs, ino: u32) u64 {
 ~proc exec|zig {
     var dir: [BS]u8 = undefined;
     const ino = lookupPath(fs, path, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "path not found" } };
+    const nid = pinNid(fs, ino);
+    if (nid == 0) return .{ .refused = .{ .fs = fs, .reason = "nid store refused the pin" } };
     const bp = switch (readFile(fs, ino)) {
         .ok => |b| b,
         .err => |e| return .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
@@ -439,7 +441,45 @@ fn mintNid(fs: *Fs, ino: u32) u64 {
     free(@ptrCast(bp.ptr));
     free(@ptrCast(bp));
     if (st < 0) return .{ .refused = .{ .fs = fs, .reason = "spawn provider refused the image" } };
-    return .{ .ok = .{ .fs = fs, .status = st, .ino = ino, .nid = mintNid(fs, ino) } };
+    return .{ .ok = .{ .fs = fs, .status = st, .ino = ino, .nid = nid } };
+}
+
+// pin: path → bound identity, without executing — the explicit
+// "give me this object's nid" surface for resolvers and later rename.
+~pub tor pin { fs: *Fs<!mounted>, path: string }
+| ok { fs: *Fs<mounted!>, ino: u32, nid: u64 }
+| refused { fs: *Fs<mounted!>, reason: string }
+
+~proc pin|zig {
+    var dir: [BS]u8 = undefined;
+    const ino = lookupPath(fs, path, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "path not found" } };
+    const nid = pinNid(fs, ino);
+    if (nid == 0) return .{ .refused = .{ .fs = fs, .reason = "nid store refused the pin" } };
+    return .{ .ok = .{ .fs = fs, .ino = ino, .nid = nid } };
+}
+
+// exec-nid: exec by identity — no path is walked. The nid resolves to
+// the pinned (dev, ino) key in koruos/nid's store; a nid bound on a
+// different device is refused by name, never resolved to a local inode.
+~pub tor exec-nid { fs: *Fs<!mounted>, nid: u64, rights: u64 }
+| ok { fs: *Fs<mounted!>, status: i64, ino: u32 }
+| refused { fs: *Fs<mounted!>, reason: string }
+
+~proc exec-nid|zig {
+    const key = koruos_nid_obj_key(nid);
+    if (key < 0) return .{ .refused = .{ .fs = fs, .reason = "nid not bound to an object" } };
+    const k: u64 = @bitCast(key);
+    if (k >> 32 != fs.dev_id) return .{ .refused = .{ .fs = fs, .reason = "nid bound on another device" } };
+    const ino: u32 = @intCast(k & 0xFFFFFFFF);
+    const bp = switch (readFile(fs, ino)) {
+        .ok => |b| b,
+        .err => |e| return .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
+    };
+    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights);
+    free(@ptrCast(bp.ptr));
+    free(@ptrCast(bp));
+    if (st < 0) return .{ .refused = .{ .fs = fs, .reason = "spawn provider refused the image" } };
+    return .{ .ok = .{ .fs = fs, .status = st, .ino = ino } };
 }
 
 ~pub tor verify { fs: *Fs<!mounted>, path: string, size: u32 }

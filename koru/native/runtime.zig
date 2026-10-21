@@ -15,6 +15,8 @@
 // Boot programs allocate and run; reclamation arrives with the spawn
 // address-space seam (a domain teardown frees the bump region wholesale).
 
+const std = @import("std");
+
 const COM1: u16 = 0x3F8;
 
 fn outb(port: u16, value: u8) void {
@@ -155,4 +157,64 @@ pub export fn ukplat_monotonic_clock() callconv(.c) u64 {
     const t = rdtsc();
     // t/hz ~ seconds; split so the remainder term cannot overflow u64.
     return (t / hz) * 1_000_000_000 + (t % hz) * 1_000_000_000 / hz;
+}
+
+// ---- nid object-pin store (koruos/nid's native realization) ---------------
+// Providers pin (foreign-name → provider-local key) and get the minted nid:
+// the object's resolvable identity, derived from the object itself (e.g.
+// ext2/d0/<ino>), so a path rename re-mints the same nid and the binding
+// survives the view. nid==0 is refusal — collisions and key conflicts are
+// loud, never resolved by first-come. Arms without this provider refuse at
+// link: the symbols are the seam.
+
+const ObjPin = struct { foreign: [64]u8, flen: u8, nid: u64, key: u64 };
+var objpins: [64]ObjPin = undefined;
+var n_objpins: usize = 0;
+
+fn nidHash(foreign: []const u8) u64 {
+    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    h.update("koruos.nid.v1|");
+    h.update(foreign);
+    var d: [32]u8 = undefined;
+    h.final(&d);
+    return std.mem.readInt(u64, d[0..8], .big);
+}
+
+fn nidLog(comptime f: []const u8, a: anytype) void {
+    var b: [1024]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, f ++ "\n", a) catch return;
+    _ = fputs(s.ptr, stdout);
+}
+
+pub export fn koruos_nid_obj_pin(foreign_ptr: [*:0]const u8, key: u64) callconv(.c) u64 {
+    const foreign = std.mem.span(foreign_ptr);
+    const nid = nidHash(foreign);
+    for (objpins[0..n_objpins]) |*p| {
+        if (p.nid != nid) continue;
+        if (std.mem.eql(u8, p.foreign[0..p.flen], foreign)) {
+            if (p.key != key) {
+                nidLog("pin refused: foreign={s} nid binds a different key (held={x} asked={x})", .{ foreign, p.key, key });
+                return 0;
+            }
+            return nid; // idempotent: same object, same identity
+        }
+        nidLog("pin refused: nid collision foreign={s} nid={x}", .{ foreign, nid });
+        return 0;
+    }
+    if (n_objpins == objpins.len or foreign.len > 64) {
+        nidLog("pin refused: store full or foreign name too long ({d} chars)", .{foreign.len});
+        return 0;
+    }
+    objpins[n_objpins] = .{ .foreign = undefined, .flen = @intCast(foreign.len), .nid = nid, .key = key };
+    @memcpy(objpins[n_objpins].foreign[0..foreign.len], foreign);
+    n_objpins += 1;
+    nidLog("pin: foreign={s} nid={x} key={x}", .{ foreign, nid, key });
+    return nid;
+}
+
+pub export fn koruos_nid_obj_key(nid: u64) callconv(.c) i64 {
+    for (objpins[0..n_objpins]) |p| {
+        if (p.nid == nid) return @bitCast(p.key);
+    }
+    return -1;
 }

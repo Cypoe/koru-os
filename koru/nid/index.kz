@@ -26,6 +26,11 @@
 //   another export (the AnyPS5/shadPS4 precedent: same NIDs, new provider, call sites
 //   untouched) and bumps the generation; an old binding is then refused at use (`stale`),
 //   never redirected.
+// - Object pins (below): a second store for OBJECT identity, not interface rows.
+//   Providers pin (foreign → provider-local key) through the exported
+//   koruos_nid_obj_pin/obj_key symbols and get the minted nid — the identity
+//   that survives the view (a path rename re-mints the same nid because the
+//   foreign name derives from the object, not the path).
 //
 // Phantom states: open mints <open!>; resolve needs <!open>, returns it, and mints <live!>
 // or refuses; call needs <!live> and returns it; release needs <!live>; close needs <!open>
@@ -354,6 +359,18 @@ fn mintBinding(t: *Table, foreign: []const u8, h: u32, nids: []const u8, how: []
     logln("retarget: interface={s} -> export={s}:{s} rows={d} gen={d} (NIDs unchanged)", .{ iface, ex.artifact, ex.symbol, n, g });
     return .{ .ok = .{ .t = t, .rows = n, .generation = g } };
 }
+
+// ------------------------------------------------------------ object pins
+// A second store beside the interface-correspondence Table: providers
+// pin (foreign-name → provider-local key) and get back the minted nid —
+// the object's resolvable identity. The foreign name derives from the
+// object (ext2 uses ext2/d<dev>/<ino> — device + inode), not from any
+// path view, so a rename re-mints the same nid and the binding survives.
+// The store itself is arm-realized as link-level symbols
+// (koruos_nid_obj_pin / koruos_nid_obj_key): koru-native provides it in
+// koru/native/runtime.zig; an arm without the provider refuses at link,
+// by name — the honest dependency. key is provider-local; nid==0 is
+// refusal (collision, conflicting key, or full store).
 
 ~pub tor release { b: *Binding<!live> }
 

@@ -105,6 +105,18 @@ else
         else
             bad "exec-path: identity evidence missing: $(tail -4 "$WORK/boot_ext2.serial" | tr '\n' '|')"
         fi
+        # the pin round-trip: pin(path) re-mints the SAME nid (identity is
+        # derived from the object, not the view) and exec_nid re-runs the
+        # child by nid alone — no path is walked on that call.
+        exnid=$(sed -n 's/.*exec child.elf ino=\([0-9]*\) nid=\([0-9a-f]*\).*/\1 \2/p' "$WORK/boot_ext2.serial" | head -1)
+        pinnid=$(sed -n 's/.*pinned child.elf ino=\([0-9]*\) nid=\([0-9a-f]*\).*/\1 \2/p' "$WORK/boot_ext2.serial" | head -1)
+        nxline=$(grep -oE "exec-nid ino=[0-9]+ status=43" "$WORK/boot_ext2.serial" | head -1)
+        if [ -n "$exnid" ] && [ "$exnid" = "$pinnid" ] && [ -n "$nxline" ] \
+           && [ "$(echo "$nxline" | sed -n 's/.*ino=\([0-9]*\).*/\1/p')" = "$(echo "$exnid" | cut -d' ' -f1)" ]; then
+            ok "nid-bind: pin re-minted exec's nid, exec_nid re-ran the same ino"
+        else
+            bad "nid-bind: pin/exec-nid mismatch: exec='$exnid' pin='$pinnid' exec-nid='$nxline'"
+        fi
         # the bag is load-bearing: kernel-side refusal AND the child
         # observing -EACCES as a return value it can branch on.
         if grep -qF "SEAM REFUSE nr=0000000000000002" "$WORK/boot_ext2.serial" && grep -qF "getpid refused" "$WORK/boot_ext2.serial"; then
