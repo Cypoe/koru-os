@@ -16,6 +16,7 @@ const prog = @import("program");
 const runtime = @import("runtime");
 const virtio = @import("virtio");
 const aspace = @import("aspace");
+const user = @import("user");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -146,5 +147,6 @@ comptime {
 export fn kmain() callconv(.c) noreturn {
     aspace.selftest();
     prog.main();
+    user.demo();
     while (true) asm volatile ("hlt");
 }

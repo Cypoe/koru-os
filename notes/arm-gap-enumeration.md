@@ -130,14 +130,23 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    MMU/IOMMU capabilities are eventual on `native-runtime` (own
    substrate, not host-supplied like `kconfig`/`host-libc`); the
    provisional binds stay rung-honest until this family exists.
-   **Sub-ladder in flight, first capability measured 2026-10-21:**
+   **Sub-ladder in flight, two capabilities measured 2026-10-21:**
    `koru/native/aspace.zig` clones the boot tables into a second CR3
    domain and proves on serial that VA 0x800000 resolves to different
    physical pages per space (`ASPACE A=aaaa B=bbbb DISTINCT`, pinned by
-   `check-boot.sh`). Remaining rungs: ELF64 loader (ext2 is now the
-   source), 4 KiB-granular mapping + user (U/S) pages, ring3 entry via
-   TSS/iretq, syscall seam for the rights bag, then the rung-2 spawn
-   provider family that binds all of it.
+   `check-boot.sh`). `koru/native/user.zig` then completes the first
+   ring3 descent: a child CR3 with user (U/S) pages at VA 0x800000 —
+   U/S required at *every* walk level, kernel leaves stay ring0-only —
+   `iretq` into CPL=3 (user GDT entries + TSS + a 256-entry IDT added
+   by the module), the child writes a marker byte into its own page
+   and raises `int 0x80` — the embryonic syscall seam — which lands on
+   TSS.rsp0 and reports on serial (`RING3 OK`, pinned). Measured bug:
+   `pd[4]` covers 8–10 MiB, not 4 — the first user window faulted on a
+   VA that walked the wrong slot. Remaining rungs: ELF64 loader (ext2
+   is now the source — the child today is a raw opcode blob), the seam
+   grown past `int 0x80`-as-halt into a return-able ABI (iretq back to
+   the child, handler registers), then the rung-2 spawn provider family
+   that binds all of it.
 
 ## Semantics (fixed in this slice)
 

@@ -47,6 +47,12 @@ if grep -qF "ASPACE" "$WORK/boot_hello.serial" && grep -qF "DISTINCT" "$WORK/boo
 else
     bad "aspace: selftest evidence missing: $(head -3 "$WORK/boot_hello.serial" | tr '\n' '|')"
 fi
+# ring3: user-space child in its own CR3 writes a marker, int 0x80 seam.
+if grep -qF "RING3 OK" "$WORK/boot_hello.serial"; then
+    ok "ring3: iretq to CPL=3, user marker, int 0x80 seam taken"
+else
+    bad "ring3: seam evidence missing: $(tail -3 "$WORK/boot_hello.serial" | tr '\n' '|')"
+fi
 
 # ext2 over the native virtio-blk provider: a blank host-made image, the
 # guest does mount -> create -> verify -> unmount and must print COMPLETE.
