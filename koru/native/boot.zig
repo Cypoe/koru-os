@@ -145,6 +145,7 @@ comptime {
 // The program's Zig entry. The emitted program returns void from `main`;
 // anything it leaves on the console is the boot evidence.
 export fn kmain() callconv(.c) noreturn {
+    user.init(); // IDT + PIC + sti — interrupts live before the program
     aspace.selftest();
     prog.main();
     user.run();

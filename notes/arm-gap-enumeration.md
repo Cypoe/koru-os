@@ -189,10 +189,36 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    `movaps` prologue 8 bytes off — `#GP(0)` mid-print; the int path's
    40-byte frame had masked the same math. Pad before `call`, rdi at
    the frame.
+   **Real interrupt path landed the same day** — the IF=0 hack is gone.
+   `user.zig` now carries a 256-gate IDT: generated stubs (32 exception
+   gates, vectors 0x20–0x2F as IRQ gates) saved through a link-time
+   `.quad` pointer table — GAS emits variable-length `jmp`s, so a
+   fixed-stride stub array pointed mid-instruction and delivered a
+   *code address* as the vector; the table removes the arithmetic.
+   Common entry saves all GP regs, forces `and $-16` before the Zig
+   call (entry parity differs CPL0 vs CPL3 — never inherit it), and
+   `iretq`s back. Exceptions print `EXC v=… rip=… err=…` and resume
+   where resumable — vector 3 is installed DPL=3, so the disk child's
+   `int3` vectors in from CPL=3 and returns (`EXC v=03 (continued)`,
+   pinned). The 8259 pair is remapped to 0x20/0x28 with the cascade
+   unmasked; IRQ0 (PIT) and the device's INTx line are unmasked —
+   `irq: timer delivered` and `irq: virtio delivered` both measured,
+   the child itself runs RFLAGS=0x202 (timer IRQs land mid-child at
+   CPL=3, switch to TSS.rsp0, return through iretq). The measured bug
+   that mattered: `finish_reqs`'s polled `inb(VIRTIO_ISR)` is
+   read-to-clear — it deasserted INTx *before* the PIC delivered, and
+   the PIC answered the collapsed level-triggered line as a spurious
+   IRQ15 storm (42× `vec=2f` — the virtio interrupt arriving
+   mislabeled). The ISR read moved into the IRQ handler, where an
+   ack belongs; strays mask after first report and QEMU logged zero.
+   `check-boot.sh` 10/10 pins all of it — `irq-virtio`, `irq-timer`,
+   `irq-storm` (strays bounded), `exc-resume`.
    Remaining rungs: `exec` promoted from a lift member to a declared
    rung-2 provider family, ELF-by-path through a general filesystem
-   interface, a real interrupt path (child runs IF=0 today), and the
-   bag grown from a bitmask to the lift's grant objects.
+   interface, interrupt-driven request completion (the ring is still
+   polled for *data*; the IRQ proves arrival — a waker/scheduler
+   consumes it next), a proper GDT/IDT per-CPU story, and the bag
+   grown from a bitmask to the lift's grant objects.
 
 ## Semantics (fixed in this slice)
 

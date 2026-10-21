@@ -20,6 +20,8 @@
 // in the child space (U/S clear on identity leaves): the isolation is
 // real.
 
+const std = @import("std");
+
 extern var pml4: [512]u64;
 extern var pdpt: [512]u64;
 extern var pd: [512]u64;
@@ -165,6 +167,206 @@ fn setIdtGate(idx: usize, handler: usize, dpl3: bool) void {
 
 extern fn ring3_entry80() void;
 extern fn ring3_syscall_entry() void;
+
+// ---- interrupts ---------------------------------------------------------
+// The real IDT: vectors 0-31 get gates that report and halt (except #BP,
+// which resumes — a delivered exception that doesn't kill anything is the
+// evidence), 0x20-0x2F are the remapped 8259 PIC lines (timer + the virtio
+// device's INTx). SYSCALL/int-0x80 keep their entries. With the table
+// populated, stray delivery stops being a triple-fault — so the child can
+// run IF=1 again and the kernel takes interrupts anywhere.
+
+fn outb(port: u16, v: u8) void {
+    asm volatile ("outb %[v], %[p]"
+        :
+        : [v] "{al}" (v),
+          [p] "N{dx}" (port),
+        : .{ .memory = true });
+}
+fn inb(port: u16) u8 {
+    return asm volatile ("inb %[p], %[r]"
+        : [r] "={al}" (-> u8),
+        : [p] "N{dx}" (port),
+        : .{ .memory = true });
+}
+
+// 8259 remap: master → vectors 0x20-0x27, slave → 0x28-0x2F, all masked.
+fn picInit() void {
+    outb(0x20, 0x11);
+    outb(0xA0, 0x11);
+    outb(0x21, 0x20);
+    outb(0xA1, 0x28);
+    outb(0x21, 0x04);
+    outb(0xA1, 0x02);
+    outb(0x21, 0x01);
+    outb(0xA1, 0x01);
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
+}
+fn picEoi(vec: u64) void {
+    if (vec >= 0x28) outb(0xA0, 0x20);
+    outb(0x20, 0x20);
+}
+// Providers call this once they know their line (virtio reads it from PCI
+// config). irq is the PIC line (0-15), not the vector.
+pub export fn koru_irq_unmask(irq: u8) callconv(.c) void {
+    say("irq: unmask line ");
+    puthex(irq);
+    say("\n");
+    const port: u16 = if (irq < 8) 0x21 else 0xA1;
+    const bit: u3 = @intCast(irq & 7);
+    outb(port, inb(port) & ~(@as(u8, 1) << bit));
+    // a slave line only reaches the CPU through master's cascade input 2
+    if (irq >= 8) outb(0x21, inb(0x21) & ~@as(u8, 4));
+}
+
+pub export var irq_ticks: u64 = 0;
+var virtio_seen: u64 = 0;
+
+// virtio.zig exports these once the device is found; 0xFF = unconfigured.
+extern var virtio_irq_line: u8;
+extern fn virtio_irq_ack() void;
+
+const ExcFrame = extern struct {
+    rax: u64,
+    rbx: u64,
+    rcx: u64,
+    rdx: u64,
+    rsi: u64,
+    rdi: u64,
+    rbp: u64,
+    r8: u64,
+    r9: u64,
+    r10: u64,
+    r11: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+    vec: u64,
+    err: u64,
+    rip: u64,
+    cs: u64,
+    rflags: u64,
+    // ss/usp trail when the source was CPL=3 — hardware layout, unread.
+};
+
+export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
+    if (f.vec >= 0x20 and f.vec < 0x30) {
+        if (f.vec == 0x20) {
+            irq_ticks += 1;
+            if (irq_ticks == 1) say("irq: timer delivered\n");
+        } else if (virtio_irq_line != 0xFF and f.vec == 0x20 + @as(u64, virtio_irq_line)) {
+            virtio_irq_ack();
+            virtio_seen += 1;
+            if (virtio_seen == 1) say("irq: virtio delivered\n");
+        } else {
+            // unclaimed line: report once, then mask it at the PIC so a
+            // level-asserted storm can't drown the boot (PS/2 aux fires
+            // IRQ12 on QEMU despite the IMR — masking stops delivery)
+            say("irq: stray vec=");
+            puthex(f.vec);
+            say(" (masked)\n");
+            const l: u8 = @intCast(f.vec - 0x20);
+            const port: u16 = if (l < 8) 0x21 else 0xA1;
+            const bit: u3 = @intCast(l & 7);
+            outb(port, inb(port) | (@as(u8, 1) << bit));
+        }
+        picEoi(f.vec);
+        return;
+    }
+    say("EXC v=");
+    puthex(f.vec);
+    say(" rip=");
+    puthex(f.rip);
+    say(" err=");
+    puthex(f.err);
+    if (f.vec == 3) {
+        say(" (continued)\n");
+        return;
+    }
+    say(" — halting\n");
+    while (true) asm volatile ("cli; hlt");
+}
+
+// Stub table: vectors 0-31 are exceptions (8,10-14,17,21,29,30 carry a
+// hardware error code — for those the stub pushes only the vector; the
+// rest push a dummy err first), 0x20-0x2F are IRQ lines. All land on one
+// common entry. The rsp parity at stub entry is NOT fixed (CPL0 vs CPL3
+// sources push different frame sizes), so the common entry force-aligns
+// with AND before calling into Zig — a fixed sub would be wrong half the
+// time (the lesson of three movaps GPFs).
+comptime {
+    var src: []const u8 = ".section .text\n";
+    const errv = [_]u8{ 8, 10, 11, 12, 13, 14, 17, 21, 29, 30 };
+    for (0..48) |v| {
+        var has_err = false;
+        for (errv) |e| has_err = has_err or e == v;
+        src = src ++ std.fmt.comptimePrint("irqstub_{d}:\n", .{v});
+        if (!has_err) src = src ++ "  push $0\n";
+        src = src ++ std.fmt.comptimePrint("  push ${d}\n  jmp irq_exc_common\n", .{v});
+    }
+    // a link-time address table — stub encodings stay free to vary
+    src = src ++ ".section .rodata\n.globl irqstub_table\n.align 8\nirqstub_table:\n";
+    for (0..48) |v| src = src ++ std.fmt.comptimePrint("  .quad irqstub_{d}\n", .{v});
+    src = src ++ ".section .text\n";
+    src = src ++
+        \\ irq_exc_common:
+        \\   push %r15
+        \\   push %r14
+        \\   push %r13
+        \\   push %r12
+        \\   push %r11
+        \\   push %r10
+        \\   push %r9
+        \\   push %r8
+        \\   push %rbp
+        \\   push %rdi
+        \\   push %rsi
+        \\   push %rdx
+        \\   push %rcx
+        \\   push %rbx
+        \\   push %rax
+        \\   mov %rsp, %rdi
+        \\   mov %rsp, %rbx
+        \\   and $-16, %rsp
+        \\   call irq_exc_dispatch
+        \\   mov %rbx, %rsp
+        \\   pop %rax
+        \\   pop %rbx
+        \\   pop %rcx
+        \\   pop %rdx
+        \\   pop %rsi
+        \\   pop %rdi
+        \\   pop %rbp
+        \\   pop %r8
+        \\   pop %r9
+        \\   pop %r10
+        \\   pop %r11
+        \\   pop %r12
+        \\   pop %r13
+        \\   pop %r14
+        \\   pop %r15
+        \\   add $16, %rsp
+        \\   iretq
+        \\
+    ;
+    asm (src);
+}
+
+extern var irqstub_table: [48]u64;
+
+// Called once from kmain, before the program runs: PIC remapped, every
+// gate populated, interrupts on.
+pub fn init() void {
+    picInit();
+    // v3 must be DPL=3 — #BP is raised by int3 from user code and the
+    // DPL check applies
+    for (0..48) |v| setIdtGate(v, irqstub_table[v], v == 3);
+    loadTables();
+    koru_irq_unmask(0); // PIT tick — the standing delivery proof
+    asm volatile ("sti");
+}
 
 // Per-child state the seam reads at ring transition. One child at a time
 // (spawn blocks), so plain globals are honest.
@@ -510,9 +712,9 @@ pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) callc
         \\ mov %%rax, saved_rip(%%rip)
         \\ push $0x1B
         \\ push %[stk]
-        // IF=0: the IDT only carries the 0x80 gate — a hardware IRQ landing
-        // at CPL=3 vectors to a null descriptor and triple-faults
-        \\ push $0x2
+        // IF=1: the IDT is fully populated now — IRQs land on real gates,
+        // the child may be interrupted and resumed
+        \\ push $0x202
         \\ push $0x23
         \\ push %[rip]
         \\ iretq

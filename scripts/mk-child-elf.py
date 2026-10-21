@@ -31,6 +31,10 @@ code += b"\x48\x8D\x35" + struct.pack("<i", 0)  # lea refused(%rip) — patched
 code += b"\xBA" + struct.pack("<I", len(refused))
 code += b"\x0F\x05"                      # syscall
 skip = len(code)
+# int3 — a delivered exception that resumes: the IDT's #BP gate lands on
+# irq_exc_dispatch, prints EXC v=03, iretqs back into the child. Proves
+# trap delivery + return at CPL=3, not just syscall/sysret.
+code += b"\xCC"
 # exit(43)
 code += b"\xB8\x3C\x00\x00\x00"          # mov $60, %eax
 code += b"\xBF\x2B\x00\x00\x00"          # mov $43, %edi

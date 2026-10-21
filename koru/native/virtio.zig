@@ -114,6 +114,17 @@ const BlkReqHdr = extern struct {
 };
 
 var iobase: u16 = 0;
+// INTx line from PCI config (0x3C lo byte); 0xFF = not yet discovered.
+// The seam reads it to route the IRQ; ack reads the ISR (read-to-clear).
+pub export var virtio_irq_line: u8 = 0xFF;
+pub export var irq_pin: u8 = 0;
+pub export var virtio_irq_count: u64 = 0;
+extern fn koru_irq_unmask(irq: u8) void;
+
+pub export fn virtio_irq_ack() callconv(.c) void {
+    if (iobase != 0) _ = inb(iobase + VIRTIO_ISR);
+    virtio_irq_count += 1;
+}
 var qsize: u16 = 0;
 var descs: [*]volatile Desc = undefined;
 var avail: *volatile Avail = undefined;
@@ -142,9 +153,13 @@ fn findDevice() void {
                 const bar0 = pciRead32(@intCast(bus), devnum, 0, 0x10);
                 if ((bar0 & 1) != 0) { // I/O-space BAR → legacy port window
                     iobase = @intCast(bar0 & ~@as(u32, 3));
-                    // enable I/O space + bus mastering
+                    // enable I/O space + bus mastering; clear INTx-disable
+                    // (PCI command bit 10) so the line actually asserts
                     const cmd = pciRead32(@intCast(bus), devnum, 0, 0x04);
-                    pciWrite32(@intCast(bus), devnum, 0, 0x04, cmd | 0x5);
+                    pciWrite32(@intCast(bus), devnum, 0, 0x04, (cmd & ~@as(u32, 0x400)) | 0x5);
+                    const intr = pciRead32(@intCast(bus), devnum, 0, 0x3C);
+                    virtio_irq_line = @intCast(intr & 0xFF);
+                    irq_pin = @intCast((intr >> 8) & 0xFF);
                     device_found = true;
                     return;
                 }
@@ -187,6 +202,11 @@ fn initQueue() void {
     outl(iobase + VIRTIO_QUEUE_PFN, @intCast(@intFromPtr(&ring_mem[0]) >> 12));
     capacity = @as(u64, inl(iobase + VIRTIO_CONFIG)) |
         (@as(u64, inl(iobase + VIRTIO_CONFIG + 4)) << 32);
+    // ring flags must be zero — VIRTQ_*_F_NO_INTERRUPT bits would suppress
+    // the INTx assert we now rely on for the interrupt evidence
+    avail.flags = 0;
+    used.flags = 0;
+    if (virtio_irq_line != 0xFF) koru_irq_unmask(virtio_irq_line);
 }
 
 fn blkStatus() void {
@@ -349,7 +369,8 @@ pub export fn uk_blkdev_queue_submit_one(d: ?*anyopaque, queue_id: u16, req: ?*B
 pub export fn uk_blkdev_queue_finish_reqs(d: ?*anyopaque, queue_id: u16) callconv(.c) c_int {
     _ = d;
     if (queue_id != 0) return -22;
-    _ = inb(iobase + VIRTIO_ISR); // read-to-clear
+    // ISR is the IRQ handler's channel — reading it here (read-to-clear)
+    // would drop INTx mid-assertion and the PIC reports a spurious IRQ15
     const ui = used.idx;
     if (ui == last_used_idx) return 0; // nothing retired yet
     last_used_idx = ui;

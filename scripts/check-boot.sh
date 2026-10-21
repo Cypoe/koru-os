@@ -92,6 +92,31 @@ else
         else
             bad "seam-bag: refusal evidence missing: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"
         fi
+        # interrupts are real: virtio INTx delivered through the PIC and
+        # the child's int3 vectored into our #BP gate and RESUMED (the
+        # child still exits 43 after it).
+        if grep -qF "irq: virtio delivered" "$WORK/boot_ext2.serial"; then
+            ok "irq-virtio: INTx completion delivered through the IDT"
+        else
+            bad "irq-virtio: no interrupt evidence: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"
+        fi
+        if grep -qF "irq: timer delivered" "$WORK/boot_ext2.serial"; then
+            ok "irq-timer: PIT IRQ0 delivered through the PIC"
+        else
+            bad "irq-timer: no timer evidence: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"
+        fi
+        # spurious IRQ7/15 is legal once in a while; it must not storm.
+        strays=$(grep -c "irq: stray" "$WORK/boot_ext2.serial" || true)
+        if [ "$strays" -le 8 ]; then
+            ok "irq-storm: stray IRQs bounded ($strays)"
+        else
+            bad "irq-storm: $strays stray IRQ deliveries — unbounded"
+        fi
+        if grep -qF "EXC v=0000000000000003" "$WORK/boot_ext2.serial" && grep -qF "(continued)" "$WORK/boot_ext2.serial"; then
+            ok "exc-resume: child int3 delivered at CPL=3 and resumed"
+        else
+            bad "exc-resume: #BP evidence missing: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"
+        fi
     else
         bad "boot_ext2: image build failed: $(tail -2 "$WORK/mke2fs.out" "$WORK/debugfs.out")"
     fi
