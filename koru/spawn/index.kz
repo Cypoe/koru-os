@@ -515,3 +515,23 @@ extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) c_int;
     logln("spawn: exec elf size={d} bag={x} exited status={d} (rung 2: own CR3, CPL=3, syscall seam)", .{ image_len, rights, st });
     return .{ .ok = st };
 }
+
+extern fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, rights: [*]const u64, n: usize) c_int;
+
+// run2: two images, two child spaces, ONE epoch — the roster runs under
+// tick preemption and the call returns when both have exited. The multi-
+// process seam: what exec does for one image, run2 proves for a roster —
+// each child's bag rides its own slot (rights_a / rights_b).
+~pub tor run2 { image_ptr: [*]u8, image_len: usize, image2_ptr: [*]u8, image2_len: usize, rights: u64 }
+| ok i32
+| refused string
+
+~proc run2|zig {
+    var imgs = [_][*]const u8{ @ptrCast(image_ptr), @ptrCast(image2_ptr) };
+    var szs = [_]usize{ image_len, image2_len };
+    var rts = [_]u64{ rights, rights };
+    const st = koru_spawn_run(&imgs, &szs, &rts, 2);
+    if (st < 0) return .{ .refused = "provider could not spawn the roster" };
+    logln("spawn: run2 last-exit={d} (rung 2: tick-preempted roster)", .{st});
+    return .{ .ok = st };
+}

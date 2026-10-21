@@ -62,19 +62,31 @@ fi
 IMG="$WORK/ext2.img"
 IMGWSL="$(wsl -e wslpath -u "$(cygpath -w "$IMG")" 2>/dev/null)" || IMGWSL=""
 ELF="$WORK/child.elf"
+ELFA="$WORK/childA.elf"
+ELFB="$WORK/childB.elf"
 ELFWSL=""
 if command -v python >/dev/null 2>&1; then
     python "$ROOT/scripts/mk-child-elf.py" "$ELF" > /dev/null 2>&1
+    python "$ROOT/scripts/mk-ticker-elf.py" "$ELFA" A 30 8000000 43 > /dev/null 2>&1
+    python "$ROOT/scripts/mk-ticker-elf.py" "$ELFB" B 30 8000000 44 > /dev/null 2>&1
     ELFWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELF")" 2>/dev/null)" || ELFWSL=""
+    ELFAWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELFA")" 2>/dev/null)" || ELFAWSL=""
+    ELFBWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELFB")" 2>/dev/null)" || ELFBWSL=""
 elif command -v py >/dev/null 2>&1; then
     py -3 "$ROOT/scripts/mk-child-elf.py" "$(cygpath -w "$ELF")" > /dev/null 2>&1
+    py -3 "$ROOT/scripts/mk-ticker-elf.py" "$(cygpath -w "$ELFA")" A 30 8000000 43 > /dev/null 2>&1
+    py -3 "$ROOT/scripts/mk-ticker-elf.py" "$(cygpath -w "$ELFB")" B 30 8000000 44 > /dev/null 2>&1
     ELFWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELF")" 2>/dev/null)" || ELFWSL=""
+    ELFAWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELFA")" 2>/dev/null)" || ELFAWSL=""
+    ELFBWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELFB")" 2>/dev/null)" || ELFBWSL=""
 fi
 if [ -z "$IMGWSL" ] || [ -z "$ELFWSL" ]; then
     bad "boot_ext2: WSL/wslpath or python unavailable — cannot build the ext2 image"
 else
     if MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 64 -O none -L koru-native "$IMGWSL" 4096 > "$WORK/mke2fs.out" 2>&1 \
-        && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFWSL child.elf" "$IMGWSL" > "$WORK/debugfs.out" 2>&1; then
+        && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFWSL child.elf" "$IMGWSL" > "$WORK/debugfs.out" 2>&1 \
+        && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFAWSL childA.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+        && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFBWSL childB.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1; then
         boot_check "$ROOT/koru/native/tests/boot_ext2.k" "EXT2N COMPLETE" \
             -drive "file=$IMG,format=raw,if=none,id=d0" \
             -device virtio-blk-pci,drive=d0,disable-modern=on
@@ -114,11 +126,9 @@ else
         else
             bad "irq-wake: blk stats missing or unbounded: $blkline"
         fi
-        if grep -qF "irq: timer delivered" "$WORK/boot_ext2.serial"; then
-            ok "irq-timer: PIT IRQ0 delivered through the PIC"
-        else
-            bad "irq-timer: no timer evidence: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"
-        fi
+        # (PIT IRQ0 evidence lives on boot_multi — its epoch spans ticks;
+        # the ext2 run now finishes inside one tick period because the
+        # blk wait is parked, not burned)
         # spurious IRQ7/15 is legal once in a while; it must not storm.
         strays=$(grep -c "irq: stray" "$WORK/boot_ext2.serial" || true)
         if [ "$strays" -le 8 ]; then
@@ -130,6 +140,35 @@ else
             ok "exc-resume: child int3 delivered at CPL=3 and resumed"
         else
             bad "exc-resume: #BP evidence missing: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"
+        fi
+
+        # two ELF children on one roster: the PIT tick preempts between
+        # them — their single-char writes interleave on serial, and the
+        # switch counter in spawn_run reports the rotations. >=3 stream
+        # transitions proves a return switch (not just a first handoff).
+        if [ -n "$ELFAWSL" ] && [ -n "$ELFBWSL" ]; then
+            boot_check "$ROOT/koru/native/tests/boot_multi.k" "MULTI COMPLETE" \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on
+            sw=$(sed -n 's/.*sched: switches=\([0-9]*\).*/\1/p' "$WORK/boot_multi.serial" | tail -1)
+            trans=$(grep -o 'AB\|BA' "$WORK/boot_multi.serial" | wc -l)
+            if grep -qF "irq: timer delivered" "$WORK/boot_multi.serial"; then
+                ok "irq-timer: PIT IRQ0 delivered through the PIC"
+            else
+                bad "irq-timer: no timer evidence: $(tail -6 "$WORK/boot_multi.serial" | tr '\n' '|')"
+            fi
+            if [ -n "$sw" ] && [ "$sw" -ge 2 ] && [ "$trans" -ge 3 ]; then
+                ok "sched: tick preemption rotated the roster (switches=$sw, A/B transitions=$trans)"
+            else
+                bad "sched: no interleave evidence (switches=${sw:-none}, transitions=$trans)"
+            fi
+            if grep -qE "last-exit=4[34]" "$WORK/boot_multi.serial" && grep -qF "roster drained last=" "$WORK/boot_multi.serial"; then
+                ok "sched: child exit codes rode the seam home"
+            else
+                bad "sched: exit evidence missing: $(tail -4 "$WORK/boot_multi.serial" | tr '\n' '|')"
+            fi
+        else
+            bad "boot_multi: ticker ELFs not built (wslpath failed)"
         fi
     else
         bad "boot_ext2: image build failed: $(tail -2 "$WORK/mke2fs.out" "$WORK/debugfs.out")"

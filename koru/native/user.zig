@@ -277,11 +277,55 @@ const ExcFrame = extern struct {
     // ss/usp trail when the source was CPL=3 — hardware layout, unread.
 };
 
+// Tick preemption, in place: if the interrupted context was CPL3 and the
+// epoch is live, the on-stack frame IS the outgoing child's context — copy
+// it into its slot, copy the next runnable child's saved frame over the
+// stack image, flip CR3 to its space, and let irq_exc_common's tail resume
+// it. cs&3 != 3 means the tick interrupted CPL0 work (ISR, syscall, kmain)
+// — there is no user frame on the stack to steal, so nothing rotates.
+fn schedPreempt(f: *ExcFrame) void {
+    if (!sched_active or nchildren == 0) return;
+    if (f.cs & 3 != 3) return;
+    const st: [*]const u64 = @ptrCast(f);
+    const c = &children[cur_child];
+    for (0..15) |i| c.frame.gp[i] = st[i];
+    c.frame.rip = st[17];
+    c.frame.cs = st[18];
+    c.frame.rflags = st[19];
+    c.frame.rsp = st[20];
+    c.frame.ss = st[21];
+    var nxt = cur_child;
+    for (0..nchildren) |k| {
+        const j = (cur_child + 1 + k) % nchildren;
+        if (children[j].state == .runnable) {
+            nxt = j;
+            break;
+        }
+    }
+    if (nxt == cur_child) return;
+    const nx = &children[nxt];
+    cur_child = nxt;
+    child_rights = nx.rights;
+    const out: [*]u64 = @ptrCast(f);
+    for (0..15) |i| out[i] = nx.frame.gp[i];
+    out[17] = nx.frame.rip;
+    out[18] = nx.frame.cs;
+    out[19] = nx.frame.rflags;
+    out[20] = nx.frame.rsp;
+    out[21] = nx.frame.ss;
+    asm volatile ("mov %[c], %%cr3"
+        :
+        : [c] "r" (nx.pml4),
+        : .{ .memory = true });
+    sched_switches += 1;
+}
+
 export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
     if (f.vec >= 0x20 and f.vec < 0x30) {
         if (f.vec == 0x20) {
             irq_ticks += 1;
             if (irq_ticks == 1) say("irq: timer delivered\n");
+            schedPreempt(f);
         } else if (virtio_irq_line != 0xFF and f.vec == 0x20 + @as(u64, virtio_irq_line)) {
             virtio_irq_ack();
             virtio_seen += 1;
@@ -464,12 +508,40 @@ fn loadTables() void {
 }
 
 // ---- child space -----------------------------------------------------------
+// Per-child state — one 4-level chain (pml4→pdpt→pd→pt) + a resumable user
+// frame per child. A frame is the whole user context: the 15 GP regs in
+// trap-frame order plus the iret tail (rip/cs/rflags/rsp/ss) — the same
+// layout the irq stub stack carries, so a preempted child's frame can be
+// written back onto a live interrupt frame in place and the common pop +
+// iretq tail resumes it.
 
-var c_pml4: *align(4096) [512]u64 = undefined;
-var c_pdpt: *align(4096) [512]u64 = undefined;
-var c_pd: *align(4096) [512]u64 = undefined;
-var c_pt: *align(4096) [512]u64 = undefined;
-var stack_page: *align(4096) [4096]u8 = undefined;
+const UserFrame = extern struct {
+    gp: [15]u64, // rax..r15 in on-stack order (rax lowest)
+    rip: u64,
+    cs: u64,
+    rflags: u64,
+    rsp: u64,
+    ss: u64,
+};
+
+const ChildState = enum { empty, runnable, dead };
+const MAXCHILDREN: usize = 4;
+
+const Child = struct {
+    pml4: usize = 0,
+    pdpt: usize = 0,
+    pd: usize = 0,
+    pt: usize = 0,
+    frame: UserFrame = std.mem.zeroes(UserFrame),
+    rights: u64 = 0,
+    state: ChildState = .empty,
+};
+
+var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{} };
+var nchildren: usize = 0;
+var cur_child: usize = 0;
+var sched_active = false;
+pub export var sched_switches: u64 = 0;
 
 fn allocPage() ?*align(4096) [4096]u8 {
     var p: ?*anyopaque = null;
@@ -479,34 +551,40 @@ fn allocPage() ?*align(4096) [4096]u8 {
     return t;
 }
 
-// Map one 4 KiB user page for `vaddr` inside the pd[4] window.
-fn mapUserPage(vaddr: usize) ?*align(4096) [4096]u8 {
+// Map one 4 KiB user page for `vaddr` inside the pd[4] window of `c`'s space.
+fn mapUserPage(c: *Child, vaddr: usize) ?*align(4096) [4096]u8 {
     if (vaddr < USER_BASE or vaddr >= USER_BASE + 0x200000) return null;
+    const pt: *align(4096) [512]u64 = @ptrFromInt(c.pt);
     const idx = (vaddr >> 12) & 0x1FF;
     const page = allocPage() orelse return null;
-    c_pt[idx] = @intFromPtr(page) | US | ENT;
+    pt[idx] = @intFromPtr(page) | US | ENT;
     return page;
 }
 
-fn buildTables() bool {
-    c_pml4 = @ptrCast(@alignCast(allocPage() orelse return false));
-    c_pdpt = @ptrCast(@alignCast(allocPage() orelse return false));
-    c_pd = @ptrCast(@alignCast(allocPage() orelse return false));
-    c_pt = @ptrCast(@alignCast(allocPage() orelse return false));
+fn buildTables(c: *Child) bool {
+    c.pml4 = @intFromPtr(allocPage() orelse return false);
+    c.pdpt = @intFromPtr(allocPage() orelse return false);
+    c.pd = @intFromPtr(allocPage() orelse return false);
+    c.pt = @intFromPtr(allocPage() orelse return false);
+    const c_pml4: *[512]u64 = @ptrFromInt(c.pml4);
+    const c_pdpt: *[512]u64 = @ptrFromInt(c.pdpt);
+    const c_pd: *[512]u64 = @ptrFromInt(c.pd);
+    const c_pt: *[512]u64 = @ptrFromInt(c.pt);
     // U/S must hold at every level for ring3 to reach a leaf; kernel leaves
     // in the copied pd still lack the bit, so the kernel half stays
-    // ring0-only.
-    c_pml4[0] = @intFromPtr(c_pdpt) | US | ENT;
-    c_pdpt[0] = @intFromPtr(c_pd) | US | ENT;
+    // ring0-only — and identical across children, which is what lets the
+    // ISR flip CR3 mid-dispatch without losing itself.
+    c_pml4[0] = c.pdpt | US | ENT;
+    c_pdpt[0] = c.pd | US | ENT;
     c_pd.* = pd;
-    c_pd[4] = @intFromPtr(c_pt) | US | ENT;
-    stack_page = allocPage() orelse return false;
+    c_pd[4] = c.pt | US | ENT;
+    const stack_page = allocPage() orelse return false;
     c_pt[1] = @intFromPtr(stack_page) | US | ENT;
     return true;
 }
 
-// Parse an ELF64 image, map PT_LOAD pages, return e_entry.
-fn loadElf(b: []const u8) ?usize {
+// Parse an ELF64 image into `c`'s space, map PT_LOAD pages, return e_entry.
+fn loadElf(c: *Child, b: []const u8) ?usize {
     if (b.len < EHDR or b[0] != 0x7F or b[1] != 'E' or b[2] != 'L' or
         b[3] != 'F' or b[4] != 2 or b[5] != 1) return null;
     if (u16le(b, 16) != 2 or u16le(b, 18) != 0x3E) return null;
@@ -527,9 +605,10 @@ fn loadElf(b: []const u8) ?usize {
         if (filesz > memsz or off + filesz > b.len) return null;
         var p = vaddr & ~@as(usize, 0xFFF);
         while (p < vaddr + memsz) : (p += 0x1000) {
-            _ = mapUserPage(p) orelse return null;
+            _ = mapUserPage(c, p) orelse return null;
         }
         // copy through the mapped page via identity VA
+        const c_pt: *const [512]u64 = @ptrFromInt(c.pt);
         var n: usize = 0;
         while (n < filesz) : (n += 1) {
             const va = vaddr + n;
@@ -596,8 +675,10 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         2 => { // getpid — defined so "granted vs refused" is decidable
             f.rax = 1;
         },
-        60 => { // exit(code) — resume the caller's spawn path, don't halt
+        60 => { // exit(code) — child dies, roster rotates or caller resumes
             last_exit = f.rdi;
+            children[cur_child].state = .dead;
+            if (nextRunnable()) |n| resumeChild(n);
             asm volatile (
                 \\ mov %[cr3], %%rax
                 \\ mov %%rax, %%cr3
@@ -612,9 +693,70 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
     }
 }
 
+// First runnable child after `cur` (wraps); null when the roster is dead.
+fn nextRunnable() ?usize {
+    for (0..nchildren) |k| {
+        const j = (cur_child + 1 + k) % nchildren;
+        if (children[j].state == .runnable) return j;
+    }
+    return null;
+}
+
+// Resume child `nxt`: rsp -> its saved frame, CR3 -> its space, then the
+// shared pop+iretq tail. Never returns — the current context (kernel stack
+// or a dead child's syscall frame) is abandoned by construction.
+fn resumeChild(nxt: usize) noreturn {
+    const c = &children[nxt];
+    cur_child = nxt;
+    child_rights = c.rights;
+    asm volatile (
+        \\ mov %[fr], %%rsp
+        \\ mov %[cr3], %%rax
+        \\ mov %%rax, %%cr3
+        \\ jmp user_frame_resume
+        :
+        : [fr] "r" (&c.frame),
+          [cr3] "r" (c.pml4),
+        : .{ .memory = true });
+    unreachable;
+}
+
+// The epoch's entry: called (via `call sched_launch` inside koru_spawn_run's
+// save block) once all children are primed — resumes the first runnable.
+export fn sched_launch() callconv(.c) noreturn {
+    resumeChild(nextRunnable() orelse {
+        // an all-dead roster must never reach here — fall back to the
+        // blocked caller rather than hang
+        asm volatile (
+            \\ mov saved_rsp(%%rip), %%rsp
+            \\ jmp *saved_rip(%%rip)
+            ::: .{ .memory = true });
+        unreachable;
+    });
+}
+
 comptime {
     asm (
         \\ .section .text
+        \\ .globl user_frame_resume
+        \\ user_frame_resume:
+        \\   pop %rax
+        \\   pop %rbx
+        \\   pop %rcx
+        \\   pop %rdx
+        \\   pop %rsi
+        \\   pop %rdi
+        \\   pop %rbp
+        \\   pop %r8
+        \\   pop %r9
+        \\   pop %r10
+        \\   pop %r11
+        \\   pop %r12
+        \\   pop %r13
+        \\   pop %r14
+        \\   pop %r15
+        \\   iretq
+        \\
         \\ .globl ring3_entry80
         \\ ring3_entry80:
         \\   push %r15
@@ -708,20 +850,44 @@ comptime {
     );
 }
 
-// Spawn a caller-supplied ELF64 image in a fresh child space. Blocks until
-// the child exits through the seam; returns its exit code (< 0 on setup
-// refusal: -1 tables, -2 image).
-pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) callconv(.c) c_int {
-    child_rights = rights;
-    if (!buildTables()) {
-        say("RING3 FAIL: page alloc\n");
-        return -1;
+// Spawn n caller-supplied ELF64 images, one child space each, rung-2
+// semantics: all children runnable, the PIT tick rotates them, exit()
+// resumes the next runnable child — and the roster draining resumes the
+// blocked caller (spawn stays a blocking provider call — it returns the
+// last exit code). The kernel is not a schedulable context inside an
+// epoch: while children run, only children run; ticks that interrupt
+// CPL0 work (the ISR/syscall path itself) see cs&3==0 and do not rotate.
+// < 0 on setup refusal: -1 tables, -2 image, -3 over MAXCHILDREN.
+pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, rights: [*]const u64, n: usize) callconv(.c) c_int {
+    if (n == 0) return 0;
+    if (n > MAXCHILDREN) {
+        say("RING3 FAIL: roster over MAXCHILDREN\n");
+        return -3;
     }
-    const entry = loadElf(image[0..size]) orelse {
-        say("ELF LOAD FAIL\n");
-        return -2;
-    };
+    nchildren = 0;
+    for (0..n) |i| {
+        const c = &children[i];
+        if (!buildTables(c)) {
+            say("RING3 FAIL: page alloc\n");
+            return -1;
+        }
+        const entry = loadElf(c, imgs[i][0..sizes[i]]) orelse {
+            say("ELF LOAD FAIL\n");
+            return -2;
+        };
+        c.rights = rights[i];
+        c.frame = std.mem.zeroes(UserFrame);
+        c.frame.rip = entry;
+        c.frame.cs = 0x23; // user code64
+        c.frame.rflags = 0x202; // IF=1 — the child may be ticked mid-flight
+        c.frame.rsp = USER_STACK_TOP;
+        c.frame.ss = 0x1B; // user data
+        c.state = .runnable;
+        nchildren += 1;
+    }
     loadTables();
+    cur_child = 0;
+    sched_active = true;
     asm volatile (
         \\ push %rbx
         \\ push %rbp
@@ -730,20 +896,13 @@ pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) callc
         \\ push %r14
         \\ push %r15
         \\ mov %%rsp, saved_rsp(%%rip)
-        // consume %[cr3] before any scratch use — the lea below is free to
-        // take rax only after the input has been moved into CR3
-        \\ mov %[cr3], %%rax
-        \\ mov %%rax, %%cr3
         \\ lea 1f(%%rip), %%rax
         \\ mov %%rax, saved_rip(%%rip)
-        \\ push $0x1B
-        \\ push %[stk]
-        // IF=1: the IDT is fully populated now — IRQs land on real gates,
-        // the child may be interrupted and resumed
-        \\ push $0x202
-        \\ push $0x23
-        \\ push %[rip]
-        \\ iretq
+        // call, not fallthrough — sched_launch is noreturn; the pad keeps
+        // its entry 16-conformant. saved_rsp predates both, so the exit
+        // jmp back to 1: walks only the pushed regs.
+        \\ sub $8, %%rsp
+        \\ call sched_launch
         \\ 1:
         \\ pop %r15
         \\ pop %r14
@@ -751,12 +910,22 @@ pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) callc
         \\ pop %r12
         \\ pop %rbp
         \\ pop %rbx
-        :
-        : [cr3] "r" (@intFromPtr(c_pml4)),
-          [stk] "r" (@as(usize, USER_STACK_TOP)),
-          [rip] "r" (entry),
-        : .{ .memory = true });
+        ::: .{ .memory = true });
+    sched_active = false;
+    say("sched: switches=");
+    koru_putdec(sched_switches);
+    say("\n");
     return @intCast(last_exit);
+}
+
+// Spawn a caller-supplied ELF64 image in a fresh child space. The single-
+// child spelling of koru_spawn_run — blocks until the child exits through
+// the seam; returns its exit code (< 0 on setup refusal).
+pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) callconv(.c) c_int {
+    var imgs = [_][*]const u8{image};
+    var szs = [_]usize{size};
+    var rts = [_]u64{rights};
+    return koru_spawn_run(&imgs, &szs, &rts, 1);
 }
 
 // No-disk evidence path: spawn the embedded child once.
