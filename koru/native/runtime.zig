@@ -46,7 +46,7 @@ fn serInit() void {
     outb(COM1 + 4, 0x0B); // DTR + RTS + OUT2
 }
 
-fn serPut(c: u8) void {
+pub export fn serPut(c: u8) callconv(.c) void {
     while (inb(COM1 + 5) & 0x20 == 0) {} // wait for empty THR
     outb(COM1, c);
 }

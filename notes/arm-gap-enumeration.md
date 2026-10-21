@@ -142,11 +142,18 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    and raises `int 0x80` — the embryonic syscall seam — which lands on
    TSS.rsp0 and reports on serial (`RING3 OK`, pinned). Measured bug:
    `pd[4]` covers 8–10 MiB, not 4 — the first user window faulted on a
-   VA that walked the wrong slot. Remaining rungs: ELF64 loader (ext2
-   is now the source — the child today is a raw opcode blob), the seam
-   grown past `int 0x80`-as-halt into a return-able ABI (iretq back to
-   the child, handler registers), then the rung-2 spawn provider family
-   that binds all of it.
+   VA that walked the wrong slot. **ELF64 + return-able seam landed the
+   same day:** the child is now a real ELF64 (embedded in the kernel
+   image; ext2 read-by-path is a later rung) — parsed, PT_LOAD pages
+   mapped at `p_vaddr`, entered at `e_entry`. The seam is a full trap
+   frame (all GP regs), dispatch on `rax`: `write(fd,buf,len)` to
+   serial returns its length and the child *continues* — the
+   iretq-back direction is exercised — and `exit(code)` reports on
+   serial then halts. Evidence pinned: `elf child says hi` +
+   `ELF CHILD EXIT ...2a`. Remaining rungs: ELF from ext2 (read-by-path
+   or a loader fs), the seam grown to a real ABI (SYSCALL/SYSRET, a
+   rights-bag check per call, exit reaping to a parent), then the
+   rung-2 spawn provider family that binds all of it.
 
 ## Semantics (fixed in this slice)
 
