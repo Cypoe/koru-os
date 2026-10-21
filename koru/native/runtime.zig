@@ -57,7 +57,7 @@ fn serPut(c: u8) void {
 pub export var stdout: ?*anyopaque = @ptrFromInt(1);
 pub export var stderr: ?*anyopaque = @ptrFromInt(2);
 
-export fn fputs(s: [*:0]const u8, stream: ?*anyopaque) callconv(.c) c_int {
+pub export fn fputs(s: [*:0]const u8, stream: ?*anyopaque) callconv(.c) c_int {
     _ = stream;
     serInit();
     var n: usize = 0;
@@ -74,7 +74,7 @@ const HEAP_SIZE = 4 * 1024 * 1024;
 var heap: [HEAP_SIZE]u8 align(4096) = undefined;
 var heap_off: usize = 0;
 
-export fn posix_memalign(memptr: *?*anyopaque, alignment: usize, size: usize) callconv(.c) c_int {
+pub export fn posix_memalign(memptr: *?*anyopaque, alignment: usize, size: usize) callconv(.c) c_int {
     if (alignment == 0 or (alignment & (alignment - 1)) != 0 or alignment % @sizeOf(usize) != 0)
         return 22; // EINVAL
     if (size == 0) {
@@ -90,7 +90,7 @@ export fn posix_memalign(memptr: *?*anyopaque, alignment: usize, size: usize) ca
     return 0;
 }
 
-export fn free(ptr: ?*anyopaque) callconv(.c) void {
+pub export fn free(ptr: ?*anyopaque) callconv(.c) void {
     _ = ptr;
 }
 
@@ -134,7 +134,7 @@ fn calibrateTsc() u64 {
     return tsc_hz;
 }
 
-export fn ukplat_monotonic_clock() callconv(.c) u64 {
+pub export fn ukplat_monotonic_clock() callconv(.c) u64 {
     const hz = calibrateTsc();
     const t = rdtsc();
     // t/hz ~ seconds; split so the remainder term cannot overflow u64.

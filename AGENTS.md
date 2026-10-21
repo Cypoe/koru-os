@@ -82,13 +82,23 @@ providers.
 ## Before pushing
 
 ```bash
-bash scripts/check-realize.sh   # 6 checks: controls bind, negatives refuse
-                                # by name, koru-native binds iff imported
+bash scripts/check-realize.sh   # declaration tier: controls bind, negatives
+                                # refuse by name, matrix marks re-decided Lean-side
+bash scripts/check-boot.sh      # boot tier: build-native.sh + QEMU -kernel,
+                                # asserts the fixture's own serial output
 ```
 
-Green means the declaration contract still says what the fixtures pin. A
-fail after an intentional semantics change means the fixture's comment and
-the expected line get updated together — never the check dropped.
+Green on realize means the declaration contract still says what the
+fixtures pin; green on boot means an emitted program actually ran on the
+image — the two tiers are deliberately separate (a bound row is not a
+booted program). A fail after an intentional semantics change means the
+fixture's comment and the expected line get updated together — never the
+check dropped.
+
+`scripts/build-native.sh prog.k out.elf` emits via koruc then links
+`native/boot.zig` (multiboot2 + PVH note, 32→64 trampoline, SSE enable) +
+`native/runtime.zig` + the emitted program into a flat 1 MiB ELF — boot it
+with `qemu-system-x86_64 -kernel out.elf -serial stdio -display none`.
 
 ## Conventions
 

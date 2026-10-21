@@ -100,11 +100,17 @@ the real boot programs (`import koruos/native` added — opt-in holds):
 
 ## Next items (ordered)
 
-1. **Boot entry** — multiboot/UEFI stub calling the emitted entry;
-   `runtime.zig` provides symbols, not `_start`. The load-bearing rung:
-   every bound row so far is declaration-phase truth and nothing has
-   booted. A minimal stub turns "bound" into "booted" for the first
-   time and is the substrate the physical session needs.
+1. ~~**Boot entry**~~ — **DONE, measured.** `koru/native/boot.zig` carries
+   the multiboot2 header + PVH note (both loaders land in 32-bit protected
+   mode; QEMU `-kernel` on ELF64 uses the PVH path), a 32→64 trampoline
+   (identity map 0–6 MiB, PAE/LME/PG, `CR4.OSFXSR|OSXMMEXCPT` + `CR0.MP`
+   for SSE — the emitted memset needs xmm), `link.ld` (`KEEP` the header
+   inside the first 32 KiB), 512 KiB stack, `kmain → prog.main()`. Gate:
+   `scripts/check-boot.sh` boots `native/tests/boot_hello.k` under QEMU
+   and asserts `KORU NATIVE BOOT OK` on serial — measured 2026-10-21.
+   `native-runtime` now owns the `_start` boundary, not just symbols.
+   Known honest limits: identity-mapped, 6 MiB window, bump heap,
+   multiboot info ignored (no cmdline/modules yet).
 2. **blk transport** — virtio first (QEMU arm), then NVMe/AHCI. A booted
    image without block I/O can't provision anything.
 3. **Real debug channel** — `isa-debugcon` port 0x402 is QEMU-only and
