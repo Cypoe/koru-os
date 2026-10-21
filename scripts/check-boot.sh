@@ -85,8 +85,9 @@ if [ -z "$IMGWSL" ] || [ -z "$ELFWSL" ]; then
 else
     if MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 64 -O none -L koru-native "$IMGWSL" 4096 > "$WORK/mke2fs.out" 2>&1 \
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFWSL child.elf" "$IMGWSL" > "$WORK/debugfs.out" 2>&1 \
-        && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFAWSL childA.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
-        && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFBWSL childB.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1; then
+        && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "mkdir bin" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+        && { printf 'cd bin\nwrite %s childA.elf\nwrite %s childB.elf\n' "$ELFAWSL" "$ELFBWSL" > "$WORK/debugfs.cmds" \
+        && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -f "$(wsl -e wslpath -u "$(cygpath -w "$WORK/debugfs.cmds")")" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1; }; then
         boot_check "$ROOT/koru/native/tests/boot_ext2.k" "EXT2N COMPLETE" \
             -drive "file=$IMG,format=raw,if=none,id=d0" \
             -device virtio-blk-pci,drive=d0,disable-modern=on

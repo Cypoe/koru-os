@@ -129,22 +129,43 @@ fn inodeLoc(fs: *const Fs, ino: u32) struct { block: u32, off: usize } {
     return .{ .block = fs.inode_table + @as(u32, @intCast(byte / BS)), .off = byte % BS };
 }
 
-fn findInRoot(fs: *Fs, name: []const u8, dirblk: []u8) ?u32 {
-    var root: [BS]u8 = undefined;
-    const loc = inodeLoc(fs, 2);
-    if (!readBlock(fs, loc.block, &root)) return null;
-    const blk0 = rd32(&root, loc.off + 40);
-    if (!readBlock(fs, blk0, dirblk)) return null;
-    var p: usize = 0;
-    while (p < BS) {
-        const ino = rd32(dirblk, p);
-        const rec = rd16(dirblk, p + 4);
-        const nl: usize = if (fs.filetype) dirblk[p + 6] else rd16(dirblk, p + 6);
-        if (rec < 8) return null;
-        if (ino != 0 and nl == name.len and std.mem.eql(u8, dirblk[p + 8 .. p + 8 + nl], name)) return ino;
-        p += rec;
+// Find `name` inside directory inode `dir_ino` — scans every direct block,
+// not just the first. Refuses (null) if the inode isn't a directory —
+// a non-dir mid-path component is a failed walk, not a skipped check.
+fn dirFind(fs: *Fs, dir_ino: u32, name: []const u8, dirblk: []u8) ?u32 {
+    var ib: [BS]u8 = undefined;
+    const loc = inodeLoc(fs, dir_ino);
+    if (!readBlock(fs, loc.block, &ib)) return null;
+    if (rd16(&ib, loc.off + 0) & 0o170000 != 0o040000) return null;
+    for (0..12) |i| {
+        const blkno = rd32(&ib, loc.off + 40 + i * 4);
+        if (blkno == 0) continue;
+        if (!readBlock(fs, blkno, dirblk)) return null;
+        var p: usize = 0;
+        while (p < BS) {
+            const ino = rd32(dirblk, p);
+            const rec = rd16(dirblk, p + 4);
+            if (rec < 8) return null;
+            const nl: usize = if (fs.filetype) dirblk[p + 6] else rd16(dirblk, p + 6);
+            if (ino != 0 and nl == name.len and std.mem.eql(u8, dirblk[p + 8 .. p + 8 + nl], name)) return ino;
+            p += rec;
+        }
     }
     return null;
+}
+
+// Path → inode: components walk from the root inode (2), '/'-separated,
+// empty components skipped. The inode number is the stable identity —
+// the path is one projection over it (the POSIX view).
+fn lookupPath(fs: *Fs, path: []const u8, dirblk: []u8) ?u32 {
+    var ino: u32 = 2;
+    var it = std.mem.splitScalar(u8, path, '/');
+    while (it.next()) |comp| {
+        if (comp.len == 0) continue;
+        if (comp.len > 255) return null;
+        ino = dirFind(fs, ino, comp, dirblk) orelse return null;
+    }
+    return ino;
 }
 
 fn pattern(i: usize) u8 {
@@ -213,7 +234,7 @@ fn pattern(i: usize) u8 {
     if (size == 0 or nblk > 12) return .{ .refused = .{ .fs = fs, .reason = "size must be 1..12 KiB (direct blocks only)" } };
     if (name.len == 0 or name.len > 255) return .{ .refused = .{ .fs = fs, .reason = "bad name length" } };
     var dir: [BS]u8 = undefined;
-    if (findInRoot(fs, name, &dir) != null) return .{ .refused = .{ .fs = fs, .reason = "name exists" } };
+    if (dirFind(fs, 2, name, &dir) != null) return .{ .refused = .{ .fs = fs, .reason = "name exists" } };
 
     // inode bitmap: first free inode >= first_ino
     var ib: [BS]u8 = undefined;
@@ -307,13 +328,28 @@ fn pattern(i: usize) u8 {
 // payload is a named extern struct.
 pub const Buf = extern struct { ptr: [*]u8, len: usize };
 
-~pub tor fetch { fs: *Fs<!mounted>, name: string }
+// lookup: path → inode, the projection's inverse — the inode number is
+// the object's stable identity; nid can bind it, exec can take it, and
+// the path itself stays a view (renameable, rebindable) not the identity.
+~pub tor lookup { fs: *Fs<!mounted>, path: string }
+| ok { fs: *Fs<mounted!>, ino: u32 }
+| refused { fs: *Fs<mounted!>, reason: string }
+
+~proc lookup|zig {
+    var dir: [BS]u8 = undefined;
+    const ino = lookupPath(fs, path, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "path not found" } };
+    return .{ .ok = .{ .fs = fs, .ino = ino } };
+}
+
+// path is the POSIX projection: "/bin/child.elf" and "child.elf" both
+// walk components from the root — the inode is the identity either way.
+~pub tor fetch { fs: *Fs<!mounted>, path: string }
 | ok { fs: *Fs<mounted!>, buf: *Buf }
 | refused { fs: *Fs<mounted!>, reason: string }
 
 ~proc fetch|zig {
     var dir: [BS]u8 = undefined;
-    const ino = findInRoot(fs, name, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "name not found" } };
+    const ino = lookupPath(fs, path, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "path not found" } };
     const loc = inodeLoc(fs, ino);
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return .{ .refused = .{ .fs = fs, .reason = "inode read failed" } };
@@ -343,13 +379,13 @@ pub const Buf = extern struct { ptr: [*]u8, len: usize };
     return .{ .ok = .{ .fs = fs, .buf = bp } };
 }
 
-~pub tor verify { fs: *Fs<!mounted>, name: string, size: u32 }
+~pub tor verify { fs: *Fs<!mounted>, path: string, size: u32 }
 | ok { fs: *Fs<mounted!>, ino: u32, bytes: u32 }
 | mismatch { fs: *Fs<mounted!>, reason: string }
 
 ~proc verify|zig {
     var dir: [BS]u8 = undefined;
-    const ino = findInRoot(fs, name, &dir) orelse return .{ .mismatch = .{ .fs = fs, .reason = "name not found" } };
+    const ino = lookupPath(fs, path, &dir) orelse return .{ .mismatch = .{ .fs = fs, .reason = "path not found" } };
     const loc = inodeLoc(fs, ino);
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return .{ .mismatch = .{ .fs = fs, .reason = "inode read failed" } };
