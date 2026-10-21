@@ -26,11 +26,12 @@
 // wait <!running> -> <exited!>; reap <!exited>; abandon <!staged|!sealed>;
 // detach <!running>; revoke (epoch bump); replace <!running> -> <running!>.
 
+~import std/realize
 ~import koruos/realize
 
 // realize row: which arms can serve this lift and how — a typed declaration,
 // harvested by the realize command (DESIGN-0001 §11.1).
-~koruos/realize:row {
+~std/realize:row {
     "iface": "koruos/spawn",
     "stack": 4096,
     "resources": "clock: ukplat_monotonic_clock (ambient for children); console: fputs(stdout) behind the seam; heap: malloc/free (child records)",

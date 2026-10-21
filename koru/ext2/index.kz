@@ -17,12 +17,13 @@
 // exposes no byte-level API another lift could call, so the sequence is repeated
 // here. That is debt, recorded in experiments/m2-ext2/README.md.
 
+~import std/realize
 ~import koruos/realize
 
 // realize row: which arms can serve this lift and how — a typed declaration,
 // harvested by the realize command (DESIGN-0001 §11.1). No linuxu binding —
 // virtio-pci/blk is a KVM-plat device, not host syscalls.
-~koruos/realize:row {
+~std/realize:row {
     "iface": "koruos/ext2",
     "stack": 8192,
     "resources": "blkdev: uk_blkdev queue ops over virtio-blk; heap: malloc/memalign/free",

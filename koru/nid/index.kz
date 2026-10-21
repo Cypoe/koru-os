@@ -31,13 +31,14 @@
 // or refuses; call needs <!live> and returns it; release needs <!live>; close needs <!open>
 // and reports outstanding bindings loudly.
 
+~import std/realize
 ~import koruos/realize
 
 // realize row: which arms can serve this lift and how — a typed declaration,
 // harvested by the realize command (DESIGN-0001 §11.1). The koru-native clock
 // is TSC calibrated once against PIT ch2 (koru/native/runtime.zig) —
 // monotonic ns, not wall time.
-~koruos/realize:row {
+~std/realize:row {
     "iface": "koruos/nid",
     "stack": 4096,
     "resources": "clock: ukplat_monotonic_clock (plat, always linked); console: fputs(stdout); heap: malloc/free",

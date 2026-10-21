@@ -1,4 +1,4 @@
-// NEGATIVE (declaration phase): a lift whose `koruos/realize:row` is malformed
+// NEGATIVE (declaration phase): a lift whose `std/realize:row` is malformed
 // (binds[0] lacks "arm"). `koruc ... realize gen` must write a refused: line
 // naming the module and the missing field, and the interface it meant to serve
 // stays unrowed.

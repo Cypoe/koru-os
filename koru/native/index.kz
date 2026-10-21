@@ -18,9 +18,10 @@
 // (MMU/IOMMU isolation, process substrate) are eventual here, not
 // delegated.
 
+~import std/realize
 ~import koruos/realize
 
-~koruos/realize:row {
+~std/realize:row {
     "iface": "koru.runtime",
     "binds": [
         {
@@ -31,7 +32,7 @@
     ]
 }
 
-~koruos/realize:row {
+~std/realize:row {
     "iface": "std.io:print",
     "binds": [
         {
