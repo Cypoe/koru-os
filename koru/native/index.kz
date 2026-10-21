@@ -1,13 +1,22 @@
 // koruos/native — the freestanding provider for the `koru-native` arm.
 //
-// runtime.zig carries the two contracts the emitted backend declares as
-// externs: the heap (posix_memalign/free over a bump region) and the console
-// (fputs/stdout/stderr routed to COM1 115200 8N1). The rows below attach
+// runtime.zig carries the contracts the emitted backend declares as
+// externs: the heap (posix_memalign/free over a bump region), the console
+// (fputs/stdout/stderr routed to COM1 115200 8N1), and the clock
+// (PIT-calibrated TSC, ukplat_monotonic_clock). The rows below attach
 // koru-native bindings to the always-on runtime and print interfaces —
 // the declaring module is provenance; the declared `iface` names what the
 // binding serves (DESIGN-0001 §11.1). Every other interface still refuses
 // on this arm until its provider family exists; the gap enumeration in
 // notes/arm-gap-enumeration.md is the work order.
+//
+// `native-runtime` is koru-os's OWN substrate — provisional, growing one
+// provider family at a time, and the thing every `koru-native` bind
+// eventually folds into. It is NOT host-supplied: `kconfig` means "the
+// unikernel provides it", `host-libc` means "the host OS provides it",
+// `native-runtime` means "we provide it" — so capability-bearing rows
+// (MMU/IOMMU isolation, process substrate) are eventual here, not
+// delegated.
 
 ~import koruos/realize
 

@@ -92,15 +92,28 @@ the real boot programs (`import koruos/native` added — opt-in holds):
   bag enforced at the seam. Its whole extern surface is
   `malloc`/`free`/`ukplat_monotonic_clock`/`stdout`/`fputs` — already
   served. The refusals were a missing binding, not a missing substrate;
-  the `koru-native` bind now exists with the caveat riding deltas
-  (`rung:0/1 … no MMU isolation`). What genuinely remains open is the
-  *MMU-isolated* spawn — real address-space separation and ELF
-  children — a different binding family (M-SPAWN-MMU), not a blocker
+  the `koru-native` bind now exists with the caveat riding deltas —
+  provisional, MMU/IOMMU isolation caps eventual. What genuinely remains
+  open is the *MMU-isolated* spawn — real address-space separation and
+  ELF children — a different binding family (M-SPAWN-MMU), not a blocker
   for this rung.
 
-Remaining gap families: MMU-isolated spawn (rung 2+), blk transport, a
-real debug channel, plus the boot entry itself (multiboot/UEFI stub;
-runtime.zig provides symbols, not `_start`).
+## Next items (ordered)
+
+1. **Boot entry** — multiboot/UEFI stub calling the emitted entry;
+   `runtime.zig` provides symbols, not `_start`. The load-bearing rung:
+   every bound row so far is declaration-phase truth and nothing has
+   booted. A minimal stub turns "bound" into "booted" for the first
+   time and is the substrate the physical session needs.
+2. **blk transport** — virtio first (QEMU arm), then NVMe/AHCI. A booted
+   image without block I/O can't provision anything.
+3. **Real debug channel** — `isa-debugcon` port 0x402 is QEMU-only and
+   silently drops on real hardware; needed for bare-metal bring-up past
+   serial alone.
+4. **MMU-isolated spawn (rung 2+)** — real address spaces + ELF children.
+   MMU/IOMMU capabilities are eventual on `native-runtime` (own
+   substrate, not host-supplied like `kconfig`/`host-libc`); the
+   provisional binds stay rung-honest until this family exists.
 
 ## Semantics (fixed in this slice)
 

@@ -39,7 +39,7 @@
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
         { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" },
         { "arm": "koru-native", "mechanism": "native-runtime",
-          "deltas": ["src:koru/native/runtime.zig", "rung:0/1 entry-function children run to completion inside start — one address space, bag enforced at the seam, no MMU isolation"] }
+          "deltas": ["src:koru/native/runtime.zig", "rung:0/1 entry-function children run to completion inside start — one address space, bag enforced at the seam; provisional bind, MMU/IOMMU isolation caps are eventual (a different provider family), not claimed here"] }
     ]
 }
 
