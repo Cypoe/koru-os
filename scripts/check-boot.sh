@@ -47,12 +47,14 @@ if grep -qF "ASPACE" "$WORK/boot_hello.serial" && grep -qF "DISTINCT" "$WORK/boo
 else
     bad "aspace: selftest evidence missing: $(head -3 "$WORK/boot_hello.serial" | tr '\n' '|')"
 fi
-# ring3: an ELF64 child in its own CR3 does write() out-and-back through
-# the int 0x80 seam, then exit(42) reported by the ring0 trap handler.
-if grep -qF "elf child says hi" "$WORK/boot_hello.serial" && grep -qF "ELF CHILD EXIT" "$WORK/boot_hello.serial"; then
-    ok "ring3: ELF child parsed+mapped, write/exit through the seam"
+# ring3+spawn: an ELF64 child in its own CR3 does write() out-and-back
+# through the int 0x80 seam, exit(42) returns control to the kernel
+# reaper, and a second spawn proves launch->wait->reap->relaunch.
+if grep -qF "elf child says hi" "$WORK/boot_hello.serial" && grep -qF "ELF CHILD EXIT" "$WORK/boot_hello.serial" \
+    && grep -qF "SPAWN LOOP DONE" "$WORK/boot_hello.serial"; then
+    ok "ring3: ELF spawn loop — write/exit seam, kernel reap + relaunch"
 else
-    bad "ring3: seam evidence missing: $(tail -3 "$WORK/boot_hello.serial" | tr '\n' '|')"
+    bad "ring3: seam evidence missing: $(tail -4 "$WORK/boot_hello.serial" | tr '\n' '|')"
 fi
 
 # ext2 over the native virtio-blk provider: a blank host-made image, the

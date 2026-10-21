@@ -148,12 +148,17 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    mapped at `p_vaddr`, entered at `e_entry`. The seam is a full trap
    frame (all GP regs), dispatch on `rax`: `write(fd,buf,len)` to
    serial returns its length and the child *continues* — the
-   iretq-back direction is exercised — and `exit(code)` reports on
-   serial then halts. Evidence pinned: `elf child says hi` +
-   `ELF CHILD EXIT ...2a`. Remaining rungs: ELF from ext2 (read-by-path
-   or a loader fs), the seam grown to a real ABI (SYSCALL/SYSRET, a
-   rights-bag check per call, exit reaping to a parent), then the
-   rung-2 spawn provider family that binds all of it.
+   iretq-back direction is exercised — and `exit(code)` no longer
+   halts — it restores the kernel CR3 + saved stack and CALLs a reaper
+   continuation (`childReaped`), which reports the code and relaunches:
+   launch → trap → reap → relaunch is a measured spawn loop
+   (`elf child says hi` / `ELF CHILD EXIT 2a` / `REAPED 2a`, twice,
+   then `SPAWN LOOP DONE`, pinned). Measured bug: a raw `jmp` into the
+   reaper entered with `rsp%16==0` and the callee's `movaps` prologue
+   GPF'd — the exit path `and $-16` + `call` gives a call-shaped frame.
+   Remaining rungs: ELF from ext2 (read-by-path or a loader fs), the
+   seam grown to a real ABI (SYSCALL/SYSRET, a rights-bag check per
+   call), then the rung-2 spawn provider family that binds all of it.
 
 ## Semantics (fixed in this slice)
 

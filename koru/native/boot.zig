@@ -147,6 +147,6 @@ comptime {
 export fn kmain() callconv(.c) noreturn {
     aspace.selftest();
     prog.main();
-    user.demo();
+    user.run();
     while (true) asm volatile ("hlt");
 }

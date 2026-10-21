@@ -294,6 +294,16 @@ const TrapFrame = extern struct {
     r15: u64,
 };
 
+// ---- spawn primitive ------------------------------------------------------
+// The kernel captures its own rsp + a reaper continuation before dropping
+// into the child. exit() switches back to the kernel CR3 and stack and
+// jumps to the reaper — no halt, control returns. That makes the unit
+// launch -> trap -> reap -> relaunch a real spawn loop, not a one-shot.
+var saved_rsp: u64 = 0;
+var saved_rip: u64 = 0;
+var last_exit: u64 = 0;
+var spawns_left: u64 = 0;
+
 export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
     switch (f.rax) {
         1 => { // write(fd, buf, len) -> len
@@ -302,11 +312,27 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             while (i < f.rdx) : (i += 1) serPut(buf[i]);
             f.rax = f.rdx;
         },
-        60 => { // exit(code) — report + halt (no parent to reap to yet)
+        60 => { // exit(code) — report, restore kernel context, jump to reaper
+            last_exit = f.rdi;
             say("ELF CHILD EXIT ");
             puthex(f.rdi);
             say("\n");
-            while (true) asm volatile ("cli; hlt");
+            // Restore kernel CR3 + stack, then CALL the reaper: the call
+            // pushes a return address so the callee enters with rsp%16==8
+            // like a normal call — a raw jmp enters misaligned and the
+            // callee's movaps prologue GPFs (measured).
+            asm volatile (
+                \\ mov %[cr3], %%rax
+                \\ mov %%rax, %%cr3
+                \\ mov %[rsp], %%rsp
+                \\ and $-16, %%rsp
+                \\ call *%[rip]
+                :
+                : [cr3] "r" (@intFromPtr(&pml4)),
+                  [rsp] "r" (saved_rsp),
+                  [rip] "r" (saved_rip),
+                : .{ .memory = true });
+            unreachable;
         },
         else => f.rax = @bitCast(@as(i64, -38)), // ENOSYS
     }
@@ -353,9 +379,28 @@ comptime {
     );
 }
 
-// Boot into the ELF child. Diverges when the child exits (the seam halts);
-// if the child loops forever, so does the boot — single-shot by design.
-pub fn demo() void {
+// Reaper continuation: the exit path jumps here on the kernel stack/CR3.
+// Reports the code and relaunches while spawns remain — the spawn loop.
+fn childReaped() void {
+    say("REAPED ");
+    puthex(last_exit);
+    say("\n");
+    if (spawns_left == 0) {
+        say("SPAWN LOOP DONE\n");
+        while (true) asm volatile ("cli; hlt");
+    }
+    spawns_left -= 1;
+    demo();
+}
+
+// Boot into the ELF child. The exit seam returns control to childReaped
+// on the kernel stack; a second spawn proves the loop, not just the shot.
+pub fn run() void {
+    spawns_left = 1; // two children total, then SPAWN LOOP DONE
+    demo();
+}
+
+fn demo() void {
     if (!buildTables()) {
         say("RING3 FAIL: page alloc\n");
         return;
@@ -365,6 +410,10 @@ pub fn demo() void {
         return;
     };
     loadTables();
+    saved_rip = @intFromPtr(&childReaped);
+    asm volatile ("mov %%rsp, %[r]"
+        : [r] "=r" (saved_rsp),
+    );
     asm volatile (
         \\ mov %[cr3], %%rax
         \\ mov %%rax, %%cr3
