@@ -23,8 +23,7 @@
 // realize row: which arms can serve this lift and how — a typed declaration,
 // harvested by the realize command (DESIGN-0001 §11.1). No linuxu binding —
 // virtio-pci/blk is a KVM-plat device, not host syscalls.
-~std/realize:row {
-    "iface": "koruos/ext2",
+~std/realize:row(iface: koruos/ext2) {
     "stack": 8192,
     "resources": "blkdev: uk_blkdev queue ops over virtio-blk; heap: malloc/memalign/free",
     "evidence": "V: koru/ext2/index.kz externs uk_blkdev_*/malloc/memalign; M2 author lines name the LIBVIRTIO deltas now derived here",

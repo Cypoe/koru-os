@@ -2,8 +2,7 @@
 // lacks "arm"). Used by negative_badrow.k to prove realize refuses loudly
 // instead of silently dropping the declaration.
 ~import std/realize
-~std/realize:row {
-    "iface": "koruos/badrow",
+~std/realize:row(iface: koruos/badrow) {
     "stack": 4096,
     "binds": [
         { "mechanism": "kconfig" }

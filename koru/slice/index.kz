@@ -32,8 +32,7 @@
 // (koru/native/runtime.zig); the debug view is still isa-debugcon 0x402 — a
 // QEMU device (-debugcon) whose writes are silently dropped on real hw, so a
 // native debug channel stays an open provider of its own.
-~std/realize:row {
-    "iface": "koruos/slice",
+~std/realize:row(iface: koruos/slice) {
     "stack": 4096,
     "resources": "clock: ukplat_monotonic_clock (plat, always linked); view: isa-debugcon port 0x402 (QEMU device); heap: malloc/free",
     "evidence": "V: koru/slice/index.kz externs; frames <= 1 KiB buffers",

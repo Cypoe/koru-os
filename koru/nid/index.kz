@@ -38,8 +38,7 @@
 // harvested by the realize command (DESIGN-0001 §11.1). The koru-native clock
 // is TSC calibrated once against PIT ch2 (koru/native/runtime.zig) —
 // monotonic ns, not wall time.
-~std/realize:row {
-    "iface": "koruos/nid",
+~std/realize:row(iface: koruos/nid) {
     "stack": 4096,
     "resources": "clock: ukplat_monotonic_clock (plat, always linked); console: fputs(stdout); heap: malloc/free",
     "evidence": "V: koru/nid/index.kz externs; frames <= 1 KiB buffers",

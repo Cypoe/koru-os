@@ -64,8 +64,7 @@
 // the engine, so a lift's stackless extension bind merges onto these rows
 // legally regardless of import order.
 
-~std/realize:row {
-    "iface": "koru.runtime",
+~std/realize:row(iface: "koru.runtime") {
     "stack": 16384,
     "resources": "heap: posix_memalign/free from the emitted flow prologue",
     "evidence": "V: output_emitted.zig declares extern posix_memalign/free; 16384 B is an allowance for the C side (C until stack-demand.py measures it)",
@@ -78,8 +77,7 @@
     ]
 }
 
-~std/realize:row {
-    "iface": "std.io:print",
+~std/realize:row(iface: std.io.print) {
     "stack": 65536,
     "resources": "console: fputs(stdout) on the Unikraft console",
     "evidence": "V: emitted print formats into `var __kb: [65536]u8` on the stack (koru BUILD.md: order 4 = 64 KiB overflows)",
@@ -90,8 +88,7 @@
     ]
 }
 
-~std/realize:row {
-    "iface": "unikraft/sched",
+~std/realize:row(iface: "unikraft/sched") {
     "stack": 4096,
     "resources": "threads: worker stack STACK_SIZE + aux stack + TLS per thread",
     "evidence": "V: koru-libs unikraft/sched README (ukschedcoop, cooperative)",

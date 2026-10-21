@@ -28,8 +28,7 @@ extern fn free(ptr: ?*anyopaque) void;
 // harvested by the realize command (DESIGN-0001 §11.1). The koru-native bind
 // needs a CPU with rdrand (QEMU -cpu host or +rdrand); externs are just
 // malloc/free.
-~std/realize:row {
-    "iface": "koruos/silo",
+~std/realize:row(iface: koruos/silo) {
     "stack": 4096,
     "resources": "cpu: rdrand (QEMU -cpu +rdrand); heap: malloc/free",
     "evidence": "V: koru/silo/index.kz rdrand64 and externs",

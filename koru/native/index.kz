@@ -21,8 +21,7 @@
 ~import std/realize
 ~import koruos/realize
 
-~std/realize:row {
-    "iface": "koru.runtime",
+~std/realize:row(iface: "koru.runtime") {
     "binds": [
         {
             "arm": "koru-native",
@@ -32,8 +31,7 @@
     ]
 }
 
-~std/realize:row {
-    "iface": "std.io:print",
+~std/realize:row(iface: std.io.print) {
     "binds": [
         {
             "arm": "koru-native",

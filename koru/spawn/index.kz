@@ -31,8 +31,7 @@
 
 // realize row: which arms can serve this lift and how — a typed declaration,
 // harvested by the realize command (DESIGN-0001 §11.1).
-~std/realize:row {
-    "iface": "koruos/spawn",
+~std/realize:row(iface: koruos/spawn) {
     "stack": 4096,
     "resources": "clock: ukplat_monotonic_clock (ambient for children); console: fputs(stdout) behind the seam; heap: malloc/free (child records)",
     "evidence": "V: koru/spawn/index.kz externs; frames <= 1 KiB buffers",

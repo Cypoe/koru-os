@@ -128,7 +128,7 @@ sed -e "s|{{ ENTRY }}|$FIX_SILO|g" \
     "$ROOT/koru/silo/tests/boot_silo.k" > "$WORK/tsilo_nat.k"
 run_k tsilo_nat gen --arm koru-native
 if [ -f "$WORK/manifest-koru-native.txt" ] \
-   && grep -q "bind: koruos/silo -> native-runtime" "$WORK/manifest-koru-native.txt" \
+   && grep -q "bind: koruos.silo -> native-runtime" "$WORK/manifest-koru-native.txt" \
    && grep -q 'admission","koruos.silo:open","koru-native<-native-runtime","bound".*bind_by=koruos.silo' \
       "$WORK/tsilo_nat.marks" 2>/dev/null; then
     ok "koru-native binds the silo lift (entropy+heap+console)"
@@ -144,7 +144,7 @@ sed -e "s|{{ ENTRY }}|$FIX_SPAWN|g" \
     "$ROOT/koru/spawn/tests/boot_spawn.k" > "$WORK/tspawn_nat.k"
 run_k tspawn_nat gen --arm koru-native
 if [ -f "$WORK/manifest-koru-native.txt" ] \
-   && grep -q "bind: koruos/spawn -> native-runtime" "$WORK/manifest-koru-native.txt" \
+   && grep -q "bind: koruos.spawn -> native-runtime" "$WORK/manifest-koru-native.txt" \
    && grep -q "rung:0/1" "$WORK/manifest-koru-native.txt" \
    && [ "$(grep -c 'admission","koruos.spawn:[a-z-]*","koru-native<-native-runtime","bound"' "$WORK/tspawn_nat.marks" 2>/dev/null)" -eq 12 ]; then
     ok "koru-native binds all 12 spawn tors at declared rung 0/1"
