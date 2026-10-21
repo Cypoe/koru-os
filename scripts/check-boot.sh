@@ -100,6 +100,20 @@ else
         else
             bad "irq-virtio: no interrupt evidence: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"
         fi
+        # interrupt-DRIVEN, not interrupt-assisted: each empty finish_reqs
+        # parks on a delivered vector (hlt) instead of returning into a
+        # burn loop. parks must exist (we slept) and stay within a small
+        # multiple of the request count — a spin would not produce parks.
+        blkline=$(grep "blk: reqs=" "$WORK/boot_ext2.serial" | tail -1 || true)
+        reqs=$(echo "$blkline" | sed -n 's/.*reqs=\([0-9]*\).*/\1/p')
+        parks=$(echo "$blkline" | sed -n 's/.*parks=\([0-9]*\).*/\1/p')
+        irqs=$(echo "$blkline" | sed -n 's/.*irqs=\([0-9]*\).*/\1/p')
+        if [ -n "$reqs" ] && [ -n "$parks" ] && [ "$parks" -ge 1 ] \
+           && [ "$parks" -le $((reqs * 8 + 64)) ]; then
+            ok "irq-wake: blk waits are interrupt-paced (reqs=$reqs parks=$parks irqs=$irqs)"
+        else
+            bad "irq-wake: blk stats missing or unbounded: $blkline"
+        fi
         if grep -qF "irq: timer delivered" "$WORK/boot_ext2.serial"; then
             ok "irq-timer: PIT IRQ0 delivered through the PIC"
         else

@@ -119,7 +119,11 @@ var iobase: u16 = 0;
 pub export var virtio_irq_line: u8 = 0xFF;
 pub export var irq_pin: u8 = 0;
 pub export var virtio_irq_count: u64 = 0;
+pub export var blk_reqs: u64 = 0;
+pub export var blk_parks: u64 = 0;
 extern fn koru_irq_unmask(irq: u8) void;
+extern fn koru_say(s: [*:0]const u8) void;
+extern fn koru_putdec(v: u64) void;
 
 pub export fn virtio_irq_ack() callconv(.c) void {
     if (iobase != 0) _ = inb(iobase + VIRTIO_ISR);
@@ -363,7 +367,29 @@ pub export fn uk_blkdev_queue_submit_one(d: ?*anyopaque, queue_id: u16, req: ?*B
     const r = pushReq(req.?);
     if (r != 0) return r;
     pending_req = req;
+    blk_reqs += 1;
     return 1; // STATUS_SUCCESS bit, as the lift checks it
+}
+
+// Park until the next interrupt: cli, re-read the used index under the
+// mask, then sti;hlt — sti and hlt execute as one atomic enable-and-sleep,
+// so a completion landing between the caller's check and here cannot be
+// slept past. The virtio INTx is the real wake; the unmasked PIT tick is
+// the backstop that keeps a dropped completion from sleeping forever. A
+// caller with IF=0 cannot wake — it gets a plain return and keeps polling.
+fn parkOnce() void {
+    const flags = asm volatile ("pushfq\n\tpop %[f]"
+        : [f] "=r" (-> u64)
+        :
+        : .{ .memory = true });
+    if (flags & 0x200 == 0) return;
+    asm volatile ("cli" ::: .{ .memory = true });
+    if (used.idx == last_used_idx) {
+        blk_parks += 1;
+        asm volatile ("sti\n\thlt" ::: .{ .memory = true });
+    } else {
+        asm volatile ("sti" ::: .{ .memory = true });
+    }
 }
 
 pub export fn uk_blkdev_queue_finish_reqs(d: ?*anyopaque, queue_id: u16) callconv(.c) c_int {
@@ -371,8 +397,16 @@ pub export fn uk_blkdev_queue_finish_reqs(d: ?*anyopaque, queue_id: u16) callcon
     if (queue_id != 0) return -22;
     // ISR is the IRQ handler's channel — reading it here (read-to-clear)
     // would drop INTx mid-assertion and the PIC reports a spurious IRQ15
-    const ui = used.idx;
-    if (ui == last_used_idx) return 0; // nothing retired yet
+    var ui = used.idx;
+    if (ui == last_used_idx) {
+        // nothing retired — park on the next interrupt instead of
+        // returning into the lift's poll loop; each empty finish_reqs is
+        // one hlt = one delivered vector, so the retry loop is paced by
+        // interrupts rather than burning the core
+        parkOnce();
+        ui = used.idx;
+        if (ui == last_used_idx) return 0;
+    }
     last_used_idx = ui;
     if (pending_req) |req| {
         req.state = 0; // REQ_FINISHED
@@ -394,5 +428,15 @@ pub export fn uk_blkdev_queue_unconfigure(d: ?*anyopaque, queue_id: u16) callcon
 }
 pub export fn uk_blkdev_unconfigure(d: ?*anyopaque) callconv(.c) c_int {
     _ = d;
+    // interrupt-driven evidence, printed at unmount: each park is one
+    // slept-until-a-vector window — parks staying in single digits per
+    // request is the "driven, not assisted" claim made measurable
+    koru_say("blk: reqs=");
+    koru_putdec(blk_reqs);
+    koru_say(" parks=");
+    koru_putdec(blk_parks);
+    koru_say(" irqs=");
+    koru_putdec(virtio_irq_count);
+    koru_say("\n");
     return 0;
 }

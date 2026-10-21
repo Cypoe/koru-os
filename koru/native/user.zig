@@ -53,6 +53,32 @@ fn puthex(v: u64) void {
     say(@ptrCast(&buf));
 }
 
+fn putdec(v0: u64) void {
+    var buf: [21]u8 = undefined;
+    buf[20] = 0;
+    var i: usize = 20;
+    var v = v0;
+    if (v == 0) {
+        i -= 1;
+        buf[i] = '0';
+    }
+    while (v != 0) {
+        i -= 1;
+        buf[i] = @intCast('0' + (v % 10));
+        v /= 10;
+    }
+    say(@ptrCast(&buf[i]));
+}
+
+// sibling .zig files (virtio) print through these — the .c-callable
+// surface, same as koru_irq_unmask
+pub export fn koru_say(s: [*:0]const u8) callconv(.c) void {
+    say(s);
+}
+pub export fn koru_putdec(v: u64) callconv(.c) void {
+    putdec(v);
+}
+
 // ---- the embedded ELF64 child --------------------------------------------
 // write(1, "elf child says hi\n", 18); exit(42) — hand-assembled, laid out as
 // one PT_LOAD at file offset 0x78 mapped at vaddr 0x800078.
