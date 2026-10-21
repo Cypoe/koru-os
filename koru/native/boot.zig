@@ -15,6 +15,7 @@
 const prog = @import("program");
 const runtime = @import("runtime");
 const virtio = @import("virtio");
+const aspace = @import("aspace");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -67,10 +68,16 @@ comptime {
     );
 }
 
-// _start: 32-bit entry. Identity-map 0..4MiB (pml4->pdpt->pd, two 2 MiB
+// Page tables for the boot address space. Exported (not asm-local) so the
+// aspace provider can clone them for per-domain CR3s. Layout: pml4[0] ->
+// pdpt[0] -> pd[0..2] = 2 MiB pages identity-mapping 0-6 MiB.
+export var pml4: [512]u64 align(4096) = undefined;
+export var pdpt: [512]u64 align(4096) = undefined;
+export var pd: [512]u64 align(4096) = undefined;
+
+// _start: 32-bit entry. Identity-map 0..6MiB (pml4->pdpt->pd, three 2 MiB
 // pages), load CR3, set CR4.PAE + EFER.LME + CR0.PG, then ljmp into the
-// 64-bit code segment. The GDT/code/data descriptors and the page-table
-// pages live below, emitted by the same asm block.
+// 64-bit code segment. The GDT descriptors live below in .rodata.
 comptime {
     asm (
         \\ .section .text
@@ -128,10 +135,6 @@ comptime {
     \\   .word gdt64_ptr - gdt64 - 1
     \\   .quad gdt64
     \\ .section .bss
-    \\ .balign 4096
-    \\ pml4: .skip 4096
-    \\ pdpt: .skip 4096
-    \\ pd:   .skip 4096
         \\ .balign 16
         \\ __stack_bottom: .skip 524288
         \\ __stack_top:
@@ -141,6 +144,7 @@ comptime {
 // The program's Zig entry. The emitted program returns void from `main`;
 // anything it leaves on the console is the boot evidence.
 export fn kmain() callconv(.c) noreturn {
+    aspace.selftest();
     prog.main();
     while (true) asm volatile ("hlt");
 }

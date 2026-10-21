@@ -41,6 +41,12 @@ boot_check() {
 }
 
 boot_check "$ROOT/koru/native/tests/boot_hello.k" "KORU NATIVE BOOT OK"
+# aspace selftest runs in kmain on every boot — same-VA different-phys proof.
+if grep -qF "ASPACE" "$WORK/boot_hello.serial" && grep -qF "DISTINCT" "$WORK/boot_hello.serial"; then
+    ok "aspace: per-domain CR3 proven (same VA, different phys)"
+else
+    bad "aspace: selftest evidence missing: $(head -3 "$WORK/boot_hello.serial" | tr '\n' '|')"
+fi
 
 # ext2 over the native virtio-blk provider: a blank host-made image, the
 # guest does mount -> create -> verify -> unmount and must print COMPLETE.

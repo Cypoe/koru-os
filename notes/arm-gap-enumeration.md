@@ -130,6 +130,14 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    MMU/IOMMU capabilities are eventual on `native-runtime` (own
    substrate, not host-supplied like `kconfig`/`host-libc`); the
    provisional binds stay rung-honest until this family exists.
+   **Sub-ladder in flight, first capability measured 2026-10-21:**
+   `koru/native/aspace.zig` clones the boot tables into a second CR3
+   domain and proves on serial that VA 0x800000 resolves to different
+   physical pages per space (`ASPACE A=aaaa B=bbbb DISTINCT`, pinned by
+   `check-boot.sh`). Remaining rungs: ELF64 loader (ext2 is now the
+   source), 4 KiB-granular mapping + user (U/S) pages, ring3 entry via
+   TSS/iretq, syscall seam for the rights bag, then the rung-2 spawn
+   provider family that binds all of it.
 
 ## Semantics (fixed in this slice)
 
