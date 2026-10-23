@@ -54,6 +54,30 @@ Same question applies to fasmg/KolibriOS material: KolibriOS is a
 full GUI OS in flat assembler; its syscall ABI (int 0x40), driver model,
 and VFS are donor-shaped — an adapter arm, not a substrate to inherit.
 
+## Personalities: same platform, different magic
+
+`exec` already dispatches on the object's magic — ELF64 is simply the
+one personality implemented today. The seam generalizes: **a magic
+selects a personality, and a personality is a provider family**, not a
+kernel fork. Consequences:
+
+- **DOS programs run on this platform.** An `MZ`/`COM` magic dispatches
+  to a DOS personality: a vm86 monitor (or a real-mode trampoline on
+  hardware that allows it) plus an `int 21h` service family realized
+  through koru providers (fs.object for file ops, console, memory).
+  Dependencies of the DOS program itself are out of scope; the ABI it
+  expects is not.
+- **KolibriOS apps are the same shape** — `MENUET01`-magic binaries +
+  `int 0x40` service family, realized against koru providers. The
+  vendored tree is the ABI reference for exactly this.
+- The personality boundary is where foreign ABIs get *contained*: each
+  family translates its syscall convention into koru seams, so a DOS
+  program's `int 21h` file-read becomes an `fs.object` call — the
+  program never escapes the nid/rights-bag model.
+- Explicitly **not** pursued: importing an LKM stack or embedding a
+  Linux kernel to gain compatibility. Personalities give the
+  compatibility surface without adopting a host kernel's architecture.
+
 ## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 16/16)
 
 - multiboot2/PVH boot, 32→64 trampoline, COM1 serial, TSC clock
@@ -99,3 +123,6 @@ Also open, smaller:
 - Not making POSIX the primary ontology — it's a view over the
   relational/identity layer.
 - Not shipping a fake compositor to claim the milestone early.
+- Not importing an LKM stack or a host Linux kernel — compatibility
+  comes from personality providers (magic → ABI family), not from
+  adopting another kernel's architecture.
