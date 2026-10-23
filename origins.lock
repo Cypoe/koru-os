@@ -100,6 +100,16 @@
         "revision": "f31c47a1b9d300847d8fc3108ad959448103dfc1"
       },
       "target": "m9src/aquamarine"
+    },
+    {
+      "name": "kolibrios",
+      "source": {
+        "kind": "vcs",
+        "scheme": "git",
+        "origin": "https://github.com/KolibriOS/kolibrios.git",
+        "revision": "45b134bae56888631652533e97548b72050fd17a"
+      },
+      "target": "upstream/kolibrios"
     }
   ]
 }

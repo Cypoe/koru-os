@@ -1,5 +1,11 @@
 __pycache__/
 *.pyc
+# vendored donor trees materialize via vand replicate origins.lock — not committed
+/upstream/
+/m9src/
+/m3/
+/m7bin/
+/tc/
 # never commit disk images, raw captures, WADs or DOOM material
 **/disk.img
 *.img

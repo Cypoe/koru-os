@@ -43,6 +43,7 @@ commit. `target` paths are relative to a clone root (on the build box this is `/
 | libudev-zero | illiliti/libudev-zero | `8f1d3d06` | `m7bin/src/libudev-zero` | ISC libudev; local change in `patches/libudev-zero-udev_monitor.patch` |
 | foot | dnkl/foot (Codeberg) | `ab33c9a1` | `m9src/foot` | source reference for the M9 terminal |
 | aquamarine | hyprwm/aquamarine | `f31c47a1` | `m9src/aquamarine` | source reference for Hyprland's backend |
+| kolibrios | KolibriOS/kolibrios | `45b134ba` | `upstream/kolibrios` | second donor tree (fasm kernel, int 0x40 ABI, GUI, drivers) — oracle/reference, unstudied |
 
 How the Unikraft pins were derived: the build trees are fetched by kraft as branch tarballs
 (`archive/refs/heads/stable.tar.gz`). The commit is the tarball's pax `comment` header, and it
