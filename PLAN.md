@@ -112,6 +112,27 @@ The bare-metal ladder below stays the path to `koru-native`; hosted
 shortens the feedback loop on identity/realization, it doesn't replace
 the kernel work.
 
+### KolibriOS donor map (first-pass read, `45b134ba`)
+
+| ask | where it lives in `upstream/kolibrios` |
+|---|---|
+| syscall dispatch (kolibri personality spec) | `kernel/trunk/core/syscall.inc` — `servetable2` flat `dd` table, dual `SYSENTER`/`int 0x40` entry; fn 70 = `sys_file_system_lfn` (VFS seam), fn 77 = posix, `-1` = exit |
+| runtime loading | `core/dll.inc` (`.obj` DLLs) + `core/peload.inc` (a PE loader — foreign-format load+bind, not ELF) |
+| DOS/v86 personality mechanism | `core/v86.inc` — `v86_create` → `V86_machine` handle with `iopm` (I/O permission map) |
+| fs providers behind one seam | `fs/fs_common.inc` + `fs_lfn.inc` over `ext/fat/exfat/ntfs/xfs`; `blkdev/disk_cache.inc` below |
+| driver model / adapter precedent | `drivers/devman/` (+ imported ACPICA) and `drivers/ddk/linux/` — **Linux drivers wrapped in a compat shim: the adapter-arm pattern in the wild** |
+| GUI/input (nativeCompositor oracle) | `gui/window.inc`, `gui/event.inc`, `hid/{keyboard,mousedrv}` |
+| hw init | `core/{apic,irq,hpet,timers,sched,taskman,memory,heap,slab}.inc`, `bus/pci/pci32.inc` |
+
+Not there — stay spec/vendored-driven: **real ELF + dynamic linking**
+(Kolibri is `MENUET01` flat; references are `upstream/app-elfloader`
+today, a later `upstream/musl` pin for ld.so — a Linux checkout would
+pull gravity toward the LKM stack for no payoff), **IO-MMU/VT-d**
+(32-bit physical addressing — virtio DMA programs guest-physical
+addresses regardless, defer or spec-driven), **virtio-gpu** (absent;
+first pixels come cheaper from a multiboot/GOP linear framebuffer —
+the `cyberboot` path — with virtio-gpu later for damage/3D).
+
 ## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 16/16)
 
 - multiboot2/PVH boot, 32→64 trampoline, COM1 serial, TSC clock
