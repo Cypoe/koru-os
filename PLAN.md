@@ -169,8 +169,11 @@ Also open, smaller:
 - bootable media: GRUB multiboot2 image (link.ld already carries the
   header), init that doesn't halt-on-exit, shutdown/reboot
 - SMP (ACPI MADT + IOAPIC + AP bringup) — required before real hardware
-- KolibriOS study: driver model, int 0x40 ABI surface, GUI/windowing
-  architecture — what's liftable vs what stays donor-shaped
+- KolibriOS study: first pass done —
+  `notes/kolibrios-donor-read.md` (syscall table, VFS seam, devman
+  driver model, v86, lift/don't-lift). Deeper reads TBD:
+  `gui/event.inc` + `hid/` for nativeCompositor, `core/v86.inc` for
+  the DOS personality
 
 ## Not doing (explicit)
 
