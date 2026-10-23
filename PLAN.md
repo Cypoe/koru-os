@@ -78,6 +78,40 @@ kernel fork. Consequences:
   Linux kernel to gain compatibility. Personalities give the
   compatibility surface without adopting a host kernel's architecture.
 
+## Hosted-first: the nix-shaped slice
+
+The first *free-standing* milestone doesn't need bare metal. The
+identity layer — nid store, realization rows, link-time refusal,
+rights bags — is host-agnostic; a hosted arm realizes provider seams
+over the host kernel's syscall ABI. That's nix's shape transposed:
+nix = content-addressed store + link-time composition over Linux;
+koru = nid-addressed storage + realization rows over providers. The
+concrete slice: **koru system interpreter + on-disk nid store +
+link-time provider binding**, with the bag enforced (seccomp on
+Linux), not advisory.
+
+Host arms, deliberately plural:
+
+- **`hosted/linux`** — first, because the toolchain, the WSL bench,
+  the linuxu donor arm, nix's precedent, and the Hyprland oracle all
+  live there. Capabilities are synthesized: seccomp-bpf (an NR bitmask
+  — exactly what bags are today), Landlock for fs scoping, namespaces
+  for uid scoping. Weak native object-capability story.
+- **`hosted/freebsd`** — early second arm, not for coverage but as the
+  **design test**: Capsicum is the bag design already — capability
+  mode + named rights on descriptors (`CAP_*`), casper = provider
+  family. If nid-scoped grants collapse onto `cap_rights_t` without
+  special-casing, the capability model is honest; if they can't, the
+  model learns why cheaply. OpenBSD pledge/unveil noted but coarser —
+  promise strings, not per-object grants.
+
+Risk to hold: a hosted arm alone is "another userspace runtime" —
+it's koru-os only while unbound providers refuse before execution and
+nid storage is the primary identity, on the host exactly as on metal.
+The bare-metal ladder below stays the path to `koru-native`; hosted
+shortens the feedback loop on identity/realization, it doesn't replace
+the kernel work.
+
 ## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 16/16)
 
 - multiboot2/PVH boot, 32→64 trampoline, COM1 serial, TSC clock
