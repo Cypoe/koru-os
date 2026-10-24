@@ -13,6 +13,11 @@ or refuses loudly. Unikraft is one arm, not the OS. Design contract:
   leaks `|c` proc bodies into zig output (`handler__c` raw C text) and
   every `std/io` consumer fails the backend build. Scripts take
   `KORUC=` override — restore the default once ccomp is fixed.
+  Pin-local patch: `koru_std/bridge*.kz` `create`/`run`/`close`/
+  `get-handles` carry `~[retain]` — the declared mechanism for tors
+  invoked by name from generated host text (a compiled driver calls
+  `run_event.handler`, which flow reachability cannot see). Upstream
+  candidate; without it a REPL-style driver prunes the bridge.
 - zig: `W:\tools\zig-0.15.1` — must be on `PATH` (POSIX form
   `/w/tools/zig-0.15.1`) or koruc crashes `FileNotFound` spawning the
   backend build. From Git Bash: `PATH="/w/tools/zig-0.15.1:$PATH" koruc ...`

@@ -144,19 +144,19 @@ carries branch+fields, not pointers — the `handle_pool`/spec fns are
 the deeper mechanism, deferred), and verbs return flat strings
 rather than typed Values.
 
-**Next correction on this track: the REPL moves to `std/bridge`.**
-`std/bridge` is the designed persistent resource layer —
-`bridge:create` mints a session obligation over a `HandlePool` that
-outlives interpreter runs; `mintResourceToken`/`registerResource`
-turns a `*Fs` into a token that flows through interpreted bindings
-as a first-class value (honestly replacing the module-global
-`cur_fs`); `bridge:run` is the per-line execution path that retains
-handles across turns; `close` owns final discharge. The fb surface
-becomes a bridge resource the same way — `fb.open()` mints a
-surface token, strokes route through the same custody path as fs.
-That is also the shape the Kopium control channel needs:
-`bridge.affordances`/`vocabulary`/`grammar` are introspection for
-an AI driving the same session.
+**Landed: REPL on `std/bridge`** (17/17 hosted). `cur_fs` is gone —
+the boot-mounted `*Fs` is minted as a pool resource token
+(`h:Fs:…`), handle-acquired with `unmount` as its discharge verb
+(obligation names derived from the scope's spec table, not spelled
+twice), and bound under `fs` in the session env. Scope verbs take
+`string<mounted>`/`string<!mounted>` token args; the procs resolve
+them via `resolveDispatchResource` — the typed pointer never
+crosses `Value`. Proven mid-session: `unmount(fs: fs)` discharges;
+the same `pin(fs: fs, …)` afterwards refuses *by name* ("names
+nothing the session holds"); a `mount()` handle left open is
+released at `close` through the real `unmount` dispatch. Required
+pin-local patch: `~[retain]` on bridge `create`/`run`/`close`/
+`get-handles` (host-text callers; upstreamable).
 
 **Landed on this track** (gated by `scripts/check-hosted.sh`):
 `koru/hosted/linux.zig` realizes the whole lift extern surface on

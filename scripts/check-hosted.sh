@@ -113,14 +113,16 @@ fi
 
 # --- the system REPL -----------------------------------------------------
 # repl.kz: a compiled koru program that reads terminal lines and runs each
-# through std/interpreter:run against the registered "os" scope. The scope
-# IS the language-level rights bag — unregistered tors refuse at dispatch.
+# as a std/bridge turn against the registered "os" scope. The scope IS the
+# language-level rights bag — unregistered tors refuse at dispatch. The fs
+# is a bridge resource: verbs take opaque tokens, the pool resolves them to
+# typed pointers, and a consumed token refuses by name afterwards.
 sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/repl.kz" > "$WORK/repl.kz"
 bash "$ROOT/scripts/build-hosted.sh" "$WORK/repl.kz" "$WORK/repl.bin" > "$WORK/repl.build" 2>&1 || {
     bad "repl: build failed"; tail -8 "$WORK/repl.build"; echo "---"; echo "check-hosted: $pass passed, $failn failed"; exit 1; }
 
 MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
-    "cd '$WORKWSL' && printf 'mount()\nlookup(path: \"child.elf\")\npin(path: \"child.elf\")\nexec(path: \"child.elf\")\nbogus()\nexecnid(nid: \"0\")\nquit()\n' | KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store' ./repl.bin" \
+    "cd '$WORKWSL' && printf 'lookup(fs: fs, path: \"child.elf\")\npin(fs: fs, path: \"child.elf\")\nexec(fs: fs, path: \"child.elf\")\nbogus()\nexecnid(fs: fs, nid: \"0\")\nunmount(fs: fs)\npin(fs: fs, path: \"child.elf\")\nquit()\n' | KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store' ./repl.bin" \
     > "$WORK/repl.serial" 2>&1
 RC=$?
 if [ $RC -ne 0 ]; then
@@ -131,10 +133,15 @@ else
     else
         bad "repl: loop incomplete: $(tail -5 "$WORK/repl.serial" | tr '\n' '|')"
     fi
-    if grep -qF "already mounted" "$WORK/repl.serial"; then
-        ok "repl-scope: mount verb sees the boot-handed fs capability"
+    if grep -qE 'held resource: fs = h:Fs:[0-9a-f]+' "$WORK/repl.serial"; then
+        ok "repl-bridge: boot-mounted fs minted as a pool resource token"
     else
-        bad "repl-scope: mount state missing: $(grep mount "$WORK/repl.serial" | head -2 | tr '\n' '|')"
+        bad "repl-bridge: no resource token at boot: $(head -4 "$WORK/repl.serial" | tr '\n' '|')"
+    fi
+    if grep -qF '"value":"ino=12"' "$WORK/repl.serial"; then
+        ok "repl-bridge: session-bound token resolves to the typed fs across turns"
+    else
+        bad "repl-bridge: lookup(fs: fs) did not resolve: $(grep -m1 lookup -A0 "$WORK/repl.serial" | tr '\n' '|')"
     fi
     if grep -qE '"value":"ino=[0-9]+ nid=[0-9a-f]+"' "$WORK/repl.serial"; then
         ok "repl-scope: pin mints nid identity from interpreted source"
@@ -146,8 +153,8 @@ else
     else
         bad "repl-exec: child did not run: $(grep -E 'exec|child' "$WORK/repl.serial" | tail -3 | tr '\n' '|')"
     fi
-    if grep -qF "dispatch-error: bogus: EventDenied" "$WORK/repl.serial"; then
-        ok "repl-refusal: unregistered tor refuses at dispatch (EventDenied)"
+    if grep -qF "event-denied: bogus" "$WORK/repl.serial"; then
+        ok "repl-refusal: unregistered tor refuses at dispatch (event-denied)"
     else
         bad "repl-refusal: bogus() did not refuse"
     fi
@@ -155,6 +162,16 @@ else
         ok "repl-refusal: unbound nid refuses by name, not silently"
     else
         bad "repl-refusal: execnid(0) accepted or lost"
+    fi
+    if grep -qF '"value":"unmounted"' "$WORK/repl.serial"; then
+        ok "repl-bridge: consume verb discharged the fs handle mid-session"
+    else
+        bad "repl-bridge: unmount(fs: fs) did not discharge"
+    fi
+    if grep -qF "names nothing the session holds" "$WORK/repl.serial"; then
+        ok "repl-bridge: spent token refuses by name — no stale resolution"
+    else
+        bad "repl-bridge: stale token did not refuse: $(grep -F 'h:Fs' "$WORK/repl.serial" | tail -2 | tr '\n' '|')"
     fi
 fi
 
