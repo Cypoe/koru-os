@@ -116,11 +116,15 @@ First system milestone on this track: **the koru interpreter as the
 system REPL** — init = interpreter over the host terminal; prompt →
 exec-by-nid children under enforced bags → reap → repeat. It's the
 only slice exercising the whole chain at once (terminal IO, provider
-dispatch, spawn, isolation, persistent nids, loud refusal). Named
-dependency: koru is a *compiler* today — a REPL needs an eval path
-(interpreter backend or compile-and-exec per line); that's a
-language-level feature living in the koru repo, to raise alongside
-the ccomp judgment.
+dispatch, spawn, isolation, persistent nids, loud refusal). The eval
+path already exists: `koru_std/interpreter.*` parses koru at runtime
+with the compiler's own parser and dispatches tors registered via
+`std/runtime:register(scope:)` — **the scope is the capability
+surface**: a shell registers os providers into a scope; a child's
+bag can literally be *which scope its interpreter gets*. The
+remaining pieces are the REPL driver program (read → `run(source:,
+scope:)` → print) and the os-scope registration, not an
+interpreter.
 
 ### KolibriOS donor map (first-pass read, `45b134ba`)
 
