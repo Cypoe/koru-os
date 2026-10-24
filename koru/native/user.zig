@@ -539,6 +539,22 @@ const UserFrame = extern struct {
 const ChildState = enum { empty, runnable, dead };
 const MAXCHILDREN: usize = 4;
 
+// The child's scoped fs view: the fs a child was spawned *from* hands
+// down this ops record — open/read/read_at/seek/stat/close over opaque
+// provider handles. fs-neutral: the ops are the fs's own emitted code
+// (ext2 today), ctx is its *Fs; the kernel side only juggles fds 3..7
+// and copies through child memory. A child without a view (embedded,
+// hostexec, spawn:exec) gets open() == -ENOSYS, not a borrowed fs.
+const ChildFsOps = extern struct {
+    ctx: ?*anyopaque,
+    open: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    read: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64,
+    read_at: *const fn (ctx: ?*anyopaque, h: u64, off: u64, dst: [*]u8, len: usize) callconv(.c) i64,
+    seek: *const fn (ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64,
+    stat: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64, // 144B linux stat
+    close: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) void,
+};
+
 const Child = struct {
     pml4: usize = 0,
     pdpt: usize = 0,
@@ -551,6 +567,8 @@ const Child = struct {
     frame: UserFrame = std.mem.zeroes(UserFrame),
     rights: u64 = 0,
     state: ChildState = .empty,
+    fsv: ?*const ChildFsOps = null, // scoped fs view (the spawning fs)
+    fds: [8]u64 = .{0} ** 8,        // provider handles; 0..2 are stdio
 };
 
 var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{} };
@@ -764,6 +782,37 @@ fn userWrite(c: *Child, va: usize, v: u64) void {
     dst.* = v;
 }
 
+// Child-memory access through the identity map, not the pointer value:
+// the trap handler runs on the child's CR3, so a bare @ptrFromInt would
+// work — but only for RW pages (CR0.WP). Via userPhys the access is the
+// page's identity twin: W-bit-independent, and it self-checks mapping.
+fn userByte(c: *Child, va: usize) u8 {
+    if (userEntry(c, va) & 1 == 0) return 0;
+    return @as([*]const u8, @ptrFromInt(userPhys(c, va) + (va & 0xFFF)))[0];
+}
+fn userPut(c: *Child, va: usize, b: u8) void {
+    if (userEntry(c, va) & 1 == 0) return;
+    @as([*]u8, @ptrFromInt(userPhys(c, va) + (va & 0xFFF)))[0] = b;
+}
+fn userPath(c: *Child, va: usize, buf: []u8) ?[]u8 {
+    var n: usize = 0;
+    while (n < buf.len - 1) : (n += 1) {
+        if (userEntry(c, va + n) & 1 == 0) return null;
+        const ch = userByte(c, va + n);
+        buf[n] = ch;
+        if (ch == 0) return buf[0..n];
+    }
+    return null; // unterminated within the cap — refuse
+}
+fn copyToUser(c: *Child, va: usize, src: []const u8) usize {
+    var n: usize = 0;
+    while (n < src.len) : (n += 1) {
+        if (userEntry(c, va + n) & 1 == 0) break;
+        userPut(c, va + n, src[n]);
+    }
+    return n;
+}
+
 fn buildStack(c: *Child, info: ElfInfo) ?usize {
     var i: usize = 0;
     const sbase = USER_STACK_TOP - USER_STACK_PAGES * 0x1000;
@@ -875,11 +924,106 @@ pub export var last_exit: u64 = 0;
 // standing axis (concepts/frag-bag-*); high-NR folding is interim.
 fn canonNr(nr: u64) u64 {
     return switch (nr) {
+        257 => 2, // openat folds to open — one "fs lookup" capability
         231 => 60,
         318 => 61,
         158, 218, 273, 302 => 62,
         else => nr,
     };
+}
+
+// ---- the child's fs view ---------------------------------------------------
+// fd slots 3..7 hold provider handles minted by fsv.open; the provider
+// owns the handle (ino+pos) — the kernel side translates fds, copies
+// through child memory via the identity map, and refuses what the view
+// doesn't carry (O_WRONLY/O_RDWR → EROFS; no view at all → ENOSYS).
+
+var fsbounce: [4096]u8 = undefined;
+
+fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
+    const ops = c.fsv orelse return -38; // ENOSYS — this child has no fs view
+    if (flags & 3 != 0) return -30; // EROFS — the view is read-only
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14; // EFAULT
+    pb[p.len] = 0;
+    const h = ops.open(ops.ctx, @ptrCast(&pb));
+    if (h < 0) return h; // provider's errno passes through (ENOENT &c.)
+    var fd: usize = 3;
+    while (fd < c.fds.len) : (fd += 1) {
+        if (c.fds[fd] == 0) break;
+    }
+    if (fd == c.fds.len) {
+        ops.close(ops.ctx, @intCast(h));
+        return -24; // EMFILE
+    }
+    c.fds[fd] = @intCast(h);
+    return @intCast(fd);
+}
+
+fn childRead(c: *Child, fdu: u64, buva: u64, want: u64) i64 {
+    const ops = c.fsv orelse return -38;
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    if (fd < 3 or c.fds[fd] == 0) return -9; // EBADF
+    var total: i64 = 0;
+    var off: u64 = 0;
+    while (off < want) {
+        const chunk: usize = @intCast(@min(@as(u64, fsbounce.len), want - off));
+        const n = ops.read(ops.ctx, c.fds[fd], &fsbounce, chunk);
+        if (n <= 0) break;
+        const got = copyToUser(c, @intCast(buva + off), fsbounce[0..@intCast(n)]);
+        total += @intCast(got);
+        off += got;
+        if (got < n or n < chunk) break; // EFAULT mid-copy or EOF/short
+    }
+    return total;
+}
+
+fn childPread(c: *Child, fdu: u64, buva: u64, want: u64, pos: u64) i64 {
+    const ops = c.fsv orelse return -38;
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    if (fd < 3 or c.fds[fd] == 0) return -9;
+    var total: i64 = 0;
+    var off: u64 = 0;
+    while (off < want) {
+        const chunk: usize = @intCast(@min(@as(u64, fsbounce.len), want - off));
+        const n = ops.read_at(ops.ctx, c.fds[fd], pos + off, &fsbounce, chunk);
+        if (n <= 0) break;
+        const got = copyToUser(c, @intCast(buva + off), fsbounce[0..@intCast(n)]);
+        total += @intCast(got);
+        off += got;
+        if (got < n or n < chunk) break;
+    }
+    return total;
+}
+
+fn childSeek(c: *Child, fdu: u64, off: i64, whence: u32) i64 {
+    const ops = c.fsv orelse return -38;
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    if (fd < 3 or c.fds[fd] == 0) return -9;
+    return ops.seek(ops.ctx, c.fds[fd], off, whence);
+}
+
+fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
+    if (fdu >= c.fds.len) return -9;
+    var st: [144]u8 = std.mem.zeroes([144]u8);
+    const fd: usize = @intCast(fdu);
+    if (fd < 3) {
+        // stdio: chrdev, 0620 — the console has no size to name
+        stw(&st, 24, 0o20620);
+        stw(&st, 16, 1); // nlink
+    } else {
+        if (c.fds[fd] == 0) return -9;
+        const ops = c.fsv orelse return -38;
+        if (ops.stat(ops.ctx, c.fds[fd], &st) < 0) return -9;
+    }
+    const n = copyToUser(c, @intCast(stva), &st);
+    return if (n < 144) -14 else 0;
+}
+fn stw(st: *[144]u8, off: usize, v: u64) void {
+    for (0..8) |i| st[off + i] = @truncate(v >> @intCast(i * 8));
 }
 
 export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
@@ -918,6 +1062,39 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 total += len;
             }
             f.rax = total;
+        },
+        2, 257 => { // open(path,flags) / openat(dirfd,path,flags)
+            // Scoped fs view: paths resolve inside the fs the child was
+            // spawned from — nothing else exists for it to mean.
+            if (f.rax == 257 and f.rdi != @as(u64, @bitCast(@as(i64, -100)))) {
+                f.rax = @bitCast(@as(i64, -9)); // EBADF — only AT_FDCWD has meaning here
+            } else {
+                const pva: usize = if (f.rax == 2) @intCast(f.rdi) else @intCast(f.rsi);
+                const fl = if (f.rax == 2) f.rsi else f.rdx;
+                f.rax = @bitCast(childOpen(c, pva, fl));
+            }
+        },
+        0 => { // read(fd, buf, len) — fs handles only; stdin has no bytes
+            f.rax = @bitCast(childRead(c, f.rdi, f.rsi, f.rdx));
+        },
+        3 => { // close(fd)
+            const fd = f.rdi;
+            if (fd >= 3 and fd < c.fds.len and c.fds[fd] != 0) {
+                if (c.fsv) |ops| ops.close(ops.ctx, c.fds[fd]);
+                c.fds[fd] = 0;
+                f.rax = 0;
+            } else {
+                f.rax = @bitCast(@as(i64, -9));
+            }
+        },
+        8 => { // lseek(fd, off, whence)
+            f.rax = @bitCast(childSeek(c, f.rdi, @bitCast(f.rsi), @intCast(f.rdx)));
+        },
+        5 => { // fstat(fd, st) — 144B linux stat, statx is a different nr
+            f.rax = @bitCast(childFstat(c, f.rdi, f.rsi));
+        },
+        17 => { // pread64(fd, buf, len, off) — read without moving pos
+            f.rax = @bitCast(childPread(c, f.rdi, f.rsi, f.rdx, f.r10));
         },
         39 => { // getpid
             f.rax = 1;
@@ -965,6 +1142,11 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         158 => { // arch_prctl(code, addr) — the TLS seam: FS base per child
             if (f.rdi == 0x1002) { // ARCH_SET_FS
                 c.fsbase = f.rsi;
+                // The MSR must hold the new base BEFORE sysret — the
+                // child's very next instruction may read %fs:0. Only
+                // resumeChild reloaded it before; musl survived on a
+                // lucky preemption tick, fscat didn't.
+                wrmsr(0xC0000100, c.fsbase);
                 f.rax = 0;
             } else if (f.rdi == 0x1003) { // ARCH_GET_FS
                 f.rax = c.fsbase;
@@ -1186,7 +1368,7 @@ comptime {
 // epoch: while children run, only children run; ticks that interrupt
 // CPL0 work (the ISR/syscall path itself) see cs&3==0 and do not rotate.
 // < 0 on setup refusal: -1 tables, -2 image, -3 over MAXCHILDREN.
-pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, rights: [*]const u64, n: usize) callconv(.c) c_int {
+pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, rights: [*]const u64, n: usize, fsv: ?*const ChildFsOps) callconv(.c) c_int {
     if (n == 0) return 0;
     if (n > MAXCHILDREN) {
         say("RING3 FAIL: roster over MAXCHILDREN\n");
@@ -1213,6 +1395,8 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         c.brk = info.brk_base;
         c.mmap_top = MMAP_BASE;
         c.fsbase = 0;
+        c.fsv = fsv;
+        c.fds = .{0} ** 8;
         c.frame.ss = 0x1B; // user data
         c.state = .runnable;
         nchildren += 1;
@@ -1252,17 +1436,20 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
 
 // Spawn a caller-supplied ELF64 image in a fresh child space. The single-
 // child spelling of koru_spawn_run — blocks until the child exits through
-// the seam; returns its exit code (< 0 on setup refusal).
-pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) callconv(.c) c_int {
+// the seam; returns its exit code (< 0 on setup refusal). `fsv` scopes the
+// child's fs view: the spawning fs hands down its ops record — a child
+// spawned without one (embedded, hostexec, spawn:exec) gets ENOSYS on
+// open, not a borrowed fs.
+pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64, fsv: ?*const ChildFsOps) callconv(.c) c_int {
     var imgs = [_][*]const u8{image};
     var szs = [_]usize{size};
     var rts = [_]u64{rights};
-    return koru_spawn_run(&imgs, &szs, &rts, 1);
+    return koru_spawn_run(&imgs, &szs, &rts, 1, fsv);
 }
 
 // No-disk evidence path: spawn the embedded child once.
 pub fn run() void {
-    const st = koru_spawn_elf(&child_elf, child_elf.len, (1 << 1) | (1 << 60));
+    const st = koru_spawn_elf(&child_elf, child_elf.len, (1 << 1) | (1 << 60), null);
     say("EMBED SPAWN exit=");
     puthex(@intCast(@as(u32, @bitCast(st))));
     say("\n");

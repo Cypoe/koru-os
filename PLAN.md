@@ -220,6 +220,29 @@ reads follow single+double indirect (files to ~66 MiB) so a
 (`boot_real.k`): a gcc `-static-pie` ET_DYN and a full
 **musl-static `puts`** binary ran to status=42 with zero seam
 refusals — 67 frames reclaimed on exit.
+
+**fs-in-child — the scoped fs view (gated)** — a child's `open`
+now resolves *inside the fs its image came from*: `koru_spawn_elf`
+takes a 4th arg, an ops record (`open/read/read_at/seek/stat/close`)
+the spawning fs hands down — ext2's `exec`/`exec-nid` pass their own
+`Fs` plus ops; `spawn:exec` and the embedded path pass `null`, so
+children spawned from raw bytes get `open() == -ENOSYS`, never a
+borrowed fs. The kernel side owns only fds 3..7 + child-memory copies
+(via the identity map, W-bit-independent); the provider owns handles
+(`OpenFile{ino,pos}`), path resolution (`lookupPath`), and the
+partial read (`readAt` walks blkAt per covered block — whole-file
+`readFile` stays for exec). Surface: `open`/`openat` (257 folds to
+cap 2), `read`, `close`, `lseek`, `fstat` (144B linux stat), `pread64`.
+The view is read-only — `O_WRONLY`/`O_RDWR` get `EROFS`. Gate evidence
+(`boot_real.k`): **a real musl binary `open()`/`read()`/`close()`d
+`hello.txt` on its own ext2 and printed the bytes** — file contents,
+not just the image, now reach ring-3. This is the PT_INTERP rung's
+prerequisite (ld.so's DT_NEEDED loads are `openat`+`mmap`-file), and
+the first half of what a real shell needs — a child that can name
+paths. The bug it exposed: `arch_prctl(SET_FS)` recorded the base but
+only `resumeChild` wrote the MSR — muslhello survived on a preemption
+tick's incidental reload; the fix writes FS_BASE before sysret on the
+prctl path itself.
 `build-hosted.sh <prog> [out] [shim]` selects the shim; check-hosted
 asserts both fixtures link for `x86_64-freebsd` (no linux-only
 primitive may leak into the shared seam).

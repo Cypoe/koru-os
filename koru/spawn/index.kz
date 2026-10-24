@@ -503,7 +503,11 @@ fn retire(c: *Child, how: []const u8) void {
 // arms without it the symbol is absent and the call fails at link —
 // the honest refusal for "this arm has no process substrate".
 
-extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) c_int;
+// The fsv arg scopes the child's fs view — a provider ops record the
+// *spawning* fs hands down (ext2's exec passes its own). spawn:exec has
+// no fs to scope: children spawned from raw bytes get open() == ENOSYS,
+// never a borrowed fs.
+extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64, fsv: ?*const anyopaque) c_int;
 
 // image is a raw ELF64 byte buffer (e.g. ext2's Buf.ptr/len pair).
 // rights is the child's syscall bag: a bitmask over nr — the seam
@@ -513,13 +517,13 @@ extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) c_int;
 | refused string
 
 ~proc exec|zig {
-    const st = koru_spawn_elf(@ptrCast(image_ptr), image_len, rights);
+    const st = koru_spawn_elf(@ptrCast(image_ptr), image_len, rights, null);
     if (st < 0) return .{ .refused = "provider could not spawn the image" };
     logln("spawn: exec elf size={d} bag={x} exited status={d} (rung 2: own CR3, CPL=3, syscall seam)", .{ image_len, rights, st });
     return .{ .ok = st };
 }
 
-extern fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, rights: [*]const u64, n: usize) c_int;
+extern fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, rights: [*]const u64, n: usize, fsv: ?*const anyopaque) c_int;
 
 // run2: two images, two child spaces, ONE epoch — the roster runs under
 // tick preemption and the call returns when both have exited. The multi-
@@ -533,7 +537,7 @@ extern fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, righ
     var imgs = [_][*]const u8{ @ptrCast(image_ptr), @ptrCast(image2_ptr) };
     var szs = [_]usize{ image_len, image2_len };
     var rts = [_]u64{ rights, rights };
-    const st = koru_spawn_run(&imgs, &szs, &rts, 2);
+    const st = koru_spawn_run(&imgs, &szs, &rts, 2, null);
     if (st < 0) return .{ .refused = "provider could not spawn the roster" };
     logln("spawn: run2 last-exit={d} (rung 2: tick-preempted roster)", .{st});
     return .{ .ok = st };

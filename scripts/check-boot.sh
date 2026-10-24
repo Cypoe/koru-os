@@ -157,17 +157,24 @@ else
         # image, not a fixture we built byte by byte.
         cp "$ROOT/koru/native/tests/realhello.c" "$WORK/realhello.c"
         cp "$ROOT/koru/native/tests/muslhello.c" "$WORK/muslhello.c"
+        cp "$ROOT/koru/native/tests/fscat.c" "$WORK/fscat.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
+        FSCATWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/fscat.elf")")"
+        HELLOWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/hello.txt")")"
+        printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
         # the double-indirect ext2 read path.
         ZIGBIN="${ZIG:-/w/tools/zig-0.15.1/zig.exe}"
         if MSYS2_ARG_CONV_EXCL='*' wsl -e gcc -static-pie -nostdlib -nostartfiles -s -Wl,--build-id=none -Wl,-z,noseparate-code -o "$PIEWSL" "$REALWSL" > "$WORK/pie.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/musl.elf" "$WORK/muslhello.c" > "$WORK/musl.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fscat.elf" "$WORK/fscat.c" > "$WORK/fscat.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
-           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $MUSLWSL musl.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1; then
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $MUSLWSL musl.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $FSCATWSL fscat.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $HELLOWSL hello.txt" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on
@@ -184,8 +191,18 @@ else
             else
                 bad "real-elf-musl: musl evidence missing: $(grep -E 'musl|REFUSE|EXC' "$WORK/boot_real.serial" | tail -4 | tr '\n' '|')"
             fi
+            # fs-in-child: fscat's open/read/close resolve inside the ext2
+            # it was spawned from — the scoped fs view riding the spawn
+            # call. hello.txt content must come back through the seam.
+            if grep -qF "FSCAT hello-from-ext2" "$WORK/boot_real.serial" \
+               && grep -qF "exec fscat.elf status=44" "$WORK/boot_real.serial" \
+               && ! grep -qF "SEAM REFUSE" "$WORK/boot_real.serial"; then
+                ok "fs-child: musl child read a file from its own ext2 via the scoped fs view (openat/read/close)"
+            else
+                bad "fs-child: evidence missing: $(grep -E 'FSCAT|fscat|REFUSE|EXC' "$WORK/boot_real.serial" | tail -4 | tr '\n' '|')"
+            fi
         else
-            bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" 2>/dev/null
+            bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null
         fi
         boot_check "$ROOT/koru/native/tests/boot_ext2.k" "EXT2N COMPLETE" \
             -drive "file=$IMG,format=raw,if=none,id=d0" \

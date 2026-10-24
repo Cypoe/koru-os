@@ -442,6 +442,127 @@ fn readFile(fs: *Fs, ino: u32) ReadResult {
     return .{ .ok = bp };
 }
 
+// ---- the child's fs view ---------------------------------------------------
+// When this fs spawns a child, the child's open/read/close syscalls
+// resolve INSIDE this same ext2 — the scoped fs view. The seam calls
+// back through this ops record (koru/native's ChildFsOps ABI); a file
+// handle is an allocated OpenFile whose pointer is the kernel fd's
+// cargo. The view is read-only and by-inode underneath — paths are a
+// view (lookupPath), the read is always inode+offset.
+
+const OpenFile = struct { ino: u32, size: u32, pos: u64 };
+
+const ChildFsOps = extern struct {
+    ctx: ?*anyopaque,
+    open: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    read: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64,
+    read_at: *const fn (ctx: ?*anyopaque, h: u64, off: u64, dst: [*]u8, len: usize) callconv(.c) i64,
+    seek: *const fn (ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64,
+    stat: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
+    close: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) void,
+};
+
+// readAt: inode + byte-range → bytes, reading only the blocks covered —
+// what a child read(2)/pread(2) actually costs. Whole-file readFile
+// stays for exec/pin/fetch.
+fn readAt(fs: *Fs, ino: u32, off: u64, dst: [*]u8, len: usize) i64 {
+    const loc = inodeLoc(fs, ino);
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5; // EIO
+    const fsize: u64 = rd32(&it, loc.off + 4);
+    if (off >= fsize) return 0;
+    const n: usize = @intCast(@min(fsize - off, len));
+    var ind: [BS]u8 = undefined;
+    var ind2: [BS]u8 = undefined;
+    var leaf: [BS]u8 = undefined;
+    var st = [4]u32{ 0, 0, 0, 0 };
+    var data: [BS]u8 = undefined;
+    var done: usize = 0;
+    while (done < n) {
+        const k: usize = @intCast((off + done) / BS);
+        const phys = blkAt(fs, &it, loc.off, k, &ind, &ind2, &leaf, &st) orelse return @intCast(done);
+        if (!readBlock(fs, phys, &data)) return -5;
+        const boff: usize = @intCast((off + done) % BS);
+        const take = @min(n - done, BS - boff);
+        @memcpy(dst[done .. done + take], data[boff .. boff + take]);
+        done += take;
+    }
+    return @intCast(done);
+}
+
+fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    var dir: [BS]u8 = undefined;
+    const ino = lookupPath(fs, std.mem.span(path), &dir) orelse return -2; // ENOENT
+    const loc = inodeLoc(fs, ino);
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    if (rd16(&it, loc.off) & 0o170000 != 0o100000) return -21; // EISDIR/ENOTREG
+    const h = malloc(@sizeOf(OpenFile)) orelse return -12; // ENOMEM
+    const fp: *OpenFile = @ptrCast(@alignCast(h));
+    fp.* = .{ .ino = ino, .size = rd32(&it, loc.off + 4), .pos = 0 };
+    return @intCast(@intFromPtr(fp));
+}
+
+fn cfRead(ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    const n = readAt(fs, fp.ino, fp.pos, dst, len);
+    if (n > 0) fp.pos += @intCast(n);
+    return n;
+}
+
+fn cfReadAt(ctx: ?*anyopaque, h: u64, off: u64, dst: [*]u8, len: usize) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    return readAt(fs, fp.ino, off, dst, len);
+}
+
+fn cfSeek(ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    _ = fs;
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    const base: i64 = switch (whence) {
+        0 => 0,
+        1 => @intCast(fp.pos),
+        2 => fp.size,
+        else => return -22, // EINVAL
+    };
+    const np = base + off;
+    if (np < 0) return -22;
+    fp.pos = @intCast(np);
+    return np;
+}
+
+fn cfStat(ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    for (0..144) |i| dst[i] = 0;
+    const w64 = struct { // little-endian u64 write into the stat buffer
+        fn s(b: [*]u8, off: usize, v: u64) void {
+            for (0..8) |i| b[off + i] = @truncate(v >> @intCast(i * 8));
+        }
+    }.s;
+    w64(dst, 0, fs.dev_id);                          // st_dev
+    w64(dst, 8, fp.ino);                             // st_ino
+    w64(dst, 16, 1);                                 // st_nlink
+    for (0..4) |i| dst[24 + i] = @truncate(@as(u64, 0o100644) >> @intCast(i * 8)); // st_mode u32
+    w64(dst, 48, fp.size);                           // st_size
+    w64(dst, 56, BS);                                // st_blksize
+    w64(dst, 64, (fp.size + 511) / 512);             // st_blocks
+    return 0;
+}
+
+fn cfClose(ctx: ?*anyopaque, h: u64) callconv(.c) void {
+    _ = ctx;
+    free(@ptrFromInt(@as(usize, @intCast(h))));
+}
+
+fn childFs(fs: *Fs) ChildFsOps {
+    return .{ .ctx = @ptrCast(fs), .open = cfOpen, .read = cfRead,
+              .read_at = cfReadAt, .seek = cfSeek, .stat = cfStat, .close = cfClose };
+}
+
 ~proc fetch|zig {
     var dir: [BS]u8 = undefined;
     const ino = lookupPath(fs, path, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "path not found" } };
@@ -457,7 +578,11 @@ fn readFile(fs: *Fs, ino: u32) ReadResult {
 // BOUND in koruos/nid's object-pin store under the foreign name
 // ext2/d<dev>/<ino>. The nid lift owns minting — a program using exec
 // must carry koruos/nid or the link refuses the missing symbols.
-extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) c_int;
+// koru_spawn_elf's 4th arg scopes the child's fs view: exec hands the
+// child THIS fs — open/read/close inside it resolve by path+inode
+// through the ops record above. Hosted providers export the 3-arg
+// spelling (the arg is ignored there — a hosted child has no scoped fs).
+extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64, fsv: ?*const ChildFsOps) c_int;
 extern fn koruos_nid_obj_pin(foreign: [*:0]const u8, key: u64) u64;
 extern fn koruos_nid_obj_key(nid: u64) i64;
 
@@ -483,7 +608,8 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
         .ok => |b| b,
         .err => |e| return .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
     };
-    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights);
+    var vfs = childFs(fs);
+    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights, &vfs);
     free(@ptrCast(bp.ptr));
     free(@ptrCast(bp));
     if (st < 0) return .{ .refused = .{ .fs = fs, .reason = "spawn provider refused the image" } };
@@ -521,7 +647,8 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
         .ok => |b| b,
         .err => |e| return .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
     };
-    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights);
+    var vfs = childFs(fs);
+    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights, &vfs);
     free(@ptrCast(bp.ptr));
     free(@ptrCast(bp));
     if (st < 0) return .{ .refused = .{ .fs = fs, .reason = "spawn provider refused the image" } };
