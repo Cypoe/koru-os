@@ -245,8 +245,22 @@ addresses regardless, defer or spec-driven), **virtio-gpu** (absent;
 first pixels come cheaper from a multiboot/GOP linear framebuffer —
 the `cyberboot` path — with virtio-gpu later for damage/3D).
 
-## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 17/17)
+## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 20/20)
 
+- **pmm — the frame allocator + reclaim.** `koru/native/pmm.zig`:
+  loader memory map (PVH `hvm_start_info` under QEMU `-kernel` —
+  **correction**: the image was being PVH-booted all along; the mb2
+  tag walk stays for GRUB) → u8-refcount bitmap over 4 KiB frames.
+  `alloc`/`pin`/`free`/`allocContiguous(n, align)`/`alloc2M`/`freeBlock`;
+  double-free and free-of-reserved refuse loudly. The identity map now
+  covers all managed RAM (`_start` 0–32 MiB, `pmm.init` onward to the
+  discovered limit, cap 1 GiB). Child page tables/pages/stacks moved off
+  the bump heap onto frames; **`freeChild` on exit() reclaims all of
+  them** (`pmm: reap freed=N` on serial — the pair-release shape the
+  surface contract wants). aspace's proof window moved to pd[257]
+  (0x20200000) and eats 2 MiB-aligned blocks — lesson recorded: a large
+  PDE needs a 2 MiB-aligned base or the walk faults RSVD. The 4 MiB bump
+  heap still serves koru-level malloc — program data, not page tables.
 - **`koruos/fb` — first visual output.** `koru/fb/index.kz` lift
   (info/fill/px over a linear framebuffer, `absent` refusal) +
   `koru/native/fb.zig` provider. Two honest sources, tried in order:
@@ -276,8 +290,9 @@ the `cyberboot` path — with virtio-gpu later for damage/3D).
 ## Open axes (dependency order)
 
 ```
-frame allocator + page reclaim + teardown        (heap is a 4MiB bump; free is a no-op)
-  → wait queues + kernel-as-context + per-task kstacks + FPU state
+wait queues + kernel-as-context + per-task kstacks + FPU state
+  (frame allocator + reclaim landed: refcounted 4KiB frames, pinned-buffer
+   + pair-release shapes proven; bump heap remains for program data)
     → syscall surface + nid-scoped grant bags (replaces NR bitmask)
       → fs.object iface + nid dispatch; fs writes/dirs/indirects
         → input + display (virtio-gpu | GOP), PCI enum + MSI-X, ACPI

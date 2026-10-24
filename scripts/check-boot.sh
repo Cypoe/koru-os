@@ -42,6 +42,21 @@ boot_check() {
 
 boot_check "$ROOT/koru/native/tests/boot_hello.k" "KORU NATIVE BOOT OK"
 
+# pmm: the frame allocator must discover RAM from the loader's own map —
+# PVH hvm_start_info under QEMU -kernel, mb2 tag 6 under GRUB — and pass
+# its serial selftest (alloc→pin→shared-free→release→double-free refused
+# →frame writable through identity).
+if grep -qE 'pmm: usable=[0-9]+MiB managed=[0-9]+' "$WORK/boot_hello.serial"; then
+    ok "pmm: RAM discovered from the loader memory map (PVH/mb2)"
+else
+    bad "pmm: no usable-memory report: $(grep pmm "$WORK/boot_hello.serial" | head -2 | tr '\n' '|')"
+fi
+if grep -qF 'PMM selftest ok' "$WORK/boot_hello.serial"; then
+    ok "pmm: alloc/pin/free/double-free-refused selftest passed"
+else
+    bad "pmm: selftest failed: $(grep 'PMM' "$WORK/boot_hello.serial" | head -3 | tr '\n' '|')"
+fi
+
 # fb: the koruos/fb seam over a BGA-programmed linear framebuffer — QEMU's
 # built-in multiboot loader does not answer the mb2 fb request tag, so the
 # provider programs the std VGA's VBE_DISPI registers itself and takes the
@@ -131,6 +146,13 @@ else
             ok "seam-bag: getpid refused loud + as -EACCES to the child"
         else
             bad "seam-bag: refusal evidence missing: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"
+        fi
+        # reclaim: every child exit must return its frames to the allocator
+        # — tables + user pages + stack, not a leak into the old bump heap.
+        if grep -qE "pmm: reap freed=[0-9a-f]+" "$WORK/boot_ext2.serial"; then
+            ok "pmm-reclaim: child exit returned its frames (tables+pages+stack)"
+        else
+            bad "pmm-reclaim: no reap evidence: $(grep pmm "$WORK/boot_ext2.serial" | tail -3 | tr '\n' '|')"
         fi
         # interrupts are real: virtio INTx delivered through the PIC and
         # the child's int3 vectored into our #BP gate and RESUMED (the

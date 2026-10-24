@@ -29,6 +29,7 @@ extern var pd: [512]u64;
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
 extern fn posix_memalign(memptr: *?*anyopaque, alignment: usize, size: usize) callconv(.c) c_int;
+const pmm = @import("pmm");
 extern fn serPut(c: u8) callconv(.c) void;
 
 const ENT: u64 = 0x3; // present | writable
@@ -543,12 +544,41 @@ var cur_child: usize = 0;
 var sched_active = false;
 pub export var sched_switches: u64 = 0;
 
+// Child memory comes from the frame allocator, not the bump heap: every
+// table and user page is a refcounted frame that freeChild returns on
+// exit — reclaim is the point of the rung, not a later nicety.
 fn allocPage() ?*align(4096) [4096]u8 {
-    var p: ?*anyopaque = null;
-    if (posix_memalign(&p, 4096, 4096) != 0 or p == null) return null;
-    const t: *align(4096) [4096]u8 = @ptrCast(@alignCast(p.?));
+    const phys = pmm.alloc() orelse return null;
+    const t: *align(4096) [4096]u8 = @ptrFromInt(@as(usize, @intCast(phys)));
     @memset(t, 0);
     return t;
+}
+
+// Return every frame a dead child held: the user pages its pd[4] pt maps,
+// then the four table pages themselves. Runs on the dead child's stack —
+// the frame frees only release the refcount, the identity map keeps the
+// pages readable until we jump away, and nothing allocates in between.
+fn freeChild(c: *Child) usize {
+    var freed: usize = 0;
+    if (c.pt == 0) return 0;
+    const c_pt: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(c.pt)));
+    for (c_pt) |e| {
+        if (e & 1 != 0) {
+            _ = pmm.free(e & ~@as(u64, 0xFFF));
+            freed += 1;
+        }
+    }
+    for ([_]u64{ c.pt, c.pd, c.pdpt, c.pml4 }) |t| {
+        if (t != 0) {
+            _ = pmm.free(t);
+            freed += 1;
+        }
+    }
+    c.pt = 0;
+    c.pd = 0;
+    c.pdpt = 0;
+    c.pml4 = 0;
+    return freed;
 }
 
 // Map one 4 KiB user page for `vaddr` inside the pd[4] window of `c`'s space.
@@ -675,9 +705,13 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         2 => { // getpid — defined so "granted vs refused" is decidable
             f.rax = 1;
         },
-        60 => { // exit(code) — child dies, roster rotates or caller resumes
+        60 => { // exit(code) — child dies, its frames go back, roster rotates
             last_exit = f.rdi;
             children[cur_child].state = .dead;
+            const nf = freeChild(&children[cur_child]);
+            say("pmm: reap freed=");
+            puthex(nf);
+            say("\n");
             if (nextRunnable()) |n| resumeChild(n);
             asm volatile (
                 \\ mov %[cr3], %%rax

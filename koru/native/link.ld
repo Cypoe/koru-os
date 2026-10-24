@@ -17,5 +17,7 @@ SECTIONS {
     .data : { *(.data) *(.data.*) }
     . = ALIGN(4K);
     .bss : { *(COMMON) *(.bss) *(.bss.*) }
+    . = ALIGN(4K);
+    _end = .;
     /DISCARD/ : { *(.comment) *(.eh_frame) *(.eh_frame_hdr) *(.gnu.*) }
 }

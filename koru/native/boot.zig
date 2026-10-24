@@ -8,9 +8,11 @@
 // `main` (module `program`, bound by build-native.sh). This stub knows
 // nothing about the program beyond the symbol it calls.
 //
-// Multiboot information (magic in EAX, info ptr in EBX) is ignored for now —
-// the boot program needs no cmdline/modules yet; when one does, kmain's
-// signature becomes the seam.
+// Boot info: EBX carries the loader's info pointer — under QEMU -kernel
+// that is a Xen PVH hvm_start_info (the .note.Xen below), under GRUB a
+// multiboot2 info block. pmm.init detects which by the head word and reads
+// the memory map either way; fb.init reads mb2 tag 8 (GRUB) or falls back
+// to programming BGA itself.
 
 const prog = @import("program");
 const runtime = @import("runtime");
@@ -18,6 +20,7 @@ const virtio = @import("virtio");
 const aspace = @import("aspace");
 const user = @import("user");
 const fb = @import("fb.zig");
+const pmm = @import("pmm");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -79,14 +82,17 @@ comptime {
 
 // Page tables for the boot address space. Exported (not asm-local) so the
 // aspace provider can clone them for per-domain CR3s. Layout: pml4[0] ->
-// pdpt[0] -> pd[0..2] = 2 MiB pages identity-mapping 0-6 MiB.
+// pdpt[0] -> pd[0..15] = 2 MiB pages identity-mapping 0-32 MiB here;
+// pmm.init extends pd[16..] to the discovered RAM limit (cap 1 GiB).
 export var pml4: [512]u64 align(4096) = undefined;
 export var pdpt: [512]u64 align(4096) = undefined;
 export var pd: [512]u64 align(4096) = undefined;
 
-// _start: 32-bit entry. Identity-map 0..6MiB (pml4->pdpt->pd, three 2 MiB
-// pages), load CR3, set CR4.PAE + EFER.LME + CR0.PG, then ljmp into the
-// 64-bit code segment. The GDT descriptors live below in .rodata.
+// _start: 32-bit entry. Identity-map 0..32MiB (pml4->pdpt->pd[0..16),
+// sixteen 2 MiB pages — enough that the image's .bss (heap, pmm bitmaps)
+// is always reachable; pmm.init extends the map to the discovered limit),
+// load CR3, set CR4.PAE + EFER.LME + CR0.PG, then ljmp into the 64-bit
+// code segment. The GDT descriptors live below in .rodata.
 comptime {
     asm (
         \\ .section .text
@@ -100,12 +106,14 @@ comptime {
     \\   movl $pd, %eax
     \\   orl $0x3, %eax
     \\   movl %eax, pdpt
-    \\   movl $0x000083, %eax
-    \\   movl %eax, pd
-    \\   movl $0x200083, %eax
-    \\   movl %eax, pd+8
-    \\   movl $0x400083, %eax
-    \\   movl %eax, pd+16
+    \\   xorl %ecx, %ecx
+    \\ 1: movl %ecx, %eax
+    \\   shll $21, %eax
+    \\   orl $0x83, %eax
+    \\   movl %eax, pd(,%ecx,8)
+    \\   incl %ecx
+    \\   cmpl $16, %ecx
+    \\   jb 1b
     \\   movl $pml4, %eax
     \\   movl %eax, %cr3
     \\   movl %cr4, %eax
@@ -155,6 +163,7 @@ comptime {
 // anything it leaves on the console is the boot evidence. `mbi` is the
 // multiboot2 info block's physical address (EBX at _start).
 export fn kmain(mbi: u32) callconv(.c) noreturn {
+    pmm.init(mbi); // frames live before anything allocates
     user.init(); // IDT + PIC + sti — interrupts live before the program
     fb.init(mbi);
     aspace.selftest();

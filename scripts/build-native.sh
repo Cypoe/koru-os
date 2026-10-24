@@ -33,13 +33,14 @@ cp "$PROG" "$WORK/program.k"
     -O ReleaseSafe \
     -fno-entry -fno-stack-protector -mno-red-zone \
     -T "$ROOT/koru/native/link.ld" \
-    --dep program --dep runtime --dep virtio --dep aspace --dep user -Mroot="$ROOT/koru/native/boot.zig" \
+    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm -Mroot="$ROOT/koru/native/boot.zig" \
     --dep compiler_env -Mprogram="$WORK/output_emitted.zig" \
     -Mcompiler_env="$ROOT/koru/native/compiler_env.zig" \
     -Mruntime="$ROOT/koru/native/runtime.zig" \
     -Mvirtio="$ROOT/koru/native/virtio.zig" \
-    -Maspace="$ROOT/koru/native/aspace.zig" \
-    -Muser="$ROOT/koru/native/user.zig" \
+    --dep pmm -Maspace="$ROOT/koru/native/aspace.zig" \
+    --dep pmm -Muser="$ROOT/koru/native/user.zig" \
+    -Mpmm="$ROOT/koru/native/pmm.zig" \
     -femit-bin="$OUT" || {
     echo "build-native: zig link failed"; exit 1;
 }
