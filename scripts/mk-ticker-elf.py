@@ -36,7 +36,7 @@ code[jnz_off + 1] = (loop_top - (jnz_off + 2)) & 0xFF
 struct.pack_into("<i", code, 18, msg_off - 22)
 
 EHDR, PHDR, SEG_OFF = 64, 56, 0x78
-VADDR = 0x800000 + SEG_OFF
+VADDR = 0x40000000 + SEG_OFF
 
 b = bytearray(EHDR + PHDR + len(code))
 b[0:4] = b"\x7fELF"; b[4] = 2; b[5] = 1; b[6] = 1

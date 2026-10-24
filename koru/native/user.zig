@@ -36,8 +36,16 @@ extern fn serPut(c: u8) callconv(.c) void;
 const ENT: u64 = 0x3; // present | writable
 const US: u64 = 0x4; // user-accessible
 
-const USER_BASE: usize = 0x800000; // pd[4] -> pt -> user pages (8-10 MiB window)
-const USER_STACK_TOP: usize = 0x802000; // second user page, top
+// Child user space is its own pdpt slot — [USER_VA_BASE, USER_VA_END)
+// maps through c.upd, kept entirely clear of the kernel-half pd copy
+// (identity RAM) the ISR still needs on the child's CR3. Real ET_EXEC
+// vaddrs below 0x40000000 therefore refuse by name: the honest answer
+// is static-pie (ET_DYN) or a link above the identity region.
+const USER_VA_BASE: usize = 0x4000_0000; // pdpt[1] -> upd -> user pages
+const USER_VA_END: usize = 0x7FE0_0000;  // ~1 GiB of user space
+const USER_STACK_TOP: usize = 0x7FE0_0000; // stack pages map just below
+const USER_STACK_PAGES: usize = 16;
+const MMAP_BASE: usize = 0x6000_0000; // mmap arena — between image and stack
 
 fn say(s: [*:0]const u8) void {
     _ = fputs(s, stdout);
@@ -83,7 +91,7 @@ pub export fn koru_putdec(v: u64) callconv(.c) void {
 
 // ---- the embedded ELF64 child --------------------------------------------
 // write(1, "elf child says hi\n", 18); exit(42) — hand-assembled, laid out as
-// one PT_LOAD at file offset 0x78 mapped at vaddr 0x800078.
+// one PT_LOAD at file offset 0x78 mapped at vaddr USER_VA_BASE+0x78.
 //
 //   B8 01 00 00 00            mov $1, %eax        (write)
 //   BF 01 00 00 00            mov $1, %edi        (fd)
@@ -129,7 +137,7 @@ fn u64wr(b: []u8, off: usize, v: u64) void {
 const EHDR = 64;
 const PHDR = 56;
 const SEG_OFF: usize = 0x78; // right after ehdr+phdr
-const SEG_VADDR: usize = USER_BASE + SEG_OFF;
+const SEG_VADDR: usize = USER_VA_BASE + SEG_OFF;
 
 const child_elf = blk: {
     var b: [EHDR + PHDR + child_code.len]u8 = [_]u8{0} ** (EHDR + PHDR + child_code.len);
@@ -534,8 +542,12 @@ const MAXCHILDREN: usize = 4;
 const Child = struct {
     pml4: usize = 0,
     pdpt: usize = 0,
-    pd: usize = 0,
-    pt: usize = 0,
+    pd: usize = 0,   // kernel-half copy (identity RAM, ISR on child CR3)
+    upd: usize = 0,  // user-half pd — pdpt[1], USER_VA_BASE..END
+    fsbase: u64 = 0, // TLS base (arch_prctl) — MSR-loaded at resume
+    brk: usize = 0,  // program break (brk syscall)
+    brk_base: usize = 0, // lowest legal break — end of the loaded image
+    mmap_top: usize = 0, // bump cursor of the mmap arena
     frame: UserFrame = std.mem.zeroes(UserFrame),
     rights: u64 = 0,
     state: ChildState = .empty,
@@ -557,52 +569,99 @@ fn allocPage() ?*align(4096) [4096]u8 {
     return t;
 }
 
-// Return every frame a dead child held: the user pages its pd[4] pt maps,
-// then the four table pages themselves. Runs on the dead child's stack —
-// the frame frees only release the refcount, the identity map keeps the
-// pages readable until we jump away, and nothing allocates in between.
+// Return every frame a dead child held: every pt under its user pd and
+// every page those pts map, then the four table pages themselves. Runs
+// on the dead child's stack — the frame frees only release the refcount,
+// the identity map keeps the pages readable until we jump away, and
+// nothing allocates in between.
 fn freeChild(c: *Child) usize {
     var freed: usize = 0;
-    if (c.pt == 0) return 0;
-    const c_pt: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(c.pt)));
-    for (c_pt) |e| {
-        if (e & 1 != 0) {
-            _ = pmm.free(e & ~@as(u64, 0xFFF));
-            freed += 1;
+    if (c.upd == 0) return 0;
+    const c_upd: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(c.upd)));
+    for (c_upd) |pde| {
+        if (pde & 1 == 0) continue;
+        const pt: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(pde & ~@as(u64, 0xFFF))));
+        for (pt) |e| {
+            if (e & 1 != 0) {
+                _ = pmm.free(e & ~@as(u64, 0xFFF));
+                freed += 1;
+            }
         }
+        _ = pmm.free(pde & ~@as(u64, 0xFFF));
+        freed += 1;
     }
-    for ([_]u64{ c.pt, c.pd, c.pdpt, c.pml4 }) |t| {
+    for ([_]u64{ c.upd, c.pd, c.pdpt, c.pml4 }) |t| {
         if (t != 0) {
             _ = pmm.free(t);
             freed += 1;
         }
     }
-    c.pt = 0;
+    c.upd = 0;
     c.pd = 0;
     c.pdpt = 0;
     c.pml4 = 0;
     return freed;
 }
 
-// Map one 4 KiB user page for `vaddr` inside the pd[4] window of `c`'s space.
+// Map one 4 KiB user page for `vaddr` inside `c`'s user window, growing
+// the upd's pt on demand. Returns the frame (identity VA) for writes.
 fn mapUserPage(c: *Child, vaddr: usize) ?*align(4096) [4096]u8 {
-    if (vaddr < USER_BASE or vaddr >= USER_BASE + 0x200000) return null;
-    const pt: *align(4096) [512]u64 = @ptrFromInt(c.pt);
+    if (vaddr < USER_VA_BASE or vaddr >= USER_VA_END) return null;
+    const upd: *[512]u64 = @ptrFromInt(c.upd);
+    const pd_i = (vaddr - USER_VA_BASE) >> 21;
+    if (upd[pd_i] & 1 == 0) {
+        const npt = allocPage() orelse return null;
+        upd[pd_i] = @intFromPtr(npt) | US | ENT;
+    }
+    const pt: *[512]u64 = @ptrFromInt(@as(usize, @intCast(upd[pd_i] & ~@as(u64, 0xFFF))));
     const idx = (vaddr >> 12) & 0x1FF;
     const page = allocPage() orelse return null;
     pt[idx] = @intFromPtr(page) | US | ENT;
     return page;
 }
 
+// raw pte value for a mapped user va (0 if unmapped)
+fn userEntry(c: *Child, vaddr: usize) u64 {
+    if (vaddr < USER_VA_BASE or vaddr >= USER_VA_END) return 0;
+    const upd: *const [512]u64 = @ptrFromInt(c.upd);
+    const pd_i = (vaddr - USER_VA_BASE) >> 21;
+    if (upd[pd_i] & 1 == 0) return 0;
+    const pt: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(upd[pd_i] & ~@as(u64, 0xFFF))));
+    return pt[(vaddr >> 12) & 0x1FF];
+}
+
+// set/clear the writable bit on mapped user pages (PROT_WRITE down)
+fn setUserWritable(c: *Child, vaddr: usize, len: usize, w: bool) void {
+    var p = vaddr & ~@as(usize, 0xFFF);
+    const end = vaddr + len;
+    while (p < end) : (p += 0x1000) {
+        const upd: *[512]u64 = @ptrFromInt(c.upd);
+        const pd_i = (p - USER_VA_BASE) >> 21;
+        if (upd[pd_i] & 1 == 0) continue;
+        const pt: *[512]u64 = @ptrFromInt(@as(usize, @intCast(upd[pd_i] & ~@as(u64, 0xFFF))));
+        const idx = (p >> 12) & 0x1FF;
+        if (pt[idx] & 1 == 0) continue;
+        if (w) pt[idx] |= 2 else pt[idx] &= ~@as(u64, 2);
+    }
+}
+
+// phys of an already-mapped user page in `c`'s space (loader writes
+// through the kernel identity map).
+fn userPhys(c: *Child, vaddr: usize) usize {
+    const upd: *const [512]u64 = @ptrFromInt(c.upd);
+    const pd_i = (vaddr - USER_VA_BASE) >> 21;
+    const pt: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(upd[pd_i] & ~@as(u64, 0xFFF))));
+    return @intCast(pt[(vaddr >> 12) & 0x1FF] & ~@as(u64, 0xFFF));
+}
+
 fn buildTables(c: *Child) bool {
     c.pml4 = @intFromPtr(allocPage() orelse return false);
     c.pdpt = @intFromPtr(allocPage() orelse return false);
     c.pd = @intFromPtr(allocPage() orelse return false);
-    c.pt = @intFromPtr(allocPage() orelse return false);
+    c.upd = @intFromPtr(allocPage() orelse return false);
     const c_pml4: *[512]u64 = @ptrFromInt(c.pml4);
     const c_pdpt: *[512]u64 = @ptrFromInt(c.pdpt);
     const c_pd: *[512]u64 = @ptrFromInt(c.pd);
-    const c_pt: *[512]u64 = @ptrFromInt(c.pt);
     // U/S must hold at every level for ring3 to reach a leaf; kernel leaves
     // in the copied pd still lack the bit, so the kernel half stays
     // ring0-only — and identical across children, which is what lets the
@@ -610,47 +669,166 @@ fn buildTables(c: *Child) bool {
     c_pml4[0] = c.pdpt | US | ENT;
     c_pdpt[0] = c.pd | US | ENT;
     c_pd.* = pd;
-    c_pd[4] = c.pt | US | ENT;
-    const stack_page = allocPage() orelse return false;
-    c_pt[1] = @intFromPtr(stack_page) | US | ENT;
+    c_pdpt[1] = c.upd | US | ENT;
     return true;
 }
 
-// Parse an ELF64 image into `c`'s space, map PT_LOAD pages, return e_entry.
-fn loadElf(c: *Child, b: []const u8) ?usize {
+const ElfInfo = struct {
+    entry: usize,
+    phdr_va: usize,
+    phent: usize,
+    phnum: usize,
+    bias: usize,
+    brk_base: usize, // page-aligned end of the loaded image
+};
+
+// Parse an ELF64 image into `c`'s space: ET_EXEC maps at p_vaddr (must be
+// inside the user window — a 0x400000-style link address collides with
+// the kernel identity and refuses by name), ET_DYN maps at
+// USER_VA_BASE + p_vaddr (the static-pie/libc path — bias application is
+// the same mechanism a PT_INTERP ld.so will need). Pages are zeroed at
+// alloc, so bss (memsz > filesz) needs no fill. PT_INTERP is not yet
+// served: it is refused by name rather than silently ignored.
+fn loadElf(c: *Child, b: []const u8) ?ElfInfo {
     if (b.len < EHDR or b[0] != 0x7F or b[1] != 'E' or b[2] != 'L' or
         b[3] != 'F' or b[4] != 2 or b[5] != 1) return null;
-    if (u16le(b, 16) != 2 or u16le(b, 18) != 0x3E) return null;
+    const etype = u16le(b, 16);
+    if (u16le(b, 18) != 0x3E or (etype != 2 and etype != 3)) return null;
+    const bias: usize = if (etype == 3) USER_VA_BASE else 0;
     const entry = u64le(b, 24);
     const phoff: usize = @intCast(u64le(b, 32));
     const phentsz: usize = u16le(b, 54);
     const phnum: usize = u16le(b, 56);
     if (phnum == 0 or phentsz < PHDR or phoff + phnum * phentsz > b.len)
         return null;
+    var phdr_va: usize = 0;
+    var max_va: usize = 0;
     var i: usize = 0;
     while (i < phnum) : (i += 1) {
         const ph = phoff + i * phentsz;
-        if (u32le(b, ph) != 1) continue; // PT_LOAD only
+        const ptype = u32le(b, ph);
+        if (ptype == 3) { // PT_INTERP — dynamic images are a later rung
+            say("ELF REFUSE: PT_INTERP (dynamic) not served yet\n");
+            return null;
+        }
+        if (ptype != 1) continue; // PT_LOAD only
         const off: usize = @intCast(u64le(b, ph + 8));
         const vaddr: usize = @intCast(u64le(b, ph + 16));
         const filesz: usize = @intCast(u64le(b, ph + 32));
         const memsz: usize = @intCast(u64le(b, ph + 40));
         if (filesz > memsz or off + filesz > b.len) return null;
-        var p = vaddr & ~@as(usize, 0xFFF);
-        while (p < vaddr + memsz) : (p += 0x1000) {
+        const va = bias + vaddr;
+        const end_va = va + memsz;
+        if (end_va > max_va) max_va = end_va;
+        if (va < USER_VA_BASE) {
+            say("ELF REFUSE: vaddr below user window — link -pie or above 0x40000000\n");
+            return null;
+        }
+        var p = va & ~@as(usize, 0xFFF);
+        while (p < va + memsz) : (p += 0x1000) {
             _ = mapUserPage(c, p) orelse return null;
         }
-        // copy through the mapped page via identity VA
-        const c_pt: *const [512]u64 = @ptrFromInt(c.pt);
+        // copy through the mapped pages via identity VA
         var n: usize = 0;
         while (n < filesz) : (n += 1) {
-            const va = vaddr + n;
-            const phys = c_pt[(va >> 12) & 0x1FF] & ~@as(u64, 0xFFF);
-            const dst: [*]u8 = @ptrFromInt(@as(usize, @intCast(phys)) + (va & 0xFFF));
+            const phys = userPhys(c, va + n);
+            const dst: [*]u8 = @ptrFromInt(phys + ((va + n) & 0xFFF));
             dst[0] = b[off + n];
         }
+        // phdrs are usually inside the first PT_LOAD; remember where they
+        // landed so AT_PHDR can point at the in-memory copy.
+        if (phoff >= off and phoff + phnum * phentsz <= off + filesz)
+            phdr_va = va + (phoff - off);
     }
-    return @intCast(entry);
+    if (phdr_va == 0) {
+        // phdrs not inside any PT_LOAD — park a copy on its own page.
+        const pa = mapUserPage(c, USER_VA_BASE + 0x200000 - 0x1000) orelse return null;
+        _ = pa;
+        const dst: [*]u8 = @ptrFromInt(userPhys(c, USER_VA_BASE + 0x200000 - 0x1000));
+        var n: usize = 0;
+        while (n < phnum * phentsz) : (n += 1) dst[n] = b[phoff + n];
+        phdr_va = USER_VA_BASE + 0x200000 - 0x1000;
+    }
+    return .{ .entry = @intCast(bias + entry), .phdr_va = phdr_va, .phent = phentsz, .phnum = phnum, .bias = bias, .brk_base = (max_va + 0xFFF) & ~@as(usize, 0xFFF) };
+}
+
+// ---- the real initial process stack ---------------------------------------
+// rsp convention a real ELF entry expects: [argc][argv0..][NULL][envp..]
+// [NULL][auxv pairs][AT_NULL] — any real libc's _start reads auxv off the
+// stack; without this a musl/glibc binary cannot even reach its main.
+// Stack pages live at the top of the user window; strings/auxv data are
+// written above the vector through the identity map.
+fn userWrite(c: *Child, va: usize, v: u64) void {
+    const phys = userPhys(c, va);
+    const dst: *u64 = @ptrFromInt(phys + (va & 0xFFF));
+    dst.* = v;
+}
+
+fn buildStack(c: *Child, info: ElfInfo) ?usize {
+    var i: usize = 0;
+    const sbase = USER_STACK_TOP - USER_STACK_PAGES * 0x1000;
+    while (i < USER_STACK_PAGES) : (i += 1) {
+        _ = mapUserPage(c, sbase + i * 0x1000) orelse return null;
+    }
+    // strings + AT_RANDOM block live at the very top
+    const arg0 = "child.elf";
+    var top = USER_STACK_TOP;
+    var n: usize = 0;
+    while (n <= arg0.len) : (n += 1) { // include the NUL
+        const phys = userPhys(c, top - arg0.len - 1 + n);
+        const dst: *u8 = @ptrFromInt(phys + ((top - arg0.len - 1 + n) & 0xFFF));
+        dst.* = arg0[n];
+    }
+    top -= arg0.len + 1;
+    const arg0_va = top;
+    top -= 16;
+    const rand_va = top;
+    // AT_RANDOM: 16 bytes, TSC-seeded xorshift — an honest non-crypto seed.
+    var s: u64 = rdtsc();
+    n = 0;
+    while (n < 16) : (n += 1) {
+        s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+        const phys = userPhys(c, rand_va + n);
+        const dst: *u8 = @ptrFromInt(phys + ((rand_va + n) & 0xFFF));
+        dst.* = @truncate(s);
+    }
+    // the vector: argc, argv, NULL, envp NULL, auxv pairs, AT_NULL
+    const auxv = [_][2]u64{
+        .{ 3, info.phdr_va },  // AT_PHDR
+        .{ 4, info.phent },   // AT_PHENT
+        .{ 5, info.phnum },   // AT_PHNUM
+        .{ 6, 4096 },         // AT_PAGESZ
+        .{ 9, info.entry },   // AT_ENTRY
+        .{ 11, 0 },           // AT_UID
+        .{ 12, 0 },           // AT_GID
+        .{ 13, 0 },           // AT_EUID
+        .{ 14, 0 },           // AT_EGID
+        .{ 16, 0 },           // AT_HWCAP — none advertised
+        .{ 17, 100 },         // AT_CLKTCK
+        .{ 23, 0 },           // AT_SECURE
+        .{ 25, rand_va },     // AT_RANDOM
+        .{ 0, 0 },            // AT_NULL
+    };
+    const vec_slots = 1 + 1 + 1 + 1 + auxv.len * 2; // argc argv0 NUL envpNUL pairs
+    const sp = (top - vec_slots * 8) & ~@as(usize, 0xF);
+    var at = sp;
+    userWrite(c, at, 1); at += 8;          // argc
+    userWrite(c, at, arg0_va); at += 8;    // argv[0]
+    userWrite(c, at, 0); at += 8;          // argv NULL
+    userWrite(c, at, 0); at += 8;          // envp NULL
+    for (auxv) |pair| {
+        userWrite(c, at, pair[0]); at += 8;
+        userWrite(c, at, pair[1]); at += 8;
+    }
+    return sp;
+}
+
+fn rdtsc() u64 {
+    var lo: u32 = undefined;
+    var hi: u32 = undefined;
+    asm volatile ("rdtsc"
+        : [lo] "={eax}" (lo), [hi] "={edx}" (hi));
+    return (@as(u64, hi) << 32) | lo;
 }
 
 // ---- the seam ---------------------------------------------------------------
@@ -687,17 +865,39 @@ pub export var saved_rsp: u64 = 0;
 pub export var saved_rip: u64 = 0;
 pub export var last_exit: u64 = 0;
 
+// Canonical capability number for a syscall nr. Bits 0..63 name
+// capabilities; for NRs <64 the bit IS the Linux nr, so a bag reads
+// like a syscall mask. NRs ≥64 have no bit — they fold onto reserved
+// caps: 62 = "describe/modify own process metadata" (arch_prctl FS,
+// set_tid_address, set_robust_list, prlimit64), 61 = "entropy"
+// (getrandom), and 231 -> 60 (exit_group IS exit for single-threaded
+// children). The grant-object bag replacing this bitmask is the
+// standing axis (concepts/frag-bag-*); high-NR folding is interim.
+fn canonNr(nr: u64) u64 {
+    return switch (nr) {
+        231 => 60,
+        318 => 61,
+        158, 218, 273, 302 => 62,
+        else => nr,
+    };
+}
+
 export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
     // bag check before dispatch: an nr not granted in child_rights is a
     // capability refusal, loud on serial AND visible to the child as
-    // -EACCES — not a silent ENOSYS.
-    if (f.rax >= 64 or (child_rights >> @as(u6, @intCast(f.rax))) & 1 == 0) {
+    // -EACCES — not a silent ENOSYS. Bits name CAPABILITIES, not raw
+    // numbers: NRs that are the same capability fold to a canonical
+    // number first (exit_group 231 -> exit 60), so a bag wider than
+    // u64 is not needed while the surface stays small.
+    const cnr = canonNr(f.rax);
+    if (cnr >= 64 or (child_rights >> @as(u6, @intCast(cnr))) & 1 == 0) {
         say("SEAM REFUSE nr=");
         puthex(f.rax);
         say(" (not in child bag)\n");
         f.rax = @bitCast(@as(i64, -13));
         return;
     }
+    const c = &children[cur_child];
     switch (f.rax) {
         1 => { // write(fd, buf, len) -> len
             const buf: [*]const u8 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
@@ -705,10 +905,94 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             while (i < f.rdx) : (i += 1) serPut(buf[i]);
             f.rax = f.rdx;
         },
-        2 => { // getpid — defined so "granted vs refused" is decidable
+        20 => { // writev(fd, iov, iovcnt) -> total
+            const iov: [*]const u64 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
+            var total: u64 = 0;
+            var i: usize = 0;
+            while (i < f.rdx) : (i += 1) {
+                const base: usize = @intCast(iov[i * 2]);
+                const len: usize = @intCast(iov[i * 2 + 1]);
+                const buf: [*]const u8 = @ptrFromInt(base);
+                var n: usize = 0;
+                while (n < len) : (n += 1) serPut(buf[n]);
+                total += len;
+            }
+            f.rax = total;
+        },
+        39 => { // getpid
             f.rax = 1;
         },
-        60 => { // exit(code) — child dies, its frames go back, roster rotates
+        16 => { // ioctl — no ttys exist; ENOTTY is the honest answer
+            f.rax = @bitCast(@as(i64, -25));
+        },
+        12 => { // brk(addr) -> current break; 0 queries
+            const want: usize = @intCast(f.rdi);
+            if (want == 0 or want < c.brk_base or
+                want >= USER_STACK_TOP - USER_STACK_PAGES * 0x1000 - 0x1000)
+            {
+                f.rax = c.brk; // brk's refusal is returning the old break
+            } else {
+                var p = c.brk & ~@as(usize, 0xFFF);
+                while (p < want) : (p += 0x1000) {
+                    if (userEntry(c, p) == 0) {
+                        _ = mapUserPage(c, p) orelse break;
+                    }
+                }
+                c.brk = want;
+                f.rax = c.brk;
+            }
+        },
+        9 => { // mmap — anonymous private only; file-backed refuses ENODEV
+            const len: usize = @intCast(f.rsi);
+            if (f.r10 & 0x20 == 0 or len == 0) { // MAP_ANONYMOUS required
+                f.rax = @bitCast(@as(i64, -19)); // ENODEV
+            } else {
+                const base = c.mmap_top;
+                var p: usize = 0;
+                var ok = true;
+                while (p < len) : (p += 0x1000) {
+                    if (mapUserPage(c, base + p) == null) { ok = false; break; }
+                }
+                if (!ok) {
+                    f.rax = @bitCast(@as(i64, -12)); // ENOMEM
+                } else {
+                    if (f.rdx & 2 == 0) setUserWritable(c, base, len, false); // !PROT_WRITE
+                    c.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
+                    f.rax = base;
+                }
+            }
+        },
+        158 => { // arch_prctl(code, addr) — the TLS seam: FS base per child
+            if (f.rdi == 0x1002) { // ARCH_SET_FS
+                c.fsbase = f.rsi;
+                f.rax = 0;
+            } else if (f.rdi == 0x1003) { // ARCH_GET_FS
+                f.rax = c.fsbase;
+            } else {
+                f.rax = @bitCast(@as(i64, -22)); // EINVAL
+            }
+        },
+        218 => f.rax = 1, // set_tid_address — our only tid is the child
+        273 => f.rax = 0, // set_robust_list — declared, no robust futexes
+        302 => { // prlimit64(pid, res, new, old) — old gets infinity
+            if (f.r10 != 0) {
+                const old: [*]u64 = @ptrFromInt(@as(usize, @intCast(f.r10)));
+                old[0] = ~@as(u64, 0);
+                old[1] = ~@as(u64, 0);
+            }
+            f.rax = 0;
+        },
+        318 => { // getrandom — TSC-seeded xorshift; non-crypto, said so
+            const buf: [*]u8 = @ptrFromInt(@as(usize, @intCast(f.rdi)));
+            var s: u64 = rdtsc() ^ f.rsi;
+            var i: usize = 0;
+            while (i < f.rsi) : (i += 1) {
+                s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+                buf[i] = @truncate(s);
+            }
+            f.rax = f.rsi;
+        },
+        60, 231 => { // exit/exit_group(code) — child dies, frames go back
             last_exit = f.rdi;
             children[cur_child].state = .dead;
             const nf = freeChild(&children[cur_child]);
@@ -742,10 +1026,17 @@ fn nextRunnable() ?usize {
 // Resume child `nxt`: rsp -> its saved frame, CR3 -> its space, then the
 // shared pop+iretq tail. Never returns — the current context (kernel stack
 // or a dead child's syscall frame) is abandoned by construction.
+fn wrmsr(msr: u32, v: u64) void {
+    asm volatile ("wrmsr"
+        :
+        : [c] "{ecx}" (msr), [a] "{eax}" (@as(u32, @truncate(v))), [d] "{edx}" (@as(u32, @truncate(v >> 32))));
+}
+
 fn resumeChild(nxt: usize) noreturn {
     const c = &children[nxt];
     cur_child = nxt;
     child_rights = c.rights;
+    wrmsr(0xC0000100, c.fsbase); // FS_BASE — the child's TLS home
     asm volatile (
         \\ mov %[fr], %%rsp
         \\ mov %[cr3], %%rax
@@ -908,16 +1199,20 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
             say("RING3 FAIL: page alloc\n");
             return -1;
         }
-        const entry = loadElf(c, imgs[i][0..sizes[i]]) orelse {
+        const info = loadElf(c, imgs[i][0..sizes[i]]) orelse {
             say("ELF LOAD FAIL\n");
             return -2;
         };
         c.rights = rights[i];
         c.frame = std.mem.zeroes(UserFrame);
-        c.frame.rip = entry;
+        c.frame.rip = info.entry;
         c.frame.cs = 0x23; // user code64
         c.frame.rflags = 0x202; // IF=1 — the child may be ticked mid-flight
-        c.frame.rsp = USER_STACK_TOP;
+        c.frame.rsp = buildStack(c, info) orelse return -1;
+        c.brk_base = info.brk_base;
+        c.brk = info.brk_base;
+        c.mmap_top = MMAP_BASE;
+        c.fsbase = 0;
         c.frame.ss = 0x1B; // user data
         c.state = .runnable;
         nchildren += 1;

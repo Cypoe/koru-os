@@ -2,7 +2,7 @@
 # mk-child-elf.py <out> — emit the ELF64 child binary loaded from ext2 in
 # the boot_spawn path. SYSCALL ABI (the real seam — int 0x80 retired):
 # nr in rax, args rdi/rsi/rdx. The child's bag grants {write=1, exit=60}
-# only — it then calls getpid (nr 2, defined but ungranted), observes
+# only — it then calls getpid (nr 39, defined but ungranted), observes
 # -EACCES, and prints its own evidence that the refusal came back as a
 # return value. Different message + status than the embedded child so
 # disk provenance is distinguishable in the serial evidence.
@@ -18,8 +18,8 @@ code += b"\xBF\x01\x00\x00\x00"          # mov $1, %edi
 code += b"\x48\x8D\x35" + struct.pack("<i", 0)  # lea msg(%rip),%rsi — patched
 code += b"\xBA" + struct.pack("<I", len(msg))   # mov $len, %edx
 code += b"\x0F\x05"                      # syscall
-# getpid — defined (nr 2) but NOT in the bag → -EACCES
-code += b"\xB8\x02\x00\x00\x00"          # mov $2, %eax
+# getpid — defined (nr 39) but NOT in the bag → -EACCES
+code += b"\xB8\x27\x00\x00\x00"          # mov $39, %eax
 code += b"\x0F\x05"                      # syscall
 code += b"\x83\xF8\xF3"                  # cmp $-13, %eax
 jne_off = len(code)
@@ -51,7 +51,7 @@ struct.pack_into("<i", code, 13, msg1_off - 17)
 struct.pack_into("<i", code, 49, msg2_off - 53)
 
 EHDR, PHDR, SEG_OFF = 64, 56, 0x78
-VADDR = 0x800000 + SEG_OFF
+VADDR = 0x40000000 + SEG_OFF
 
 b = bytearray(EHDR + PHDR + len(code))
 b[0:4] = b"\x7fELF"; b[4] = 2; b[5] = 1; b[6] = 1

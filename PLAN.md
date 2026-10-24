@@ -197,10 +197,29 @@ host namespace — the extern is absent and a program naming the
 verb refuses at link; on `hosted/freebsd` cap mode narrows the
 opened path fd and `fexecve`s it, so dynamic host paths still
 fail inside ld.so by design. This is the first rung of real-ELF
-hosting; the native ladder under it (initial stack/argv-auxv,
-the ~10-syscall surface — TLS via arch_prctl, brk/mmap,
-exit_group — then PT_INTERP through a child's own fs seam) is
-the open axis below.
+hosting; the native ladder under it landed next:
+
+**Real ELF children on koru-native (boot 24/24)** — the loader
+grew from "embedded hand-built ELF in a 2 MiB window" to a real
+image path. Child address space: user half is its own pdpt slot
+(`pdpt[1]` → `upd`, `0x40000000–0x7FE00000`) so kernel identity
+and ISR-on-child-CR3 stay intact; pts grow on demand; `freeChild`
+walks the upd and reclaims every pt + page. `loadElf` serves
+ET_EXEC inside the window and ET_DYN via bias (the same mechanism
+PT_INTERP will need); PT_INTERP refuses by name until the rung
+below exists. The child gets a real initial stack — argc/argv/
+envp/auxv with AT_PHDR (in-image or a parked copy), AT_RANDOM —
+and the syscall seam grew the surface a real libc demands:
+writev, brk, anonymous-private mmap (file-backed → ENODEV),
+arch_prctl FS base switched per-child via MSR, getpid at the
+real NR 39, ioctl→ENOTTY, prlimit64, getrandom, exit_group.
+Bag bits became *capability indices*: canonNr folds NRs ≥64
+onto reserved caps (62 proc-self, 61 entropy, 231→60). ext2
+reads follow single+double indirect (files to ~66 MiB) so a
+~1 MB musl image actually reaches the loader. Gate evidence
+(`boot_real.k`): a gcc `-static-pie` ET_DYN and a full
+**musl-static `puts`** binary ran to status=42 with zero seam
+refusals — 67 frames reclaimed on exit.
 `build-hosted.sh <prog> [out] [shim]` selects the shim; check-hosted
 asserts both fixtures link for `x86_64-freebsd` (no linux-only
 primitive may leak into the shared seam).

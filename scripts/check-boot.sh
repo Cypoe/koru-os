@@ -152,6 +152,41 @@ else
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "mkdir bin" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
         && { printf 'cd bin\nwrite %s childA.elf\nwrite %s childB.elf\n' "$ELFAWSL" "$ELFBWSL" > "$WORK/debugfs.cmds" \
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -f "$(wsl -e wslpath -u "$(cygpath -w "$WORK/debugfs.cmds")")" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1; }; then
+        # real-ELF rung: gcc static-pie ET_DYN staged beside the hand-made
+        # child — the loader bias+stack path exercised on a real toolchain
+        # image, not a fixture we built byte by byte.
+        cp "$ROOT/koru/native/tests/realhello.c" "$WORK/realhello.c"
+        cp "$ROOT/koru/native/tests/muslhello.c" "$WORK/muslhello.c"
+        REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
+        PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
+        MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
+        # musl hello: zig cc emits a real static musl ET_EXEC linked above
+        # the kernel identity region (0x48000000) — ~1MB, exercised through
+        # the double-indirect ext2 read path.
+        ZIGBIN="${ZIG:-/w/tools/zig-0.15.1/zig.exe}"
+        if MSYS2_ARG_CONV_EXCL='*' wsl -e gcc -static-pie -nostdlib -nostartfiles -s -Wl,--build-id=none -Wl,-z,noseparate-code -o "$PIEWSL" "$REALWSL" > "$WORK/pie.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/musl.elf" "$WORK/muslhello.c" > "$WORK/musl.build" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $MUSLWSL musl.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1; then
+            boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on
+            if grep -qF "real pie child says hi" "$WORK/boot_real.serial" \
+               && grep -qE "exec pie.elf ino=[0-9]+.*status=42" "$WORK/boot_real.serial"; then
+                ok "real-elf: gcc -static-pie ET_DYN loaded with bias, ran, exit_group folded to exit"
+            else
+                bad "real-elf: pie child evidence missing: $(tail -4 "$WORK/boot_real.serial" | tr '\n' '|')"
+            fi
+            if grep -qF "musl child says hi" "$WORK/boot_real.serial" \
+               && grep -qF "exec musl.elf status=42" "$WORK/boot_real.serial" \
+               && ! grep -qF "SEAM REFUSE" "$WORK/boot_real.serial"; then
+                ok "real-elf-musl: static musl libc ran end-to-end (TLS, brk, writev, exit_group)"
+            else
+                bad "real-elf-musl: musl evidence missing: $(grep -E 'musl|REFUSE|EXC' "$WORK/boot_real.serial" | tail -4 | tr '\n' '|')"
+            fi
+        else
+            bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" 2>/dev/null
+        fi
         boot_check "$ROOT/koru/native/tests/boot_ext2.k" "EXT2N COMPLETE" \
             -drive "file=$IMG,format=raw,if=none,id=d0" \
             -device virtio-blk-pci,drive=d0,disable-modern=on
@@ -183,7 +218,7 @@ else
         fi
         # the bag is load-bearing: kernel-side refusal AND the child
         # observing -EACCES as a return value it can branch on.
-        if grep -qF "SEAM REFUSE nr=0000000000000002" "$WORK/boot_ext2.serial" && grep -qF "getpid refused" "$WORK/boot_ext2.serial"; then
+        if grep -qF "SEAM REFUSE nr=0000000000000027" "$WORK/boot_ext2.serial" && grep -qF "getpid refused" "$WORK/boot_ext2.serial"; then
             ok "seam-bag: getpid refused loud + as -EACCES to the child"
         else
             bad "seam-bag: refusal evidence missing: $(tail -6 "$WORK/boot_ext2.serial" | tr '\n' '|')"

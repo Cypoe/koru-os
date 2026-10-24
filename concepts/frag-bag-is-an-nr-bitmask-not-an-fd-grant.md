@@ -18,6 +18,17 @@ Held consequence: bag v2 is the nid-scoped grant-object design — grants name
 optional: the NR axis cannot express "this fd, read-only" — the object axis
 cannot be approximated by syscall filtering without false precision.
 
+**Evolved (real-ELF rung):** the bits are now formally *capability
+indices*, not raw NRs — real binaries need the Linux NR table, and NRs
+≥64 (arch_prctl 158, set_tid_address 218, set_robust_list 273,
+prlimit64 302, getrandom 318, exit_group 231) have no bit. `canonNr`
+folds them onto reserved caps — 62 "proc-self metadata", 61 "entropy",
+231→60 (exit_group IS exit for single-threaded children). The fold
+table is interim plumbing that proves the bitmask's days are numbered:
+the cap groupings it invents are exactly what grant objects replace.
+Also corrected on contact: getpid is NR 39, not our invented NR 2 —
+a real binary's `open(2)` must never resolve to a getpid answer.
+
 Named caveat that follows: a real cap-mode child must be static — dynamic
 rtld opens libs by path → ECAPMODE. Extern-ELF ambitions (fish/foot/
 Quickshell) run fine on the linux arm; under Capsicum they want static

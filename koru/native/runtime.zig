@@ -70,6 +70,18 @@ pub export fn fputs(s: [*:0]const u8, stream: ?*anyopaque) callconv(.c) c_int {
     return @intCast(n);
 }
 
+// write(2) — the fd is a token like stdout's; all fds route to serial.
+pub export fn write(fd: c_int, buf: [*]const u8, n: usize) callconv(.c) isize {
+    _ = fd;
+    serInit();
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (buf[i] == '\n') serPut('\r');
+        serPut(buf[i]);
+    }
+    return @intCast(n);
+}
+
 // LLVM lowers fputs→fwrite for computable lengths — provide it or the
 // symbol dangles. Bytes go to the same serial sink; stream is ignored.
 pub export fn fwrite(ptr: [*]const u8, size: usize, nmemb: usize, stream: ?*anyopaque) callconv(.c) usize {

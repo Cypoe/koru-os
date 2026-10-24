@@ -6,6 +6,8 @@
 //     (neither changes anything this driver writes in a one-group filesystem);
 //   - create: one regular file in the root directory, at most 12 blocks (direct only),
 //     the name must fit in the root directory's first block.
+//   - reads follow indirect blocks (i_block[12] single, i_block[13]
+//     double): up to ~66 MiB; triple-indirect refuses by name.
 // It allocates an inode and data blocks from the on-disk bitmaps and updates the group
 // descriptor and superblock free counts. The host checks the result with e2fsck/debugfs.
 //
@@ -356,7 +358,7 @@ const ReadResult = union(enum) { ok: *Buf, err: ReadErr };
 fn readErr(e: ReadErr) []const u8 {
     return switch (e) {
         .inode_read => "inode read failed",
-        .size_range => "size outside direct-block range",
+        .size_range => "size outside mapped range (>~66 MiB)",
         .not_regular => "not a regular file",
         .oom => "out of memory",
         .data_read => "data read failed",
@@ -366,12 +368,46 @@ fn readErr(e: ReadErr) []const u8 {
 // readFile: inode identity → bytes (direct blocks only). The caller's
 // path is a view; the read is always BY INODE — no path string crosses
 // this boundary.
+// Logical data-block k of an inode → physical block number: direct for
+// k<12, single-indirect (i_block[12]) for the next 256, double-indirect
+// (i_block[13] → 256×256) to ~66 MiB. Triple-indirect refuses by name.
+// Three cached tables: ind = i_block[12], ind2 = i_block[13] root,
+// leaf = the current second-level table (reloaded on 256-boundaries).
+fn blkAt(fs: *Fs, it: []const u8, off: usize, k: usize, ind: *[BS]u8, ind2: *[BS]u8, leaf: *[BS]u8, st: *[4]u32) ?u32 {
+    if (k < 12) return rd32(it, off + 40 + k * 4);
+    const cap1 = 12 + BS / 4;
+    if (k < cap1) {
+        if (st[0] == 0) {
+            const ib = rd32(it, off + 40 + 12 * 4);
+            if (ib == 0 or !readBlock(fs, ib, ind)) return null;
+            st[0] = 1;
+        }
+        const n = rd32(ind, (k - 12) * 4);
+        return if (n == 0) null else n;
+    }
+    const d = k - cap1;
+    if (d >= (BS / 4) * (BS / 4)) return null;
+    if (st[1] == 0) {
+        const ib = rd32(it, off + 40 + 13 * 4);
+        if (ib == 0 or !readBlock(fs, ib, ind2)) return null;
+        st[1] = 1;
+    }
+    const li = d / (BS / 4);
+    if (st[2] != li + 1) { // cached leaf is a different table — reload
+        const lvl2 = rd32(ind2, li * 4);
+        if (lvl2 == 0 or !readBlock(fs, lvl2, leaf)) return null;
+        st[2] = @intCast(li + 1);
+    }
+    const n = rd32(leaf, (d % (BS / 4)) * 4);
+    return if (n == 0) null else n;
+}
+
 fn readFile(fs: *Fs, ino: u32) ReadResult {
     const loc = inodeLoc(fs, ino);
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return .{ .err = .inode_read };
     const fsize = rd32(&it, loc.off + 4);
-    if (fsize == 0 or fsize > 12 * BS) return .{ .err = .size_range };
+    if (fsize == 0 or fsize > (12 + BS / 4 + (BS / 4) * (BS / 4)) * BS) return .{ .err = .size_range };
     const mode = rd16(&it, loc.off + 0);
     if (mode & 0o170000 != 0o100000) return .{ .err = .not_regular };
     const mem = malloc(fsize) orelse return .{ .err = .oom };
@@ -383,10 +419,19 @@ fn readFile(fs: *Fs, ino: u32) ReadResult {
     bp.* = .{ .ptr = @ptrCast(mem), .len = fsize };
     const out: [*]u8 = @ptrCast(mem);
     var data: [BS]u8 = undefined;
+    var ind: [BS]u8 = undefined;
+    var ind2: [BS]u8 = undefined;
+    var leaf: [BS]u8 = undefined;
+    var st = [4]u32{ 0, 0, 0, 0 };
     var off: usize = 0;
     var k: usize = 0;
     while (off < fsize) : (k += 1) {
-        if (!readBlock(fs, rd32(&it, loc.off + 40 + k * 4), &data)) {
+        const phys = blkAt(fs, &it, loc.off, k, &ind, &ind2, &leaf, &st) orelse {
+            free(mem);
+            free(bh);
+            return .{ .err = .data_read };
+        };
+        if (!readBlock(fs, phys, &data)) {
             free(mem);
             free(bh);
             return .{ .err = .data_read };

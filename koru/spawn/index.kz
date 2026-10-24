@@ -51,8 +51,9 @@ extern fn malloc(size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn ukplat_monotonic_clock() u64;
 const C = struct {
-    extern var stdout: ?*anyopaque;
-    extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) c_int;
+    // fd 1 via write(2) — every provider has it; stdio FILEs don't exist
+    // on all arms (freebsd exports __stdoutp, not stdout).
+    extern fn write(fd: c_int, buf: [*]const u8, n: usize) isize;
 };
 
 pub const arm_name = "unikraft/qemu-x86_64";
@@ -61,8 +62,8 @@ pub const rung = "0/1 (one address space; enforced at the seam)";
 
 fn logln(comptime f: []const u8, a: anytype) void {
     var b: [1024]u8 = undefined;
-    const s = std.fmt.bufPrintZ(&b, f ++ "\n", a) catch return;
-    _ = C.fputs(s.ptr, C.stdout);
+    const s = std.fmt.bufPrint(&b, f ++ "\n", a) catch return;
+    _ = C.write(1, s.ptr, s.len);
 }
 
 fn verbsWithin(want: []const u8, have: []const u8) bool {
