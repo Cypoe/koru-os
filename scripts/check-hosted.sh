@@ -285,6 +285,95 @@ if [ "$XOK" -eq 1 ]; then
     fi
 fi
 
+# --- hosted/vroot — vendored rootfs arm ----------------------------------
+# The hosted desktop path needs real GUI programs (terminal, compositor,
+# webview) that this host's Ubuntu-20.04 cannot package. hosted/vroot is
+# an Arch rootfs (hyprland/foot/weston/webkit2gtk) entered through
+# unshare+chroot with a socket relay for WSLg — same kernel, jail views.
+# It is environment state (~/kvroot), not a build artifact: absent is a
+# failure, not a skip — same rule as the X server above. Rebuild with
+# scripts/mk-vroot.sh.
+VROOTSRC_WSL="$(MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e wslpath -u "$(cygpath -w "$ROOT/hosted/vroot")" 2>/dev/null)"
+KVOK=0
+MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+    "test -x ~/kvroot/usr/bin/foot -a -x ~/kvroot/usr/bin/weston -a -x ~/kvroot/usr/bin/Hyprland -a -x ~/kvroot/usr/local/bin/kvview" && KVOK=1
+if [ "$KVOK" -eq 1 ] && [ -n "$VROOTSRC_WSL" ]; then
+    ok "vroot: vendored rootfs present (foot/weston/hyprland/kvview)"
+else
+    bad "vroot: ~/kvroot missing or incomplete — run scripts/mk-vroot.sh"
+fi
+
+if [ "$KVOK" -eq 1 ]; then
+    VRUN="KVROOT_DIR=\$HOME/kvroot bash '$VROOTSRC_WSL/kvroot-run.sh'"
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "$VRUN foot --version" > "$WORK/vroot-foot.out" 2>&1
+    if grep -qF "foot version:" "$WORK/vroot-foot.out"; then
+        ok "vroot: userns jail enters + runs vendored binaries (foot --version)"
+    else
+        bad "vroot: jail entry failed: $(tail -3 "$WORK/vroot-foot.out" | tr '\n' '|')"
+    fi
+
+    # Real wayland terminal: foot negotiates WSLg's compositor through
+    # the SCM_RIGHTS relay — the "no compositor" error is the failure
+    # signal; the optional-protocol warnings are the handshake evidence.
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "$VRUN timeout 10 foot /bin/sleep 6" > "$WORK/vroot-term.out" 2>&1
+    if grep -qF "compositor does not implement" "$WORK/vroot-term.out" \
+       && ! grep -qF "failed to connect to wayland" "$WORK/vroot-term.out"; then
+        ok "vroot-term: real wayland terminal (foot) negotiated WSLg through the relay"
+    else
+        bad "vroot-term: wayland handshake failed: $(tail -3 "$WORK/vroot-term.out" | tr '\n' '|')"
+    fi
+
+    # Nested compositor: weston serves wayland-1 on WSLg's wayland
+    # backend (wl_shm — no dmabuf needed), and foot is its client.
+    # Two levels of real compositing on the hosted arm.
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "$VRUN nest-weston" > "$WORK/vroot-nest.out" 2>&1
+    if grep -qF "VROOT-NESTED-SOCKET" "$WORK/vroot-nest.out" \
+       && [ "$(tail -1 "$WORK/vroot-nest.out")" = "0" ]; then
+        ok "vroot-compositor: nested weston served foot on wayland-1 (2-level compositing)"
+    else
+        bad "vroot-compositor: nested compositor failed: $(tail -3 "$WORK/vroot-nest.out" | tr '\n' '|')"
+    fi
+
+    # Vendored webview: webkit2gtk through the relay, page loaded and
+    # DOM evaluated — the "unlocks most programs" rung.
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "$VRUN timeout 15 env WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 kvview file:///tmp/kvtest.html" \
+        > "$WORK/vroot-web.out" 2>&1
+    if grep -qF 'KVVIEW loaded title="KVTEST-OK"' "$WORK/vroot-web.out"; then
+        ok "vroot-webview: vendored webkit rendered a page (DOM title read back)"
+    else
+        bad "vroot-webview: webview evidence missing: $(tail -3 "$WORK/vroot-web.out" | tr '\n' '|')"
+    fi
+
+    # hostexec reaches the jail: the same seam that ran busybox now runs
+    # vendored programs — jail entry is a program, not a seam change.
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "cd '$WORKWSL' && printf 'hostexec(path: \"$VROOTSRC_WSL/kvroot-run.sh\", args: \"foot --version\", rights: 3)\nquit()\n' | KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store' ./repl.bin" \
+        > "$WORK/vroot-seam.log" 2>&1
+    if grep -qF "foot version:" "$WORK/vroot-seam.log" \
+       && grep -qF "kvroot-run.sh status=0" "$WORK/vroot-seam.log"; then
+        ok "vroot-seam: hostexec spawns vendored binaries through the jail"
+    else
+        bad "vroot-seam: hostexec+ jail failed: $(grep -E 'hostexec|foot' "$WORK/vroot-seam.log" | tail -3 | tr '\n' '|')"
+    fi
+
+    # Measured refusal oracle: hyprland refuses on this compositor —
+    # aquamarine's wayland backend demands zwp_linux_dmabuf_v1, which
+    # WSLg (software, no /dev/dri) does not advertise. This row pins the
+    # refusal reason; if it ever flips the ENVIRONMENT changed, not the code.
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "$VRUN timeout 10 env HOME=/root Hyprland --i-am-really-stupid" \
+        > "$WORK/vroot-hypr.out" 2>&1
+    if grep -qE "Missing protocols|no allocator available" "$WORK/vroot-hypr.out"; then
+        ok "vroot-hyprland: honest refusal — needs dmabuf/DRM seat WSLg lacks"
+    else
+        bad "vroot-hyprland: unexpected outcome (env changed?): $(tail -3 "$WORK/vroot-hypr.out" | tr '\n' '|')"
+    fi
+fi
+
 # --- hosted/freebsd (Capsicum arm) — build-check -------------------------
 # We can't run a FreeBSD binary on this host; the check that matters here
 # is the semantic one: the shared provider machinery + the same fixtures

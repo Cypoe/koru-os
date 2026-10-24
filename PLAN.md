@@ -300,6 +300,34 @@ key. The driver calls the lifts' emitted `*_event.handler`s
 directly — typed `*Surf` inside one process; the bridge pool stays
 the wire-facing custody path.
 
+**`hosted/vroot` — the vendored-userspace desktop path (gated)** —
+Ubuntu-20.04 WSL cannot package a real terminal, compositor, or
+webview, so `hosted/vroot/` carries an **Arch rootfs** built by
+`scripts/mk-vroot.sh` (`docker build` → `docker export` → `~/kvroot`)
+and entered via `unshare -Urmpf` + chroot — no root, same kernel,
+no daemon bridging. The jail membrane is measured
+(`concepts/frag-vroot-jail-membrane.md`): foreign-tmpfs binds are
+refused so WSLg sockets ride `vroot-relay.py` with **SCM_RIGHTS**
+fd-passing intact (wayland keymap/shm-pool die in a byte-pump);
+`mknod` is EPERM so `/dev` is fresh tmpfs + devpts + symlink/fifo
+fakes (an EOF-returning `/dev/urandom` sends WebKit's entropy init
+into a 100%-CPU read loop). `hostexec` reaches the jail unchanged —
+the spawn seam's *empty envp* is a feature: ambient env is a leak
+channel, entry scripts resolve their own PATH/HOME. Gated rows:
+real `foot` terminal negotiated WSLg through the relay; **nested
+weston** served `foot` on `wayland-1` — two levels of real
+compositing on the hosted arm; **`kvview` (vendored webkit2gtk)
+rendered a page and read back the DOM title** — the webview rung
+the user asked for; and a measured-refusal oracle: **hyprland
+(aquamarine) requires `zwp_linux_dmabuf_v1`** — WSLg is software,
+no dmabuf, no `/dev/dri` — the row pins *why* so a dmabuf-capable
+environment flips it on contact. Hyprland-as-protocol stands:
+koru-side wayland provider is the arm-agnostic answer, and
+koru-libs `origin/main` now carries the shell-authoring stack
+(`clay` solver binding + `nativelayout` pure-koru candidate +
+`ui` panel words + `oshun` markup→spec-rows) — *our* backend path
+is `koruos/surface`, not `metal`.
+
 ### KolibriOS donor map (first-pass read, `45b134ba`)
 
 | ask | where it lives in `upstream/kolibrios` |
