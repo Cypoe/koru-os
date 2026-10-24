@@ -149,7 +149,7 @@ if [ -f "$WORK/manifest-koru-native.txt" ] \
    && grep -q "bind: koruos.spawn -> native-runtime" "$WORK/manifest-koru-native.txt" \
    && grep -q "rung:0/1" "$WORK/manifest-koru-native.txt" \
    && [ "$(grep -c 'admission","koruos.spawn:[a-z-]*","koru-native<-native-runtime","bound"' "$WORK/tspawn_nat.marks" 2>/dev/null)" -eq 12 ]; then
-    ok "koru-native binds all 12 spawn tors at declared rung 0/1"
+    ok "koru-native binds the 12 spawn tors the program names (hostexec is hosted-only)"
 else bad "tspawn_nat native (rc=$RC, bound=$(grep -c 'koruos.spawn:.*bound' "$WORK/tspawn_nat.marks" 2>/dev/null))"; fi
 rm -f "$WORK"/manifest-*.txt "$WORK"/realize.txt "$WORK"/*.marks
 

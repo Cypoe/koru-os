@@ -41,7 +41,7 @@
         { "arm": "koru-native", "mechanism": "native-runtime",
           "deltas": ["src:koru/native/runtime.zig", "src:koru/native/user.zig", "rung:0/1 entry-function children run to completion inside start — one address space, bag enforced at the seam; exec (rung 2: ELF image in own CR3 at CPL=3, int 0x80 seam) is native-runtime only — unserved on kconfig arms", "MMU/IOMMU isolation caps are eventual (a different provider family), not claimed for rung-0/1 tors"] },
         { "arm": "hosted", "mechanism": "host-libc",
-          "deltas": ["src:koru/hosted/linux.zig", "exec/run2: fork+execve+waitpid — real host processes; rights bag advisory only (seccomp pending), printed not enforced"] }
+          "deltas": ["src:koru/hosted/linux.zig", "exec/run2: fork+execve+waitpid — real host processes; rights bag advisory only (seccomp pending), printed not enforced", "hostexec: execve on a host-fs path — real host ELF incl. PT_INTERP via host ld.so; hosted-only, unserved on koru-native (no host namespace)", "src:koru/hosted/freebsd.zig — hostexec under cap mode: the image fd is narrowed+cap_enter'd; dynamic host paths fail inside ld.so (no path namespace), static images only"] }
     ]
 }
 
@@ -535,5 +535,26 @@ extern fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, righ
     const st = koru_spawn_run(&imgs, &szs, &rts, 2);
     if (st < 0) return .{ .refused = "provider could not spawn the roster" };
     logln("spawn: run2 last-exit={d} (rung 2: tick-preempted roster)", .{st});
+    return .{ .ok = st };
+}
+
+// hostexec: run a program the HOST fs names — a hosted-arm capability.
+// No image bytes cross the seam: the path resolves in the provider's
+// namespace and the host kernel loads it (real ELF, real PT_INTERP —
+// dynamic linking is the host ld.so's job). There is no host on
+// koru-native: the extern is absent there and a program that names the
+// verb refuses at link, same doctrine as exec on kconfig arms.
+// args is one space-split string — argv-as-data on the wire is the
+// eventual shape; quoting is not implemented.
+extern fn koru_spawn_host(path: [*]const u8, path_len: usize, args: [*]const u8, args_len: usize, rights: u64) c_int;
+
+~pub tor hostexec { path: string, args: string, rights: u64 }
+| ok i32
+| refused string
+
+~proc hostexec|zig {
+    const st = koru_spawn_host(@ptrCast(path.ptr), path.len, @ptrCast(args.ptr), args.len, rights);
+    if (st < 0) return .{ .refused = "provider could not spawn the host path" };
+    logln("spawn: hostexec {s} status={d} (hosted: host path, host loader)", .{ path, st });
     return .{ .ok = st };
 }

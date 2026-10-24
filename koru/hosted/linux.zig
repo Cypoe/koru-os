@@ -33,6 +33,56 @@ fn spawnOne(image: [*]const u8, size: usize) !std.posix.pid_t {
     return pid;
 }
 
+// spawnHost: run a program the HOST fs names — the image never crosses
+// the seam as bytes; execve resolves the path in the provider's own
+// namespace. Real host ELF including PT_INTERP: dynamic linking is the
+// host ld.so's job, which makes this the hosted arm's real-binary path.
+// args is one string, split on spaces — no quoting (the wire carries
+// argv as data eventually; space-split is the honest v0).
+fn spawnHost(path: []const u8, args: []const u8) !std.posix.pid_t {
+    var pbuf: [std.fs.max_path_bytes]u8 = undefined;
+    if (path.len >= pbuf.len) return error.NameTooLong;
+    @memcpy(pbuf[0..path.len], path);
+    pbuf[path.len] = 0;
+    const pathz: [*:0]const u8 = @ptrCast(&pbuf);
+    var abuf: [1024]u8 = undefined;
+    if (args.len >= abuf.len) return error.NameTooLong;
+    @memcpy(abuf[0..args.len], args);
+    abuf[args.len] = 0;
+    for (abuf[0..args.len]) |*c| {
+        if (c.* == ' ') c.* = 0; // NUL-terminate each arg in place
+    }
+    const pid = try std.posix.fork();
+    if (pid == 0) {
+        var argv: [17:null]?[*:0]const u8 = undefined;
+        argv[0] = pathz;
+        var argc: usize = 1;
+        var i: usize = 0;
+        while (i < args.len and argc < argv.len - 1) {
+            if (abuf[i] != 0) {
+                argv[argc] = @ptrCast(&abuf[i]);
+                argc += 1;
+                while (i < args.len and abuf[i] != 0) i += 1;
+            } else i += 1;
+        }
+        argv[argc] = null;
+        var envp_buf = [_:null]?[*:0]const u8{};
+        const err = std.posix.execveZ(pathz, &argv, &envp_buf);
+        _ = err catch {};
+        std.posix.exit(127);
+    }
+    return pid;
+}
+
+pub export fn koru_spawn_host(path: [*]const u8, path_len: usize, args: [*]const u8, args_len: usize, rights: u64) callconv(.c) c_int {
+    spawnNote(rights);
+    const pid = spawnHost(path[0..path_len], args[0..args_len]) catch |e| {
+        common.say("spawn: hostexec failed: {s}", .{@errorName(e)});
+        return -1;
+    };
+    return common.waitStatus(pid);
+}
+
 var spawn_said = false;
 fn spawnNote(rights: u64) void {
     if (spawn_said) return;

@@ -30,6 +30,7 @@
 ~import koruos/ext2
 ~import koruos/surface
 ~import koruos/input
+~import koruos/spawn
 
 const std = @import("std");
 
@@ -134,6 +135,7 @@ fn fsOf(tok: []const u8) ?*koru_koruos.koru_ext2.Fs {
     koruos.surface:present -> present(1)
     koruos.surface:close -> sclose(1)
     koruos.input:poll -> kpoll(1)
+    koruos.spawn:hostexec -> hostexec(1)
     quit
 }
 

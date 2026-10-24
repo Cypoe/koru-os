@@ -25,6 +25,7 @@
 ~import std/bridge
 ~import std/io
 ~import koruos/ext2
+~import koruos/spawn
 
 const std = @import("std");
 
@@ -124,6 +125,7 @@ fn fsOf(tok: []const u8) ?*koru_koruos.koru_ext2.Fs {
     exec
     execnid
     unmount
+    koruos.spawn:hostexec -> hostexec(1)
     quit
 }
 

@@ -183,6 +183,24 @@ nid-scoped grant-object bag is the Capsicum axis; NR bits without a
 descriptor analogue are reported unmapped, not silently granted.
 Caveat for the real run: cap-mode children must be static — a
 dynamic ELF's rtld opens libs by path and ECAPMODEs.
+
+**`spawn:hostexec` — real ELF by host path (hosted-only, gated)** —
+where `exec` crosses the seam with image *bytes* (identity: the
+content, nid-bindable from ext2), `hostexec` names a path in the
+*provider's own* namespace: no bytes cross, the host kernel loads
+it — real ELF64 including PT_INTERP, dynamic linking via the host
+ld.so. Gated live: `/usr/bin/busybox` echoes through the wire and
+`/usr/bin/false`'s exit status propagates back (28/28 hosted).
+argv v0 is one space-split string — argv-as-data on the wire is
+the eventual shape. Arm honesty: on `koru-native` there is no
+host namespace — the extern is absent and a program naming the
+verb refuses at link; on `hosted/freebsd` cap mode narrows the
+opened path fd and `fexecve`s it, so dynamic host paths still
+fail inside ld.so by design. This is the first rung of real-ELF
+hosting; the native ladder under it (initial stack/argv-auxv,
+the ~10-syscall surface — TLS via arch_prctl, brk/mmap,
+exit_group — then PT_INTERP through a child's own fs seam) is
+the open axis below.
 `build-hosted.sh <prog> [out] [shim]` selects the shim; check-hosted
 asserts both fixtures link for `x86_64-freebsd` (no linux-only
 primitive may leak into the shared seam).

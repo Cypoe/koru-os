@@ -122,7 +122,7 @@ bash "$ROOT/scripts/build-hosted.sh" "$WORK/repl.kz" "$WORK/repl.bin" > "$WORK/r
     bad "repl: build failed"; tail -8 "$WORK/repl.build"; echo "---"; echo "check-hosted: $pass passed, $failn failed"; exit 1; }
 
 MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
-    "cd '$WORKWSL' && printf 'lookup(fs: fs, path: \"child.elf\")\npin(fs: fs, path: \"child.elf\")\nexec(fs: fs, path: \"child.elf\")\nbogus()\nexecnid(fs: fs, nid: \"0\")\nunmount(fs: fs)\npin(fs: fs, path: \"child.elf\")\nquit()\n' | KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store' ./repl.bin" \
+    "cd '$WORKWSL' && printf 'lookup(fs: fs, path: \"child.elf\")\npin(fs: fs, path: \"child.elf\")\nexec(fs: fs, path: \"child.elf\")\nhostexec(path: \"/usr/bin/busybox\", args: \"echo koru-real-elf\", rights: 3)\nhostexec(path: \"/usr/bin/false\", args: \"\", rights: 3)\nbogus()\nexecnid(fs: fs, nid: \"0\")\nunmount(fs: fs)\npin(fs: fs, path: \"child.elf\")\nquit()\n' | KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store' ./repl.bin" \
     > "$WORK/repl.serial" 2>&1
 RC=$?
 if [ $RC -ne 0 ]; then
@@ -152,6 +152,16 @@ else
         ok "repl-exec: interpreted exec ran a real host child (status=43)"
     else
         bad "repl-exec: child did not run: $(grep -E 'exec|child' "$WORK/repl.serial" | tail -3 | tr '\n' '|')"
+    fi
+    if grep -qF "koru-real-elf" "$WORK/repl.serial" && grep -qF "hostexec /usr/bin/busybox status=0" "$WORK/repl.serial"; then
+        ok "repl-hostexec: real host ELF ran by path (busybox echo, status=0)"
+    else
+        bad "repl-hostexec: host child did not run: $(grep -E 'hostexec|koru-real' "$WORK/repl.serial" | tail -3 | tr '\n' '|')"
+    fi
+    if grep -qF "hostexec /usr/bin/false status=1" "$WORK/repl.serial"; then
+        ok "repl-hostexec: child exit status propagates through the seam (false=1)"
+    else
+        bad "repl-hostexec: exit status lost: $(grep -E 'hostexec' "$WORK/repl.serial" | tail -3 | tr '\n' '|')"
     fi
     if grep -qF "event-denied: bogus" "$WORK/repl.serial"; then
         ok "repl-refusal: unregistered tor refuses at dispatch (event-denied)"
