@@ -154,6 +154,25 @@ mint/refusal semantics to native. `hosted_ext2` proves the same
 chain `boot_ext2` gates: mount → exec(path) → pin → exec-nid →
 child ran twice as a real host process, nid survived process death.
 
+**`hosted/freebsd` (Capsicum arm, build-checked 14/14)** —
+`koru/hosted/freebsd.zig` + shared `common.zig` (file-backed blkdev,
+clock, nid store; spawn is the per-OS seam). The spawn path is where
+the bag stops being advisory: parent opens the staged image once,
+narrows the fd to `CAP_READ|CAP_FEXECVE|CAP_FSTAT` via
+`cap_rights_limit`, then `pdfork → cap_enter → fexecve(fd)` — the
+child runs in capability mode with no path namespace; the image fd
+is its grant. The semantic check already bit twice: `stdout` is
+`__stdoutp` on FreeBSD libc (say now writes fd 1), and the koru
+`rights` u64 is an **NR bitmask** (which *calls* you may make) while
+`cap_rights_t` is **per-descriptor** (which *objects*, how) — the
+nid-scoped grant-object bag is the Capsicum axis; NR bits without a
+descriptor analogue are reported unmapped, not silently granted.
+Caveat for the real run: cap-mode children must be static — a
+dynamic ELF's rtld opens libs by path and ECAPMODEs.
+`build-hosted.sh <prog> [out] [shim]` selects the shim; check-hosted
+asserts both fixtures link for `x86_64-freebsd` (no linux-only
+primitive may leak into the shared seam).
+
 ### KolibriOS donor map (first-pass read, `45b134ba`)
 
 | ask | where it lives in `upstream/kolibrios` |

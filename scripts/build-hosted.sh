@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# build-hosted.sh <prog.k> [out] — emit the program via koruc, then link a
-# STATIC linux binary for the hosted/linux arm: output_emitted.zig +
-# koru/hosted/linux.zig (the provider shim) + the compiler_env stub.
-# Target is x86_64-linux-musl so the artifact runs on any linux
-# (WSL, VM, real box) with no runtime deps — same "no host assumptions"
-# stance as the freestanding image.
+# build-hosted.sh <prog.k> [out] [shim] — emit the program via koruc, then
+# link a hosted-arm binary: output_emitted.zig + koru/hosted/<shim>.zig
+# (the provider shim) + the compiler_env stub.
+#
+#   shim=linux    → x86_64-linux-musl -static (runs on any linux: WSL,
+#                   VM, real box — no runtime deps)
+#   shim=freebsd  → x86_64-freebsd -lc (dynamic; the Capsicum spawn arm —
+#                   build-check on this host, runs on a real FreeBSD)
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,6 +18,16 @@ export PATH="/w/tools/zig-0.15.1:$PATH"
 
 PROG="$(cygpath -m "$1" 2>/dev/null || echo "$1")"
 OUT="${2:-hosted.out}"
+SHIM="${3:-linux}"
+SHIM_SRC="$ROOT/koru/hosted/$SHIM.zig"
+[ -f "$SHIM_SRC" ] || { echo "build-hosted: no shim $SHIM_SRC"; exit 1; }
+
+case "$SHIM" in
+    linux)   TARGS=(-target x86_64-linux-musl -mcpu=x86_64 -static) ;;
+    freebsd) TARGS=(-target x86_64-freebsd -mcpu=x86_64) ;;
+    *)       TARGS=(-target "$SHIM") ;;
+esac
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -32,10 +44,10 @@ cp "$PROG" "$WORK/program.$EXT"
 # the provider shim as a linkable object — the emitted program's externs
 # resolve against it by symbol name.
 "$ZIG" build-obj \
-    -target x86_64-linux-musl -mcpu=x86_64 \
+    "${TARGS[@]}" \
     -O ReleaseSafe -lc \
-    -femit-bin="$WORK/hosted_linux.o" \
-    "$ROOT/koru/hosted/linux.zig" || { echo "build-hosted: shim compile failed"; exit 1; }
+    -femit-bin="$WORK/hosted_shim.o" \
+    "$SHIM_SRC" || { echo "build-hosted: shim compile failed ($SHIM)"; exit 1; }
 
 # Interpreter programs (std/interpreter) emit references to the koru
 # compiler's own zig modules (ast, koru_parser, flow_parser, liquid and
@@ -82,14 +94,14 @@ INTERP_DEPS=(
 )
 
 "$ZIG" build-exe \
-    -target x86_64-linux-musl -mcpu=x86_64 \
-    -O ReleaseSafe -lc -static \
+    "${TARGS[@]}" \
+    -O ReleaseSafe -lc \
     --dep compiler_env --dep ast --dep koru_parser --dep koru_errors=errors --dep flow_parser --dep liquid \
     -Mroot="$WORK/output_emitted.zig" \
     -Mcompiler_env="$ROOT/koru/native/compiler_env.zig" \
     "${INTERP_DEPS[@]}" \
-    "$WORK/hosted_linux.o" \
+    "$WORK/hosted_shim.o" \
     -femit-bin="$OUT" || {
     echo "build-hosted: zig link failed"; exit 1;
 }
-echo "build-hosted: $OUT written — run under linux: KORU_BLK0=<img> ./$OUT"
+echo "build-hosted: $OUT written — shim=$SHIM"

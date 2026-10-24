@@ -158,6 +158,21 @@ else
     fi
 fi
 
+# --- hosted/freebsd (Capsicum arm) — build-check -------------------------
+# We can't run a FreeBSD binary on this host; the check that matters here
+# is the semantic one: the shared provider machinery + the same fixtures
+# must compile and link for x86_64-freebsd — i.e. nothing in the seam
+# silently assumes linux (musl, stdout-as-global, linux-only posix).
+bash "$ROOT/scripts/build-hosted.sh" "$WORK/hosted_ext2.k" "$WORK/ext2_fbsd.bin" freebsd > "$WORK/fbsd_ext2.build" 2>&1 \
+    && [ -s "$WORK/ext2_fbsd.bin" ] \
+    && ok "freebsd-arm: hosted_ext2 links for x86_64-freebsd (Capsicum shim)" \
+    || { bad "freebsd-arm: ext2 build failed"; tail -6 "$WORK/fbsd_ext2.build"; }
+
+bash "$ROOT/scripts/build-hosted.sh" "$WORK/repl.kz" "$WORK/repl_fbsd.bin" freebsd > "$WORK/fbsd_repl.build" 2>&1 \
+    && [ -s "$WORK/repl_fbsd.bin" ] \
+    && ok "freebsd-arm: repl links for x86_64-freebsd (interpreter closure included)" \
+    || { bad "freebsd-arm: repl build failed"; tail -6 "$WORK/fbsd_repl.build"; }
+
 echo "---"
 echo "check-hosted: $pass passed, $failn failed"
 [ "$failn" -eq 0 ]
