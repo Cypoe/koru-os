@@ -175,6 +175,76 @@ else
     fi
 fi
 
+# --- koruos/surface on hosted — X11/WSLg as the compositor oracle --------
+# The surface lift is a bridge resource like the fs: surf() mints
+# *Surf<open!> into the pool, fill/present borrow through the token,
+# sclose consumes, and bridge close discharges a still-held surface
+# through the real provider. Realization is a live X server (WSLg :0) —
+# a compositor, not a file dump. The gate needs that server: absent is a
+# failure, not a skip — same rule as the rest of this file.
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/repl-x11.kz" > "$WORK/repl-x11.kz"
+bash "$ROOT/scripts/build-hosted.sh" "$WORK/repl-x11.kz" "$WORK/repl-x11.bin" linux-x11 > "$WORK/repl-x11.build" 2>&1 \
+    && [ -s "$WORK/repl-x11.bin" ] \
+    && ok "surface-x11: linux-x11 arm builds (dynamic glibc + staged libX11.so.6)" \
+    || { bad "surface-x11: build failed"; tail -8 "$WORK/repl-x11.build"; }
+
+XSIDE="$WORK/x11side"
+mkdir -p "$XSIDE"
+XSIDEWSL="$WORKWSL/x11side"
+XOK=0
+MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+    "DISPLAY=:0 xwininfo -root >/dev/null 2>&1" && XOK=1
+if [ "$XOK" -eq 1 ]; then
+    ok "surface-x11: live X server on DISPLAY=:0 (WSLg)"
+else
+    bad "surface-x11: no X server on DISPLAY=:0 — the hosted surface oracle needs a compositor"
+fi
+
+if [ "$XOK" -eq 1 ]; then
+    # Session A: open → bind → fill → present → hold the window while
+    # xwininfo asks the server, then sclose → stale refusal.
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "cd '$WORKWSL' && export DISPLAY=:0 KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store'
+         { printf 'surf(width: 640, height: 480) | ok o |> bind(name: \"s\", value: o.surface)\nfill(surface: s, x: 0, y: 0, w: 640, h: 480, color: 16711680)\npresent(surface: s)\n'; sleep 4; printf 'sclose(surface: s)\npresent(surface: s)\nquit()\n'; } | ./repl-x11.bin > '$XSIDEWSL/sessA.log' 2>&1 &
+         sleep 3
+         xwininfo -name koru-os > '$XSIDEWSL/wininfo.txt' 2>&1 || true
+         wait" > /dev/null 2>&1
+
+    if grep -qF 'Map State: IsViewable' "$XSIDE/wininfo.txt" && grep -qF 'Width: 640' "$XSIDE/wininfo.txt"; then
+        ok "surface-x11: compositor reports mapped 640x480 'koru-os' window"
+    else
+        bad "surface-x11: no mapped window on the server: $(tail -3 "$XSIDE/wininfo.txt" | tr '\n' '|')"
+    fi
+    if grep -qF '"value":"s"' "$XSIDE/sessA.log"; then
+        ok "surface-x11: surf() minted *Surf<open!> into the bridge pool (bound 's')"
+    else
+        bad "surface-x11: open/bind failed: $(grep -m1 'koru>' "$XSIDE/sessA.log")"
+    fi
+    A_OKS=$(grep -cF 'unhandled-branch: ok' "$XSIDE/sessA.log")
+    A_ERRS=$(grep -E 'dispatch-error|validation-error|refused' "$XSIDE/sessA.log" | grep -cvF 'names nothing')
+    if [ "$A_OKS" -ge 3 ] && [ "$A_ERRS" -eq 0 ]; then
+        ok "surface-x11: fill/present/sclose dispatched through the pool token"
+    else
+        bad "surface-x11: borrow path broke: $(grep -E 'error|refused' "$XSIDE/sessA.log" | head -3 | tr '\n' '|')"
+    fi
+    if grep -qF "names nothing the session holds" "$XSIDE/sessA.log"; then
+        ok "surface-x11: spent surface token refuses by name after sclose"
+    else
+        bad "surface-x11: stale surface token did not refuse"
+    fi
+
+    # Session B: open and quit — bridge close must discharge the still-held
+    # surface through the real provider verb, like the fs unmount.
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "cd '$WORKWSL' && printf 'surf(width: 320, height: 240)\nquit()\n' | DISPLAY=:0 KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store' ./repl-x11.bin" \
+        > "$XSIDE/sessB.log" 2>&1
+    if grep -qE "\[BRIDGE\] Invoked 'sclose' for handle 'h:Surf:[0-9a-f]+'" "$XSIDE/sessB.log"; then
+        ok "surface-x11: bridge close discharges held surface via provider"
+    else
+        bad "surface-x11: unclosed surface not discharged: $(tail -4 "$XSIDE/sessB.log" | tr '\n' '|')"
+    fi
+fi
+
 # --- hosted/freebsd (Capsicum arm) — build-check -------------------------
 # We can't run a FreeBSD binary on this host; the check that matters here
 # is the semantic one: the shared provider machinery + the same fixtures

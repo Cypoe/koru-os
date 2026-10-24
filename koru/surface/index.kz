@@ -1,0 +1,71 @@
+// koruos/surface — the display-surface lift.
+//
+// The object a compositor hands out: open mints `*Surf<open!>`, fill/px/
+// present borrow `*Surf<open>`, close consumes `*Surf<!open>`. Pixels live
+// in provider-owned memory until present — the honest model: a surface is
+// a buffer object + a commit point, which is what wayland-shm, XPutImage,
+// and eventually nativeCompositor all agree on.
+//
+// Realized today on the `hosted` arm by koru/hosted/x11.zig (WSLg through
+// libX11). koru-native refuses by name until a compositor or a
+// surface-over-fb provider family exists — that refusal is the work order.
+
+~import std/realize
+~import koruos/realize
+
+~std/realize:row(iface: koruos/surface) {
+    "resources": "surface: provider-owned pixel buffer + window object + commit",
+    "evidence": "V: koru/hosted/x11.zig externs koruos_surface_* over libX11; no GPU, no event loop",
+    "binds": [
+        { "arm": "hosted", "mechanism": "host-libc", "deltas": ["src:koru/hosted/x11.zig", "libX11.so.6; ZPixmap XImage per surface, XPutImage+flush on present"] }
+    ]
+}
+
+const Surf = opaque {};
+
+extern fn koruos_surface_open(w: u32, h: u32, title: [*:0]const u8) ?*anyopaque;
+extern fn koruos_surface_fill(s: *anyopaque, x: u32, y: u32, w: u32, h: u32, color: u32) u8;
+extern fn koruos_surface_px(s: *anyopaque, x: u32, y: u32, color: u32) u8;
+extern fn koruos_surface_present(s: *anyopaque) u8;
+extern fn koruos_surface_close(s: *anyopaque) u8;
+
+// A zero-arg title keeps the lift honest about what a host compositor can
+// actually label; callers that care pass a static name.
+const CACHED_TITLE: [:0]const u8 = "koru-os";
+
+~pub tor open { width: u32, height: u32 }
+| ok { surface: *Surf<open!>, width: u32, height: u32 }
+| refused string
+
+~proc open|zig {
+    const p = koruos_surface_open(width, height, CACHED_TITLE.ptr) orelse
+        return .{ .refused = "no display (XOpenDisplay failed) or allocation refused" };
+    return .{ .ok = .{ .surface = @ptrCast(@alignCast(p)), .width = width, .height = height } };
+}
+
+~pub tor fill { surface: *Surf<open>, x: u32, y: u32, w: u32, h: u32, color: u32 }
+| ok
+| refused string
+
+~proc fill|zig {
+    if (koruos_surface_fill(@ptrCast(surface), x, y, w, h, color) == 0) return .{ .refused = "fill failed" };
+    return .{ .ok = .{} };
+}
+
+~pub tor present { surface: *Surf<open> }
+| ok
+| refused string
+
+~proc present|zig {
+    if (koruos_surface_present(@ptrCast(surface)) == 0) return .{ .refused = "present failed" };
+    return .{ .ok = .{} };
+}
+
+~pub tor close { surface: *Surf<!open> }
+| ok
+| refused string
+
+~proc close|zig {
+    if (koruos_surface_close(@ptrCast(surface)) == 0) return .{ .refused = "close failed" };
+    return .{ .ok = .{} };
+}

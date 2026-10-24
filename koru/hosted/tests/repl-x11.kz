@@ -1,0 +1,212 @@
+// hosted koru system REPL — the linux-x11 arm: repl.kz plus the
+// koruos/surface scope verbs. Kept as a second entry because the static
+// `linux` shim must not even see the X11 externs — a program without a
+// surface provider can't register the verbs. Builds with shim=linux-x11.
+//
+// Boot mounts blkdev 0 and hands the mounted-fs capability to `repl`
+// (`*Fs<!mounted>` — the obligation transfers to the REPL process). The
+// driver creates a std/bridge session bound to the "os" scope, registers
+// the handed-off fs into the bridge's HandlePool as a resource token, and
+// binds the token under `fs` in the session env. Each input line is a
+// turn through std/bridge:run — resources held in the pool persist across
+// lines, and `close` owns discharge at hang-up.
+//
+// There is no module-global fs: scope verbs take `string<mounted>`-shaped
+// args — the opaque pool token — and resolve the typed `*Fs` through the
+// dispatch-pool channel. `unmount`'s arg is `string<!mounted>` (consume),
+// so discharging is the same verb a user would type; a spent token stops
+// resolving, and a stale name refuses by name. Only registered tors are
+// callable from interpreted source — the scope is the process's
+// language-level rights bag.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import std/interpreter
+~import std/runtime
+~import std/bridge
+~import std/io
+~import koruos/ext2
+~import koruos/surface
+
+const std = @import("std");
+
+const Interp = koru_std.koru_interpreter;
+const Bridge = koru_std.koru_bridge.Bridge;
+
+var br: ?*Bridge = null;
+var quit: bool = false;
+var obuf: [512]u8 = undefined;
+
+fn say(comptime f: []const u8, a: anytype) void {
+    var b: [4096]u8 = undefined;
+    const s = std.fmt.bufPrint(&b, f, a) catch b[0..0];
+    std.fs.File.stdout().writeAll(s) catch {};
+}
+
+// Resolve a pool token to the mounted fs. The token is the resource's only
+// wire name; the pointer stays outside Value. null means stale, forged, or
+// discharged — the caller refuses loudly, never a fabricated pointer.
+fn fsOf(tok: []const u8) ?*koru_koruos.koru_ext2.Fs {
+    return Interp.resolveDispatchResource(*koru_koruos.koru_ext2.Fs, tok);
+}
+
+// ---- os scope --------------------------------------------------------
+// `mount` creates a held fs (issue phantom on the result field); `pin`,
+// `exec`, `execnid`, `lookup` borrow it; `unmount` consumes it. Custody is
+// the bridge pool's business — these procs see tokens in, typed ptrs out.
+
+~pub tor mount {}
+| ok { fs: string<mounted!>, blocks: u32, inodes: u32 }
+| refused string
+
+~proc mount|zig {
+    return switch (koru_koruos.koru_ext2.mount_event.handler(.{ .id = 0 })) {
+        .ok => |m| .{ .ok = .{ .fs = Interp.registerDispatchResource("Fs", @ptrCast(m.fs)), .blocks = m.blocks, .inodes = m.inodes } },
+        .refused => |e| .{ .refused = e },
+    };
+}
+
+~pub tor lookup { fs: string<mounted>, path: string } -> string
+~proc lookup|zig {
+    const f = fsOf(fs) orelse return "no live fs resource under that name";
+    return switch (koru_koruos.koru_ext2.lookup_event.handler(.{ .fs = f, .path = path })) {
+        .ok => |r| std.fmt.bufPrint(&$mod.obuf, "ino={d}", .{r.ino}) catch "ok",
+        .refused => |e| e.reason,
+    };
+}
+
+~pub tor pin { fs: string<mounted>, path: string } -> string
+~proc pin|zig {
+    const f = fsOf(fs) orelse return "no live fs resource under that name";
+    return switch (koru_koruos.koru_ext2.pin_event.handler(.{ .fs = f, .path = path })) {
+        .ok => |r| std.fmt.bufPrint(&$mod.obuf, "ino={d} nid={x}", .{ r.ino, r.nid }) catch "ok",
+        .refused => |e| e.reason,
+    };
+}
+
+~pub tor exec { fs: string<mounted>, path: string } -> string
+~proc exec|zig {
+    const f = fsOf(fs) orelse return "no live fs resource under that name";
+    const r = koru_koruos.koru_ext2.exec_event.handler(.{ .fs = f, .path = path, .rights = 1152921504606846978 });
+    return switch (r) {
+        .ok => |e| std.fmt.bufPrint(&$mod.obuf, "status={d} ino={d} nid={x}", .{ e.status, e.ino, e.nid }) catch "ok",
+        .refused => |e| e.reason,
+    };
+}
+
+~pub tor execnid { fs: string<mounted>, nid: string } -> string
+~proc execnid|zig {
+    const f = fsOf(fs) orelse return "no live fs resource under that name";
+    const n = std.fmt.parseInt(u64, nid, 16) catch return "bad nid (hex expected)";
+    const r = koru_koruos.koru_ext2.exec_nid_event.handler(.{ .fs = f, .nid = n, .rights = 1152921504606846978 });
+    return switch (r) {
+        .ok => |e| std.fmt.bufPrint(&$mod.obuf, "status={d} ino={d}", .{ e.status, e.ino }) catch "ok",
+        .refused => |e| e.reason,
+    };
+}
+
+~pub tor unmount { fs: string<!mounted> } -> string
+~proc unmount|zig {
+    const f = fsOf(fs) orelse return "no live fs resource under that name";
+    return switch (koru_koruos.koru_ext2.unmount_event.handler(.{ .fs = f })) {
+        .ok => "unmounted",
+        .failed => |e| e,
+    };
+}
+
+~pub tor quit {}
+~proc quit|zig {
+    $mod.quit = true;
+}
+
+~std/runtime:register(scope: "os") {
+    mount
+    lookup
+    pin
+    exec
+    execnid
+    unmount
+    koruos.surface:open -> surf(1)
+    koruos.surface:fill -> fill(1)
+    koruos.surface:present -> present(1)
+    koruos.surface:close -> sclose(1)
+    quit
+}
+
+// ---- driver ----------------------------------------------------------
+// The mounted-fs obligation enters the REPL as a process capability:
+// `repl` owns the mount for the session's lifetime and registers it as a
+// bridge resource — the same custody path an interpreted `mount()` mints.
+
+~pub tor repl { fs: *koruos/ext2:Fs<!mounted> } -> string
+
+~proc repl|zig {
+    const b = koru_std.koru_bridge.create_event.handler(.{
+        .id = "repl", .scope = "os", .introspection = true, .world = "",
+    });
+    $mod.br = b;
+    // Mint the boot-handed fs as a held resource: token → pointer in the
+    // pool's resource map, and a handle whose discharge verb is `unmount`.
+    // The obligation module/name come from the scope's own spec table —
+    // derived, never spelled twice.
+    const tok = b.pool.mintResourceToken("Fs");
+    b.pool.registerResource(tok, @ptrCast(fs));
+    var obl_mod: []const u8 = "program";
+    var obl_name: []const u8 = "mounted";
+    const rt = @import("root").koru_std.koru_runtime;
+    switch (rt.get_scope_event.handler(.{ .name = "os" })) {
+        .scope => |s| {
+            if (s.discharges_spec_fn) |spec_fn| {
+                const specs = spec_fn("unmount");
+                if (specs.len > 0) {
+                    obl_mod = specs[0].obligation_module;
+                    obl_name = specs[0].obligation_name;
+                }
+            }
+        },
+        else => {},
+    }
+    _ = b.pool.acquire(tok, obl_mod, obl_name, "unmount", "repl-boot", "Fs", "os", &.{}, "boot-mount") catch {};
+    // `fs` resolves in every later turn's env — the session's first name.
+    const f0 = [1]Interp.NamedField{.{ .name = "__type_ref", .value = .{ .string_val = tok } }};
+    b.session_env.bindCopy("fs", .{ .branch = "resource", .fields = &f0 }) catch {};
+
+    say("koru-os repl (bridge session 'repl', os scope: mount lookup pin exec execnid unmount quit)\n", .{});
+    say("held resource: fs = {s}\n", .{tok});
+    const stdin = std.fs.File.stdin();
+    var lbuf: [4096]u8 = undefined;
+    outer: while (!$mod.quit) {
+        std.fs.File.stdout().writeAll("koru> ") catch {};
+        var n: usize = 0;
+        while (n < lbuf.len) {
+            var c: [1]u8 = undefined;
+            const got = stdin.read(&c) catch break :outer;
+            if (got == 0) {
+                if (n == 0) break :outer;
+                break;
+            }
+            if (c[0] == '\n') break;
+            lbuf[n] = c[0];
+            n += 1;
+        }
+        const line = lbuf[0..n];
+        if (line.len == 0) continue;
+        const r = koru_std.koru_bridge.run_event.handler(.{ .br = b, .source = line });
+        switch (r) {
+            .result => |res| say("=> {s}\n", .{res.value.toJsonBuf()}),
+            .@"error" => |e| say("{s}: {s}\n", .{ e.kind, e.message }),
+            .defined => |d| say("defined {s}\n", .{d}),
+            .unhandled_branch => |u| say("unhandled-branch: {s}\n", .{u.branch}),
+            .residue => |res2| say("residue: {s}\n", .{res2.report}),
+            .partial => |p| say("partial {d}/{d}: {s}\n", .{ p.ran, p.total, p.report }),
+        }
+    }
+    koru_std.koru_bridge.close_event.handler(.{ .br = b });
+    return "bye";
+}
+
+~koruos/ext2:mount(id: 0)
+| ok m |> repl(m.fs): msg |> std/io:print.ln("repl: {{ msg:s }}")
+| refused e |> std/io:print.ln("repl: mount refused: {{ e:s }}")

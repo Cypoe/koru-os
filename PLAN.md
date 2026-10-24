@@ -168,7 +168,7 @@ mint/refusal semantics to native. `hosted_ext2` proves the same
 chain `boot_ext2` gates: mount → exec(path) → pin → exec-nid →
 child ran twice as a real host process, nid survived process death.
 
-**`hosted/freebsd` (Capsicum arm, build-checked 14/14)** —
+**`hosted/freebsd` (Capsicum arm, build-checked)** —
 `koru/hosted/freebsd.zig` + shared `common.zig` (file-backed blkdev,
 clock, nid store; spawn is the per-OS seam). The spawn path is where
 the bag stops being advisory: parent opens the staged image once,
@@ -186,6 +186,43 @@ dynamic ELF's rtld opens libs by path and ECAPMODEs.
 `build-hosted.sh <prog> [out] [shim]` selects the shim; check-hosted
 asserts both fixtures link for `x86_64-freebsd` (no linux-only
 primitive may leak into the shared seam).
+
+**`koruos/surface` on the hosted arm (linux-x11, gated)** —
+`koru/surface/index.kz` is the compositor-facing lift, deliberately
+split from `koruos/fb` (the dumb device): `open` mints
+`*Surf<open!>` into the bridge pool, `fill`/`px`/`present` borrow
+`*Surf<open>` through the pool token, `close` consumes
+`*Surf<!open>`. Realization is `koru/hosted/x11.zig` over
+`libX11.so.6` — a real compositor (WSLg), not a PPM: the surface is
+a mapped X window backed by one provider-owned ZPixmap; `present`
+is `XPutImage`+flush. `build-hosted.sh linux-x11` is a separate arm
+variant (glibc-dynamic; the static `linux` arm must not even see
+the X11 externs — `repl.kz`/`repl-x11.kz` split at exactly that
+seam). Proven through the same bridge path as fs: `surf() | ok o |>
+bind(name: "s", value: o.surface)` mints `h:Surf:…` into the pool;
+`fill/present(surface: s)` resolve on later turns; `sclose`
+discharges; re-use refuses *by name*; an unclosed surface is
+released at bridge `close` through the real provider verb; and
+`xwininfo` reports the mapped 640×480 "koru-os" window — the
+compositor's own account, not ours. `koru-native` refuses by name
+until `nativeCompositor` or a surface-over-fb family exists.
+
+**What the X11 oracle just taught the kernel ladder** (why this
+came before the frame allocator): a surface is *a persistent
+backing buffer the provider owns* + a damage-less `present`
+commit point + a lifetime (destroy releases the window object and
+the buffer together). For native that translates to: (1) the
+frame allocator must hand out **long-lived, physically-stable
+buffers** — a surface is not a heap alloc, it's pinned scanout
+memory with a lifetime tied to a resource handle; (2) present
+needs a **commit/dirty boundary** — XPutImage copies the whole
+buffer each time; wayland/vulkan want damage rects, so the native
+contract should carry `present(surface, damage)` even if the
+first provider ignores it; (3) close is a **pair-release** —
+window object + backing store die together, which is exactly the
+bridge discharge's shape. X11's copy-model also names what to skip:
+no event loop (input is a different provider family) and no GPU
+submission — virtio-gpu stays its own axis.
 
 ### KolibriOS donor map (first-pass read, `45b134ba`)
 
