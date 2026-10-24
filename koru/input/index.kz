@@ -1,0 +1,60 @@
+// koruos/input — the human-input lift.
+//
+// The seam a compositor actually hangs on: poll returns one queued event
+// or empty — never blocks (sleeping is the wait-queue rung's problem,
+// not this iface's shape). Events are RAW: `key` carries the provider's
+// hardware code (scancode set-1 on native 8042, X keycode on hosted) —
+// keysym/charmap translation is a layer above, not smuggled into the seam.
+// `motion` is a delta because a pointer position is a compositor-owned
+// concept, not a device fact.
+//
+// Providers: koru/native/kbd.zig (8042, IRQ1 ring) on koru-native;
+// koru/hosted/x11.zig (XSelectInput + XPending drain) on hosted. No fake
+// event source — where no input device exists the provider is simply not
+// bound and the arm refuses by name.
+//
+// This is deliberately the same shape on both arms: a painter that polls
+// on hosted must see the same event vocabulary it will see on native —
+// neither side gets to bake semantics in alone.
+
+~import std/realize
+~import koruos/realize
+
+~std/realize:row(iface: koruos/input) {
+    "resources": "input: raw key/button/motion events, polled ring — no blocking, no charmap",
+    "evidence": "V: koru/native/kbd.zig (8042 IRQ1) + koru/hosted/x11.zig (X event drain) extern koruos_input_*",
+    "binds": [
+        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/kbd.zig", "8042 PS/2, IRQ1 through the IDT, 64-entry ring"] },
+        { "arm": "hosted", "mechanism": "host-libc", "deltas": ["src:koru/hosted/x11.zig", "XSelectInput masks + XPending/XNextEvent drain"] }
+    ]
+}
+
+const InEv = extern struct {
+    kind: u32,    // 1=key, 2=button, 3=motion, 4=expose (repaint demand)
+    code: u32,    // keycode (set-1 / X) or button number
+    pressed: u32, // key/button: 1 make, 0 break
+    dx: i32,      // motion only
+    dy: i32,
+};
+
+extern fn koruos_input_poll(out: *InEv) u8;
+
+~[retain]pub tor poll {}
+| key { code: u32, pressed: u32 }
+| button { code: u32, pressed: u32 }
+| motion { dx: i32, dy: i32 }
+| expose // surface invalidation — damage flowing server→client: repaint
+| empty
+| refused string
+
+~proc poll|zig {
+    var ev = InEv{ .kind = 0, .code = 0, .pressed = 0, .dx = 0, .dy = 0 };
+    if (koruos_input_poll(&ev) == 0) return .{ .empty = .{} };
+    return switch (ev.kind) {
+        1 => .{ .key = .{ .code = ev.code, .pressed = ev.pressed } },
+        2 => .{ .button = .{ .code = ev.code, .pressed = ev.pressed } },
+        3 => .{ .motion = .{ .dx = ev.dx, .dy = ev.dy } },
+        4 => .{ .expose = .{} },
+        else => .{ .refused = "provider returned an event kind the iface does not know" },
+    };
+}

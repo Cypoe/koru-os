@@ -1,0 +1,42 @@
+// boot_kbd — the koruos/input seam on koru-native: poll the lift until a
+// key event arrives (the gate injects one through QEMU's sendkey) or the
+// bounded spin runs out. Serial lines are the gate evidence: the IRQ1 →
+// ring → lift chain only reports what the hardware actually delivered.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/native
+~import koruos/input
+~import std/io
+
+const std = @import("std");
+
+var obuf: [256]u8 = undefined;
+
+// Bounded spin inside a proc — the lift stays in the path (poll_event's
+// emitted handler is the same tor flow would call), the loop is driver
+// code like the REPL's. 20M polls is generous for a sendkey to land.
+~pub tor waitkey {} -> string
+
+~proc waitkey|zig {
+    const h = koru_koruos.koru_input.poll_event.handler;
+    var i: usize = 0;
+    while (i < 20_000_000) : (i += 1) {
+        switch (h(.{})) {
+            .key => |k| return std.fmt.bufPrint(&$mod.obuf,
+                "key code={d} pressed={d}", .{ k.code, k.pressed }) catch "key",
+            .button => |b| return std.fmt.bufPrint(&$mod.obuf,
+                "button code={d} pressed={d}", .{ b.code, b.pressed }) catch "button",
+            .motion => return "motion",
+            .refused => |r| return std.fmt.bufPrint(&$mod.obuf,
+                "refused: {s}", .{r}) catch "refused",
+            else => {},
+        }
+    }
+    return "timeout";
+}
+
+~waitkey(): msg |> std/io:print.ln("KBD {{ msg:s }}")
+~std/io:print.ln("KBD COMPLETE")

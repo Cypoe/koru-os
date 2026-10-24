@@ -21,6 +21,7 @@ const aspace = @import("aspace");
 const user = @import("user");
 const fb = @import("fb.zig");
 const pmm = @import("pmm");
+const kbd = @import("kbd");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -31,6 +32,7 @@ comptime {
     _ = &runtime.malloc;
     _ = &runtime.memalign;
     _ = &runtime.fputs;
+    _ = &runtime.fwrite;
     _ = &runtime.ukplat_monotonic_clock;
     _ = &runtime.stdout;
     _ = &runtime.stderr;
@@ -165,6 +167,7 @@ comptime {
 export fn kmain(mbi: u32) callconv(.c) noreturn {
     pmm.init(mbi); // frames live before anything allocates
     user.init(); // IDT + PIC + sti — interrupts live before the program
+    kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
     fb.init(mbi);
     aspace.selftest();
     prog.main();

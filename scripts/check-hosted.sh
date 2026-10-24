@@ -205,7 +205,7 @@ if [ "$XOK" -eq 1 ]; then
     # xwininfo asks the server, then sclose → stale refusal.
     MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
         "cd '$WORKWSL' && export DISPLAY=:0 KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store'
-         { printf 'surf(width: 640, height: 480) | ok o |> bind(name: \"s\", value: o.surface)\nfill(surface: s, x: 0, y: 0, w: 640, h: 480, color: 16711680)\npresent(surface: s)\n'; sleep 4; printf 'sclose(surface: s)\npresent(surface: s)\nquit()\n'; } | ./repl-x11.bin > '$XSIDEWSL/sessA.log' 2>&1 &
+         { printf 'surf(width: 640, height: 480) | ok o |> bind(name: \"s\", value: o.surface)\nfill(surface: s, x: 0, y: 0, w: 640, h: 480, color: 16711680)\npresent(surface: s, x: 0, y: 0, w: 640, h: 480)\npresent(surface: s, x: 0, y: 0, w: 0, h: 0)\n'; sleep 4; printf 'sclose(surface: s)\npresent(surface: s, x: 0, y: 0, w: 10, h: 10)\nquit()\n'; } | ./repl-x11.bin > '$XSIDEWSL/sessA.log' 2>&1 &
          sleep 3
          xwininfo -name koru-os > '$XSIDEWSL/wininfo.txt' 2>&1 || true
          wait" > /dev/null 2>&1
@@ -221,7 +221,7 @@ if [ "$XOK" -eq 1 ]; then
         bad "surface-x11: open/bind failed: $(grep -m1 'koru>' "$XSIDE/sessA.log")"
     fi
     A_OKS=$(grep -cF 'unhandled-branch: ok' "$XSIDE/sessA.log")
-    A_ERRS=$(grep -E 'dispatch-error|validation-error|refused' "$XSIDE/sessA.log" | grep -cvF 'names nothing')
+    A_ERRS=$(grep -E 'dispatch-error|validation-error|refused' "$XSIDE/sessA.log" | grep -cvF -e 'names nothing' -e 'unhandled-branch: refused')
     if [ "$A_OKS" -ge 3 ] && [ "$A_ERRS" -eq 0 ]; then
         ok "surface-x11: fill/present/sclose dispatched through the pool token"
     else
@@ -231,6 +231,11 @@ if [ "$XOK" -eq 1 ]; then
         ok "surface-x11: spent surface token refuses by name after sclose"
     else
         bad "surface-x11: stale surface token did not refuse"
+    fi
+    if grep -qF "unhandled-branch: refused" "$XSIDE/sessA.log"; then
+        ok "surface-damage: present(w:0,h:0) refuses — commit means damage"
+    else
+        bad "surface-damage: empty damage rect did not refuse"
     fi
 
     # Session B: open and quit — bridge close must discharge the still-held
@@ -242,6 +247,31 @@ if [ "$XOK" -eq 1 ]; then
         ok "surface-x11: bridge close discharges held surface via provider"
     else
         bad "surface-x11: unclosed surface not discharged: $(tail -4 "$XSIDE/sessB.log" | tr '\n' '|')"
+    fi
+
+    # painter — the koru-written compositor fixture: owns a surface,
+    # composites its own layers, repaints on the server's expose demand,
+    # presents per-rect damage, and exits on 'q'. xprobe.py (ctypes→libX11)
+    # is the witness: window by name, XGetImage pixels (the composite must
+    # be on the wire, not just in our buffer), XSendEvent drives 'q'.
+    sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/painter.kz" > "$WORK/painter.kz"
+    if bash "$ROOT/scripts/build-hosted.sh" "$WORK/painter.kz" "$WORK/painter.bin" linux-x11 > "$WORK/painter.build" 2>&1; then
+        cp "$ROOT/scripts/xprobe.py" "$XSIDE/xprobe.py"
+        MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+            "cd '$WORKWSL' && (DISPLAY=:0 ./painter.bin > '$XSIDEWSL/painter.log' 2>&1 &) && sleep 3 && python3 '$XSIDEWSL/xprobe.py' > '$XSIDEWSL/probe.out' 2>&1; sleep 6; cat '$XSIDEWSL/probe.out'" \
+            > /dev/null 2>&1
+        if grep -qF 'bg@160,60 = 0x202040' "$XSIDE/probe.out" && grep -qF 'fgA@30,30 = 0xc04000' "$XSIDE/probe.out"; then
+            ok "painter: composited layers landed on the server (bg + fg pixels read back)"
+        else
+            bad "painter: composite evidence missing: $(tail -4 "$XSIDE/probe.out" | tr '\n' '|')"
+        fi
+        if grep -qE 'PAINTER keys=[0-9]+ exposes=[1-9][0-9]* frames=[1-9]' "$XSIDE/painter.log"; then
+            ok "painter: koru event loop — expose repaint honored, key through koruos/input"
+        else
+            bad "painter: event-loop evidence missing: $(tail -4 "$XSIDE/painter.log" | tr '\n' '|')"
+        fi
+    else
+        bad "painter: build failed"; tail -6 "$WORK/painter.build"
     fi
 fi
 

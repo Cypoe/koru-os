@@ -30,6 +30,7 @@ extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
 extern fn posix_memalign(memptr: *?*anyopaque, alignment: usize, size: usize) callconv(.c) c_int;
 const pmm = @import("pmm");
+const kbd = @import("kbd");
 extern fn serPut(c: u8) callconv(.c) void;
 
 const ENT: u64 = 0x3; // present | writable
@@ -327,6 +328,8 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             irq_ticks += 1;
             if (irq_ticks == 1) say("irq: timer delivered\n");
             schedPreempt(f);
+        } else if (f.vec == 0x21) {
+            kbd.irq(); // 8042 scancode → input ring
         } else if (virtio_irq_line != 0xFF and f.vec == 0x20 + @as(u64, virtio_irq_line)) {
             virtio_irq_ack();
             virtio_seen += 1;

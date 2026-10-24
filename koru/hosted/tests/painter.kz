@@ -1,0 +1,85 @@
+// painter — the koru-written compositor fixture, hosted arm.
+//
+// Owns one surface, composites its own scene (a background layer, two
+// fixed foreground rects, one moving box drawn last) through the
+// koruos/surface lift, and runs an event loop on koruos/input. Damage
+// is bidirectional in the honest contract: present(x,y,w,h) commits
+// only what the frame repainted, and `expose` — the server's repaint
+// demand — repaints the whole scene. Pixels committed before map are
+// gone; the Expose-driven repaint is what real X/wayland clients do.
+//
+// 'q' (X keycode 24) ends the run — a named quit key, not "any event
+// ends it": focus/modifier traffic is real input, not a quit request.
+//
+// The driver calls the lifts' emitted handlers directly: the bridge pool
+// is the wire-facing custody path (proven by the REPL rows); inside one
+// process the typed *Surf flows straight through — same externs, same
+// lift, no second semantics. Builds with shim=linux-x11.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/surface
+~import koruos/input
+~import std/io
+
+const std = @import("std");
+
+var obuf: [512]u8 = undefined;
+
+~pub tor run {} -> string
+
+~proc run|zig {
+    const S = koru_koruos.koru_surface;
+    const I = koru_koruos.koru_input;
+    const o = switch (S.open_event.handler(.{ .width = 320, .height = 240 })) {
+        .ok => |v| v,
+        .refused => |r| return std.fmt.bufPrint(&$mod.obuf,
+            "surf refused: {s}", .{r}) catch "surf refused",
+    };
+    const s = o.surface;
+    // scene layers, painter-owned: bg, two fixed fg rects, a moving box.
+    var box_x: u32 = 120;
+    const repaint = struct {
+        fn go(su: anytype, bx: u32) void {
+            const Sv = koru_koruos.koru_surface;
+            _ = Sv.fill_event.handler(.{ .surface = su, .x = 0, .y = 0, .w = 320, .h = 240, .color = 0x202040 });
+            _ = Sv.fill_event.handler(.{ .surface = su, .x = 24, .y = 24, .w = 60, .h = 40, .color = 0xC04000 });
+            _ = Sv.fill_event.handler(.{ .surface = su, .x = 236, .y = 176, .w = 60, .h = 40, .color = 0x0080C0 });
+            _ = Sv.fill_event.handler(.{ .surface = su, .x = bx, .y = 100, .w = 40, .h = 40, .color = 0x00C0C0 });
+            _ = Sv.present_event.handler(.{ .surface = su, .x = 0, .y = 0, .w = 320, .h = 240 });
+        }
+    };
+    repaint.go(s, box_x);
+    var i: usize = 0;
+    var keys: u32 = 0;
+    var exposes: u32 = 0;
+    var frames: u32 = 0;
+    var quit = false;
+    while (i < 120_000_000 and !quit) : (i += 1) {
+        switch (I.poll_event.handler(.{})) {
+            .key => |k| {
+                keys += 1;
+                if (k.pressed == 1 and k.code == 24) quit = true; // 'q'
+            },
+            .expose => {
+                exposes += 1;
+                repaint.go(s, box_x); // the server's repaint demand — honor it
+            },
+            else => {},
+        }
+        if (i % 1_000_000 == 0) {
+            _ = S.fill_event.handler(.{ .surface = s, .x = box_x, .y = 100, .w = 40, .h = 40, .color = 0x00C0C0 });
+            _ = S.present_event.handler(.{ .surface = s, .x = box_x, .y = 100, .w = 40, .h = 40 });
+            box_x += 4;
+            if (box_x > 260) box_x = 120;
+            frames += 1;
+        }
+    }
+    _ = S.close_event.handler(.{ .surface = s });
+    return std.fmt.bufPrint(&$mod.obuf, "keys={d} exposes={d} frames={d}", .{ keys, exposes, frames })
+        catch "painter done";
+}
+
+~run(): r |> std/io:print.ln("PAINTER {{ r:s }}")

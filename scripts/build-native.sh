@@ -20,10 +20,12 @@ OUT="${2:-kernel.elf}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-cp "$PROG" "$WORK/program.k"
+# keep the source extension — `.k` is pure-Koru, `.kz` host-embeds zig
+EXT="${PROG##*.}"
+cp "$PROG" "$WORK/program.$EXT"
 # koruc may fail at the final host link (device externs only exist in the
 # freestanding image) — the artifact we need is output_emitted.zig.
-(cd "$WORK" && "$KORUC" program.k > koruc.out 2>&1) || true
+(cd "$WORK" && "$KORUC" "program.$EXT" > koruc.out 2>&1) || true
 [ -s "$WORK/output_emitted.zig" ] || {
     echo "build-native: koruc did not emit output_emitted.zig"; tail -10 "$WORK/koruc.out"; exit 1;
 }
@@ -33,14 +35,15 @@ cp "$PROG" "$WORK/program.k"
     -O ReleaseSafe \
     -fno-entry -fno-stack-protector -mno-red-zone \
     -T "$ROOT/koru/native/link.ld" \
-    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm -Mroot="$ROOT/koru/native/boot.zig" \
+    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm --dep kbd -Mroot="$ROOT/koru/native/boot.zig" \
     --dep compiler_env -Mprogram="$WORK/output_emitted.zig" \
     -Mcompiler_env="$ROOT/koru/native/compiler_env.zig" \
     -Mruntime="$ROOT/koru/native/runtime.zig" \
     -Mvirtio="$ROOT/koru/native/virtio.zig" \
     --dep pmm -Maspace="$ROOT/koru/native/aspace.zig" \
-    --dep pmm -Muser="$ROOT/koru/native/user.zig" \
+    --dep pmm --dep kbd -Muser="$ROOT/koru/native/user.zig" \
     -Mpmm="$ROOT/koru/native/pmm.zig" \
+    -Mkbd="$ROOT/koru/native/kbd.zig" \
     -femit-bin="$OUT" || {
     echo "build-native: zig link failed"; exit 1;
 }

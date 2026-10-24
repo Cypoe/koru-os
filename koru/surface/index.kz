@@ -26,14 +26,14 @@ const Surf = opaque {};
 extern fn koruos_surface_open(w: u32, h: u32, title: [*:0]const u8) ?*anyopaque;
 extern fn koruos_surface_fill(s: *anyopaque, x: u32, y: u32, w: u32, h: u32, color: u32) u8;
 extern fn koruos_surface_px(s: *anyopaque, x: u32, y: u32, color: u32) u8;
-extern fn koruos_surface_present(s: *anyopaque) u8;
+extern fn koruos_surface_present(s: *anyopaque, x: u32, y: u32, w: u32, h: u32) u8;
 extern fn koruos_surface_close(s: *anyopaque) u8;
 
 // A zero-arg title keeps the lift honest about what a host compositor can
 // actually label; callers that care pass a static name.
 const CACHED_TITLE: [:0]const u8 = "koru-os";
 
-~pub tor open { width: u32, height: u32 }
+~[retain]pub tor open { width: u32, height: u32 }
 | ok { surface: *Surf<open!>, width: u32, height: u32 }
 | refused string
 
@@ -43,7 +43,7 @@ const CACHED_TITLE: [:0]const u8 = "koru-os";
     return .{ .ok = .{ .surface = @ptrCast(@alignCast(p)), .width = width, .height = height } };
 }
 
-~pub tor fill { surface: *Surf<open>, x: u32, y: u32, w: u32, h: u32, color: u32 }
+~[retain]pub tor fill { surface: *Surf<open>, x: u32, y: u32, w: u32, h: u32, color: u32 }
 | ok
 | refused string
 
@@ -52,16 +52,20 @@ const CACHED_TITLE: [:0]const u8 = "koru-os";
     return .{ .ok = .{} };
 }
 
-~pub tor present { surface: *Surf<open> }
+// present commits a damage rect, not "the surface" — a compositor always
+// knows what it repainted; full-frame damage is just 0,0,w,h. Providers
+// clip to bounds; a zero-area rect refuses rather than lying about a commit.
+~[retain]pub tor present { surface: *Surf<open>, x: u32, y: u32, w: u32, h: u32 }
 | ok
 | refused string
 
 ~proc present|zig {
-    if (koruos_surface_present(@ptrCast(surface)) == 0) return .{ .refused = "present failed" };
+    if (koruos_surface_present(@ptrCast(surface), x, y, w, h) == 0)
+        return .{ .refused = "present refused (empty rect or provider failure)" };
     return .{ .ok = .{} };
 }
 
-~pub tor close { surface: *Surf<!open> }
+~[retain]pub tor close { surface: *Surf<!open> }
 | ok
 | refused string
 

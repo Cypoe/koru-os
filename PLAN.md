@@ -218,11 +218,50 @@ memory with a lifetime tied to a resource handle; (2) present
 needs a **commit/dirty boundary** — XPutImage copies the whole
 buffer each time; wayland/vulkan want damage rects, so the native
 contract should carry `present(surface, damage)` even if the
-first provider ignores it; (3) close is a **pair-release** —
+first provider ignores it — **now realized**: `present` takes
+`x,y,w,h`, an empty rect refuses, and XPutImage blits only the
+sub-rect; (3) close is a **pair-release** —
 window object + backing store die together, which is exactly the
 bridge discharge's shape. X11's copy-model also names what to skip:
 no event loop (input is a different provider family) and no GPU
 submission — virtio-gpu stays its own axis.
+
+**`koruos/input` on both arms (gated)** —
+`koru/input/index.kz` is the shared human-input lift: `poll`
+returns one queued event or `empty` — never blocks (sleeping is
+the wait-queue rung's problem, not the iface's shape). Events are
+**raw**: `key` carries the provider's hardware code (set-1 scancode
+native, X keycode hosted) — charmap is a layer above; `motion` is a
+delta; `expose` is damage flowing *server→client* (a repaint
+demand — see below). Realized by `koru/native/kbd.zig` (8042 IRQ1 →
+64-entry ring, drain-on-poll covers edges lost while masked) on
+`koru-native` and by `x11.zig` (XSelectInput + XPending drain on
+the same connection that owns surfaces) on `hosted`. Evidence:
+QEMU `sendkey a` → IRQ1 → `KBD key code=30 pressed=1`; python
+ctypes `XSendEvent` → the painter's event loop. The *same* event
+vocabulary on both arms — neither provider got to bake semantics
+in alone.
+
+**The Expose lesson** — the painter's first run proved it: pixels
+presented before the window is viewable get wiped by the server's
+background repaint; only post-map presents stick. The honest fix
+isn't a delay or a flag — it's the `expose` event: the server
+*demands* a repaint and the client obliges. Damage is bidirectional,
+and the contract now says so. This is the compositor fact the
+native side must internalize before `nativeCompositor` — a surface
+isn't "write and show", it's "hold a scene and repaint on demand".
+
+**`koru/hosted/tests/painter.kz` (gated)** — the koru-written
+compositor shape, hosted arm: owns a surface, composites its own
+scene (bg + fixed fg + a moving box drawn last), polls input,
+repaints on `expose`, presents per-rect damage, quits on 'q'
+(X keycode 24 — a named key, not "any event": focus/modifier
+traffic is real input). `scripts/xprobe.py` is the gate's witness —
+ctypes→libX11 `XGetImage` reads the composite back off the *server*
+(0x202040 bg + 0xC04000 fg pixels), `XSendEvent` drives the quit
+key. The driver calls the lifts' emitted `*_event.handler`s
+directly — typed `*Surf` inside one process; the bridge pool stays
+the wire-facing custody path.
 
 ### KolibriOS donor map (first-pass read, `45b134ba`)
 
@@ -245,7 +284,7 @@ addresses regardless, defer or spec-driven), **virtio-gpu** (absent;
 first pixels come cheaper from a multiboot/GOP linear framebuffer —
 the `cyberboot` path — with virtio-gpu later for damage/3D).
 
-## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 20/20)
+## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 21/21)
 
 - **pmm — the frame allocator + reclaim.** `koru/native/pmm.zig`:
   loader memory map (PVH `hvm_start_info` under QEMU `-kernel` —

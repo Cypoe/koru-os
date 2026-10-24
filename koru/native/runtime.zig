@@ -70,6 +70,19 @@ pub export fn fputs(s: [*:0]const u8, stream: ?*anyopaque) callconv(.c) c_int {
     return @intCast(n);
 }
 
+// LLVM lowers fputs→fwrite for computable lengths — provide it or the
+// symbol dangles. Bytes go to the same serial sink; stream is ignored.
+pub export fn fwrite(ptr: [*]const u8, size: usize, nmemb: usize, stream: ?*anyopaque) callconv(.c) usize {
+    _ = stream;
+    serInit();
+    const n = size * nmemb;
+    for (0..n) |i| {
+        if (ptr[i] == '\n') serPut('\r');
+        serPut(ptr[i]);
+    }
+    return nmemb;
+}
+
 // ---- heap contract --------------------------------------------------------
 
 const HEAP_SIZE = 4 * 1024 * 1024;

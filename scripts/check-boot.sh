@@ -64,6 +64,47 @@ fi
 # screen is human evidence (screendump). -display none still models the
 # device, so no display is needed.
 boot_check "$ROOT/koru/fb/tests/boot_fb.k" "FB COMPLETE" -vga std
+
+# input: the koruos/input seam over the 8042 — a QEMU `sendkey a` drives a
+# real scancode through IRQ1 into the provider ring; the .kz fixture polls
+# the lift in a bounded spin and prints the raw event (make 'a' = 0x1E).
+# The monitor socket is the injection path; evidence is serial-only.
+kbd_src="$WORK/boot_kbd.kz"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/input/tests/boot_kbd.kz" > "$kbd_src"
+if bash "$ROOT/scripts/build-native.sh" "$kbd_src" "$WORK/boot_kbd.elf" > "$WORK/boot_kbd.build" 2>&1; then
+    kbdport=$((4600 + $$ % 400))
+    timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_kbd.elf" -serial stdio \
+        -display none -m 64M -no-reboot \
+        -monitor "tcp:127.0.0.1:$kbdport,server,nowait" \
+        > "$WORK/boot_kbd.serial" 2>&1 &
+    kbdq=$!
+    # connect the human-monitor socket with retries — a refused connect or
+    # a dead sendkey must FAIL the row loudly, never read as "no key".
+    keys=0
+    for _ in $(seq 1 20); do
+        exec 3<>"/dev/tcp/127.0.0.1/$kbdport" 2>/dev/null && break
+        sleep 0.5
+    done
+    if [ -e /dev/fd/3 ]; then
+        for _ in $(seq 1 30); do
+            printf 'sendkey a\n' >&3 2>/dev/null || break
+            keys=$((keys+1))
+            sleep 0.3
+        done
+        exec 3>&-
+    fi
+    wait $kbdq 2>/dev/null || true
+    if [ "$keys" -eq 0 ]; then
+        bad "input-kbd: monitor connect/sendkey failed — no injection happened"
+    elif grep -qF "KBD key code=30 pressed=1" "$WORK/boot_kbd.serial"; then
+        ok "input-kbd: 8042 IRQ1 scancode rode the seam (sendkey a -> key 30 pressed)"
+    else
+        bad "input-kbd: no key evidence: $(tail -6 "$WORK/boot_kbd.serial" | tr '\n' '|')"
+    fi
+else
+    bad "boot_kbd: build failed"; tail -6 "$WORK/boot_kbd.build"
+fi
+
 # aspace selftest runs in kmain on every boot — same-VA different-phys proof.
 if grep -qF "ASPACE" "$WORK/boot_hello.serial" && grep -qF "DISTINCT" "$WORK/boot_hello.serial"; then
     ok "aspace: per-domain CR3 proven (same VA, different phys)"
