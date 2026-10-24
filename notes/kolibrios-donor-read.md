@@ -119,6 +119,87 @@ DOS personality filed in PLAN.md. A koru DOS personality = v86
 machine + `int 21h` family over koru providers; Kolibri's is the
 same shape with its own syscall table underneath.
 
+## 5. GUI / windowing — `gui/`, `hid/`, `const.inc`
+
+The compositing model is shockingly simple and worth understanding
+whole before designing `nativeCompositor`:
+
+- **`_display.win_map` — per-pixel ownership.** A byte map the size
+  of the framebuffer; each pixel holds the *slot number* of the
+  window that owns it. Drawing primitives clip by testing
+  `win_map[px] == my_slot`. There is no compositor, no blending, no
+  alpha — z-order + damage + an owner map. Recalculated on
+  z-change/move/resize; `calculatebackground` fills it with the
+  desktop's id when the background changes.
+
+- **`WDATA` — the window record is 128 bytes** (`const.inc:630`,
+  size asserted). box (geometry), `clientbox`, three packed
+  color/style dwords, `fl_wstate/fl_wdrawn/fl_redraw` flags,
+  `shape`+`shape_scale` (arbitrary shaped windows exist!),
+  caption+encoding, `saved_box` (maximize restore), per-window
+  `cursor`/`temp_cursor`, **`draw_data RECT` = the damage region**,
+  `thread → APPDATA`, buttons array. Everything a minimal
+  compositor needs is in one cacheline-pair.
+
+- **Damage protocol** — kernel sets `WDATA.fl_redraw` and fills
+  `draw_data` with the invalid rect; app sees event bit 0 in
+  `occurred_events`; `BeginDraw`/`EndDraw` (sysfn 12) is the
+  bracket that makes draws legal and resets the flag. The app
+  repaints *into the shared framebuffer*, clipped by win_map — the
+  kernel owns the pixels, apps borrow them.
+
+- **Event model is bitmask-word, not queue.** `APPDATA.event_mask`
+  (registered via sysfn 40) + `APPDATA.occurred_events`;
+  `get_event_for_app` `bsr`-scans the mask in priority order:
+  bit0→redraw(checks fl_redraw), bit1→key, bit2→button, bit4→
+  background, bit5→mouse, 6-9→IPC/stack/debug. Payloads fetched by
+  separate sysfns (`GetKey` reads `KEY_BUFF`, `GetButton` →
+  `BTN_BUFF`). `Wait_events_ex` is the general wait loop — a
+  client-supplied test function + timeout, and it's exactly the
+  wait-queue shape koru's blocking-children work needs.
+
+- **Focus = stack-top.** `WIN_STACK` is a u16 array of slot ids in
+  z-order; `thread_count` is the top index; keys/buttons only
+  deliver to top (`cmp edx, [thread_count]`). `KEY_BUFF`/`BTN_BUFF`
+  are small global rings (120 keys, overflow drops). Mouse events
+  carry `EVM_MOUSE_FILTER`; suppressed while the user
+  drags/resizes a window (`WINDOW_MOVE_AND_RESIZE_FLAGS`).
+  `hotkey_buffer` gives global hotkeys per slot — checked after
+  normal keys. Button id `0xFFFF` is minimize → `wakeup_osloop`.
+
+- **Kernel objects are a real object model.** `APPOBJ` header on
+  `CURSOR`/`EVENT`/`SMEM`: `magic`, `destroy` (internal destructor),
+  fd/bk links, `pid` owner — on process death the object lists are
+  walked by pid and destroyed. Same pattern the EVENT layer uses.
+  This is the closest thing in the tree to koru's "provider object
+  owned by a nid, cleaned on exit" semantics.
+
+- **Input is fused to the kernel.** `hid/keyboard.inc` +
+  `hid/mousedrv.inc` feed `KEY_BUFF`/`mouse` state directly; GUI
+  `mouse.inc` owns cursor compositing. Input→event has no
+  indirection — there's no "input provider" seam to speak of.
+
+### What this means for `nativeCompositor`
+
+The Kolibri model is honest but it's a *pixel-ownership* design —
+single framebuffer, opaque rects, damage-by-rect, no per-window
+surfaces. koru's direction should keep the semantics (z-order,
+damage rects, focus stack, event bits) but invert the mechanism:
+windows get *surface objects* (nid-pinned), the compositor owns
+win_map-equivalent hit-testing, drawing goes through the compositor
+not directly to the framebuffer. Kolibri's win_map is then the
+semantic oracle for hit-test/damage correctness — "same pixel goes
+to the same window" is a testable equivalence even if the mechanism
+is a scene graph. The BeginDraw/EndDraw bracket and the
+redraw-bit+draw_data damage protocol are both worth keeping
+almost verbatim.
+
+Also worth the same note: `Wait_events_ex` (test-fn + timeout) is
+the right shape for koru's wait queues, and `APPOBJ.magic +
+destroy + pid` is the shape for provider-object lifetime
+auditing — kill-process walks owned objects and calls destructors,
+which is what "nid bindings released on exit" wants mechanically.
+
 ## Lift / don't lift
 
 | lift (as concepts) | don't lift |
@@ -128,7 +209,7 @@ same shape with its own syscall table underneath.
 | probe-claim `fs.probe()` shape | probe-claim *binding* — koru keeps explicit mount; identity needs named mounts |
 | v86 monitor + iopm for the DOS personality | sysfn70's packed-param-struct ABI — koru's typed seams, not a dword bag |
 | `ddk/linux` shim precedent for the ABI question | `sys_posix` as bolt-on syscall number — POSIX is a view, not a syscall |
-| GUI event model (sysfn 10/11/23 wait/check/timeout) for nativeCompositor | GUI-in-kernel: windowing code shares kernel memory model; koru wants the compositor as a userland provider |
+| win_map per-pixel ownership → compositor hit-test oracle; fl_redraw+draw_data damage protocol; BeginDraw/EndDraw bracket; bitmask event words + Wait_events_ex | GUI-in-kernel + paint-direct-to-framebuffer: koru wants surface objects and the compositor owning pixels, not apps borrowing them |
 | media lifecycle (querymedia→cache→scan→probe→refcount) | single address space per app with one growable heap (sysfn 64) |
 
 ## The one-line summary for koru-os

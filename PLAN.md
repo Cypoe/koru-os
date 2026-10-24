@@ -171,9 +171,9 @@ Also open, smaller:
 - SMP (ACPI MADT + IOAPIC + AP bringup) — required before real hardware
 - KolibriOS study: first pass done —
   `notes/kolibrios-donor-read.md` (syscall table, VFS seam, devman
-  driver model, v86, lift/don't-lift). Deeper reads TBD:
-  `gui/event.inc` + `hid/` for nativeCompositor, `core/v86.inc` for
-  the DOS personality
+  driver model, v86, **GUI/windowing incl. win_map + damage
+  protocol**, lift/don't-lift). Deeper reads TBD: `core/v86.inc`
+  for the DOS personality
 
 ## Not doing (explicit)
 
