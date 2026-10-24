@@ -334,7 +334,7 @@ pub const Buf = extern struct { ptr: [*]u8, len: usize };
 // lookup: path → inode, the projection's inverse — the inode number is
 // the object's stable identity; nid can bind it, exec can take it, and
 // the path itself stays a view (renameable, rebindable) not the identity.
-~pub tor lookup { fs: *Fs<!mounted>, path: string }
+~[retain]pub tor lookup { fs: *Fs<!mounted>, path: string }
 | ok { fs: *Fs<mounted!>, ino: u32 }
 | refused { fs: *Fs<mounted!>, reason: string }
 
@@ -425,7 +425,7 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
     return koruos_nid_obj_pin(foreign, (@as(u64, fs.dev_id) << 32) | ino);
 }
 
-~pub tor exec { fs: *Fs<!mounted>, path: string, rights: u64 }
+~[retain]pub tor exec { fs: *Fs<!mounted>, path: string, rights: u64 }
 | ok { fs: *Fs<mounted!>, status: i64, ino: u32, nid: u64 }
 | refused { fs: *Fs<mounted!>, reason: string }
 
@@ -447,7 +447,7 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
 
 // pin: path → bound identity, without executing — the explicit
 // "give me this object's nid" surface for resolvers and later rename.
-~pub tor pin { fs: *Fs<!mounted>, path: string }
+~[retain]pub tor pin { fs: *Fs<!mounted>, path: string }
 | ok { fs: *Fs<mounted!>, ino: u32, nid: u64 }
 | refused { fs: *Fs<mounted!>, reason: string }
 
@@ -462,7 +462,7 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
 // exec-nid: exec by identity — no path is walked. The nid resolves to
 // the pinned (dev, ino) key in koruos/nid's store; a nid bound on a
 // different device is refused by name, never resolved to a local inode.
-~pub tor exec-nid { fs: *Fs<!mounted>, nid: u64, rights: u64 }
+~[retain]pub tor exec-nid { fs: *Fs<!mounted>, nid: u64, rights: u64 }
 | ok { fs: *Fs<mounted!>, status: i64, ino: u32 }
 | refused { fs: *Fs<mounted!>, reason: string }
 
@@ -508,7 +508,7 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
     return .{ .ok = .{ .fs = fs, .ino = ino, .bytes = fsize } };
 }
 
-~pub tor unmount { fs: *Fs<!mounted> }
+~[retain]pub tor unmount { fs: *Fs<!mounted> }
 | ok
 | failed string
 

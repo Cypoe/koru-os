@@ -126,7 +126,25 @@ remaining pieces are the REPL driver program (read → `run(source:,
 scope:)` → print) and the os-scope registration, not an
 interpreter.
 
-**Landed on this track** (gated by `scripts/check-hosted.sh` — 6/6):
+**Landed: the system REPL** (`koru/hosted/tests/repl.kz`, gated by
+`check-hosted.sh` — 12/12). Boot mounts blkdev 0 and hands the
+mounted-fs obligation to `repl(fs: *Fs<!mounted>)` — the capability
+moves into the process by handoff, discharged via the os-scope
+`unmount` verb. Each terminal line is a full koru flow through
+`std/interpreter:run` against `dispatch_os`; session_env keeps
+bindings durable across lines. Scope verbs call provider tors **by
+name from zig** (`koru_koruos.koru_ext2.X_event.handler`) — which is
+why the ext2 surface carries `~[retain]`: the declared mechanism for
+tors invoked outside flow reachability. Proven in the gate:
+interpreted `exec(path:)` runs a real host child (status 43),
+`pin` mints nid identity from source, `bogus()` refuses at dispatch
+(`EventDenied`), an unbound nid refuses by name. Two honest limits:
+wrapper tors inject `fs` from module state (interpreter `Value`
+carries branch+fields, not pointers — the `handle_pool`/spec fns are
+the deeper mechanism, deferred), and verbs return flat strings
+rather than typed Values.
+
+**Landed on this track** (gated by `scripts/check-hosted.sh`):
 `koru/hosted/linux.zig` realizes the whole lift extern surface on
 host primitives — file-backed `uk_blkdev_*` (`$KORU_BLK0`, requests
 complete inline), `fork+execve+waitpid` spawn (rights bag advisory,

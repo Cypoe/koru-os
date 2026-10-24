@@ -1,0 +1,185 @@
+// hosted koru system REPL — the first system shell.
+//
+// Boot mounts blkdev 0 and hands the mounted-fs capability to `repl`
+// (`*Fs<!mounted>` — the obligation transfers to the REPL process,
+// which discharges it through the os-scope `unmount` verb). Each input
+// line is a full koru flow run through std/interpreter:run against the
+// registered "os" scope. Only registered tors are callable from
+// interpreted source — the scope is the process's language-level
+// rights bag: an unregistered tor refuses at dispatch.
+//
+// The Fs handle stays in module state (opaque pointers do not
+// round-trip the interpreter env); scope verbs take paths/nids.
+// Durable value bindings persist through the session env.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import std/interpreter
+~import std/runtime
+~import std/io
+~import koruos/ext2
+
+const std = @import("std");
+
+var cur_fs: ?*koru_koruos.koru_ext2.Fs = null;
+var session_env: koru_std.koru_interpreter.Environment = undefined;
+var quit: bool = false;
+var obuf: [512]u8 = undefined;
+
+fn say(comptime f: []const u8, a: anytype) void {
+    var b: [4096]u8 = undefined;
+    const s = std.fmt.bufPrint(&b, f, a) catch b[0..0];
+    std.fs.File.stdout().writeAll(s) catch {};
+}
+
+// ---- os scope --------------------------------------------------------
+
+~pub tor mount {} -> string
+~proc mount|zig {
+    if ($mod.cur_fs != null) return "already mounted";
+    return switch (koru_koruos.koru_ext2.mount_event.handler(.{ .id = 0 })) {
+        .ok => |m| blk: {
+            $mod.cur_fs = m.fs;
+            break :blk std.fmt.bufPrint(&$mod.obuf, "mounted blocks={d} inodes={d} free={d}", .{ m.blocks, m.inodes, m.free_blocks }) catch "mounted";
+        },
+        .refused => |e| e,
+    };
+}
+
+~pub tor lookup { path: string } -> string
+~proc lookup|zig {
+    const fs = $mod.cur_fs orelse return "not mounted";
+    return switch (koru_koruos.koru_ext2.lookup_event.handler(.{ .fs = fs, .path = path })) {
+        .ok => |r| std.fmt.bufPrint(&$mod.obuf, "ino={d}", .{r.ino}) catch "ok",
+        .refused => |e| e.reason,
+    };
+}
+
+~pub tor pin { path: string } -> string
+~proc pin|zig {
+    const fs = $mod.cur_fs orelse return "not mounted";
+    return switch (koru_koruos.koru_ext2.pin_event.handler(.{ .fs = fs, .path = path })) {
+        .ok => |r| std.fmt.bufPrint(&$mod.obuf, "ino={d} nid={x}", .{ r.ino, r.nid }) catch "ok",
+        .refused => |e| e.reason,
+    };
+}
+
+~pub tor exec { path: string } -> string
+~proc exec|zig {
+    const fs = $mod.cur_fs orelse return "not mounted";
+    const r = koru_koruos.koru_ext2.exec_event.handler(.{ .fs = fs, .path = path, .rights = 1152921504606846978 });
+    return switch (r) {
+        .ok => |e| std.fmt.bufPrint(&$mod.obuf, "status={d} ino={d} nid={x}", .{ e.status, e.ino, e.nid }) catch "ok",
+        .refused => |e| e.reason,
+    };
+}
+
+~pub tor execnid { nid: string } -> string
+~proc execnid|zig {
+    const fs = $mod.cur_fs orelse return "not mounted";
+    const n = std.fmt.parseInt(u64, nid, 16) catch return "bad nid (hex expected)";
+    const r = koru_koruos.koru_ext2.exec_nid_event.handler(.{ .fs = fs, .nid = n, .rights = 1152921504606846978 });
+    return switch (r) {
+        .ok => |e| std.fmt.bufPrint(&$mod.obuf, "status={d} ino={d}", .{ e.status, e.ino }) catch "ok",
+        .refused => |e| e.reason,
+    };
+}
+
+~pub tor unmount {} -> string
+~proc unmount|zig {
+    const fs = $mod.cur_fs orelse return "not mounted";
+    return switch (koru_koruos.koru_ext2.unmount_event.handler(.{ .fs = fs })) {
+        .ok => blk: {
+            $mod.cur_fs = null;
+            break :blk "unmounted";
+        },
+        .failed => |e| e,
+    };
+}
+
+~pub tor quit {}
+~proc quit|zig {
+    $mod.quit = true;
+}
+
+~std/runtime:register(scope: "os") {
+    mount
+    lookup
+    pin
+    exec
+    execnid
+    unmount
+    quit
+}
+
+// ---- driver ----------------------------------------------------------
+// The mounted-fs obligation enters the REPL as a process capability:
+// `repl` owns the mount for the session's lifetime.
+
+~pub tor repl { fs: *koruos/ext2:Fs<!mounted> } -> string
+
+~proc repl|zig {
+    $mod.cur_fs = fs;
+    $mod.session_env = koru_std.koru_interpreter.Environment.init(std.heap.c_allocator);
+    say("koru-os repl (os scope: mount lookup pin exec execnid unmount quit)\n", .{});
+    const stdin = std.fs.File.stdin();
+    var lbuf: [4096]u8 = undefined;
+    outer: while (!$mod.quit) {
+        std.fs.File.stdout().writeAll("koru> ") catch {};
+        // one line from the terminal — eof (pipe close) ends the session
+        var n: usize = 0;
+        while (n < lbuf.len) {
+            var c: [1]u8 = undefined;
+            const got = stdin.read(&c) catch break :outer;
+            if (got == 0) {
+                if (n == 0) break :outer;
+                break;
+            }
+            if (c[0] == '\n') break;
+            lbuf[n] = c[0];
+            n += 1;
+        }
+        const line = lbuf[0..n];
+        if (line.len == 0) continue;
+        const r = koru_std.koru_interpreter.run_event.handler(.{
+            .source = line,
+            .dispatcher = $mod.dispatch_os,
+            .cost_fn = null,
+            .creates_obligations_fn = null,
+            .discharges_obligations_fn = null,
+            .discharge_event_fn = null,
+            .creates_spec_fn = null,
+            .discharges_spec_fn = null,
+            .budget = null,
+            .handle_pool = null,
+            .fail_fast = true,
+            .scope_name = "os",
+            .auto_discharge = true,
+            .defined = null,
+            .input_fn = null,
+            .branches_fn = null,
+            .lenient = false,
+            .host_dispatch = null,
+            .session_env = &$mod.session_env,
+            .session_bind_fn = null,
+            .session_bind_env = null,
+            .session_bind_counter = null,
+            .turn_env = null,
+        });
+        switch (r) {
+            .result => |res| say("=> {s}\n", .{res.value.toJsonBuf()}),
+            .unhandled_branch => |u| say("unhandled-branch: {s}\n", .{u.branch}),
+            .exhausted => |e| say("exhausted after {d}: {s}\n", .{ e.used, e.last_event }),
+            .parse_error => |e| say("parse-error: {s} ({d}:{d})\n", .{ e.message, e.line, e.column }),
+            .validation_error => |e| say("validation-error: {s}\n", .{e}),
+            .dispatch_error => |e| say("dispatch-error: {s}: {s}\n", .{ e.event_name, e.message }),
+        }
+    }
+    return "bye";
+}
+
+~koruos/ext2:mount(id: 0)
+| ok m |> repl(m.fs): msg |> std/io:print.ln("repl: {{ msg:s }}")
+| refused e |> std/io:print.ln("repl: mount refused: {{ e:s }}")

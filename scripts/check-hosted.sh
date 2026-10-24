@@ -111,6 +111,53 @@ else
     bad "spawn-bag: advisory note missing"
 fi
 
+# --- the system REPL -----------------------------------------------------
+# repl.kz: a compiled koru program that reads terminal lines and runs each
+# through std/interpreter:run against the registered "os" scope. The scope
+# IS the language-level rights bag — unregistered tors refuse at dispatch.
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/repl.kz" > "$WORK/repl.kz"
+bash "$ROOT/scripts/build-hosted.sh" "$WORK/repl.kz" "$WORK/repl.bin" > "$WORK/repl.build" 2>&1 || {
+    bad "repl: build failed"; tail -8 "$WORK/repl.build"; echo "---"; echo "check-hosted: $pass passed, $failn failed"; exit 1; }
+
+MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+    "cd '$WORKWSL' && printf 'mount()\nlookup(path: \"child.elf\")\npin(path: \"child.elf\")\nexec(path: \"child.elf\")\nbogus()\nexecnid(nid: \"0\")\nquit()\n' | KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store' ./repl.bin" \
+    > "$WORK/repl.serial" 2>&1
+RC=$?
+if [ $RC -ne 0 ]; then
+    bad "repl: run rc=$RC"; tail -8 "$WORK/repl.serial"
+else
+    if grep -qF "koru-os repl" "$WORK/repl.serial" && grep -qF "bye" "$WORK/repl.serial"; then
+        ok "repl: prompt→interpret→loop→quit on host terminal"
+    else
+        bad "repl: loop incomplete: $(tail -5 "$WORK/repl.serial" | tr '\n' '|')"
+    fi
+    if grep -qF "already mounted" "$WORK/repl.serial"; then
+        ok "repl-scope: mount verb sees the boot-handed fs capability"
+    else
+        bad "repl-scope: mount state missing: $(grep mount "$WORK/repl.serial" | head -2 | tr '\n' '|')"
+    fi
+    if grep -qE '"value":"ino=[0-9]+ nid=[0-9a-f]+"' "$WORK/repl.serial"; then
+        ok "repl-scope: pin mints nid identity from interpreted source"
+    else
+        bad "repl-scope: pin evidence missing"
+    fi
+    if grep -qF "hosted child says hi" "$WORK/repl.serial" && grep -qE '"value":"status=43 ino=[0-9]+ nid=[0-9a-f]+"' "$WORK/repl.serial"; then
+        ok "repl-exec: interpreted exec ran a real host child (status=43)"
+    else
+        bad "repl-exec: child did not run: $(grep -E 'exec|child' "$WORK/repl.serial" | tail -3 | tr '\n' '|')"
+    fi
+    if grep -qF "dispatch-error: bogus: EventDenied" "$WORK/repl.serial"; then
+        ok "repl-refusal: unregistered tor refuses at dispatch (EventDenied)"
+    else
+        bad "repl-refusal: bogus() did not refuse"
+    fi
+    if grep -qF "nid not bound" "$WORK/repl.serial"; then
+        ok "repl-refusal: unbound nid refuses by name, not silently"
+    else
+        bad "repl-refusal: execnid(0) accepted or lost"
+    fi
+fi
+
 echo "---"
 echo "check-hosted: $pass passed, $failn failed"
 [ "$failn" -eq 0 ]
