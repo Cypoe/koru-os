@@ -119,3 +119,26 @@ with `qemu-system-x86_64 -kernel out.elf -serial stdio -display none`.
 - Provider artifacts ride in `deltas` (e.g. `src:koru/native/runtime.zig`);
   mechanisms are names (`kconfig`, `host-libc`, `native-runtime`).
 - `git push` after meaningful commits (see BLOCKERS B4).
+
+## Commit discipline (installed via `hooks/install.sh`)
+
+Every authored commit answers three sectioned questions — silence is a
+refusal, the honest opt-outs are explicit:
+
+- `## World Model` — `Signal: <type> — <note>` per belief that changed, or
+  `Signals: acknowledged-none`. Signal interfaces live in `signals/*.signal`
+  (register-on-miss; `membrane: true` marks belief-class → a staged
+  `concepts/` file is required in the same commit).
+- `## Gates` — REQUIRED when staging `koru/` or `scripts/build-*`:
+  `name: pass/total` rows of measured evidence, or `deferred — <reason>`.
+  "Gates green" is a measured claim, not prose.
+- `## Membrane` — durable beliefs live in `concepts/frag-<id>.md`
+  (frontmatter `type/id/provenance/ts`, id == stem). Stage one → declare
+  `Action: create|evolve|merge|split|correct|move` + `Concept:` (every staged
+  frag named); stage none → `Evolution: acknowledged-none`.
+
+pre-commit runs `scripts/git_wall.sh --staged` (.gitignore is the oracle;
+allowlist does not widen). post-commit appends Signal cards to
+`.git/signal-cards.jsonl` (untracked telemetry). Full doctrine:
+`.devin/skills/membrane/SKILL.md`. Never `--no-verify` except a recorded
+emergency; merge commits are exempt (topology, not authorship).

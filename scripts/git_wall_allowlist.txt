@@ -1,0 +1,2 @@
+# git_wall allowlist — tracked paths the .gitignore oracle would refuse.
+# Grandfather rows only; each line is a debt with a purge plan. Empty is healthy.
