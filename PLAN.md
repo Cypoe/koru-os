@@ -144,6 +144,20 @@ carries branch+fields, not pointers — the `handle_pool`/spec fns are
 the deeper mechanism, deferred), and verbs return flat strings
 rather than typed Values.
 
+**Next correction on this track: the REPL moves to `std/bridge`.**
+`std/bridge` is the designed persistent resource layer —
+`bridge:create` mints a session obligation over a `HandlePool` that
+outlives interpreter runs; `mintResourceToken`/`registerResource`
+turns a `*Fs` into a token that flows through interpreted bindings
+as a first-class value (honestly replacing the module-global
+`cur_fs`); `bridge:run` is the per-line execution path that retains
+handles across turns; `close` owns final discharge. The fb surface
+becomes a bridge resource the same way — `fb.open()` mints a
+surface token, strokes route through the same custody path as fs.
+That is also the shape the Kopium control channel needs:
+`bridge.affordances`/`vocabulary`/`grammar` are introspection for
+an AI driving the same session.
+
 **Landed on this track** (gated by `scripts/check-hosted.sh`):
 `koru/hosted/linux.zig` realizes the whole lift extern surface on
 host primitives — file-backed `uk_blkdev_*` (`$KORU_BLK0`, requests
@@ -194,8 +208,21 @@ addresses regardless, defer or spec-driven), **virtio-gpu** (absent;
 first pixels come cheaper from a multiboot/GOP linear framebuffer —
 the `cyberboot` path — with virtio-gpu later for damage/3D).
 
-## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 16/16)
+## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 17/17)
 
+- **`koruos/fb` — first visual output.** `koru/fb/index.kz` lift
+  (info/fill/px over a linear framebuffer, `absent` refusal) +
+  `koru/native/fb.zig` provider. Two honest sources, tried in order:
+  mb2 mbi tag 8 (GRUB programs the mode), else **BGA** — QEMU's
+  `-kernel` multiboot loader does not answer the fb request tag, so
+  the provider programs the std VGA's `VBE_DISPI` registers
+  (0x1CE/0x1CF) itself and takes the LFB phys from PCI BAR0 (class-03
+  scan). The fb range is identity-mapped on demand in a second pd
+  (`pd_hi`, one 1 GiB window — a second window needs the frame
+  allocator's page-table story; deliberately not it). Verified by
+  QEMU screendump: `boot_fb` paints red/green/blue bands and the
+  gate asserts geometry on serial (17/17). This is the substrate
+  `nativeCompositor` and the Hyprland-oracle path both need.
 - multiboot2/PVH boot, 32→64 trampoline, COM1 serial, TSC clock
 - 8259 PIC + IDT + exception delivery; interrupt-driven virtio-blk
   completion (`hlt` parks on vectors, no burn loops)

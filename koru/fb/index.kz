@@ -1,0 +1,55 @@
+// koruos/fb — the linear-framebuffer lift.
+//
+// The smallest honest display seam: info/fill/px over a memory-mapped linear
+// framebuffer. On koru-native the provider is koru/native/fb.zig, which gets
+// the fb from the multiboot2 loader (boot.zig requests it, mbi tag 8 answers)
+// and identity-maps it. Anything outside bpp-32 direct-color is `absent` —
+// loud refusal, never a half-decoded pixel.
+//
+// No resource token yet: v0 is a single global surface like the console.
+// The typed surface object (*Surface<open!>) that flows through bridge
+// custody is the next shape — this iface is what it will wrap.
+
+~import std/realize
+~import koruos/realize
+
+~std/realize:row(iface: koruos/fb) {
+    "resources": "fb: mb2 tag-8 linear framebuffer, identity-mapped, bpp-32 direct color; no GPU",
+    "evidence": "V: koru/native/fb.zig externs koruos_fb_*; boot.zig mb2 framebuffer request tag",
+    "binds": [
+        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/fb.zig", "mb2 fb request + mbi tag-8 parse; 2MiB identity map, cache-disabled until PAT"] }
+    ]
+}
+
+const Info = extern struct { width: u32, height: u32, pitch: u32, bpp: u32 };
+extern fn koruos_fb_info(out: *Info) u8;
+extern fn koruos_fb_px(x: u32, y: u32, color: u32) u8;
+extern fn koruos_fb_fill(x: u32, y: u32, w: u32, h: u32, color: u32) u8;
+
+~pub tor info {}
+| ok { width: u32, height: u32, pitch: u32, bpp: u32 }
+| absent string
+
+~proc info|zig {
+    var i = Info{ .width = 0, .height = 0, .pitch = 0, .bpp = 0 };
+    if (koruos_fb_info(&i) == 0) return .{ .absent = "no framebuffer (no mb2 tag 8, or not bpp-32 direct color)" };
+    return .{ .ok = .{ .width = i.width, .height = i.height, .pitch = i.pitch, .bpp = i.bpp } };
+}
+
+~pub tor fill { x: u32, y: u32, w: u32, h: u32, color: u32 }
+| ok
+| absent string
+
+~proc fill|zig {
+    if (koruos_fb_fill(x, y, w, h, color) == 0) return .{ .absent = "no framebuffer" };
+    return .{ .ok = .{} };
+}
+
+~pub tor px { x: u32, y: u32, color: u32 }
+| ok
+| absent string
+
+~proc px|zig {
+    if (koruos_fb_px(x, y, color) == 0) return .{ .absent = "no framebuffer or out of bounds" };
+    return .{ .ok = .{} };
+}

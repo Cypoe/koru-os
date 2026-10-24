@@ -41,6 +41,14 @@ boot_check() {
 }
 
 boot_check "$ROOT/koru/native/tests/boot_hello.k" "KORU NATIVE BOOT OK"
+
+# fb: the koruos/fb seam over a BGA-programmed linear framebuffer — QEMU's
+# built-in multiboot loader does not answer the mb2 fb request tag, so the
+# provider programs the std VGA's VBE_DISPI registers itself and takes the
+# LFB phys from PCI BAR0. Serial geometry is the gate; the three-band
+# screen is human evidence (screendump). -display none still models the
+# device, so no display is needed.
+boot_check "$ROOT/koru/fb/tests/boot_fb.k" "FB COMPLETE" -vga std
 # aspace selftest runs in kmain on every boot — same-VA different-phys proof.
 if grep -qF "ASPACE" "$WORK/boot_hello.serial" && grep -qF "DISTINCT" "$WORK/boot_hello.serial"; then
     ok "aspace: per-domain CR3 proven (same VA, different phys)"

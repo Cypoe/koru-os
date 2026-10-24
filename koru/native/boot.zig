@@ -17,6 +17,7 @@ const runtime = @import("runtime");
 const virtio = @import("virtio");
 const aspace = @import("aspace");
 const user = @import("user");
+const fb = @import("fb.zig");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -53,6 +54,13 @@ comptime {
         \\   .long 0
         \\   .long mb2_end - mb2_header
         \\   .long -(0xE85250D6 + 0 + (mb2_end - mb2_header))
+        \\   .balign 8
+        \\   .short 5          // framebuffer request tag — asks the loader
+        \\   .short 1          //   for a linear fb (optional: boot still
+        \\   .long 20          //   proceeds if the loader can't give one)
+        \\   .long 1024
+        \\   .long 768
+        \\   .long 32
         \\   .balign 8
         \\   .short 0
         \\   .short 0
@@ -123,6 +131,7 @@ comptime {
     \\   movw %ax, %gs
     \\   movq $__stack_top, %rsp
     \\   xorl %ebp, %ebp
+    \\   movl %ebx, %edi      // mbi phys addr — EBX survives the 32→64 path
     \\   call kmain
     \\ 1: hlt
     \\   jmp 1b
@@ -143,9 +152,11 @@ comptime {
 }
 
 // The program's Zig entry. The emitted program returns void from `main`;
-// anything it leaves on the console is the boot evidence.
-export fn kmain() callconv(.c) noreturn {
+// anything it leaves on the console is the boot evidence. `mbi` is the
+// multiboot2 info block's physical address (EBX at _start).
+export fn kmain(mbi: u32) callconv(.c) noreturn {
     user.init(); // IDT + PIC + sti — interrupts live before the program
+    fb.init(mbi);
     aspace.selftest();
     prog.main();
     user.run();
