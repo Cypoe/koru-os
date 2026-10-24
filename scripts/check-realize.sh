@@ -9,7 +9,9 @@
 # other scripts here — this is the declaration-phase tier.
 set -u
 
-KORUC="${KORUC:-/w/src/koru/zig-out/bin/koruc.exe}"
+# Pinned: see build-native.sh — koru@aaa64576c worktree while ccomp's
+# zig emitter leaks |c bodies into zig output.
+KORUC="${KORUC:-/w/src/koru-aaa6457/zig-out/bin/koruc.exe}"
 KORULIBS="${KORULIBS:-/w/src/koru-libs}"
 export PATH="/w/tools/zig-0.15.1:$PATH"
 

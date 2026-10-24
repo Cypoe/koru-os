@@ -36,7 +36,9 @@ extern fn free(ptr: ?*anyopaque) void;
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
         { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" },
         { "arm": "koru-native", "mechanism": "native-runtime",
-          "deltas": ["src:koru/native/runtime.zig", "needs:cpu rdrand (QEMU -cpu host or +rdrand)"] }
+          "deltas": ["src:koru/native/runtime.zig", "needs:cpu rdrand (QEMU -cpu host or +rdrand)"] },
+        { "arm": "hosted", "mechanism": "host-libc",
+          "deltas": ["src:koru/hosted/linux.zig", "needs:cpu rdrand"] }
     ]
 }
 

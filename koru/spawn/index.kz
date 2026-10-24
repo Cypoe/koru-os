@@ -39,7 +39,9 @@
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
         { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" },
         { "arm": "koru-native", "mechanism": "native-runtime",
-          "deltas": ["src:koru/native/runtime.zig", "src:koru/native/user.zig", "rung:0/1 entry-function children run to completion inside start — one address space, bag enforced at the seam; exec (rung 2: ELF image in own CR3 at CPL=3, int 0x80 seam) is native-runtime only — unserved on kconfig arms", "MMU/IOMMU isolation caps are eventual (a different provider family), not claimed for rung-0/1 tors"] }
+          "deltas": ["src:koru/native/runtime.zig", "src:koru/native/user.zig", "rung:0/1 entry-function children run to completion inside start — one address space, bag enforced at the seam; exec (rung 2: ELF image in own CR3 at CPL=3, int 0x80 seam) is native-runtime only — unserved on kconfig arms", "MMU/IOMMU isolation caps are eventual (a different provider family), not claimed for rung-0/1 tors"] },
+        { "arm": "hosted", "mechanism": "host-libc",
+          "deltas": ["src:koru/hosted/linux.zig", "exec/run2: fork+execve+waitpid — real host processes; rights bag advisory only (seccomp pending), printed not enforced"] }
     ]
 }
 

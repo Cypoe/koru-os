@@ -39,7 +39,9 @@
     "binds": [
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
         { "arm": "koru-native", "mechanism": "native-runtime",
-          "deltas": ["src:koru/native/runtime.zig", "note:view=isa-debugcon 0x402 (QEMU -debugcon; silent on real hw)"] }
+          "deltas": ["src:koru/native/runtime.zig", "note:view=isa-debugcon 0x402 (QEMU -debugcon; silent on real hw)"] },
+        { "arm": "hosted", "mechanism": "host-libc",
+          "deltas": ["src:koru/hosted/linux.zig"] }
     ]
 }
 

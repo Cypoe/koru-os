@@ -7,7 +7,11 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-KORUC="${KORUC:-/w/src/koru/zig-out/bin/koruc.exe}"
+# Pinned: koru@aaa64576c worktree — the live /w/src/koru checkout is on
+# fork/ccomp where the zig emitter leaks |c proc bodies into zig output
+# (handler__c with raw C text — every std/io consumer fails the backend
+# build). Restore to /w/src/koru/zig-out/bin/koruc.exe once fixed.
+KORUC="${KORUC:-/w/src/koru-aaa6457/zig-out/bin/koruc.exe}"
 ZIG="${ZIG:-/w/tools/zig-0.15.1/zig.exe}"
 export PATH="/w/tools/zig-0.15.1:$PATH"
 

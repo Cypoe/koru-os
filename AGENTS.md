@@ -7,7 +7,12 @@ or refuses loudly. Unikraft is one arm, not the OS. Design contract:
 
 ## Toolchain (Windows box)
 
-- koruc: `W:\src\koru\zig-out\bin\koruc.exe` (source: `W:\src\koru`)
+- koruc: **pinned** `W:\src\koru-aaa6457\zig-out\bin\koruc.exe` — a
+  detached worktree at `aaa64576c` (the `iface:`-arg commit). The live
+  checkout `W:\src\koru` is on `fork/ccomp`; there the zig emitter
+  leaks `|c` proc bodies into zig output (`handler__c` raw C text) and
+  every `std/io` consumer fails the backend build. Scripts take
+  `KORUC=` override — restore the default once ccomp is fixed.
 - zig: `W:\tools\zig-0.15.1` — must be on `PATH` (POSIX form
   `/w/tools/zig-0.15.1`) or koruc crashes `FileNotFound` spawning the
   backend build. From Git Bash: `PATH="/w/tools/zig-0.15.1:$PATH" koruc ...`

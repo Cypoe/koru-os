@@ -51,7 +51,9 @@
         { "arm": "unikraft/qemu-x86_64", "mechanism": "kconfig" },
         { "arm": "unikraft/linuxu-x86_64", "mechanism": "kconfig" },
         { "arm": "koru-native", "mechanism": "native-runtime",
-          "deltas": ["src:koru/native/runtime.zig"] }
+          "deltas": ["src:koru/native/runtime.zig"] },
+        { "arm": "hosted", "mechanism": "host-libc",
+          "deltas": ["src:koru/hosted/linux.zig", "obj-pin store: persistent, $KORU_NID_STORE flat file (default ./nid.store) — same mint + refusal semantics as native"] }
     ]
 }
 

@@ -126,6 +126,16 @@ remaining pieces are the REPL driver program (read → `run(source:,
 scope:)` → print) and the os-scope registration, not an
 interpreter.
 
+**Landed on this track** (gated by `scripts/check-hosted.sh` — 6/6):
+`koru/hosted/linux.zig` realizes the whole lift extern surface on
+host primitives — file-backed `uk_blkdev_*` (`$KORU_BLK0`, requests
+complete inline), `fork+execve+waitpid` spawn (rights bag advisory,
+printed not enforced — seccomp is the named future mechanism), and
+a **persistent** nid store (`$KORU_NID_STORE`) with identical
+mint/refusal semantics to native. `hosted_ext2` proves the same
+chain `boot_ext2` gates: mount → exec(path) → pin → exec-nid →
+child ran twice as a real host process, nid survived process death.
+
 ### KolibriOS donor map (first-pass read, `45b134ba`)
 
 | ask | where it lives in `upstream/kolibrios` |
