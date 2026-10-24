@@ -110,14 +110,35 @@ sysfn70 (param struct in ebx, subfn in [ebx])        user ABI
   "driver" vs "core" is a judgment call even in Kolibri; input and
   the GUI event pump are fused to the kernel.
 
-## 4. v86 — `core/v86.inc`
+## 4. v86 — `core/v86.inc` (deep read)
 
-`v86_create` → `V86_machine` handle: `process` (owning task),
-`mutex`, `iopm` (I/O permission map). Real vm86 machines with
-per-instance I/O permission bitmaps — the working reference for the
-DOS personality filed in PLAN.md. A koru DOS personality = v86
-machine + `int 21h` family over koru providers; Kolibri's is the
-same shape with its own syscall table underneath.
+A trap-and-emulate monitor — used by Kolibri itself to call real
+BIOS `int 13h` for the boot disk (`init_sys_v86` creates a system
+VM for exactly that), not to run DOS apps.
+
+- `v86_create` → `V86_machine { pagedir, mutex, iopm }`: **each VM
+  gets its own page directory** projecting a low-1MB space into
+  kernel linear addresses; BIOS data page, EBDA (`0x9C000`), BIOS
+  ROM (`0xC0000-0xFFFFF`) mapped identically across all VMs.
+- `v86_start(regs, handle, expected_end CS:IP, IRQ_to_hook)` runs
+  the VM until the guest irets back to the expected address.
+  Typed exits: `1` = exception+code, `2` = I/O port denied+port,
+  `3` = IRQ already hooked by another VM.
+- The bulk is the GPF handler: privileged ops in v86
+  (`cli/sti/pushf/popf/int/iret/in/out`) trap to the monitor, which
+  simulates each on the saved `v86_regs` frame — `int` dispatches
+  through the VM's own IVT, `in/out` check the `iopm` bitmap.
+- `v86_irqhooks`: a VM owns a real IRQ; an IRQ arriving while
+  another context runs is redirected as a simulated `int` on the
+  owning VM's stack.
+
+**Caveat for koru-native**: hardware vm86 does not exist in long
+mode. On x86-64 the DOS personality's honest shape is `MZ` magic →
+spawn a *soft-core 16-bit emulator as a ring-3 child* (DOSBox/
+NTVDM-on-64-bit style) whose `int 21h` services bridge to koru
+providers. v86.inc still teaches the semantics to translate —
+iopm-gated I/O, per-VM low-memory projection, typed exit codes,
+IRQ ownership — the mechanism is replaced, not inherited.
 
 ## 5. GUI / windowing — `gui/`, `hid/`, `const.inc`
 

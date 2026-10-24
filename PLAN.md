@@ -112,6 +112,16 @@ The bare-metal ladder below stays the path to `koru-native`; hosted
 shortens the feedback loop on identity/realization, it doesn't replace
 the kernel work.
 
+First system milestone on this track: **the koru interpreter as the
+system REPL** — init = interpreter over the host terminal; prompt →
+exec-by-nid children under enforced bags → reap → repeat. It's the
+only slice exercising the whole chain at once (terminal IO, provider
+dispatch, spawn, isolation, persistent nids, loud refusal). Named
+dependency: koru is a *compiler* today — a REPL needs an eval path
+(interpreter backend or compile-and-exec per line); that's a
+language-level feature living in the koru repo, to raise alongside
+the ccomp judgment.
+
 ### KolibriOS donor map (first-pass read, `45b134ba`)
 
 | ask | where it lives in `upstream/kolibrios` |
