@@ -285,6 +285,88 @@ if [ "$XOK" -eq 1 ]; then
     fi
 fi
 
+# --- hosted/wayland — koruos/surface over libwayland-client -------------
+# The second hosted surface arm: same fixtures as linux-x11 (repl-x11.kz,
+# painter.kz — the iface is provider-agnostic), shim=linux-wayland —
+# musl-static with libwayland-client 1.26.0 vendored as source
+# (koru/hosted/wayland/src/) + a musl libffi.a. Zero runtime deps; runs
+# on the host AND inside the vroot unchanged. The protocol Hyprland
+# speaks — this arm is unchanged when a dmabuf compositor appears.
+# Evidence is wire-level (WAYLAND_DEBUG): wayland gives no cross-client
+# snooping like xwininfo — the attach+damage+commit stream IS the
+# composite by protocol.
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/repl-x11.kz" > "$WORK/repl-wl.kz"
+bash "$ROOT/scripts/build-hosted.sh" "$WORK/repl-wl.kz" "$WORK/repl-wl.bin" linux-wayland > "$WORK/repl-wl.build" 2>&1 \
+    && [ -s "$WORK/repl-wl.bin" ] \
+    && ok "surface-wayland: linux-wayland arm builds (musl static + vendored libwayland/libffi)" \
+    || { bad "surface-wayland: build failed"; tail -8 "$WORK/repl-wl.build"; }
+
+WLOK=0
+MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+    "test -S \"\${XDG_RUNTIME_DIR:-/run/user/0}/wayland-0\"" && WLOK=1
+if [ "$WLOK" -eq 1 ]; then
+    ok "surface-wayland: live wayland socket wayland-0 (WSLg)"
+else
+    bad "surface-wayland: no wayland-0 socket — the hosted wayland oracle needs a compositor"
+fi
+
+if [ "$WLOK" -eq 1 ] && [ -s "$WORK/repl-wl.bin" ]; then
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "cd '$WORKWSL' && printf 'surf(width: 640, height: 480) | ok o |> bind(name: \"s\", value: o.surface)\nfill(surface: s, x: 0, y: 0, w: 640, h: 480, color: 16711680)\npresent(surface: s, x: 0, y: 0, w: 640, h: 480)\npresent(surface: s, x: 0, y: 0, w: 0, h: 0)\nsclose(surface: s)\npresent(surface: s, x: 0, y: 0, w: 10, h: 10)\nquit()\n' | WAYLAND_DEBUG=1 KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store' ./repl-wl.bin > '$WORKWSL/wl-sess.log' 2> '$WORKWSL/wl-wire.log'"
+    if grep -qF '"value":"s"' "$WORK/wl-sess.log"; then
+        ok "surface-wayland: surf() minted *Surf<open!> into the bridge pool (bound 's')"
+    else
+        bad "surface-wayland: open/bind failed: $(grep -m1 'koru>' "$WORK/wl-sess.log")"
+    fi
+    W_OKS=$(grep -cF 'unhandled-branch: ok' "$WORK/wl-sess.log")
+    if [ "$W_OKS" -ge 3 ] \
+       && grep -qF "names nothing the session holds" "$WORK/wl-sess.log" \
+       && grep -qF "unhandled-branch: refused" "$WORK/wl-sess.log"; then
+        ok "surface-wayland: fill/present/sclose through the pool; empty damage + stale token refuse"
+    else
+        bad "surface-wayland: borrow path broke: $(grep -E 'error|refused' "$WORK/wl-sess.log" | head -3 | tr '\n' '|')"
+    fi
+    # wire evidence: real xdg toplevel handshake (configure → ack) and a
+    # presented frame (attach + damage_buffer + commit on a 640x480 rect)
+    if grep -qE "xdg_surface.*\.configure" "$WORK/wl-wire.log" \
+       && grep -qF "ack_configure" "$WORK/wl-wire.log" \
+       && grep -qE "wl_surface.*\.attach" "$WORK/wl-wire.log" \
+       && grep -qF "damage_buffer(0, 0, 640, 480)" "$WORK/wl-wire.log"; then
+        ok "surface-wayland: xdg toplevel configured+mapped, damaged frame committed on the wire"
+    else
+        bad "surface-wayland: handshake/present wire evidence missing: $(tail -5 "$WORK/wl-wire.log" | tr '\n' '|')"
+    fi
+
+    # Session B: open+quit — bridge discharges the held surface through
+    # the real provider verb.
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+        "cd '$WORKWSL' && printf 'surf(width: 320, height: 240)\nquit()\n' | KORU_BLK0='$IMGWSL' KORU_NID_STORE='./nid.store' ./repl-wl.bin" \
+        > "$WORK/wl-sessB.log" 2>&1
+    if grep -qE "\[BRIDGE\] Invoked 'sclose' for handle 'h:Surf:[0-9a-f]+'" "$WORK/wl-sessB.log"; then
+        ok "surface-wayland: bridge close discharges held surface via provider"
+    else
+        bad "surface-wayland: unclosed surface not discharged: $(tail -4 "$WORK/wl-sessB.log" | tr '\n' '|')"
+    fi
+
+    # painter — the koru-written compositor fixture over wayland: same
+    # source as the x11 arm; evidence is the damage stream on the wire
+    # (per-rect damage, not full-surface re-pushes).
+    sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/painter.kz" > "$WORK/painter-wl.kz"
+    if bash "$ROOT/scripts/build-hosted.sh" "$WORK/painter-wl.kz" "$WORK/painter-wl.bin" linux-wayland > "$WORK/painter-wl.build" 2>&1; then
+        MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+            "cd '$WORKWSL' && WAYLAND_DEBUG=1 timeout 8 ./painter-wl.bin > '$WORKWSL/painter-wl.log' 2> '$WORKWSL/painter-wl-wire.log'"
+        if grep -qE "wl_surface.*\.attach" "$WORK/painter-wl-wire.log" \
+           && grep -cF "damage_buffer" "$WORK/painter-wl-wire.log" | grep -qE "^[2-9]|[0-9]{2}" \
+           && grep -qE "damage_buffer\(120, 100, 40, 40\)" "$WORK/painter-wl-wire.log"; then
+            ok "painter-wayland: koru compositor presented per-rect damage to a real compositor"
+        else
+            bad "painter-wayland: wire evidence missing: $(tail -4 "$WORK/painter-wl-wire.log" | tr '\n' '|')"
+        fi
+    else
+        bad "painter-wayland: build failed"; tail -6 "$WORK/painter-wl.build"
+    fi
+fi
+
 # --- hosted/vroot — vendored rootfs arm ----------------------------------
 # The hosted desktop path needs real GUI programs (terminal, compositor,
 # webview) that this host's Ubuntu-20.04 cannot package. hosted/vroot is

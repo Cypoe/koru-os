@@ -321,12 +321,37 @@ rendered a page and read back the DOM title** — the webview rung
 the user asked for; and a measured-refusal oracle: **hyprland
 (aquamarine) requires `zwp_linux_dmabuf_v1`** — WSLg is software,
 no dmabuf, no `/dev/dri` — the row pins *why* so a dmabuf-capable
-environment flips it on contact. Hyprland-as-protocol stands:
-koru-side wayland provider is the arm-agnostic answer, and
+environment flips it on contact. Hyprland-as-protocol stands —
+and the koru-side wayland provider now exists:
+
+**`linux-wayland` — the second hosted surface arm (gated)** —
+`koru/hosted/wayland.zig` implements the same `koruos.surface` +
+`koruos.input` extern surface as `x11.zig` over libwayland-client:
+registry binds `wl_compositor`/`wl_shm`/`xdg_wm_base`/`wl_seat`, a
+surface is an xdg_toplevel on a `memfd`-backed `wl_shm` buffer —
+`present` is `damage_buffer`+`commit` (the protocol's native commit
+shape, no pixel copy), xdg `configure` doubles as the iface's
+repaint-demand (`expose`), and evdev codes pass through raw. The
+arm is **musl-static with the protocol stack vendored as source**
+(`koru/hosted/wayland/`: scanner-generated bindings + libwayland
+1.26.0 `src/` + alpine musl `libffi.a` — `VENDORED.md` records
+provenance): host Ubuntu's libwayland is 1.18 and predates
+`wl_proxy_marshal_flags`, and the vroot's 1.26 needs glibc 2.38 —
+a vendored static stack beats both. Zero runtime deps: the binary
+runs on the host and inside the jail unchanged. Gated rows: xdg
+toplevel configure→ack→attach→damage→commit on WSLg's wire, the
+same pool/contract semantics as x11 (empty damage + stale token
+refuse, bridge discharges a held surface), and `painter.kz`
+presents per-rect damage to the real compositor — one fixture
+source, two realization arms.
+
 koru-libs `origin/main` now carries the shell-authoring stack
 (`clay` solver binding + `nativelayout` pure-koru candidate +
 `ui` panel words + `oshun` markup→spec-rows) — *our* backend path
-is `koruos/surface`, not `metal`.
+is `koruos/surface`, not `metal`. `nativelayout` emits a `CmdView`
+command stream, not pixels — geometry only; hardware acceleration
+is the renderer/provider's contract (framebuffer → virtio-gpu,
+dmabuf where the host has it), never the solver's.
 
 ### KolibriOS donor map (first-pass read, `45b134ba`)
 

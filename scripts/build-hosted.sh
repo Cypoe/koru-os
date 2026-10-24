@@ -8,6 +8,12 @@
 #   shim=linux-x11 → x86_64-linux-gnu dynamic — same provider surface plus
 #                    koru/hosted/x11.zig (koruos.surface over libX11.so.6,
 #                    read via the WSL UNC mount). Runs where a display is.
+#   shim=linux-wayland → x86_64-linux-gnu dynamic — provider surface +
+#                    koru/hosted/wayland.zig: koruos.surface+input over
+#                    libwayland-client (wl_shm + xdg_shell; vendored
+#                    generated bindings in koru/hosted/wayland/). The
+#                    protocol hyprland speaks — runs where a wayland
+#                    compositor is (WSLg today).
 #   shim=freebsd   → x86_64-freebsd -lc (dynamic; the Capsicum spawn arm —
 #                    build-check on this host, runs on a real FreeBSD)
 set -u
@@ -37,6 +43,23 @@ case "$SHIM" in
         TARGS=(-target x86_64-linux-gnu -mcpu=x86_64)
         SHIM_SRCS=("$ROOT/koru/hosted/linux.zig" "$ROOT/koru/hosted/x11.zig")
         LINKS=(X11_SO) ;;
+    linux-wayland)
+        # musl-static like shim=linux — libwayland-client 1.26.0 is
+        # vendored as *source* (koru/hosted/wayland/src/, MIT) and
+        # compiled into the binary: zero runtime deps, runs on the host
+        # AND inside the vroot unchanged. Static is also the honest arm:
+        # the host's libwayland (1.18) predates wl_proxy_marshal_flags.
+        TARGS=(-target x86_64-linux-musl -mcpu=x86_64 -static)
+        SHIM_SRCS=("$ROOT/koru/hosted/linux.zig" "$ROOT/koru/hosted/wayland.zig")
+        CSRCS=("$ROOT/koru/hosted/wayland/wayland-client-protocol.c"
+               "$ROOT/koru/hosted/wayland/xdg-shell-protocol.c"
+               "$ROOT/koru/hosted/wayland/src/wayland-client.c"
+               "$ROOT/koru/hosted/wayland/src/connection.c"
+               "$ROOT/koru/hosted/wayland/src/wayland-os.c"
+               "$ROOT/koru/hosted/wayland/src/wayland-util.c")
+        # libffi is wayland's only external dep (demarshal closures) —
+        # vendored musl .a + headers from alpine's libffi-dev.
+        LINKS=("$ROOT/koru/hosted/wayland/libffi/libffi.a") ;;
     freebsd)
         TARGS=(-target x86_64-freebsd -mcpu=x86_64)
         SHIM_SRCS=("$ROOT/koru/hosted/freebsd.zig") ;;
@@ -60,6 +83,8 @@ if [ "${LINKS[0]:-}" = "X11_SO" ]; then
     LINKS=("$WORK/libX11.so.6")
 fi
 
+
+
 # keep the source extension — `.k` is pure-Koru, `.kz` host-embeds zig
 EXT="${PROG##*.}"
 cp "$PROG" "$WORK/program.$EXT"
@@ -79,9 +104,24 @@ for src in "${SHIM_SRCS[@]}"; do
     "$ZIG" build-obj \
         "${TARGS[@]}" \
         -O ReleaseSafe -lc \
+        -I "$ROOT/koru/hosted/wayland" -I "$ROOT/koru/hosted/wayland/src" \
+        -I "$ROOT/koru/hosted/wayland/libffi" \
         -femit-bin="$WORK/hosted_shim_$i.o" \
         "$src" || { echo "build-hosted: shim compile failed ($src)"; exit 1; }
     SHIM_OBJS+=("$WORK/hosted_shim_$i.o")
+done
+# vendored C glue (generated protocol tables + libwayland-client src) —
+# C objects via zig cc
+for csrc in ${CSRCS[@]+"${CSRCS[@]}"}; do
+    i=$((i+1))
+    "$ZIG" build-obj \
+        "${TARGS[@]}" \
+        -O ReleaseSafe -lc \
+        -I "$ROOT/koru/hosted/wayland" -I "$ROOT/koru/hosted/wayland/src" \
+        -I "$ROOT/koru/hosted/wayland/libffi" \
+        -femit-bin="$WORK/hosted_c_$i.o" \
+        "$csrc" || { echo "build-hosted: C glue compile failed ($csrc)"; exit 1; }
+    SHIM_OBJS+=("$WORK/hosted_c_$i.o")
 done
 
 # Interpreter programs (std/interpreter) emit references to the koru
