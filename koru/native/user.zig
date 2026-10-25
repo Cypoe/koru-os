@@ -186,7 +186,14 @@ var gdt2: [8]u64 align(8) = .{
 };
 var tss: [104]u8 align(16) = [_]u8{0} ** 104;
 var idt: [512]u64 align(16) = [_]u64{0} ** 512;
-var kstack: [4096]u8 align(16) = [_]u8{0} ** 4096;
+// The trap stack: rsp0 for syscall/int80 AND the IRQ/EXC frame context.
+// Must absorb the deepest trap-side call chain — a parked childSpawn
+// streams an ELF through fs read_at + virtio-blk on this stack alone
+// (loadElfViaFs' 4 KiB head buffer + provider frames) — 4 KiB corrupted
+// pmm's tables below it and read as ghosts ("unowned" frees, #GP death).
+// Per-task kstacks are their own rung; until then this is sized for the
+// deepest single trap, not for nesting.
+var kstack: [64 * 1024]u8 align(16) = [_]u8{0} ** (64 * 1024);
 
 fn patchTssDesc() void {
     const base: u64 = @intFromPtr(&tss);
@@ -615,6 +622,8 @@ const Child = struct {
     waiting_conin: bool = false,    // parked in read(0) on the console ring
     wait_buf: u64 = 0,              // user VA the wake fills on IRQ1
     wait_len: u64 = 0,
+    waiting_exit: bool = false,     // parked in spawn() on a child's exit
+    wait_pid: usize = 0,            // roster slot of the awaited child
 };
 
 var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{} };
@@ -935,13 +944,17 @@ fn buildStack(c: *Child, info: ElfInfo, at_base: u64) ?usize {
     return sp;
 }
 
-// Load the PT_INTERP interpreter through the child's fs view — the same
-// ops record the child itself would use for openat()/read(). Header and
-// phdrs go through a small stack buffer; each PT_LOAD streams straight
-// into its mapped user pages via read_at — the kernel never buffers a
-// whole image (the bump heap can't afford a second copy of ld.so).
-fn loadViaFs(c: *Child, path: []const u8) ?ElfInfo {
+// Load an ELF image through the child's fs view — the same ops record the
+// child itself would use for openat()/read(). Header and phdrs go through
+// a small stack buffer; each PT_LOAD streams straight into its mapped
+// user pages via read_at — the kernel never buffers a whole image (the
+// bump heap can't afford a second copy of ld.so). dyn_bias lands ET_DYN
+// at the given base (mains take USER_VA_BASE, the interp INTERP_BASE);
+// ET_EXEC maps at p_vaddr outright. PT_INTERP is captured into ipath for
+// the caller to resolve — through the view, same rule as loadElf.
+fn loadElfViaFs(c: *Child, path: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen: ?*usize) ?ElfInfo {
     const ops = c.fsv orelse return null;
+    if (ilen != null) ilen.?.* = 0;
     var z: [256]u8 = undefined;
     if (path.len >= z.len) return null;
     @memcpy(z[0..path.len], path);
@@ -955,7 +968,9 @@ fn loadViaFs(c: *Child, path: []const u8) ?ElfInfo {
     const b: []const u8 = hd[0..@intCast(hn)];
     if (b[0] != 0x7F or b[1] != 'E' or b[2] != 'L' or b[3] != 'F' or
         b[4] != 2 or b[5] != 1) { ops.close(ops.ctx, fh); return null; }
-    if (u16le(b, 16) != 3 or u16le(b, 18) != 0x3E) { ops.close(ops.ctx, fh); return null; }
+    const etype = u16le(b, 16);
+    if (u16le(b, 18) != 0x3E or (etype != 2 and etype != 3)) { ops.close(ops.ctx, fh); return null; }
+    const bias: usize = if (etype == 3) dyn_bias else 0;
     const entry: usize = @intCast(u64le(b, 24));
     const phoff: usize = @intCast(u64le(b, 32));
     const phentsz: usize = u16le(b, 54);
@@ -964,17 +979,31 @@ fn loadViaFs(c: *Child, path: []const u8) ?ElfInfo {
         ops.close(ops.ctx, fh);
         return null;
     }
+    var phdr_va: usize = 0;
     var max_va: usize = 0;
     var i: usize = 0;
     while (i < phnum) : (i += 1) {
         const ph = phoff + i * phentsz;
-        if (u32le(b, ph) != 1) continue; // PT_LOAD only
+        const ptype = u32le(b, ph);
+        if (ptype == 3) { // PT_INTERP — capture the loader path for the
+            // caller to stream as a second image (the loader itself).
+            const off: usize = @intCast(u64le(b, ph + 8));
+            const filesz: usize = @intCast(u64le(b, ph + 32));
+            if (ilen != null and ipath != null and filesz <= ipath.?.len) {
+                _ = ops.read_at(ops.ctx, fh, off, ipath.?.ptr, filesz);
+                ilen.?.* = filesz;
+            }
+            continue;
+        }
+        if (ptype != 1) continue; // PT_LOAD only
         const off: usize = @intCast(u64le(b, ph + 8));
         const vaddr: usize = @intCast(u64le(b, ph + 16));
         const filesz: usize = @intCast(u64le(b, ph + 32));
         const memsz: usize = @intCast(u64le(b, ph + 40));
-        const va = INTERP_BASE + vaddr;
+        if (filesz > memsz) { ops.close(ops.ctx, fh); return null; }
+        const va = bias + vaddr;
         if (va + memsz > max_va) max_va = va + memsz;
+        if (va < USER_VA_BASE) { ops.close(ops.ctx, fh); return null; }
         var p = va & ~@as(usize, 0xFFF);
         while (p < va + memsz) : (p += 0x1000) {
             _ = mapUserPage(c, p) orelse { ops.close(ops.ctx, fh); return null; };
@@ -987,9 +1016,21 @@ fn loadViaFs(c: *Child, path: []const u8) ?ElfInfo {
             if (rn != @as(i64, @intCast(take))) { ops.close(ops.ctx, fh); return null; }
             n += take;
         }
+        if (phoff >= off and phoff + phnum * phentsz <= off + filesz)
+            phdr_va = va + (phoff - off);
+    }
+    if (phdr_va == 0 and phnum != 0) {
+        // phdrs not inside any PT_LOAD — park a copy on its own page the
+        // same way loadElf does; they're already in the head buffer.
+        const pv = USER_VA_BASE + 0x200000 - 0x1000;
+        _ = mapUserPage(c, pv) orelse { ops.close(ops.ctx, fh); return null; };
+        const dst: [*]u8 = @ptrFromInt(userPhys(c, pv));
+        var n: usize = 0;
+        while (n < phnum * phentsz) : (n += 1) dst[n] = b[phoff + n];
+        phdr_va = pv;
     }
     ops.close(ops.ctx, fh);
-    return .{ .entry = INTERP_BASE + entry, .phdr_va = 0, .phent = 0, .phnum = 0, .bias = INTERP_BASE, .brk_base = (max_va + 0xFFF) & ~@as(usize, 0xFFF) };
+    return .{ .entry = bias + entry, .phdr_va = phdr_va, .phent = phentsz, .phnum = phnum, .bias = bias, .brk_base = (max_va + 0xFFF) & ~@as(usize, 0xFFF) };
 }
 
 fn rdcr2() u64 {
@@ -1196,6 +1237,30 @@ fn stw(st: *[144]u8, off: usize, v: u64) void {
     for (0..8) |i| st[off + i] = @truncate(v >> @intCast(i * 8));
 }
 
+// Park a trapping child: rebuild its TrapFrame as an iret-resumable
+// UserFrame in the slot. The tail source depends on the entry — syscall
+// landed user rip/rflags in rcx/r11 with the user rsp stashed in
+// child_ursp; int 0x80's hardware frame already carries a complete iret
+// tail right below the pushed GP block (st[15..19]). Shared by every
+// wait-key park: conin today, spawn below.
+fn saveTrapFrame(c: *Child, f: *TrapFrame, from80: bool) void {
+    const st: [*]const u64 = @ptrCast(f);
+    for (0..15) |i| c.frame.gp[i] = st[i];
+    if (from80) {
+        c.frame.rip = st[15];
+        c.frame.cs = st[16];
+        c.frame.rflags = st[17];
+        c.frame.rsp = st[18];
+        c.frame.ss = st[19];
+    } else {
+        c.frame.rip = f.rcx;
+        c.frame.cs = 0x23;
+        c.frame.rflags = f.r11;
+        c.frame.rsp = child_ursp;
+        c.frame.ss = 0x1B;
+    }
+}
+
 // read(0): drain the console byte ring into the user buffer. Empty ring
 // is a real block, not EAGAIN — the child's syscall TrapFrame rebuilds a
 // full UserFrame (rcx = user rip, r11 = user rflags, child_ursp = user
@@ -1217,26 +1282,9 @@ fn coninRead(c: *Child, f: *TrapFrame, from80: bool) i64 {
     if (n != 0) return @intCast(n);
     if (userEntry(c, bva) & 1 == 0) return -14; // EFAULT — no page for a byte
 
-    // Empty ring: park — the TrapFrame rebuilds as an iret-resumable
-    // UserFrame. The tail source depends on the entry: syscall landed
-    // user rip/rflags in rcx/r11 with the user rsp stashed in
-    // child_ursp; int 0x80's hardware frame already carries a complete
-    // iret tail right below the pushed GP block (st[15..19]).
-    const st: [*]const u64 = @ptrCast(f);
-    for (0..15) |i| c.frame.gp[i] = st[i];
-    if (from80) {
-        c.frame.rip = st[15];
-        c.frame.cs = st[16];
-        c.frame.rflags = st[17];
-        c.frame.rsp = st[18];
-        c.frame.ss = st[19];
-    } else {
-        c.frame.rip = f.rcx;
-        c.frame.cs = 0x23;
-        c.frame.rflags = f.r11;
-        c.frame.rsp = child_ursp;
-        c.frame.ss = 0x1B;
-    }
+    // Empty ring: park — the trap frame rebuilds as an iret-resumable
+    // UserFrame and the wake completes the call.
+    saveTrapFrame(c, f, from80);
     c.wait_buf = f.rsi;
     c.wait_len = f.rdx;
     c.waiting_conin = true;
@@ -1269,6 +1317,74 @@ fn wakeConin() void {
         c.waiting_conin = false;
         c.state = .runnable;
     }
+}
+
+// nr 57 — koru spawn. fork's NR slot, loudly different semantics: no
+// address-space copy, the child starts from a *path in the caller's fs
+// view* and the caller parks on it until exit — the spawned child's
+// status IS the return value (a blocking spawn, not fork+exec+wait4).
+// A real musl fork() here hits EFAULT on its non-pointer rdi — refused,
+// not misrouted. The new child joins THIS epoch's roster (flat, ≤4):
+// it competes in the tick rotation while the spawner waits.
+fn childSpawn(c: *Child, f: *TrapFrame, from80: bool) i64 {
+    if (c.fsv == null) return -38; // ENOSYS — no fs view, nothing to exec
+    var pb: [256]u8 = undefined;
+    const path = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
+    // a free slot: dead slots were reaped and are reusable; empty slots
+    // extend the roster.
+    var slot: ?usize = null;
+    for (0..MAXCHILDREN) |i| {
+        const s = children[i].state;
+        if (s == .empty or s == .dead) { slot = i; break; }
+    }
+    const g = slot orelse return -11; // EAGAIN — roster full
+    const nc = &children[g];
+    nc.* = .{};
+    if (!buildTables(nc)) return -12; // ENOMEM
+    nc.fsv = c.fsv; // spawned inside the same view the caller names paths through
+    var ipath: [256]u8 = undefined;
+    var ilen: usize = 0;
+    const info = loadElfViaFs(nc, path, USER_VA_BASE, &ipath, &ilen) orelse {
+        _ = freeChild(nc);
+        return -2; // ENOENT — the view refused the path
+    };
+    var entry = info.entry;
+    var at_base: u64 = 0;
+    if (ilen > 0) { // PT_INTERP — the loader streams through the same view
+        const iname = std.mem.sliceTo(ipath[0..ilen], 0);
+        const iinfo = loadElfViaFs(nc, iname, INTERP_BASE, null, null) orelse {
+            _ = freeChild(nc);
+            return -2;
+        };
+        at_base = INTERP_BASE;
+        entry = iinfo.entry;
+    }
+    if (g >= nchildren) nchildren = g + 1;
+    nc.rights = f.rsi & c.rights; // a spawned bag can only narrow
+    nc.frame = std.mem.zeroes(UserFrame);
+    nc.frame.rip = entry;
+    nc.frame.cs = 0x23;
+    nc.frame.rflags = 0x202;
+    nc.frame.ss = 0x1B;
+    // argv[0] is the path the caller named — POSIX's own convention
+    var a0: usize = 0;
+    while (a0 < child_arg0.len - 1 and a0 < path.len) : (a0 += 1) child_arg0[a0] = path[a0];
+    child_arg0[a0] = 0;
+    nc.frame.rsp = buildStack(nc, info, at_base) orelse {
+        _ = freeChild(nc);
+        return -12;
+    };
+    nc.brk_base = info.brk_base;
+    nc.brk = info.brk_base;
+    nc.mmap_top = MMAP_BASE;
+    nc.state = .runnable;
+    // park the spawner on this child's exit — the exit arm completes the
+    // syscall by writing the status into our saved rax.
+    saveTrapFrame(c, f, from80);
+    c.waiting_exit = true;
+    c.wait_pid = g;
+    c.state = .blocked;
+    resumeChild(g); // run the new child first — the spawner waits anyway
 }
 
 export fn ring3_trap(f: *TrapFrame, from80: u64) callconv(.c) void {
@@ -1333,6 +1449,9 @@ export fn ring3_trap(f: *TrapFrame, from80: u64) callconv(.c) void {
         0 => { // read(fd, buf, len) — fd0 is the console ring: it returns
                // bytes or parks the child; fs handles ride the view.
             f.rax = if (f.rdi == 0) @bitCast(coninRead(c, f, from80 != 0)) else @bitCast(childRead(c, f.rdi, f.rsi, f.rdx));
+        },
+        57 => { // koru spawn(path, rights) — parks on child-exit, not fork
+            f.rax = @bitCast(childSpawn(c, f, from80 != 0));
         },
         3 => { // close(fd)
             const fd = f.rdi;
@@ -1485,6 +1604,17 @@ export fn ring3_trap(f: *TrapFrame, from80: u64) callconv(.c) void {
         60, 231 => { // exit/exit_group(code) — child dies, frames go back
             last_exit = f.rdi;
             children[cur_child].state = .dead;
+            const dead_slot = cur_child;
+            // wake a parent parked in spawn() on this slot — its saved
+            // rax takes our exit status; that IS spawn's return value.
+            for (0..nchildren) |i| {
+                const p = &children[i];
+                if (p.state == .blocked and p.waiting_exit and p.wait_pid == dead_slot) {
+                    p.frame.gp[0] = last_exit;
+                    p.waiting_exit = false;
+                    p.state = .runnable;
+                }
+            }
             const nf = freeChild(&children[cur_child]);
             say("pmm: reap freed=");
             puthex(nf);
@@ -1732,7 +1862,7 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
                 return -2;
             }
             const iname = std.mem.sliceTo(ipath[0..ilen], 0);
-            const iinfo = loadViaFs(c, iname) orelse {
+            const iinfo = loadElfViaFs(c, iname, INTERP_BASE, null, null) orelse {
                 say("ELF REFUSE: PT_INTERP loader unreadable\n");
                 return -2;
             };

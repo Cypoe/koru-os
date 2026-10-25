@@ -473,8 +473,10 @@ the `cyberboot` path — with virtio-gpu later for damage/3D).
 ## Open axes (dependency order)
 
 ```
-wait queues (conin landed; general wait keys remain) + kernel-as-context
-  + per-task kstacks + FPU state
+wait queues (conin + child-exit landed — spawn parks the spawner;
+  general wait keys remain) + kernel-as-context + per-task kstacks
+  (shared rsp0 is 64KiB — stopgap, see frag-trap-stack-is-a-budget)
+  + FPU state; shell REPL landed (nr57 spawn-on-exit, status to rax)
   (frame allocator + reclaim landed: refcounted 4KiB frames, pinned-buffer
    + pair-release shapes proven; bump heap remains for program data)
     → syscall surface + nid-scoped grant bags (replaces NR bitmask)

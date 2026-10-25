@@ -161,12 +161,14 @@ else
         cp "$ROOT/koru/native/tests/hi.c" "$WORK/hi.c"
         cp "$ROOT/koru/native/tests/libhi.c" "$WORK/libhi.c"
         cp "$ROOT/koru/native/tests/getc.c" "$WORK/getc.c"
+        cp "$ROOT/koru/native/tests/sh.c" "$WORK/sh.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
         FSCATWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/fscat.elf")")"
         HELLOWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/hello.txt")")"
         GETCWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/getc.elf")")"
+        SHWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/sh.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -176,6 +178,7 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/musl.elf" "$WORK/muslhello.c" > "$WORK/musl.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fscat.elf" "$WORK/fscat.c" > "$WORK/fscat.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/getc.elf" "$WORK/getc.c" > "$WORK/getc.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/sh.elf" "$WORK/sh.c" > "$WORK/sh.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
@@ -183,6 +186,7 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $FSCATWSL fscat.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $HELLOWSL hello.txt" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GETCWSL getc.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $SHWSL sh.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -399,6 +403,84 @@ else
             fi
         else
             bad "boot_conin: build failed"; tail -6 "$WORK/boot_conin.build"
+        fi
+
+        # shell REPL: sh.elf parks on read(0), names a path through its
+        # scoped fs view, and nr=57 spawns it — the spawner parks on the
+        # grandchild's exit and the child's status is the syscall's
+        # return. Same monitor contract as conin: the prompt must be
+        # observed BEFORE any sendkey, or a preloaded ring fakes the run.
+        sh_src="$WORK/boot_shell.k"
+        sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_shell.k" > "$sh_src"
+        if bash "$ROOT/scripts/build-native.sh" "$sh_src" "$WORK/boot_shell.elf" > "$WORK/boot_shell.build" 2>&1; then
+            shport=$((5400 + $$ % 300))
+            timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_shell.elf" -serial stdio \
+                -display none -m 64M -no-reboot \
+                -monitor "tcp:127.0.0.1:$shport,server,nowait" \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on \
+                > "$WORK/boot_shell.serial" 2>&1 &
+            shq=$!
+            prompt=0
+            for _ in $(seq 1 60); do
+                grep -qF 'koru> ' "$WORK/boot_shell.serial" 2>/dev/null && { prompt=1; break; }
+                sleep 0.25
+            done
+            keys=0
+            if [ "$prompt" -eq 1 ]; then
+                for _ in $(seq 1 20); do
+                    exec 4<>"/dev/tcp/127.0.0.1/$shport" 2>/dev/null && break
+                    sleep 0.5
+                done
+                if [ -e /dev/fd/4 ]; then
+                    for k in p i e dot e l f ret; do
+                        printf 'sendkey %s\n' "$k" >&4 2>/dev/null || break
+                        keys=$((keys+1))
+                        sleep 0.3
+                    done
+                    exec 4>&-
+                fi
+                # wait for the grandchild's exit status to reach the shell
+                done1=0
+                for _ in $(seq 1 60); do
+                    grep -qF 'exit=42' "$WORK/boot_shell.serial" 2>/dev/null && { done1=1; break; }
+                    kill -0 $shq 2>/dev/null || break
+                    sleep 0.25
+                done
+                # reprompt observed before quitting
+                for _ in $(seq 1 40); do
+                    grep -c 'koru> ' "$WORK/boot_shell.serial" 2>/dev/null | grep -q '^[2-9]' && break
+                    sleep 0.25
+                done
+                for _ in $(seq 1 20); do
+                    exec 4<>"/dev/tcp/127.0.0.1/$shport" 2>/dev/null && break
+                    sleep 0.5
+                done
+                if [ -e /dev/fd/4 ]; then
+                    printf 'sendkey q\n' >&4 2>/dev/null
+                    sleep 0.3
+                    printf 'sendkey ret\n' >&4 2>/dev/null
+                    sleep 1   # let the monitor drain before the socket closes
+                    exec 4>&-
+                fi
+            fi
+            wait $shq 2>/dev/null || true
+            if [ "$prompt" -eq 0 ]; then
+                bad "shell-repl: no 'koru> ' prompt — sh never reached read(0): $(tail -4 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
+            elif [ "$keys" -lt 8 ]; then
+                bad "shell-repl: monitor injection failed ($keys/8 keys sent)"
+            elif [ "${done1:-0}" -eq 0 ]; then
+                bad "shell-repl: spawn never completed: $(tail -6 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
+            elif grep -qF 'SHELL COMPLETE' "$WORK/boot_shell.serial" \
+                 && grep -qF 'real pie child says hi' "$WORK/boot_shell.serial" \
+                 && grep -qF 'exit=42' "$WORK/boot_shell.serial" \
+                 && grep -qF 'shell: exec sh status=47' "$WORK/boot_shell.serial"; then
+                ok "shell-repl: sh spawned pie.elf via nr57 parked on exit (status 42 home), q quit (47)"
+            else
+                bad "shell-repl: evidence missing: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
+            fi
+        else
+            bad "boot_shell: build failed"; tail -6 "$WORK/boot_shell.build"
         fi
     else
         bad "boot_ext2: image build failed: $(tail -2 "$WORK/mke2fs.out" "$WORK/debugfs.out")"

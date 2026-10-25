@@ -129,8 +129,20 @@ fn reserve(phys: u64, len: u64) void {
 }
 
 pub fn alloc() ?u64 {
+    // two passes: hint..managed, then 0..hint — the hint is a heuristic,
+    // not a boundary; freed frames below it stay reachable or every
+    // alloc/free cycle leaks frames silently.
     var i = hint;
     while (i < managed) : (i += 1) {
+        if (refs[i] == 0) {
+            refs[i] = 1;
+            live += 1;
+            hint = i;
+            return @as(u64, i) * FRAME;
+        }
+    }
+    i = 0;
+    while (i < hint) : (i += 1) {
         if (refs[i] == 0) {
             refs[i] = 1;
             live += 1;
