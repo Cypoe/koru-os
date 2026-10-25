@@ -16,10 +16,13 @@ never an ambient root.
 
 The split of custody that makes it honest:
 
-- **The kernel side is fs-agnostic.** `user.zig` owns only fd slots
-  3..7, child-memory copies (through the identity map, so write-bit
-  and U/S state can't fault the copy), and the bag check — `openat`
-  (257) folds to the open capability (2). It never parses a path.
+- **The kernel side is fs-agnostic.** `user.zig` owns only the fd
+  projection — slots 3..7 hold `.fs`-kind entries naming opaque view
+  handles (slots 0..2 are conin/conout entries; `frag-fd-projects-a-
+  typed-endpoint` holds the kinds table) — child-memory copies
+  (through the identity map, so write-bit and U/S state can't fault
+  the copy), and the bag check — `openat` (257) folds to the open
+  capability (2). It never parses a path.
 - **The provider owns everything fs-shaped.** Handles
   (`OpenFile{ino,pos}`), `lookupPath` for names, `readAt` for the
   partial read. Path strings are *views* — the read is always

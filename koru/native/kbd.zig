@@ -39,13 +39,19 @@ var drops: u64 = 0;
 // ---- console input: the read(0) path --------------------------------------
 // A second ring, ASCII bytes this time — the scancode ring above serves
 // koruos/input (raw make/break is that contract); a child's read() wants
-// *characters*. Set-1 makes below map to their unshifted US glyph; breaks,
-// E0 codes and the unmapped keys are invisible here — honest: shift/caps
-// are unmodeled for the rung, not silently wrong.
+// *characters*. Set-1 makes map through two glyph tables — shift state
+// (make 2A/36, break AA/B6) selects which one answers. Caps lock stays
+// unmodeled: honest, not silently wrong.
 const SET1: [58]u8 = .{ 0, 0, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 0x08, 0,
     'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n', 0,
     'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0, '\\',
     'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' ' };
+const SET1_SHIFT: [58]u8 = .{ 0, 0, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', 0x08, 0,
+    'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', 0,
+    'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0, '|',
+    'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0, '*', 0, ' ' };
+
+var shift: bool = false;
 
 var con: [256]u8 = undefined;
 var chead: usize = 0;
@@ -65,9 +71,13 @@ pub fn irq() void {
         ring[head] = sc;
         head = next;
     }
-    // console ring: make-codes only, mapped, dropped when full
-    if (sc & 0x80 == 0 and sc < SET1.len) {
-        const ch = SET1[sc];
+    // console ring: shift make/break updates the state, other make-codes
+    // map through the table it selects, dropped when full
+    const code = sc & 0x7F;
+    if (code == 0x2A or code == 0x36) {
+        shift = (sc & 0x80) == 0;
+    } else if (sc & 0x80 == 0 and code < SET1.len) {
+        const ch = if (shift) SET1_SHIFT[code] else SET1[code];
         if (ch != 0) {
             const cn = (chead + 1) % con.len;
             if (cn != ctail) {

@@ -13,7 +13,7 @@ import koruos/ext2
 import std/io
 
 koruos/ext2:mount(id: 0)
-| ok m |> koruos/ext2:exec(m.fs, path: "sh.elf", rights: 8214566270097626927)
+| ok m |> koruos/ext2:exec(m.fs, path: "sh.elf", rights: 8502796646253532975)
         | ok e |> std/io:print.ln("shell: exec sh status={{ e.status:d }}")
             |> koruos/ext2:unmount(e.fs)
                 | ok |> std/io:print.ln("SHELL COMPLETE")

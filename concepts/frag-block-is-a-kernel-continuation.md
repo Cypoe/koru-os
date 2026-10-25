@@ -15,7 +15,9 @@ mark `.blocked` + `wait_kind`, schedule. The waker is a mark-only write —
 the call resumes mid-provider-depth and the syscall completes itself
 through the entry path it arrived on. `wait_frame`, entry-faithful tail
 rebuild, `from80`, and every wake-side user-buffer write are gone: three
-wait kinds (conin byte, blk request, child exit) share one primitive.
+wait kinds (conin byte, blk request, child exit, pipe endpoint) share
+one primitive — `.pipe` joined as the fifth kind with `wait_pipe` as its
+identity, waking on bytes/space/EOS/EPIPE rechecks.
 
 The discipline that makes it correct:
 

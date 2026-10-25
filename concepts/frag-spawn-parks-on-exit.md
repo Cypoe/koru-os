@@ -17,11 +17,15 @@ runnable; the resumed spawn call returns the status as rax itself.
 
 Mechanism evolved (2026-10): the park is now a suspended kernel
 continuation on the parent's own kstack — see
-`frag-block-is-a-kernel-continuation`. The semantic above is unchanged:
-spawn's return value IS the child's exit status; no waitpid primitive.
-`.blk` joined `.conin` and `.exit` as a third wait kind — virtio DMA
-waits mid-call now schedule the roster instead of halting (`yields=` in
-the blk stats is the measured evidence).
+`frag-block-is-a-kernel-continuation`. The semantic above is unchanged
+for nr57: its return value IS the child's exit status. The detached
+twin landed with pipes (2026-10): nr58 spawn_start shares `spawnBuild`,
+returns the roster-slot nid immediately, adds explicit fd0/fd1 wiring
+(r8/r9), and marks the child `.waitable` — its death leaves a `.zombie`
+status that nr61 wait claims once (pid = slot, -1 = any). nr57 stays
+the fused shape for the common case; `frag-fd-projects-a-typed-endpoint`
+holds the lifecycle contract. `.pipe` joined `.conin`/`.blk`/`.exit` as
+wait kinds on the same primitive.
 
 Rights on the seam: the spawned bag is `requested ∩ parent's bag` —
 a child can shed capabilities, never grow them. A `fork()` from musl

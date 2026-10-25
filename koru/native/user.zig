@@ -584,7 +584,7 @@ const UserFrame = extern struct {
     ss: u64,
 };
 
-const ChildState = enum { empty, runnable, blocked, dead };
+const ChildState = enum { empty, runnable, blocked, zombie, dead };
 const MAXCHILDREN: usize = 4;
 
 // The child's scoped fs view: the fs a child was spawned *from* hands
@@ -603,7 +603,13 @@ const ChildFsOps = extern struct {
     close: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) void,
 };
 
-const WaitKind = enum { none, conin, blk, exit };
+const WaitKind = enum { none, conin, blk, exit, pipe };
+
+// fd slots are projections over typed seam endpoints, not bare provider
+// handles: stdio are real entries (conin/conout), fs a view handle,
+// pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
+// kind, never on the number — closing fd0 detaches like any discharge.
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w };
 
 const Child = struct {
     pml4: usize = 0,
@@ -618,7 +624,8 @@ const Child = struct {
     rights: u64 = 0,
     state: ChildState = .empty,
     fsv: ?*const ChildFsOps = null, // scoped fs view (the spawning fs)
-    fds: [8]u64 = .{0} ** 8,        // provider handles; 0..2 are stdio
+    fds: [8]u64 = .{0} ** 8,        // endpoint id by kind: fs handle or pipe idx
+    fdkinds: [8]FdKind = .{.none} ** 8,
     // blocking is a kernel continuation, not a rebuilt user frame: kblock
     // pushes callee-saved on this child's own kstack and stores the rsp
     // here; a waker just flips .runnable and the next switchInto pops the
@@ -626,8 +633,12 @@ const Child = struct {
     // itself on whatever entry path it arrived on.
     wait_kind: WaitKind = .none,    // what the .blocked child waits on
     wait_pid: usize = 0,            // .exit: roster slot of the awaited child
+    wait_pipe: usize = 0,           // .pipe: which ring the child waits on
     kctx: u64 = 0,                  // saved kernel rsp while blocked mid-call
     spawn_ret: i64 = 0,             // .exit wake: the dead child's status
+    waitable: bool = false,         // detached spawn: hold status in a
+                                    // .zombie slot until wait() claims it
+    exit_status: i64 = 0,           // zombie payload — claimed by wait()
     ursp: u64 = 0,                  // user rsp at syscall entry — child_ursp
                                     // is a per-syscall global; a blocked
                                     // syscall outlives it, so we snapshot
@@ -1174,13 +1185,14 @@ fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
     if (h < 0) return h; // provider's errno passes through (ENOENT &c.)
     var fd: usize = 3;
     while (fd < c.fds.len) : (fd += 1) {
-        if (c.fds[fd] == 0) break;
+        if (c.fdkinds[fd] == .none) break;
     }
     if (fd == c.fds.len) {
         ops.close(ops.ctx, @intCast(h));
         return -24; // EMFILE
     }
     c.fds[fd] = @intCast(h);
+    c.fdkinds[fd] = .fs;
     return @intCast(fd);
 }
 
@@ -1271,14 +1283,22 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
     if (fdu >= c.fds.len) return -9;
     var st: [144]u8 = std.mem.zeroes([144]u8);
     const fd: usize = @intCast(fdu);
-    if (fd < 3) {
-        // stdio: chrdev, 0620 — the console has no size to name
-        stw(&st, 24, 0o20620);
-        stw(&st, 16, 1); // nlink
-    } else {
-        if (c.fds[fd] == 0) return -9;
-        const ops = c.fsv orelse return -38;
-        if (ops.stat(ops.ctx, c.fds[fd], &st) < 0) return -9;
+    switch (c.fdkinds[fd]) {
+        .none => return -9,
+        .conin, .conout => {
+            // stdio: chrdev, 0620 — the console has no size to name
+            stw(&st, 24, 0o20620);
+            stw(&st, 16, 1); // nlink
+        },
+        .pipe_r, .pipe_w => {
+            // a fifo, honestly named — musl isatty/fstat probing sees S_IFIFO
+            stw(&st, 24, 0o10600);
+            stw(&st, 16, 1);
+        },
+        .fs => {
+            const ops = c.fsv orelse return -38;
+            if (ops.stat(ops.ctx, c.fds[fd], &st) < 0) return -9;
+        },
     }
     const n = copyToUser(c, @intCast(stva), &st);
     return if (n < 144) -14 else 0;
@@ -1317,14 +1337,249 @@ fn coninRead(c: *Child, f: *TrapFrame) i64 {
     }
 }
 
-// nr 57 — koru spawn. fork's NR slot, loudly different semantics: no
-// address-space copy, the child starts from a *path in the caller's fs
-// view* and the caller parks on it until exit — the spawned child's
-// status IS the return value (a blocking spawn, not fork+exec+wait4).
-// A real musl fork() here hits EFAULT on its non-pointer rdi — refused,
-// not misrouted. The new child joins THIS epoch's roster (flat, ≤4):
-// it competes in the tick rotation while the spawner waits.
-fn childSpawn(c: *Child, f: *TrapFrame) i64 {
+// ---- pipes: a seam is a bounded kernel ring with refcounted ends --------
+// pipe() mints one ring and two fd entries pointing at it; spawn wiring
+// clones entries (bumping the end's refs); close/exit decrements. The
+// wait key is .pipe + wait_pipe idx — read-or-block on empty, write-or-
+// block on full, exactly the conin shape. Last writer gone -> drain-then-
+// EOS; last reader gone -> writer wakes to -EPIPE. Wake is mark-only like
+// every other kind: the recheck loop is what actually sees EOS/EPIPE.
+const NPIPES = 8;
+const Pipe = struct {
+    used: bool = false,
+    head: usize = 0,
+    tail: usize = 0,
+    count: usize = 0,
+    rrefs: u8 = 0,
+    wrefs: u8 = 0,
+    buf: [2048]u8 = undefined,
+};
+var pipes: [NPIPES]Pipe = .{Pipe{}} ** NPIPES;
+pub export var pipe_reads: u64 = 0;
+pub export var pipe_writes: u64 = 0;
+pub export var pipe_rwaits: u64 = 0;
+pub export var pipe_wwaits: u64 = 0;
+
+// Mark-only wake for every .pipe waiter on this ring — called after any
+// endpoint ref change or buffer activity; the woken call rechecks.
+fn wakePipe(idx: usize) void {
+    for (0..nchildren) |i| {
+        const p = &children[i];
+        if (p.state == .blocked and p.wait_kind == .pipe and
+            p.wait_pipe == idx) p.state = .runnable;
+    }
+}
+
+fn pipeCreate() ?usize {
+    for (0..NPIPES) |i| {
+        if (!pipes[i].used) {
+            pipes[i] = .{ .used = true, .rrefs = 1, .wrefs = 1 };
+            return i;
+        }
+    }
+    return null;
+}
+
+fn pipeReadEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
+    if (want == 0) return 0;
+    const p = &pipes[idx];
+    while (true) {
+        asm volatile ("cli" ::: .{ .memory = true });
+        if (p.count > 0) {
+            var n: usize = 0;
+            while (n < want and p.count > 0) : (n += 1) {
+                const va: usize = @intCast(buva + n);
+                if (userEntry(c, va) & 1 == 0) break;
+                const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
+                ub[0] = p.buf[p.tail];
+                p.tail = (p.tail + 1) % p.buf.len;
+                p.count -= 1;
+            }
+            asm volatile ("sti" ::: .{ .memory = true });
+            if (n != 0) {
+                pipe_reads += 1;
+                wakePipe(idx); // space opened — prod any parked writer
+                return @intCast(n);
+            }
+            if (userEntry(c, @intCast(buva)) & 1 == 0) return -14;
+        } else if (p.wrefs == 0) {
+            asm volatile ("sti" ::: .{ .memory = true });
+            return 0; // last writer gone and drained — this read IS the EOS
+        } else {
+            c.wait_pipe = idx;
+            pipe_rwaits += 1;
+            kblock(.pipe); // wake = a byte or a writer left — recheck
+        }
+    }
+}
+
+fn pipeWriteEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
+    if (want == 0) return 0;
+    const p = &pipes[idx];
+    while (true) {
+        asm volatile ("cli" ::: .{ .memory = true });
+        if (p.rrefs == 0) {
+            asm volatile ("sti" ::: .{ .memory = true });
+            return -32; // EPIPE — no reader can ever drain this
+        }
+        if (p.count < p.buf.len) {
+            var n: usize = 0;
+            while (n < want and p.count < p.buf.len) : (n += 1) {
+                const va: usize = @intCast(buva + n);
+                if (userEntry(c, va) & 1 == 0) break;
+                p.buf[p.head] = userByte(c, va);
+                p.head = (p.head + 1) % p.buf.len;
+                p.count += 1;
+            }
+            asm volatile ("sti" ::: .{ .memory = true });
+            if (n != 0) {
+                pipe_writes += 1;
+                wakePipe(idx); // bytes landed — prod any parked reader
+                return @intCast(n);
+            }
+            if (userEntry(c, @intCast(buva)) & 1 == 0) return -14;
+        } else {
+            c.wait_pipe = idx;
+            pipe_wwaits += 1;
+            kblock(.pipe); // wake = space freed or all readers gone
+        }
+    }
+}
+
+// Close one fd entry's endpoint. Ring outlives either end; both gone
+// releases the slot. The surviving side wakes on its NEXT endpoint op —
+// a parked peer is marked now and rechecks the new refcount itself.
+fn pipeCloseEnd(idx: usize, kind: FdKind) void {
+    const p = &pipes[idx];
+    if (kind == .pipe_r) {
+        if (p.rrefs > 0) p.rrefs -= 1;
+        if (p.rrefs == 0) wakePipe(idx); // any parked writer sees EPIPE
+    } else {
+        if (p.wrefs > 0) p.wrefs -= 1;
+        if (p.wrefs == 0) wakePipe(idx); // any parked reader sees EOS
+    }
+    if (p.rrefs == 0 and p.wrefs == 0) p.* = .{};
+}
+
+// Dying child's discharge: the exit arm's page reclaim can't see the fd
+// table, so endpoint release lives here — called once, at death, before
+// the slot becomes a zombie/dead.
+fn releaseFds(c: *Child) void {
+    for (0..c.fds.len) |i| {
+        switch (c.fdkinds[i]) {
+            .none => {},
+            .fs => {
+                if (c.fsv) |ops| _ = ops.close(ops.ctx, c.fds[i]);
+            },
+            .pipe_r, .pipe_w => pipeCloseEnd(@intCast(c.fds[i]), c.fdkinds[i]),
+            .conin, .conout => {},
+        }
+        c.fds[i] = 0;
+        c.fdkinds[i] = .none;
+    }
+}
+
+// Spawn wiring: project one of the SPAWNER's fd entries into the child's
+// table. Pipes bump endpoint refs; fs entries SHARE the handle (same
+// offset/pos — dup semantics, not an independent open).
+fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) void {
+    const kind = src.fdkinds[sfd];
+    dst.fdkinds[dfd] = kind;
+    dst.fds[dfd] = src.fds[sfd];
+    switch (kind) {
+        .pipe_r => pipes[@intCast(src.fds[sfd])].rrefs += 1,
+        .pipe_w => pipes[@intCast(src.fds[sfd])].wrefs += 1,
+        else => {},
+    }
+}
+
+// nr 22 — pipe(fds[2]): mint a ring, write the two NEW fd numbers into
+// the caller's two-int array. Refuses EMFILE on a full table or pool.
+fn childPipe(c: *Child, pva: u64) i64 {
+    var slots: [2]usize = undefined;
+    var sn: usize = 0;
+    for (0..c.fds.len) |i| {
+        if (c.fdkinds[i] == .none) {
+            slots[sn] = i;
+            sn += 1;
+            if (sn == 2) break;
+        }
+    }
+    if (sn < 2) return -24; // EMFILE
+    const pi = pipeCreate() orelse return -24;
+    var out: [8]u8 = undefined;
+    for (0..2) |i| {
+        const v: u32 = @intCast(slots[i]);
+        std.mem.writeInt(u32, out[i * 4 ..][0..4], v, .little);
+    }
+    if (copyToUser(c, @intCast(pva), &out) < 8) {
+        pipes[pi] = .{};
+        return -14;
+    }
+    c.fdkinds[slots[0]] = .pipe_r;
+    c.fds[slots[0]] = pi;
+    c.fdkinds[slots[1]] = .pipe_w;
+    c.fds[slots[1]] = pi;
+    return 0;
+}
+
+// nr 61 — wait(pid, status): pid is the roster-slot nid spawn_start
+// handed back. -1 waits for ANY zombie. Reaping marks the slot .dead:
+// the status is claimed once and a reused slot can never serve it twice.
+const ANY_PID: usize = ~@as(usize, 0);
+fn childWait(c: *Child, pid: i64, stva: u64) i64 {
+    while (true) {
+        asm volatile ("cli" ::: .{ .memory = true });
+        var slot: ?usize = null;
+        var live = false;
+        if (pid == -1) {
+            for (0..nchildren) |i| {
+                const st = children[i].state;
+                if (st == .zombie and slot == null) slot = i;
+                if (st == .runnable or st == .blocked) live = true;
+            }
+        } else {
+            if (pid < 0 or pid >= MAXCHILDREN) {
+                asm volatile ("sti" ::: .{ .memory = true });
+                return -10; // ECHILD — no such roster slot
+            }
+            const st = children[@intCast(pid)].state;
+            if (st == .zombie) slot = @intCast(pid);
+            live = st == .runnable or st == .blocked;
+        }
+        if (slot) |g| {
+            const status = children[g].exit_status;
+            children[g].state = .dead;
+            children[g].waitable = false;
+            asm volatile ("sti" ::: .{ .memory = true });
+            if (stva != 0) {
+                var stb: [4]u8 = undefined;
+                const sv: u32 = @truncate(@as(u64, @bitCast(status)));
+                stb[0] = @truncate(sv);
+                stb[1] = @truncate(sv >> 8);
+                stb[2] = @truncate(sv >> 16);
+                stb[3] = @truncate(sv >> 24);
+                if (copyToUser(c, @intCast(stva), &stb) < 4) return -14;
+            }
+            return @intCast(g);
+        }
+        if (!live) {
+            asm volatile ("sti" ::: .{ .memory = true });
+            return -10; // ECHILD — nobody left that could still die
+        }
+        c.wait_pid = if (pid == -1) ANY_PID else @intCast(pid);
+        kblock(.exit); // a death mark wakes us; the loop re-questions
+    }
+}
+
+// Spawn builder shared by nr57 (fused spawn+wait) and nr58 (detached).
+// Builds tables, loads through the caller's fs view, primes the frame and
+// the fd projection — stdio defaults to conin/conout entries; in_src/
+// out_src (r8/r9 on nr58) override fd0/fd1 by CLONING caller entries, so
+// `a | b` is a pipe end projected into each child's table, not an inherit-
+// all that could never express the swap. Returns the slot or -errno.
+const SPAWN_NO_FD: u64 = ~@as(u64, 0);
+fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u64) i64 {
     if (c.fsv == null) return -38; // ENOSYS — no fs view, nothing to exec
     var pb: [256]u8 = undefined;
     const path = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
@@ -1354,7 +1609,8 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
         ablen = path.len + 1;
     }
     // a free slot: dead slots were reaped and are reusable; empty slots
-    // extend the roster.
+    // extend the roster. A .zombie holds its status until claimed — it
+    // is NOT free for reuse.
     var slot: ?usize = null;
     for (0..MAXCHILDREN) |i| {
         const s = children[i].state;
@@ -1365,9 +1621,29 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     nc.* = .{};
     if (!buildTables(nc)) return -12; // ENOMEM
     nc.fsv = c.fsv; // spawned inside the same view the caller names paths through
+    // stdio is a projection too: conin/conout entries by default, the
+    // caller's in_src/out_src entries cloned in when wiring is asked for.
+    nc.fdkinds[0] = .conin;
+    nc.fdkinds[1] = .conout;
+    nc.fdkinds[2] = .conout;
+    if (in_src != SPAWN_NO_FD) {
+        if (in_src >= c.fds.len or c.fdkinds[@intCast(in_src)] == .none) {
+            _ = freeChild(nc);
+            return -9; // EBADF — wiring names a dead slot
+        }
+        cloneFd(nc, 0, c, @intCast(in_src));
+    }
+    if (out_src != SPAWN_NO_FD) {
+        if (out_src >= c.fds.len or c.fdkinds[@intCast(out_src)] == .none) {
+            _ = freeChild(nc);
+            return -9;
+        }
+        cloneFd(nc, 1, c, @intCast(out_src));
+    }
     var ipath: [256]u8 = undefined;
     var ilen: usize = 0;
     const info = loadElfViaFs(nc, path, USER_VA_BASE, &ipath, &ilen) orelse {
+        releaseFds(nc);
         _ = freeChild(nc);
         return -2; // ENOENT — the view refused the path
     };
@@ -1376,6 +1652,7 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     if (ilen > 0) { // PT_INTERP — the loader streams through the same view
         const iname = std.mem.sliceTo(ipath[0..ilen], 0);
         const iinfo = loadElfViaFs(nc, iname, INTERP_BASE, null, null) orelse {
+            releaseFds(nc);
             _ = freeChild(nc);
             return -2;
         };
@@ -1384,12 +1661,14 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     }
     if (g >= nchildren) nchildren = g + 1;
     nc.rights = f.rsi & c.rights; // a spawned bag can only narrow
+    nc.waitable = waitable;
     nc.frame = std.mem.zeroes(UserFrame);
     nc.frame.rip = entry;
     nc.frame.cs = 0x23;
     nc.frame.rflags = 0x202;
     nc.frame.ss = 0x1B;
     nc.frame.rsp = buildStack(nc, info, at_base, ablob[0..ablen]) orelse {
+        releaseFds(nc);
         _ = freeChild(nc);
         return -12;
     };
@@ -1397,6 +1676,23 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     nc.brk = info.brk_base;
     nc.mmap_top = MMAP_BASE;
     nc.state = .runnable;
+    return @intCast(g);
+}
+
+// nr 57 — koru spawn. fork's NR slot, loudly different semantics: no
+// address-space copy, the child starts from a *path in the caller's fs
+// view* and the caller parks on it until exit — the spawned child's
+// status IS the return value (a blocking spawn, not fork+exec+wait4).
+// A real musl fork() here hits EFAULT on its non-pointer rdi — refused,
+// not misrouted. nr58 (spawn_start) is the detached twin: same builder,
+// same args plus r8/r9 fd wiring, but it returns the slot nid at once
+// and the child is .waitable — its status parks in a .zombie until
+// nr61 wait claims it. Both children of a pipeline must coexist; the
+// fused shape can never express that.
+fn childSpawn(c: *Child, f: *TrapFrame) i64 {
+    const r = spawnBuild(c, f, false, SPAWN_NO_FD, SPAWN_NO_FD);
+    if (r < 0) return r;
+    const g: usize = @intCast(r);
     // park on the child's exit: each kblock hands the roster to whoever
     // is runnable (the grandchild included); the exit arm writes our
     // spawn_ret before marking us runnable, so the status we return IS
@@ -1404,7 +1700,8 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     c.wait_pid = g;
     while (true) {
         asm volatile ("cli" ::: .{ .memory = true });
-        if (children[g].state == .dead) {
+        const st = children[g].state;
+        if (st == .dead or st == .zombie) {
             asm volatile ("sti" ::: .{ .memory = true });
             break;
         }
@@ -1439,17 +1736,32 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
     }
     const c = &children[cur_child];
     switch (f.rax) {
-        1 => { // write(fd, buf, len) -> len
-            if (f.rdx != 0) {
-                if (f.rsi == 0) {
-                    f.rax = @bitCast(@as(i64, -14)); // EFAULT
-                    return;
+        1 => { // write(fd, buf, len) — kind dispatch: conout sinks to
+               // serial, pipe_w feeds the ring (blocks on full, EPIPE on
+               // dead readers); an fs view is read-only — EROFS, not a
+               // silent drop.
+            if (f.rdi >= c.fds.len) {
+                f.rax = @bitCast(@as(i64, -9));
+            } else {
+                const fdi: usize = @intCast(f.rdi);
+                switch (c.fdkinds[fdi]) {
+                    .conout => {
+                        if (f.rdx != 0) {
+                            if (f.rsi == 0) {
+                                f.rax = @bitCast(@as(i64, -14)); // EFAULT
+                                return;
+                            }
+                            const buf: [*]const u8 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
+                            var i: usize = 0;
+                            while (i < f.rdx) : (i += 1) serPut(buf[i]);
+                        }
+                        f.rax = f.rdx;
+                    },
+                    .pipe_w => f.rax = @bitCast(pipeWriteEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
+                    .fs => f.rax = @bitCast(@as(i64, -30)), // EROFS
+                    else => f.rax = @bitCast(@as(i64, -9)),
                 }
-                const buf: [*]const u8 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
-                var i: usize = 0;
-                while (i < f.rdx) : (i += 1) serPut(buf[i]);
             }
-            f.rax = f.rdx;
         },
         20 => { // writev(fd, iov, iovcnt) -> total
             const iov: [*]const u64 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
@@ -1481,19 +1793,59 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @bitCast(childOpen(c, pva, fl));
             }
         },
-        0 => { // read(fd, buf, len) — fd0 is the console ring: it returns
-               // bytes or parks the child; fs handles ride the view.
-            f.rax = if (f.rdi == 0) @bitCast(coninRead(c, f)) else @bitCast(childRead(c, f.rdi, f.rsi, f.rdx));
+        0 => { // read(fd, buf, len) — kind dispatch: conin returns bytes
+               // or parks; fs handles ride the view; pipe_r drains the
+               // ring or parks on empty (EOS when writers are gone).
+            if (f.rdi >= c.fds.len) {
+                f.rax = @bitCast(@as(i64, -9));
+            } else {
+                const fdi: usize = @intCast(f.rdi);
+                f.rax = @bitCast(switch (c.fdkinds[fdi]) {
+                    .conin => coninRead(c, f),
+                    .fs => childRead(c, f.rdi, f.rsi, f.rdx),
+                    .pipe_r => pipeReadEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
+                    else => @as(i64, -9),
+                });
+            }
+        },
+        22 => { // pipe(fds[2]) — mints a ring; endpoints land as pipe_r/
+                // pipe_w entries in the caller's projection.
+            f.rax = @bitCast(childPipe(c, f.rdi));
         },
         57 => { // koru spawn(path, rights) — parks on child-exit, not fork
             f.rax = @bitCast(childSpawn(c, f));
         },
-        3 => { // close(fd)
-            const fd = f.rdi;
-            if (fd >= 3 and fd < c.fds.len and c.fds[fd] != 0) {
-                if (c.fsv) |ops| ops.close(ops.ctx, c.fds[fd]);
-                c.fds[fd] = 0;
-                f.rax = 0;
+        58 => { // spawn_start(path, rights, blob, blen, r8=in, r9=out) —
+                // same builder, detached: returns the slot nid now; the
+                // child is .waitable and its death leaves a .zombie.
+            f.rax = @bitCast(spawnBuild(c, f, true, f.r8, f.r9));
+        },
+        61 => { // wait(pid, status) — pid is a slot nid, -1 any zombie
+            f.rax = @bitCast(childWait(c, @bitCast(f.rdi), f.rsi));
+        },
+        3 => { // close(fd) — discharge whatever the slot projects; a
+               // conin/conout close just detaches.
+            if (f.rdi < c.fds.len) {
+                const fd: usize = @intCast(f.rdi);
+                switch (c.fdkinds[fd]) {
+                    .none => f.rax = @bitCast(@as(i64, -9)),
+                    .conin, .conout => {
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .fs => {
+                        if (c.fsv) |ops| _ = ops.close(ops.ctx, c.fds[fd]);
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .pipe_r, .pipe_w => {
+                        pipeCloseEnd(@intCast(c.fds[fd]), c.fdkinds[fd]);
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                }
             } else {
                 f.rax = @bitCast(@as(i64, -9));
             }
@@ -1639,19 +1991,28 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         60, 231 => { // exit/exit_group(code) — child dies, frames go back
             last_exit = f.rdi;
             const dead_slot = cur_child;
-            // Wake spawn-waiters with the status already in hand: a
-            // parent's loop breaks on observing this slot .dead, then
-            // reads its OWN spawn_ret — the value can't be clobbered by
-            // the dead slot's reuse because it lives in the waiter.
+            // The fd projection dies with the child — endpoint refs drop
+            // here, which is what wakes a peer blocked on this pipe.
+            releaseFds(&children[dead_slot]);
+            // Wake spawn/wait-waiters with the status already in hand: a
+            // parent's loop breaks on observing this slot .dead/.zombie,
+            // then reads its OWN spawn_ret — the value can't be clobbered
+            // by the dead slot's reuse because it lives in the waiter.
+            // ANY_PID is nr61's wait-any mark.
             for (0..nchildren) |i| {
                 const p = &children[i];
-                if (p.state == .blocked and p.wait_kind == .exit and p.wait_pid == dead_slot) {
+                if (p.state == .blocked and p.wait_kind == .exit and
+                    (p.wait_pid == dead_slot or p.wait_pid == ANY_PID)) {
                     p.spawn_ret = @bitCast(last_exit);
                     p.state = .runnable;
                 }
             }
-            children[cur_child].state = .dead;
-            const nf = freeChild(&children[cur_child]);
+            const dead = &children[cur_child];
+            dead.exit_status = @bitCast(last_exit);
+            // .waitable (nr58) parks the status in a .zombie for wait to
+            // claim; the fused nr57 child has no claimant and goes .dead.
+            dead.state = if (dead.waitable) .zombie else .dead;
+            const nf = freeChild(dead);
             say("pmm: reap freed=");
             puthex(nf);
             say("\n");
@@ -2000,6 +2361,9 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         }
         c.fsv = fsv;
         c.fds = .{0} ** 8;
+        // provider children get the stdio projection too — stdio is a
+        // typed entry now, not an fd-number special case
+        c.fdkinds = .{ .conin, .conout, .conout, .none, .none, .none, .none, .none };
         var ipath: [256]u8 = undefined;
         var ilen: usize = 0;
         const info = loadElf(c, imgs[i][0..sizes[i]], USER_VA_BASE, &ipath, &ilen) orelse {
@@ -2068,6 +2432,14 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
     koru_putdec(kctx_resumes);
     say(" tick_kctx=");
     koru_putdec(tick_kctx);
+    say(" pipe: rd=");
+    koru_putdec(pipe_reads);
+    say(" wr=");
+    koru_putdec(pipe_writes);
+    say(" rwaits=");
+    koru_putdec(pipe_rwaits);
+    say(" wwaits=");
+    koru_putdec(pipe_wwaits);
     say("\n");
     return @intCast(last_exit);
 }

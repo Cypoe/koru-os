@@ -481,7 +481,13 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
   open: kernel contexts themselves are non-preemptible while running)
   + FPU state; shell REPL landed (nr57 spawn-on-exit,
   status to rax); argv rides the spawn seam as a NUL-separated blob
-  (args.elf evidence: argc/argv vector + status home); general wait
+  (args.elf evidence: argc/argv vector + status home); pipes-as-seams
+  landed (typed fd projection: conin/conout/fs/pipe_r/pipe_w kinds on a
+  shared slot table; nr22 pipe mints a refcounted ring, nr58 spawn_start
+  wires fd0/fd1 explicitly and leaves a .waitable child whose .zombie
+  nr61 wait claims once; .pipe is the fifth wait kind — reader-parks-on-
+  empty, EPIPE/EOS on last-end close; pipegen|catc drains 20B through a
+  real ring with rwaits counted); general wait
   keys are now mechanical: new kind + a waker mark + a recheck loop
   (frame allocator + reclaim landed: refcounted 4KiB frames, pinned-buffer
    + pair-release shapes proven; bump heap remains for program data)
