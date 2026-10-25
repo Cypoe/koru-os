@@ -458,6 +458,11 @@ the `cyberboot` path — with virtio-gpu later for damage/3D).
 - PIT tick preemption: per-child frames + CR3, round-robin roster of ≤4
   ring-3 ELF64 children, in-place ISR-frame rewrite
 - `SYSCALL`/`SYSRET` seam with rights bags (NR bitmask today)
+- blocking console input: `read(0)` on an empty conin ring parks the
+  child `.blocked` (trap frame → full UserFrame, entry-faithful tail);
+  IRQ1's `wakeConin` completes the read into the parked buffer, count in
+  saved rax. Epoch drains on all-dead (`anyLive`), not all-runnable —
+  a parked child holds the roster open
 - ext2: mount/create/verify/fetch — **path as projection over inode
   identity** (`dirFind`/`lookupPath`/`lookup`); `exec(path)` folds
   walk→inode→ELF→spawn; `pin`/`exec-nid` run a child *by identity*
@@ -468,7 +473,8 @@ the `cyberboot` path — with virtio-gpu later for damage/3D).
 ## Open axes (dependency order)
 
 ```
-wait queues + kernel-as-context + per-task kstacks + FPU state
+wait queues (conin landed; general wait keys remain) + kernel-as-context
+  + per-task kstacks + FPU state
   (frame allocator + reclaim landed: refcounted 4KiB frames, pinned-buffer
    + pair-release shapes proven; bump heap remains for program data)
     → syscall surface + nid-scoped grant bags (replaces NR bitmask)

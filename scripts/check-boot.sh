@@ -160,11 +160,13 @@ else
         cp "$ROOT/koru/native/tests/fscat.c" "$WORK/fscat.c"
         cp "$ROOT/koru/native/tests/hi.c" "$WORK/hi.c"
         cp "$ROOT/koru/native/tests/libhi.c" "$WORK/libhi.c"
+        cp "$ROOT/koru/native/tests/getc.c" "$WORK/getc.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
         FSCATWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/fscat.elf")")"
         HELLOWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/hello.txt")")"
+        GETCWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/getc.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -173,12 +175,14 @@ else
         if MSYS2_ARG_CONV_EXCL='*' wsl -e gcc -static-pie -nostdlib -nostartfiles -s -Wl,--build-id=none -Wl,-z,noseparate-code -o "$PIEWSL" "$REALWSL" > "$WORK/pie.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/musl.elf" "$WORK/muslhello.c" > "$WORK/musl.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fscat.elf" "$WORK/fscat.c" > "$WORK/fscat.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/getc.elf" "$WORK/getc.c" > "$WORK/getc.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $MUSLWSL musl.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $FSCATWSL fscat.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $HELLOWSL hello.txt" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GETCWSL getc.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -346,6 +350,55 @@ else
             fi
         else
             bad "boot_multi: ticker ELFs not built (wslpath failed)"
+        fi
+
+        # conin: getc.elf's read(0) on an empty console ring parks the
+        # child .blocked — the only resume is an 8042 IRQ1 whose ASCII byte
+        # completes the read into the parked buffer. Same monitor-socket
+        # injection as input-kbd, but the key must land AFTER the "?>"
+        # prompt: an early sendkey just pre-loads the ring and the read
+        # drains without ever blocking, proving nothing.
+        con_src="$WORK/boot_conin.k"
+        sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_conin.k" > "$con_src"
+        if bash "$ROOT/scripts/build-native.sh" "$con_src" "$WORK/boot_conin.elf" > "$WORK/boot_conin.build" 2>&1; then
+            conport=$((5200 + $$ % 400))
+            timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_conin.elf" -serial stdio \
+                -display none -m 64M -no-reboot \
+                -monitor "tcp:127.0.0.1:$conport,server,nowait" \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on \
+                > "$WORK/boot_conin.serial" 2>&1 &
+            conq=$!
+            prompt=0
+            for _ in $(seq 1 40); do
+                grep -qF '?>' "$WORK/boot_conin.serial" 2>/dev/null && { prompt=1; break; }
+                sleep 0.25
+            done
+            keys=0
+            for _ in $(seq 1 20); do
+                exec 4<>"/dev/tcp/127.0.0.1/$conport" 2>/dev/null && break
+                sleep 0.5
+            done
+            if [ -e /dev/fd/4 ]; then
+                for _ in 1 2 3; do
+                    printf 'sendkey k\n' >&4 2>/dev/null || break
+                    keys=$((keys+1))
+                    sleep 0.5
+                done
+                exec 4>&-
+            fi
+            wait $conq 2>/dev/null || true
+            if [ "$prompt" -eq 0 ]; then
+                bad "conin-read: no '?> ' prompt — getc never reached read(0): $(tail -4 "$WORK/boot_conin.serial" | tr '\n' '|')"
+            elif [ "$keys" -eq 0 ]; then
+                bad "conin-read: monitor connect/sendkey failed — no injection happened"
+            elif grep -qF "GOT=k" "$WORK/boot_conin.serial" && grep -qF "conin: exec getc status=42" "$WORK/boot_conin.serial"; then
+                ok "conin-read: read(0) parked on conin until IRQ1 — sendkey k completed the read (GOT=k, status=42)"
+            else
+                bad "conin-read: wake evidence missing: $(tail -6 "$WORK/boot_conin.serial" | tr '\n' '|')"
+            fi
+        else
+            bad "boot_conin: build failed"; tail -6 "$WORK/boot_conin.build"
         fi
     else
         bad "boot_ext2: image build failed: $(tail -2 "$WORK/mke2fs.out" "$WORK/debugfs.out")"

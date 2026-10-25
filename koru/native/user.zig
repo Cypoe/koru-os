@@ -341,6 +341,7 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             schedPreempt(f);
         } else if (f.vec == 0x21) {
             kbd.irq(); // 8042 scancode → input ring
+            wakeConin(); // a landed ASCII byte completes a parked read(0)
         } else if (virtio_irq_line != 0xFF and f.vec == 0x20 + @as(u64, virtio_irq_line)) {
             virtio_irq_ack();
             virtio_seen += 1;
@@ -366,6 +367,8 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
     puthex(f.rip);
     say(" err=");
     puthex(f.err);
+    say(" cs=");
+    puthex(f.cs);
     say(" va=");
     puthex(rdcr2());
     if (f.vec == 3) {
@@ -386,6 +389,25 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             const p: *const u64 = @ptrFromInt((e & ~@as(u64, 0xFFF)) + (va & 0xFFF));
             puthex(p.*);
             say(" ");
+        }
+    } else { // kernel fault — CPL0 pushes no rsp/ss, so the faulting
+        // context's stack lives ABOVE the ExcFrame (older words), not
+        // below it. Dump the saved gp regs + the words past the frame.
+        say("\nregs:");
+        const g: [*]const u64 = @ptrCast(f);
+        var i: usize = 0;
+        while (i < 15) : (i += 1) {
+            say(" ");
+            puthex(g[i]);
+        }
+        say("\nup: ");
+        var w: usize = @intFromPtr(f) + @sizeOf(ExcFrame);
+        i = 0;
+        while (i < 24) : (i += 1) {
+            const p: *const u64 = @ptrFromInt(w);
+            puthex(p.*);
+            say(" ");
+            w += 8;
         }
     }
     say(" — halting\n");
@@ -557,7 +579,7 @@ const UserFrame = extern struct {
     ss: u64,
 };
 
-const ChildState = enum { empty, runnable, dead };
+const ChildState = enum { empty, runnable, blocked, dead };
 const MAXCHILDREN: usize = 4;
 
 // The child's scoped fs view: the fs a child was spawned *from* hands
@@ -590,6 +612,9 @@ const Child = struct {
     state: ChildState = .empty,
     fsv: ?*const ChildFsOps = null, // scoped fs view (the spawning fs)
     fds: [8]u64 = .{0} ** 8,        // provider handles; 0..2 are stdio
+    waiting_conin: bool = false,    // parked in read(0) on the console ring
+    wait_buf: u64 = 0,              // user VA the wake fills on IRQ1
+    wait_len: u64 = 0,
 };
 
 var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{} };
@@ -1171,7 +1196,82 @@ fn stw(st: *[144]u8, off: usize, v: u64) void {
     for (0..8) |i| st[off + i] = @truncate(v >> @intCast(i * 8));
 }
 
-export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
+// read(0): drain the console byte ring into the user buffer. Empty ring
+// is a real block, not EAGAIN — the child's syscall TrapFrame rebuilds a
+// full UserFrame (rcx = user rip, r11 = user rflags, child_ursp = user
+// rsp), the child parks on conin, the roster rotates or the CPU halts;
+// the IRQ1 wake completes the read into wait_buf and puts the count in
+// gp[0] — the resumed child lands post-syscall with rax already right.
+fn coninRead(c: *Child, f: *TrapFrame, from80: bool) i64 {
+    const want: usize = @intCast(f.rdx);
+    if (want == 0) return 0;
+    const bva: usize = @intCast(f.rsi);
+    var n: usize = 0;
+    while (n < want) : (n += 1) {
+        const ch = kbd.conByte() orelse break;
+        const va = bva + n;
+        if (userEntry(c, va) & 1 == 0) break;
+        const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
+        ub[0] = ch;
+    }
+    if (n != 0) return @intCast(n);
+    if (userEntry(c, bva) & 1 == 0) return -14; // EFAULT — no page for a byte
+
+    // Empty ring: park — the TrapFrame rebuilds as an iret-resumable
+    // UserFrame. The tail source depends on the entry: syscall landed
+    // user rip/rflags in rcx/r11 with the user rsp stashed in
+    // child_ursp; int 0x80's hardware frame already carries a complete
+    // iret tail right below the pushed GP block (st[15..19]).
+    const st: [*]const u64 = @ptrCast(f);
+    for (0..15) |i| c.frame.gp[i] = st[i];
+    if (from80) {
+        c.frame.rip = st[15];
+        c.frame.cs = st[16];
+        c.frame.rflags = st[17];
+        c.frame.rsp = st[18];
+        c.frame.ss = st[19];
+    } else {
+        c.frame.rip = f.rcx;
+        c.frame.cs = 0x23;
+        c.frame.rflags = f.r11;
+        c.frame.rsp = child_ursp;
+        c.frame.ss = 0x1B;
+    }
+    c.wait_buf = f.rsi;
+    c.wait_len = f.rdx;
+    c.waiting_conin = true;
+    c.state = .blocked;
+    if (nextRunnable()) |nx| resumeChild(nx);
+    // No other runnable child but the epoch is still open — halt here on
+    // rsp0 until IRQ1's wake flips us runnable. schedPreempt sees cs=8 and
+    // won't rotate, so the wake's own write is what ends the halt.
+    while (c.state == .blocked) asm volatile ("sti; hlt");
+    resumeChild(cur_child);
+}
+
+// IRQ1 lands a console byte — a parked read(0) completes right here in
+// the handler: bytes into the child's wait_buf, the count into gp[0]
+// (its saved rax), state flips runnable — the next rotation resumes it.
+fn wakeConin() void {
+    for (0..nchildren) |i| {
+        const c = &children[i];
+        if (c.state != .blocked or !c.waiting_conin) continue;
+        var n: usize = 0;
+        while (n < c.wait_len) : (n += 1) {
+            const ch = kbd.conByte() orelse break;
+            const va: usize = @intCast(c.wait_buf + n);
+            if (userEntry(c, va) & 1 == 0) break;
+            const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
+            ub[0] = ch;
+        }
+        if (n == 0) continue; // break code / unmapped — stay parked
+        c.frame.gp[0] = n;
+        c.waiting_conin = false;
+        c.state = .runnable;
+    }
+}
+
+export fn ring3_trap(f: *TrapFrame, from80: u64) callconv(.c) void {
     // bag check before dispatch: an nr not granted in child_rights is a
     // capability refusal, loud on serial AND visible to the child as
     // -EACCES — not a silent ENOSYS. Bits name CAPABILITIES, not raw
@@ -1189,9 +1289,15 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
     const c = &children[cur_child];
     switch (f.rax) {
         1 => { // write(fd, buf, len) -> len
-            const buf: [*]const u8 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
-            var i: usize = 0;
-            while (i < f.rdx) : (i += 1) serPut(buf[i]);
+            if (f.rdx != 0) {
+                if (f.rsi == 0) {
+                    f.rax = @bitCast(@as(i64, -14)); // EFAULT
+                    return;
+                }
+                const buf: [*]const u8 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
+                var i: usize = 0;
+                while (i < f.rdx) : (i += 1) serPut(buf[i]);
+            }
             f.rax = f.rdx;
         },
         20 => { // writev(fd, iov, iovcnt) -> total
@@ -1201,6 +1307,11 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             while (i < f.rdx) : (i += 1) {
                 const base: usize = @intCast(iov[i * 2]);
                 const len: usize = @intCast(iov[i * 2 + 1]);
+                if (len == 0) continue; // libcs send trailing {NULL,0} iovs
+                if (base == 0) {
+                    f.rax = @bitCast(@as(i64, -14)); // EFAULT
+                    return;
+                }
                 const buf: [*]const u8 = @ptrFromInt(base);
                 var n: usize = 0;
                 while (n < len) : (n += 1) serPut(buf[n]);
@@ -1219,8 +1330,9 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @bitCast(childOpen(c, pva, fl));
             }
         },
-        0 => { // read(fd, buf, len) — fs handles only; stdin has no bytes
-            f.rax = @bitCast(childRead(c, f.rdi, f.rsi, f.rdx));
+        0 => { // read(fd, buf, len) — fd0 is the console ring: it returns
+               // bytes or parks the child; fs handles ride the view.
+            f.rax = if (f.rdi == 0) @bitCast(coninRead(c, f, from80 != 0)) else @bitCast(childRead(c, f.rdi, f.rsi, f.rdx));
         },
         3 => { // close(fd)
             const fd = f.rdi;
@@ -1355,12 +1467,18 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             f.rax = 0;
         },
         318 => { // getrandom — TSC-seeded xorshift; non-crypto, said so
-            const buf: [*]u8 = @ptrFromInt(@as(usize, @intCast(f.rdi)));
-            var s: u64 = rdtsc() ^ f.rsi;
-            var i: usize = 0;
-            while (i < f.rsi) : (i += 1) {
-                s ^= s << 13; s ^= s >> 7; s ^= s << 17;
-                buf[i] = @truncate(s);
+            if (f.rsi != 0) { // len 0 legal even with a NULL buf
+                if (f.rdi == 0) {
+                    f.rax = @bitCast(@as(i64, -14)); // EFAULT
+                    return;
+                }
+                const buf: [*]u8 = @ptrFromInt(@as(usize, @intCast(f.rdi)));
+                var s: u64 = rdtsc() ^ f.rsi;
+                var i: usize = 0;
+                while (i < f.rsi) : (i += 1) {
+                    s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+                    buf[i] = @truncate(s);
+                }
             }
             f.rax = f.rsi;
         },
@@ -1372,6 +1490,14 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             puthex(nf);
             say("\n");
             if (nextRunnable()) |n| resumeChild(n);
+            // Runnable ran out but blocked siblings can still wake — the
+            // epoch ends only when the roster is fully dead, so halt on
+            // rsp0 and let IRQ1's wake flip one runnable (or it exits,
+            // which is this same path again).
+            while (anyLive()) {
+                if (nextRunnable()) |n| resumeChild(n);
+                asm volatile ("sti; hlt");
+            }
             asm volatile (
                 \\ mov %[cr3], %%rax
                 \\ mov %%rax, %%cr3
@@ -1391,13 +1517,25 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
     }
 }
 
-// First runnable child after `cur` (wraps); null when the roster is dead.
+// First runnable child after `cur` (wraps); null when nothing is
+// runnable — dead, empty, or parked. Distinct from anyLive: a parked
+// child is not dead.
 fn nextRunnable() ?usize {
     for (0..nchildren) |k| {
         const j = (cur_child + 1 + k) % nchildren;
         if (children[j].state == .runnable) return j;
     }
     return null;
+}
+
+// Any child still in the epoch — runnable or parked. The roster drains
+// for the spawn caller only when this goes false.
+fn anyLive() bool {
+    for (0..nchildren) |i| {
+        const s = children[i].state;
+        if (s == .runnable or s == .blocked) return true;
+    }
+    return false;
 }
 
 // Resume child `nxt`: rsp -> its saved frame, CR3 -> its space, then the
@@ -1480,6 +1618,7 @@ comptime {
         \\   push %rbx
         \\   push %rax
         \\   mov %rsp, %rdi
+        \\   mov $1, %esi
         \\   call ring3_trap
         \\   pop %rax
         \\   pop %rbx
@@ -1532,6 +1671,7 @@ comptime {
         // ring3_trap's call site is call-conformant (movaps GPFs else).
         // rdi takes the frame BEFORE the pad.
         \\   mov %rsp, %rdi
+        \\   xor %esi, %esi
         \\   sub $8, %rsp
         \\   call ring3_trap
         \\   add $8, %rsp

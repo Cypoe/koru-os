@@ -36,6 +36,21 @@ var tail: usize = 0;
 var e0_pending: bool = false;
 var drops: u64 = 0;
 
+// ---- console input: the read(0) path --------------------------------------
+// A second ring, ASCII bytes this time — the scancode ring above serves
+// koruos/input (raw make/break is that contract); a child's read() wants
+// *characters*. Set-1 makes below map to their unshifted US glyph; breaks,
+// E0 codes and the unmapped keys are invisible here — honest: shift/caps
+// are unmodeled for the rung, not silently wrong.
+const SET1: [58]u8 = .{ 0, 0, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 0x08, 0,
+    'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n', 0,
+    'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0, '\\',
+    'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' ' };
+
+var con: [256]u8 = undefined;
+var chead: usize = 0;
+var ctail: usize = 0;
+
 // vec-0x21 path — called from user.zig's irq_exc_dispatch. Reads one byte
 // if the controller has one; on a full ring the byte is dropped and
 // counted, never silently overwritten.
@@ -46,10 +61,29 @@ pub fn irq() void {
     const next = (head + 1) % ring.len;
     if (next == tail) {
         drops += 1;
-        return;
+    } else {
+        ring[head] = sc;
+        head = next;
     }
-    ring[head] = sc;
-    head = next;
+    // console ring: make-codes only, mapped, dropped when full
+    if (sc & 0x80 == 0 and sc < SET1.len) {
+        const ch = SET1[sc];
+        if (ch != 0) {
+            const cn = (chead + 1) % con.len;
+            if (cn != ctail) {
+                con[chead] = ch;
+                chead = cn;
+            }
+        }
+    }
+}
+
+// one pending console byte for read(0), or null — nonblocking pop
+pub fn conByte() ?u8 {
+    if (ctail == chead) return null;
+    const ch = con[ctail];
+    ctail = (ctail + 1) % con.len;
+    return ch;
 }
 
 pub fn init() void {
