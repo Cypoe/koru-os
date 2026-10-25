@@ -167,6 +167,7 @@ else
         cp "$ROOT/koru/native/tests/libhi.c" "$WORK/libhi.c"
         cp "$ROOT/koru/native/tests/getc.c" "$WORK/getc.c"
         cp "$ROOT/koru/native/tests/sh.c" "$WORK/sh.c"
+        cp "$ROOT/koru/native/tests/args.c" "$WORK/args.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -174,6 +175,7 @@ else
         HELLOWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/hello.txt")")"
         GETCWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/getc.elf")")"
         SHWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/sh.elf")")"
+        ARGSWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/args.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -184,6 +186,7 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fscat.elf" "$WORK/fscat.c" > "$WORK/fscat.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/getc.elf" "$WORK/getc.c" > "$WORK/getc.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/sh.elf" "$WORK/sh.c" > "$WORK/sh.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/args.elf" "$WORK/args.c" > "$WORK/args.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
@@ -192,6 +195,7 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $HELLOWSL hello.txt" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GETCWSL getc.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $SHWSL sh.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ARGSWSL args.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -452,9 +456,32 @@ else
                     kill -0 $shq 2>/dev/null || break
                     sleep 0.25
                 done
+                # argv rung: "args.elf a1 b2" — the tokenized blob must
+                # reach the child's main(argc, argv) as a real vector,
+                # and argc rides home as the exit status (exit=3).
+                done2=0
+                if [ "${done1:-0}" -eq 1 ]; then
+                    for _ in $(seq 1 20); do
+                        exec 4<>"/dev/tcp/127.0.0.1/$shport" 2>/dev/null && break
+                        sleep 0.5
+                    done
+                    if [ -e /dev/fd/4 ]; then
+                        for k in a r g s dot e l f spc a 1 spc b 2 ret; do
+                            printf 'sendkey %s\n' "$k" >&4 2>/dev/null || break
+                            keys=$((keys+1))
+                            sleep 0.3
+                        done
+                        exec 4>&-
+                    fi
+                    for _ in $(seq 1 60); do
+                        grep -qF 'argv2=b2' "$WORK/boot_shell.serial" 2>/dev/null && { done2=1; break; }
+                        kill -0 $shq 2>/dev/null || break
+                        sleep 0.25
+                    done
+                fi
                 # reprompt observed before quitting
                 for _ in $(seq 1 40); do
-                    grep -c 'koru> ' "$WORK/boot_shell.serial" 2>/dev/null | grep -q '^[2-9]' && break
+                    grep -c 'koru> ' "$WORK/boot_shell.serial" 2>/dev/null | grep -q '^[3-9]' && break
                     sleep 0.25
                 done
                 for _ in $(seq 1 20); do
@@ -472,16 +499,22 @@ else
             wait $shq 2>/dev/null || true
             if [ "$prompt" -eq 0 ]; then
                 bad "shell-repl: no 'koru> ' prompt — sh never reached read(0): $(tail -4 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
-            elif [ "$keys" -lt 8 ]; then
-                bad "shell-repl: monitor injection failed ($keys/8 keys sent)"
+            elif [ "$keys" -lt 22 ]; then
+                bad "shell-repl: monitor injection failed ($keys/22 keys sent)"
             elif [ "${done1:-0}" -eq 0 ]; then
                 bad "shell-repl: spawn never completed: $(tail -6 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
+            elif [ "${done2:-0}" -eq 0 ]; then
+                bad "shell-repl: argv evidence missing — args.elf run never completed: $(tail -6 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             elif grep -qF 'SHELL COMPLETE' "$WORK/boot_shell.serial" \
                  && grep -qF 'real pie child says hi' "$WORK/boot_shell.serial" \
                  && grep -qF 'exit=42' "$WORK/boot_shell.serial" \
+                 && grep -qF 'argc=3' "$WORK/boot_shell.serial" \
+                 && grep -qF 'argv0=args.elf' "$WORK/boot_shell.serial" \
+                 && grep -qF 'argv1=a1' "$WORK/boot_shell.serial" \
+                 && grep -qF 'exit=3' "$WORK/boot_shell.serial" \
                  && grep -qF 'shell: exec sh status=47' "$WORK/boot_shell.serial" \
                  && grep -qE 'yields=[1-9]' "$WORK/boot_shell.serial"; then
-                ok "shell-repl: sh spawned pie.elf via nr57 parked on exit (status 42 home), q quit (47), mid-call blk yields scheduled"
+                ok "shell-repl: pie.elf via nr57 (42 home), args.elf got real argv (argc=3, a1 b2, exit=3), q quit (47), blk yields scheduled"
             else
                 bad "shell-repl: evidence missing: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             fi

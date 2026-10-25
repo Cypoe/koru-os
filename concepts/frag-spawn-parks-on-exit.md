@@ -28,6 +28,19 @@ a child can shed capabilities, never grow them. A `fork()` from musl
 lands on nr 57 with a non-path rdi and gets EFAULT loudly; claiming a
 Linux syscall number means claiming its honest failure too.
 
+Arguments ride the same seam as a **NUL-separated blob**, not an execve-
+style pointer array (2026-10): `spawn(path, rights, blob, blob_len)` —
+one bounded copy out of the caller's space, no two-level chase through
+user pointers, and the malformed cases are loud: oversized block
+-EINVAL, unmapped -EFAULT, past `MAXARGS` -E2BIG. Absent blob keeps the
+old contract: `argv[0]` is the path the caller named. The shell
+tokenizes its line; argv[0] stays the name *as invoked* while path
+resolution (`bin/` prefix) is a lookup detail, not an argument.
+Oracle lesson: an unterminated blob tail is a legal last arg, but the
+on-stack copy must still terminate — a `%s` scan past `USER_STACK_TOP`
+faults exactly at the window's edge, and it looks like a stack-layout
+bug for hours before the missing byte is seen.
+
 Evidence: `sh.elf` (musl REPL) prompts `koru> `, parks, takes
 `pie.elf\n` via monitor sendkey, spawns it — serial shows
 `real pie child says hi`, `pmm: reap freed=18`, then `exit=42` printed

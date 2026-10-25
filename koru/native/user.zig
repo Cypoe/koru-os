@@ -890,24 +890,59 @@ fn copyToUser(c: *Child, va: usize, src: []const u8) usize {
     }
     return n;
 }
+fn copyFromUser(c: *Child, va: usize, dst: []u8) usize {
+    var n: usize = 0;
+    while (n < dst.len) : (n += 1) {
+        if (userEntry(c, va + n) & 1 == 0) break;
+        dst[n] = userByte(c, va + n);
+    }
+    return n;
+}
 
-fn buildStack(c: *Child, info: ElfInfo, at_base: u64) ?usize {
+// MAXARGS bounds the argv vector a spawn blob may mint — argv[] lives on
+// the child's own stack, but argc past the cap is a malformed request,
+// refused loudly as -E2BIG before any loading happens.
+const MAXARGS = 16;
+
+// Lay out the ELF-ABI entry vector: `ablob` is the argument block —
+// argv strings packed back-to-back, each NUL-terminated (a trailing
+// non-terminated tail counts as the last arg; consecutive NULs mint
+// empty args, honestly). argc/argv[]/NULL/envp-NULL/auxv is the musl
+// _start contract; strings sit at the very top of the stack window.
+fn buildStack(c: *Child, info: ElfInfo, at_base: u64, ablob: []const u8) ?usize {
     var i: usize = 0;
     const sbase = USER_STACK_TOP - USER_STACK_PAGES * 0x1000;
     while (i < USER_STACK_PAGES) : (i += 1) {
         _ = mapUserPage(c, sbase + i * 0x1000) orelse return null;
     }
-    // strings + AT_RANDOM block live at the very top
-    const arg0 = std.mem.sliceTo(child_arg0[0..], 0);
+    // the arg block: copy it down from the top, then walk NUL boundaries
+    // for segment starts — argv[i] = blob_base + start[i].
+    var starts: [MAXARGS]usize = undefined;
+    var argc: usize = 0;
+    var bi: usize = 0;
+    while (bi < ablob.len and argc < MAXARGS) {
+        starts[argc] = bi;
+        argc += 1;
+        while (bi < ablob.len and ablob[bi] != 0) bi += 1;
+        bi += 1;
+    }
+    if (bi < ablob.len) return null; // more than MAXARGS — refused upstream
+    // The on-stack block always ends NUL-terminated: an unterminated
+    // tail is a legal last arg by the blob contract, but the child reads
+    // strings with %s — without the terminator it walks one byte past
+    // the top of the mapped window and faults at USER_STACK_TOP itself.
+    var blen = ablob.len;
+    if (blen == 0 or ablob[blen - 1] != 0) blen += 1;
     var top = USER_STACK_TOP;
     var n: usize = 0;
-    while (n <= arg0.len) : (n += 1) { // include the NUL
-        const phys = userPhys(c, top - arg0.len - 1 + n);
-        const dst: *u8 = @ptrFromInt(phys + ((top - arg0.len - 1 + n) & 0xFFF));
-        dst.* = if (n < arg0.len) arg0[n] else 0;
+    while (n < blen) : (n += 1) {
+        const va = top - blen + n;
+        const phys = userPhys(c, va);
+        const dst: *u8 = @ptrFromInt(phys + (va & 0xFFF));
+        dst.* = if (n < ablob.len) ablob[n] else 0;
     }
-    top -= arg0.len + 1;
-    const arg0_va = top;
+    top -= blen;
+    const blob_base = top;
     top -= 16;
     const rand_va = top;
     // AT_RANDOM: 16 bytes, TSC-seeded xorshift — an honest non-crypto seed.
@@ -943,11 +978,13 @@ fn buildStack(c: *Child, info: ElfInfo, at_base: u64) ?usize {
     for (fixed) |p| { auxv[na] = p; na += 1; }
     if (at_base != 0) { auxv[na] = .{ 7, at_base }; na += 1; }
     auxv[na] = .{ 0, 0 }; na += 1;
-    const vec_slots = 1 + 1 + 1 + 1 + na * 2; // argc argv0 NUL envpNUL pairs
+    const vec_slots = 1 + argc + 1 + 1 + na * 2; // argc argv[] NUL envpNUL pairs
     const sp = (top - vec_slots * 8) & ~@as(usize, 0xF);
     var at = sp;
-    userWrite(c, at, 1); at += 8;          // argc
-    userWrite(c, at, arg0_va); at += 8;    // argv[0]
+    userWrite(c, at, argc); at += 8;        // argc
+    for (0..argc) |k| {
+        userWrite(c, at, blob_base + starts[k]); at += 8;
+    }
     userWrite(c, at, 0); at += 8;          // argv NULL
     userWrite(c, at, 0); at += 8;          // envp NULL
     for (auxv[0..na]) |pair| {
@@ -1291,6 +1328,31 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     if (c.fsv == null) return -38; // ENOSYS — no fs view, nothing to exec
     var pb: [256]u8 = undefined;
     const path = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
+    // argv block: rdx/r10 name a NUL-separated string blob in OUR space —
+    // one bounded copy, no pointer-array chase. Absent block defaults
+    // argv[0] to the path (POSIX's own convention). The blob is checked
+    // before any loading: oversized/unmapped/malformed refuses loudly.
+    const ABLOB_MAX = 512;
+    var ablob: [ABLOB_MAX]u8 = undefined;
+    var ablen: usize = 0;
+    if (f.rdx != 0 and f.r10 != 0) {
+        if (f.r10 > ABLOB_MAX) return -22; // EINVAL — block exceeds the cap
+        ablen = copyFromUser(c, @intCast(f.rdx), ablob[0..f.r10]);
+        if (ablen < f.r10) return -14; // EFAULT — block straddles unmapped
+        var bi: usize = 0;
+        var na: usize = 0;
+        while (bi < ablen and na < MAXARGS) {
+            na += 1;
+            while (bi < ablen and ablob[bi] != 0) bi += 1;
+            bi += 1;
+        }
+        if (bi < ablen) return -7; // E2BIG — argv vector past MAXARGS
+    } else {
+        if (path.len + 1 > ABLOB_MAX) return -7;
+        @memcpy(ablob[0..path.len], path);
+        ablob[path.len] = 0;
+        ablen = path.len + 1;
+    }
     // a free slot: dead slots were reaped and are reusable; empty slots
     // extend the roster.
     var slot: ?usize = null;
@@ -1327,11 +1389,7 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     nc.frame.cs = 0x23;
     nc.frame.rflags = 0x202;
     nc.frame.ss = 0x1B;
-    // argv[0] is the path the caller named — POSIX's own convention
-    var a0: usize = 0;
-    while (a0 < child_arg0.len - 1 and a0 < path.len) : (a0 += 1) child_arg0[a0] = path[a0];
-    child_arg0[a0] = 0;
-    nc.frame.rsp = buildStack(nc, info, at_base) orelse {
+    nc.frame.rsp = buildStack(nc, info, at_base, ablob[0..ablen]) orelse {
         _ = freeChild(nc);
         return -12;
     };
@@ -1968,7 +2026,7 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         c.frame.rip = entry;
         c.frame.cs = 0x23; // user code64
         c.frame.rflags = 0x202; // IF=1 — the child may be ticked mid-flight
-        c.frame.rsp = buildStack(c, info, at_base) orelse return -1;
+        c.frame.rsp = buildStack(c, info, at_base, std.mem.sliceTo(child_arg0[0..], 0)) orelse return -1;
         c.brk_base = info.brk_base;
         c.brk = info.brk_base;
         c.mmap_top = MMAP_BASE;

@@ -480,8 +480,9 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
   continuation resumes at the next tick (tick-kctx row measures it);
   open: kernel contexts themselves are non-preemptible while running)
   + FPU state; shell REPL landed (nr57 spawn-on-exit,
-  status to rax); general wait keys are now mechanical: new kind +
-  a waker mark + a recheck loop
+  status to rax); argv rides the spawn seam as a NUL-separated blob
+  (args.elf evidence: argc/argv vector + status home); general wait
+  keys are now mechanical: new kind + a waker mark + a recheck loop
   (frame allocator + reclaim landed: refcounted 4KiB frames, pinned-buffer
    + pair-release shapes proven; bump heap remains for program data)
     → syscall surface + nid-scoped grant bags (replaces NR bitmask)
