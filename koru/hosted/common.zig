@@ -327,6 +327,19 @@ pub export fn koruos_nid_obj_key(nid: u64) callconv(.c) i64 {
     return -1;
 }
 
+// The pin's foreign name back out — same contract as the native store:
+// exec-by-nid proves the pin's scheme belongs to the provider family.
+pub export fn koruos_nid_obj_foreign(nid: u64, out: [*]u8, cap: usize) callconv(.c) i64 {
+    nidLoad();
+    for (nid_rows.items) |p| {
+        if (p.nid != nid) continue;
+        if (p.foreign.len > cap) return -1;
+        @memcpy(out[0..p.foreign.len], p.foreign);
+        return @intCast(p.foreign.len);
+    }
+    return -1;
+}
+
 // ---------------------------------------------------------------- export surface
 // This file is never the build root — the OS shim is — so its externs
 // are lazily-analyzed zig decls until referenced. Taking every address
@@ -348,4 +361,5 @@ comptime {
     _ = &ukplat_monotonic_clock;
     _ = &koruos_nid_obj_pin;
     _ = &koruos_nid_obj_key;
+    _ = &koruos_nid_obj_foreign;
 }

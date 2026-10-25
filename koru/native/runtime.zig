@@ -243,3 +243,16 @@ pub export fn koruos_nid_obj_key(nid: u64) callconv(.c) i64 {
     }
     return -1;
 }
+
+// The pin's foreign name back out — exec-by-nid needs the scheme to prove
+// the pin belongs to the provider family resolving it ("ext2/d0/12"), not
+// just a matching hash. Returns the name length, -1 unbound/short buffer.
+pub export fn koruos_nid_obj_foreign(nid: u64, out: [*]u8, cap: usize) callconv(.c) i64 {
+    for (objpins[0..n_objpins]) |p| {
+        if (p.nid != nid) continue;
+        if (p.flen > cap) return -1;
+        @memcpy(out[0..p.flen], p.foreign[0..p.flen]);
+        return @intCast(p.flen);
+    }
+    return -1;
+}

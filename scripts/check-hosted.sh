@@ -65,7 +65,7 @@ if [ $RC -ne 0 ]; then
     bad "hosted_ext2: run rc=$RC"; tail -8 "$WORK/hosted.serial"
 else
     if grep -qF "EXT2H COMPLETE" "$WORK/hosted.serial"; then
-        ok "hosted_ext2: mount→create→verify→exec→pin→exec-nid→unmount"
+        ok "hosted_ext2: mount→create→verify→exec→pin→exec-bynid→exec-nid→unmount"
     else
         bad "hosted_ext2: incomplete: $(tail -5 "$WORK/hosted.serial" | tr '\n' '|')"
     fi
@@ -79,12 +79,18 @@ else
     bad "exec-path: identity evidence missing: $(grep ext2h "$WORK/hosted.serial" | tail -3 | tr '\n' '|')"
 fi
 
-# the child ran twice, as a real host process: once by path, once by nid.
+# the child ran three times, as real host processes: by path, by nid with
+# the pin resolving the provider through the mounted table, and by nid
+# held in the caller's fs. The post-unmount call must refuse by name —
+# the pin outlives the mount but a dead provider never executes.
 nhits=$(grep -cF "hosted child says hi" "$WORK/hosted.serial")
-if [ "$nhits" -eq 2 ] && grep -qE "ext2h: exec-nid ino=[0-9]+ status=43" "$WORK/hosted.serial"; then
-    ok "spawn: child ran twice via fork+execve (path + exec-nid)"
+if [ "$nhits" -eq 3 ] \
+   && grep -qE "ext2h: exec-bynid dev=0 ino=[0-9]+ status=43" "$WORK/hosted.serial" \
+   && grep -qF "ext2h: exec-bynid post-unmount refused:" "$WORK/hosted.serial" \
+   && grep -qE "ext2h: exec-nid ino=[0-9]+ status=43" "$WORK/hosted.serial"; then
+    ok "spawn: child ran 3x via fork+execve (path + exec-bynid + exec-nid); stale pin refused post-unmount"
 else
-    bad "spawn: expected 2 child outputs, got $nhits"
+    bad "spawn: expected 3 child outputs + bynid evidence + post-unmount refusal, got $nhits: $(grep -aE 'exec-bynid|exec-nid' "$WORK/hosted.serial" | tail -4 | tr '\n' '|')"
 fi
 
 # pin re-mints exec's nid — identity derived from the object, on host too.

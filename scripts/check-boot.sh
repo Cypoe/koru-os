@@ -280,6 +280,16 @@ else
         else
             bad "exec-path: identity evidence missing: $(tail -4 "$WORK/boot_ext2.serial" | tr '\n' '|')"
         fi
+        # exec-by-nid resolves the provider FROM THE PIN — no caller-held
+        # fs: nid → key → dev → the mounted registry → the mount's own
+        # vfs. The post-unmount call must refuse by name: the pin outlives
+        # the mount but a dead provider never executes.
+        if grep -qE "ext2n: exec-bynid dev=0 ino=[0-9]+ status=43" "$WORK/boot_ext2.serial" \
+           && grep -qF "ext2n: exec-bynid post-unmount refused:" "$WORK/boot_ext2.serial"; then
+            ok "exec-bynid: pin resolved provider via mounted table (status=43); stale pin refused post-unmount"
+        else
+            bad "exec-bynid: evidence missing: $(grep -aE 'exec-bynid|FAIL|pin:' "$WORK/boot_ext2.serial" | tail -5 | tr '\n' '|')"
+        fi
         # the pin round-trip: pin(path) re-mints the SAME nid (identity is
         # derived from the object, not the view) and exec_nid re-runs the
         # child by nid alone — no path is walked on that call.

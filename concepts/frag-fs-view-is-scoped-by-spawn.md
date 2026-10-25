@@ -33,6 +33,12 @@ The split of custody that makes it honest:
 - **Handles are opaque ints to the kernel; pointers to the provider.**
   fd slot → `OpenFile*` only inside ext2's own ops — a forged fd just
   misses a slot and is EBADF, not a pointer the kernel trusts.
+- **The ops record is mount-owned, not call-scoped.** `fs.vfs` is a
+  field of the mounted `Fs`, built once at mount — its address is stable
+  for the mount's life. The earlier shape built it stack-local per exec
+  call, borrowed scratch that only survived because exec stayed
+  synchronous. `frag-pin-resolves-provider-by-table-walk` holds the
+  resolution walk that reaches `&fs.vfs` without a caller-held fs.
 
 The rung's oracle lesson — the one a real binary had to expose:
 

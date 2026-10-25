@@ -99,7 +99,18 @@ const Fs = struct {
     block_bitmap: u32,
     inode_bitmap: u32,
     inode_table: u32,
+    // The child's fs-view ops record lives IN the Fs — built once at
+    // mount, dead at unmount. &fs.vfs is what spawn hands the child's
+    // address space; a stack-local copy would be borrowed scratch whose
+    // lifetime silently depends on exec staying synchronous.
+    vfs: ChildFsOps,
 };
+
+// The mounted-provider table exec-by-nid walks: pin → key → dev → the
+// live mounted Fs. mount registers on success, unmount deregisters
+// BEFORE freeing — a pin outlives its provider's mount and the refusal
+// says so, never a dangling *Fs.
+var mounted: [8]?*Fs = .{null} ** 8;
 
 fn rd32(b: []const u8, off: usize) u32 { return std.mem.readInt(u32, b[off..][0..4], .little); }
 fn rd16(b: []const u8, off: usize) u16 { return std.mem.readInt(u16, b[off..][0..2], .little); }
@@ -242,6 +253,8 @@ fn pattern(i: usize) u8 {
     fs.block_bitmap = rd32(&fs.bgd, 0);
     fs.inode_bitmap = rd32(&fs.bgd, 4);
     fs.inode_table = rd32(&fs.bgd, 8);
+    fs.vfs = childFs(fs); // the ops record's home is the mount itself
+    if (fs.dev_id < mounted.len) mounted[fs.dev_id] = fs;
     return .{ .ok = .{ .fs = fs, .blocks = fs.blocks_count, .free_blocks = rd32(sb, 12), .free_inodes = rd32(sb, 16), .inodes = fs.inodes_count } };
 }
 
@@ -638,6 +651,7 @@ extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64, fsv: ?*co
 extern var child_arg0: [64]u8;
 extern fn koruos_nid_obj_pin(foreign: [*:0]const u8, key: u64) u64;
 extern fn koruos_nid_obj_key(nid: u64) i64;
+extern fn koruos_nid_obj_foreign(nid: u64, out: [*]u8, cap: usize) i64;
 
 // argv[0] for the next spawn: the exec'd path's basename — POSIX's own
 // convention (argv0 is the name the program was invoked as; for a
@@ -670,9 +684,8 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
         .ok => |b| b,
         .err => |e| return .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
     };
-    var vfs = childFs(fs);
     setArg0(path);
-    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights, &vfs);
+    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights, &fs.vfs);
     free(@ptrCast(bp.ptr));
     free(@ptrCast(bp));
     if (st < 0) return .{ .refused = .{ .fs = fs, .reason = "spawn provider refused the image" } };
@@ -710,13 +723,50 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
         .ok => |b| b,
         .err => |e| return .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
     };
-    var vfs = childFs(fs);
     setArg0("exec-nid");
-    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights, &vfs);
+    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights, &fs.vfs);
     free(@ptrCast(bp.ptr));
     free(@ptrCast(bp));
     if (st < 0) return .{ .refused = .{ .fs = fs, .reason = "spawn provider refused the image" } };
     return .{ .ok = .{ .fs = fs, .status = st, .ino = ino } };
+}
+
+// exec-by-nid: exec by identity ALONE — no caller-held fs. The pin
+// resolves the provider: the walk is two tables — nid → key
+// (dev<<32|ino) and the foreign name in koruos/nid's object store, then
+// dev → the live mounted Fs in this lift's `mounted` registry. The
+// foreign name must carry this provider's scheme and its device must
+// still be mounted — a pin that survives an unmount refuses by name,
+// never runs a dead provider's ops record. The child's fs view is
+// &fs.vfs: the mount's own record, alive exactly as long as the mount.
+~[retain]pub tor exec-by-nid { nid: u64, rights: u64 }
+| ok { status: i64, dev: u32, ino: u32 }
+| refused string
+
+~proc exec-by-nid|zig {
+    const key = koruos_nid_obj_key(nid);
+    if (key < 0) return .{ .refused = "nid not bound to an object" };
+    var fb: [64]u8 = undefined;
+    const fl = koruos_nid_obj_foreign(nid, &fb, fb.len);
+    if (fl < 0) return .{ .refused = "nid's foreign name unreadable" };
+    if (!std.mem.startsWith(u8, fb[0..@intCast(fl)], "ext2/"))
+        return .{ .refused = "nid pins a scheme this provider does not serve" };
+    const k: u64 = @bitCast(key);
+    const dev: u32 = @intCast(k >> 32);
+    if (dev >= mounted.len or mounted[dev] == null)
+        return .{ .refused = "nid's provider is not mounted" };
+    const fs = mounted[dev].?;
+    const ino: u32 = @intCast(k & 0xFFFFFFFF);
+    const bp = switch (readFile(fs, ino)) {
+        .ok => |b| b,
+        .err => |e| return .{ .refused = readErr(e) },
+    };
+    setArg0("exec-by-nid");
+    const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights, &fs.vfs);
+    free(@ptrCast(bp.ptr));
+    free(@ptrCast(bp));
+    if (st < 0) return .{ .refused = "spawn provider refused the image" };
+    return .{ .ok = .{ .status = st, .dev = dev, .ino = ino } };
 }
 
 ~pub tor verify { fs: *Fs<!mounted>, path: string, size: u32 }
@@ -750,6 +800,7 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
 
 ~proc unmount|zig {
     const dev = fs.dev;
+    if (fs.dev_id < mounted.len) mounted[fs.dev_id] = null; // before the free
     free(@ptrCast(fs.buf));
     free(@ptrCast(fs));
     if (uk_blkdev_stop(dev) != 0) return .{ .failed = "uk_blkdev_stop failed" };
