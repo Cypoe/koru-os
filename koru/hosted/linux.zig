@@ -90,6 +90,8 @@ fn spawnNote(rights: u64) void {
     common.say("spawn: hosted/linux — rights bag {x} advisory (seccomp pending); children are real host processes", .{rights});
 }
 
+pub export var child_arg0: [64]u8 = undefined;
+
 pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) callconv(.c) c_int {
     spawnNote(rights);
     const pid = spawnOne(image, size) catch |e| {

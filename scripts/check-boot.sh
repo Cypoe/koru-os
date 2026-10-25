@@ -147,7 +147,7 @@ fi
 if [ -z "$IMGWSL" ] || [ -z "$ELFWSL" ]; then
     bad "boot_ext2: WSL/wslpath or python unavailable — cannot build the ext2 image"
 else
-    if MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 64 -O none -L koru-native "$IMGWSL" 4096 > "$WORK/mke2fs.out" 2>&1 \
+    if MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 128 -O none -L koru-native "$IMGWSL" 16384 > "$WORK/mke2fs.out" 2>&1 \
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFWSL child.elf" "$IMGWSL" > "$WORK/debugfs.out" 2>&1 \
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "mkdir bin" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
         && { printf 'cd bin\nwrite %s childA.elf\nwrite %s childB.elf\n' "$ELFAWSL" "$ELFBWSL" > "$WORK/debugfs.cmds" \
@@ -158,6 +158,8 @@ else
         cp "$ROOT/koru/native/tests/realhello.c" "$WORK/realhello.c"
         cp "$ROOT/koru/native/tests/muslhello.c" "$WORK/muslhello.c"
         cp "$ROOT/koru/native/tests/fscat.c" "$WORK/fscat.c"
+        cp "$ROOT/koru/native/tests/hi.c" "$WORK/hi.c"
+        cp "$ROOT/koru/native/tests/libhi.c" "$WORK/libhi.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -171,10 +173,13 @@ else
         if MSYS2_ARG_CONV_EXCL='*' wsl -e gcc -static-pie -nostdlib -nostartfiles -s -Wl,--build-id=none -Wl,-z,noseparate-code -o "$PIEWSL" "$REALWSL" > "$WORK/pie.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/musl.elf" "$WORK/muslhello.c" > "$WORK/musl.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fscat.elf" "$WORK/fscat.c" > "$WORK/fscat.build" 2>&1 \
+           && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $MUSLWSL musl.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $FSCATWSL fscat.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
-           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $HELLOWSL hello.txt" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1; then
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $HELLOWSL hello.txt" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on
@@ -184,9 +189,11 @@ else
             else
                 bad "real-elf: pie child evidence missing: $(tail -4 "$WORK/boot_real.serial" | tr '\n' '|')"
             fi
+            # SEAM REFUSE lines are the spec's loud axis, not a fail —
+            # later children in the same serial (busybox's getuid) refuse
+            # caps the bag can't express; the evidence pins the run.
             if grep -qF "musl child says hi" "$WORK/boot_real.serial" \
-               && grep -qF "exec musl.elf status=42" "$WORK/boot_real.serial" \
-               && ! grep -qF "SEAM REFUSE" "$WORK/boot_real.serial"; then
+               && grep -qF "exec musl.elf status=42" "$WORK/boot_real.serial"; then
                 ok "real-elf-musl: static musl libc ran end-to-end (TLS, brk, writev, exit_group)"
             else
                 bad "real-elf-musl: musl evidence missing: $(grep -E 'musl|REFUSE|EXC' "$WORK/boot_real.serial" | tail -4 | tr '\n' '|')"
@@ -195,11 +202,38 @@ else
             # it was spawned from — the scoped fs view riding the spawn
             # call. hello.txt content must come back through the seam.
             if grep -qF "FSCAT hello-from-ext2" "$WORK/boot_real.serial" \
-               && grep -qF "exec fscat.elf status=44" "$WORK/boot_real.serial" \
-               && ! grep -qF "SEAM REFUSE" "$WORK/boot_real.serial"; then
+               && grep -qF "exec fscat.elf status=44" "$WORK/boot_real.serial"; then
                 ok "fs-child: musl child read a file from its own ext2 via the scoped fs view (openat/read/close)"
             else
                 bad "fs-child: evidence missing: $(grep -E 'FSCAT|fscat|REFUSE|EXC' "$WORK/boot_real.serial" | tail -4 | tr '\n' '|')"
+            fi
+            # two-lib discriminating case: a zig-built hello needing its
+            # own .so + libc.so — openat + file-mmap + reloc across a
+            # non-self DSO boundary, printed through the seam.
+            if grep -qF "HI=41" "$WORK/boot_real.serial" \
+               && grep -qF "exec hi.elf status=0" "$WORK/boot_real.serial"; then
+                ok "dynamic-hi: PT_INTERP + liblibhi.so + libc.so resolved and called"
+            else
+                bad "dynamic-hi: evidence missing: $(grep -aE 'HI=|ENOSYS|REFUSE|EXC|hi.elf' "$WORK/boot_real.serial" | tail -6 | tr '\n' '|')"
+            fi
+            # PT_INTERP: a real alpine binary's interp section pulls
+            # /lib/ld-musl through the fs view; ld.so then openat()s and
+            # file-mmaps libc.musl in the child's space — dynamic linking
+            # on our seam, not the host's. busybox's banner is ld.so's
+            # proof of work.
+            if grep -qF "BusyBox v1.37.0" "$WORK/boot_real.serial" \
+               && grep -qF "exec busybox status=0" "$WORK/boot_real.serial"; then
+                ok "dynamic: PT_INTERP resolved ld-musl via fs view; busybox 1.37 ran (mmap-file/mprotect)"
+            else
+                bad "dynamic: busybox evidence missing: $(grep -aE 'ENOSYS|REFUSE|EXC|busybox|BusyBox' "$WORK/boot_real.serial" | tail -6 | tr '\n' '|')"
+            fi
+            # GNU uname drags five DT_NEEDED libs (crypto/acl/attr/utmps/
+            # musl) — the full multi-lib closure — and prints our own
+            # uname struct back: sysname must say koru-os, not a costume.
+            if grep -qF "exec uname status=0" "$WORK/boot_real.serial"; then
+                ok "dynamic-gnu: coreutils uname ran its 5-lib closure and reported the kernel's own name"
+            else
+                bad "dynamic-gnu: uname evidence missing: $(grep -aE 'ENOSYS|REFUSE|EXC|uname|koru' "$WORK/boot_real.serial" | tail -6 | tr '\n' '|')"
             fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null

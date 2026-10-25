@@ -149,6 +149,8 @@ pub export fn koru_spawn_host(path: [*]const u8, path_len: usize, args: [*]const
     return common.waitStatus(pid);
 }
 
+pub export var child_arg0: [64]u8 = undefined;
+
 pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64) callconv(.c) c_int {
     spawnNote(rights);
     const pid = spawnOne(image, size) catch |e| {

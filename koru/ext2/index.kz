@@ -93,6 +93,7 @@ const Fs = struct {
     blocks_count: u32,
     first_data_block: u32,
     inodes_per_group: u32,
+    blocks_per_group: u32,
     first_ino: u32,
     filetype: bool,
     block_bitmap: u32,
@@ -127,10 +128,19 @@ fn writeBlock(fs: *Fs, block: u32, in: []const u8) bool {
     return xfer(fs, OP_WRITE, block, fs.spb) == 0;
 }
 
-fn inodeLoc(fs: *const Fs, ino: u32) struct { block: u32, off: usize } {
-    const idx = ino - 1; // one group
+// inode → (block, offset) through the group descriptor table — inos are
+// numbered contiguously ACROSS groups, so group membership is
+// (ino-1)/inodes_per_group and the inode table block comes from that
+// group's descriptor, not a cached single value. The GDT lives at
+// first_data_block+1 (32B entries, BS/32 groups per GDT block).
+fn inodeLoc(fs: *Fs, ino: u32) ?struct { block: u32, off: usize } {
+    const g = (ino - 1) / fs.inodes_per_group;
+    const idx = (ino - 1) % fs.inodes_per_group;
+    var gdb: [BS]u8 = undefined;
+    if (!readBlock(fs, fs.first_data_block + 1 + g / @as(u32, BS / 32), &gdb)) return null;
+    const itable = rd32(&gdb, (g % (BS / 32)) * 32 + 8);
     const byte = @as(usize, idx) * 128;
-    return .{ .block = fs.inode_table + @as(u32, @intCast(byte / BS)), .off = byte % BS };
+    return .{ .block = itable + @as(u32, @intCast(byte / BS)), .off = byte % BS };
 }
 
 // Find `name` inside directory inode `dir_ino` — scans every direct block,
@@ -138,7 +148,7 @@ fn inodeLoc(fs: *const Fs, ino: u32) struct { block: u32, off: usize } {
 // a non-dir mid-path component is a failed walk, not a skipped check.
 fn dirFind(fs: *Fs, dir_ino: u32, name: []const u8, dirblk: []u8) ?u32 {
     var ib: [BS]u8 = undefined;
-    const loc = inodeLoc(fs, dir_ino);
+    const loc = inodeLoc(fs, dir_ino) orelse return null;
     if (!readBlock(fs, loc.block, &ib)) return null;
     if (rd16(&ib, loc.off + 0) & 0o170000 != 0o040000) return null;
     for (0..12) |i| {
@@ -218,11 +228,16 @@ fn pattern(i: usize) u8 {
     fs.blocks_count = rd32(sb, 4);
     fs.first_data_block = rd32(sb, 20);
     const bpg = rd32(sb, 32);
+    fs.blocks_per_group = bpg;
     fs.inodes_per_group = rd32(sb, 40);
     fs.first_ino = rd32(sb, 84);
     fs.filetype = (incompat & 0x2) != 0;
-    if (fs.blocks_count - fs.first_data_block > bpg or fs.inodes_count != fs.inodes_per_group)
-        return .{ .refused = "more than one block group" };
+    // multi-group: reads resolve per-group through the GDT (inodeLoc);
+    // the write paths (create/free) still operate on group 0's bitmaps
+    // cached below — allocation beyond it is a later rung.
+    const ngroups = (fs.blocks_count - fs.first_data_block + bpg - 1) / bpg;
+    if (ngroups == 0 or fs.inodes_count != ngroups * fs.inodes_per_group)
+        return .{ .refused = "inode/group geometry inconsistent" };
     if (!readBlock(fs, fs.first_data_block + 1, &fs.bgd)) return .{ .refused = "group descriptor read failed" };
     fs.block_bitmap = rd32(&fs.bgd, 0);
     fs.inode_bitmap = rd32(&fs.bgd, 4);
@@ -234,6 +249,7 @@ fn pattern(i: usize) u8 {
 | ok { fs: *Fs<mounted!>, ino: u32, blocks: u32, first_block: u32 }
 | refused { fs: *Fs<mounted!>, reason: string }
 
+
 ~proc create|zig {
     const nblk: u32 = @intCast((@as(usize, size) + BS - 1) / BS);
     if (size == 0 or nblk > 12) return .{ .refused = .{ .fs = fs, .reason = "size must be 1..12 KiB (direct blocks only)" } };
@@ -241,27 +257,54 @@ fn pattern(i: usize) u8 {
     var dir: [BS]u8 = undefined;
     if (dirFind(fs, 2, name, &dir) != null) return .{ .refused = .{ .fs = fs, .reason = "name exists" } };
 
-    // inode bitmap: first free inode >= first_ino
+    // inode: scan each group's inode bitmap through the GDT — inos are
+    // numbered contiguously across groups (g*ipg + bit + 1).
+    var gdb: [BS]u8 = undefined;
+    if (!readBlock(fs, fs.first_data_block + 1, &gdb)) return .{ .refused = .{ .fs = fs, .reason = "gdt read failed" } };
+    const ngroups = fs.inodes_count / fs.inodes_per_group;
     var ib: [BS]u8 = undefined;
-    if (!readBlock(fs, fs.inode_bitmap, &ib)) return .{ .refused = .{ .fs = fs, .reason = "inode bitmap read failed" } };
     var ino: u32 = 0;
-    var i: u32 = fs.first_ino - 1;
-    while (i < fs.inodes_per_group) : (i += 1) {
-        if ((ib[i / 8] & (@as(u8, 1) << @intCast(i % 8))) == 0) { ino = i + 1; break; }
+    var ig: u32 = 0;
+    var g: u32 = 0;
+    while (g < ngroups and ino == 0) : (g += 1) {
+        if (!readBlock(fs, rd32(&gdb, g * 32 + 4), &ib)) return .{ .refused = .{ .fs = fs, .reason = "inode bitmap read failed" } };
+        var i: u32 = if (g == 0) fs.first_ino - 1 else 0;
+        while (i < fs.inodes_per_group) : (i += 1) {
+            if ((ib[i / 8] & (@as(u8, 1) << @intCast(i % 8))) == 0) {
+                ino = g * fs.inodes_per_group + i + 1;
+                ig = g;
+                wr16(&fs.bgd, g * 32 + 14, rd16(&fs.bgd, g * 32 + 14) - 1);
+                break;
+            }
+        }
     }
     if (ino == 0) return .{ .refused = .{ .fs = fs, .reason = "no free inode" } };
 
-    // block bitmap: nblk free blocks (not necessarily contiguous)
+    // data blocks: nblk free blocks across groups — each group's bitmap
+    // names first_data_block + g*bpg + bit; mark+write back per group.
     var bb: [BS]u8 = undefined;
-    if (!readBlock(fs, fs.block_bitmap, &bb)) return .{ .refused = .{ .fs = fs, .reason = "block bitmap read failed" } };
     var blocks: [12]u32 = [_]u32{0} ** 12;
     var got: u32 = 0;
-    const nbits = fs.blocks_count - fs.first_data_block;
-    var j: u32 = 0;
-    while (j < nbits and got < nblk) : (j += 1) {
-        if ((bb[j / 8] & (@as(u8, 1) << @intCast(j % 8))) == 0) { blocks[got] = fs.first_data_block + j; got += 1; }
+    g = 0;
+    while (g < ngroups and got < nblk) : (g += 1) {
+        if (!readBlock(fs, rd32(&gdb, g * 32 + 0), &bb)) return .{ .refused = .{ .fs = fs, .reason = "block bitmap read failed" } };
+        const got_before = got;
+        var j: u32 = 0;
+        while (j < fs.blocks_per_group and got < nblk) : (j += 1) {
+            if ((bb[j / 8] & (@as(u8, 1) << @intCast(j % 8))) == 0) {
+                bb[j / 8] |= @as(u8, 1) << @intCast(j % 8);
+                blocks[got] = fs.first_data_block + g * fs.blocks_per_group + j;
+                got += 1;
+            }
+        }
+        if (got > got_before) {
+            wr16(&fs.bgd, g * 32 + 12, rd16(&fs.bgd, g * 32 + 12) - @as(u16, @intCast(got - got_before)));
+            if (!writeBlock(fs, rd32(&gdb, g * 32 + 0), &bb)) return .{ .refused = .{ .fs = fs, .reason = "bitmap write failed" } };
+        }
     }
     if (got < nblk) return .{ .refused = .{ .fs = fs, .reason = "not enough free blocks" } };
+    // mark the chosen inode in ITS group's bitmap (ib still holds it)
+    ib[(ino - 1 - ig * fs.inodes_per_group) / 8] |= @as(u8, 1) << @intCast((ino - 1) % 8);
 
     // root directory: split the last entry of the first block
     const need: usize = (8 + name.len + 3) & ~@as(usize, 3);
@@ -286,7 +329,7 @@ fn pattern(i: usize) u8 {
         if (!writeBlock(fs, blocks[k], &data)) return .{ .refused = .{ .fs = fs, .reason = "data write failed" } };
     }
     // 2. inode
-    const loc = inodeLoc(fs, ino);
+    const loc = inodeLoc(fs, ino) orelse return .{ .refused = .{ .fs = fs, .reason = "inode locate failed" } };
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return .{ .refused = .{ .fs = fs, .reason = "inode table read failed" } };
     @memset(it[loc.off .. loc.off + 128], 0);
@@ -309,17 +352,14 @@ fn pattern(i: usize) u8 {
     if (fs.filetype) { dir[e + 6] = @intCast(name.len); dir[e + 7] = 1; } else wr16(&dir, e + 6, @intCast(name.len));
     @memcpy(dir[e + 8 .. e + 8 + name.len], name);
     var rootino: [BS]u8 = undefined;
-    const rl = inodeLoc(fs, 2);
+    const rl = inodeLoc(fs, 2) orelse return .{ .refused = .{ .fs = fs, .reason = "inode locate failed" } };
     if (!readBlock(fs, rl.block, &rootino)) return .{ .refused = .{ .fs = fs, .reason = "root inode read failed" } };
     if (!writeBlock(fs, rd32(&rootino, rl.off + 40), &dir)) return .{ .refused = .{ .fs = fs, .reason = "directory write failed" } };
-    // 4. bitmaps
-    ib[(ino - 1) / 8] |= @as(u8, 1) << @intCast((ino - 1) % 8);
-    k = 0;
-    while (k < nblk) : (k += 1) { const b = blocks[k] - fs.first_data_block; bb[b / 8] |= @as(u8, 1) << @intCast(b % 8); }
-    if (!writeBlock(fs, fs.inode_bitmap, &ib) or !writeBlock(fs, fs.block_bitmap, &bb)) return .{ .refused = .{ .fs = fs, .reason = "bitmap write failed" } };
-    // 5. counters: group descriptor, then superblock
-    wr16(&fs.bgd, 12, rd16(&fs.bgd, 12) - @as(u16, @intCast(nblk)));
-    wr16(&fs.bgd, 14, rd16(&fs.bgd, 14) - 1);
+    // 4. bitmaps — inode bit goes back to the group it was allocated
+    // from (block bitmaps were marked+written per-group during the scan)
+    if (!writeBlock(fs, rd32(&gdb, ig * 32 + 4), &ib)) return .{ .refused = .{ .fs = fs, .reason = "bitmap write failed" } };
+    // 5. counters: per-group gd entries were decremented during the
+    // scan above; the superblock totals fold here, then both write back.
     if (!writeBlock(fs, fs.first_data_block + 1, &fs.bgd)) return .{ .refused = .{ .fs = fs, .reason = "group descriptor write failed" } };
     wr32(&fs.sb, 12, rd32(&fs.sb, 12) - nblk);
     wr32(&fs.sb, 16, rd32(&fs.sb, 16) - 1);
@@ -373,37 +413,40 @@ fn readErr(e: ReadErr) []const u8 {
 // (i_block[13] → 256×256) to ~66 MiB. Triple-indirect refuses by name.
 // Three cached tables: ind = i_block[12], ind2 = i_block[13] root,
 // leaf = the current second-level table (reloaded on 256-boundaries).
+// A zero block pointer is a sparse HOLE — reads as zeros, not an error;
+// `null` is reserved for genuine block-read failures.
 fn blkAt(fs: *Fs, it: []const u8, off: usize, k: usize, ind: *[BS]u8, ind2: *[BS]u8, leaf: *[BS]u8, st: *[4]u32) ?u32 {
     if (k < 12) return rd32(it, off + 40 + k * 4);
     const cap1 = 12 + BS / 4;
     if (k < cap1) {
         if (st[0] == 0) {
             const ib = rd32(it, off + 40 + 12 * 4);
-            if (ib == 0 or !readBlock(fs, ib, ind)) return null;
+            if (ib == 0) return 0;
+            if (!readBlock(fs, ib, ind)) return null;
             st[0] = 1;
         }
-        const n = rd32(ind, (k - 12) * 4);
-        return if (n == 0) null else n;
+        return rd32(ind, (k - 12) * 4);
     }
     const d = k - cap1;
     if (d >= (BS / 4) * (BS / 4)) return null;
     if (st[1] == 0) {
         const ib = rd32(it, off + 40 + 13 * 4);
-        if (ib == 0 or !readBlock(fs, ib, ind2)) return null;
+        if (ib == 0) return 0;
+        if (!readBlock(fs, ib, ind2)) return null;
         st[1] = 1;
     }
     const li = d / (BS / 4);
     if (st[2] != li + 1) { // cached leaf is a different table — reload
         const lvl2 = rd32(ind2, li * 4);
-        if (lvl2 == 0 or !readBlock(fs, lvl2, leaf)) return null;
+        if (lvl2 == 0) return 0;
+        if (!readBlock(fs, lvl2, leaf)) return null;
         st[2] = @intCast(li + 1);
     }
-    const n = rd32(leaf, (d % (BS / 4)) * 4);
-    return if (n == 0) null else n;
+    return rd32(leaf, (d % (BS / 4)) * 4);
 }
 
 fn readFile(fs: *Fs, ino: u32) ReadResult {
-    const loc = inodeLoc(fs, ino);
+    const loc = inodeLoc(fs, ino) orelse return .{ .err = .inode_read };
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return .{ .err = .inode_read };
     const fsize = rd32(&it, loc.off + 4);
@@ -431,6 +474,11 @@ fn readFile(fs: *Fs, ino: u32) ReadResult {
             free(bh);
             return .{ .err = .data_read };
         };
+        if (phys == 0) { // sparse hole — zeros, not a read
+            @memset(out[off..@min(off + BS, fsize)], 0);
+            off = @min(off + BS, fsize);
+            continue;
+        }
         if (!readBlock(fs, phys, &data)) {
             free(mem);
             free(bh);
@@ -466,7 +514,7 @@ const ChildFsOps = extern struct {
 // what a child read(2)/pread(2) actually costs. Whole-file readFile
 // stays for exec/pin/fetch.
 fn readAt(fs: *Fs, ino: u32, off: u64, dst: [*]u8, len: usize) i64 {
-    const loc = inodeLoc(fs, ino);
+    const loc = inodeLoc(fs, ino) orelse return -5;
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return -5; // EIO
     const fsize: u64 = rd32(&it, loc.off + 4);
@@ -481,10 +529,14 @@ fn readAt(fs: *Fs, ino: u32, off: u64, dst: [*]u8, len: usize) i64 {
     while (done < n) {
         const k: usize = @intCast((off + done) / BS);
         const phys = blkAt(fs, &it, loc.off, k, &ind, &ind2, &leaf, &st) orelse return @intCast(done);
-        if (!readBlock(fs, phys, &data)) return -5;
         const boff: usize = @intCast((off + done) % BS);
         const take = @min(n - done, BS - boff);
-        @memcpy(dst[done .. done + take], data[boff .. boff + take]);
+        if (phys == 0) { // sparse hole — zeros
+            @memset(dst[done .. done + take], 0);
+        } else {
+            if (!readBlock(fs, phys, &data)) return -5;
+            @memcpy(dst[done .. done + take], data[boff .. boff + take]);
+        }
         done += take;
     }
     return @intCast(done);
@@ -494,7 +546,7 @@ fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     const fs: *Fs = @ptrCast(@alignCast(ctx));
     var dir: [BS]u8 = undefined;
     const ino = lookupPath(fs, std.mem.span(path), &dir) orelse return -2; // ENOENT
-    const loc = inodeLoc(fs, ino);
+    const loc = inodeLoc(fs, ino) orelse return -5;
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return -5;
     if (rd16(&it, loc.off) & 0o170000 != 0o100000) return -21; // EISDIR/ENOTREG
@@ -583,8 +635,18 @@ fn childFs(fs: *Fs) ChildFsOps {
 // through the ops record above. Hosted providers export the 3-arg
 // spelling (the arg is ignored there — a hosted child has no scoped fs).
 extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64, fsv: ?*const ChildFsOps) c_int;
+extern var child_arg0: [64]u8;
 extern fn koruos_nid_obj_pin(foreign: [*:0]const u8, key: u64) u64;
 extern fn koruos_nid_obj_key(nid: u64) i64;
+
+// argv[0] for the next spawn: the exec'd path's basename — POSIX's own
+// convention (argv0 is the name the program was invoked as; for a
+// multi-call binary like busybox it IS the program selection).
+fn setArg0(path: []const u8) void {
+    const name = if (std.mem.lastIndexOfScalar(u8, path, '/')) |i| path[i + 1 ..] else path;
+    @memset(&child_arg0, 0);
+    @memcpy(child_arg0[0..@min(name.len, 63)], name[0..@min(name.len, 63)]);
+}
 
 // pinNid: bind (dev, ino) in the nid store; the key packs both halves so
 // resolve can verify the object is on THIS fs. nid==0 is the store's
@@ -609,6 +671,7 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
         .err => |e| return .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
     };
     var vfs = childFs(fs);
+    setArg0(path);
     const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights, &vfs);
     free(@ptrCast(bp.ptr));
     free(@ptrCast(bp));
@@ -648,6 +711,7 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
         .err => |e| return .{ .refused = .{ .fs = fs, .reason = readErr(e) } },
     };
     var vfs = childFs(fs);
+    setArg0("exec-nid");
     const st = koru_spawn_elf(@ptrCast(bp.ptr), bp.len, rights, &vfs);
     free(@ptrCast(bp.ptr));
     free(@ptrCast(bp));
@@ -662,7 +726,7 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
 ~proc verify|zig {
     var dir: [BS]u8 = undefined;
     const ino = lookupPath(fs, path, &dir) orelse return .{ .mismatch = .{ .fs = fs, .reason = "path not found" } };
-    const loc = inodeLoc(fs, ino);
+    const loc = inodeLoc(fs, ino) orelse return .{ .mismatch = .{ .fs = fs, .reason = "inode locate failed" } };
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return .{ .mismatch = .{ .fs = fs, .reason = "inode read failed" } };
     const fsize = rd32(&it, loc.off + 4);

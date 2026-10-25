@@ -29,6 +29,8 @@ extern var pd: [512]u64;
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
 extern fn posix_memalign(memptr: *?*anyopaque, alignment: usize, size: usize) callconv(.c) c_int;
+extern fn malloc(size: usize) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) void;
 const pmm = @import("pmm");
 const kbd = @import("kbd");
 extern fn serPut(c: u8) callconv(.c) void;
@@ -46,6 +48,7 @@ const USER_VA_END: usize = 0x7FE0_0000;  // ~1 GiB of user space
 const USER_STACK_TOP: usize = 0x7FE0_0000; // stack pages map just below
 const USER_STACK_PAGES: usize = 16;
 const MMAP_BASE: usize = 0x6000_0000; // mmap arena — between image and stack
+const INTERP_BASE: usize = 0x7000_0000; // PT_INTERP loader's ET_DYN bias — clear of mains AND the mmap arena
 
 fn say(s: [*:0]const u8) void {
     _ = fputs(s, stdout);
@@ -363,9 +366,27 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
     puthex(f.rip);
     say(" err=");
     puthex(f.err);
+    say(" va=");
+    puthex(rdcr2());
     if (f.vec == 3) {
         say(" (continued)\n");
         return;
+    }
+    if (f.rip >= USER_VA_BASE) { // user fault — dump the child's stack: the
+        // return addresses on it name the callers, which is the whole
+        // debugging story when a real binary dies deep in its own code.
+        say("\nstack: ");
+        const tail: [*]const u64 = @ptrFromInt(@intFromPtr(&f.rflags));
+        const usp = tail[1]; // hardware usp trails rip/cs/rflags in the frame
+        var i: usize = 0;
+        while (i < 12) : (i += 1) {
+            const va = usp + i * 8;
+            const e = userEntry(&children[cur_child], va);
+            if (e & 1 == 0) break;
+            const p: *const u64 = @ptrFromInt((e & ~@as(u64, 0xFFF)) + (va & 0xFFF));
+            puthex(p.*);
+            say(" ");
+        }
     }
     say(" — halting\n");
     while (true) asm volatile ("cli; hlt");
@@ -702,17 +723,19 @@ const ElfInfo = struct {
 
 // Parse an ELF64 image into `c`'s space: ET_EXEC maps at p_vaddr (must be
 // inside the user window — a 0x400000-style link address collides with
-// the kernel identity and refuses by name), ET_DYN maps at
-// USER_VA_BASE + p_vaddr (the static-pie/libc path — bias application is
-// the same mechanism a PT_INTERP ld.so will need). Pages are zeroed at
-// alloc, so bss (memsz > filesz) needs no fill. PT_INTERP is not yet
-// served: it is refused by name rather than silently ignored.
-fn loadElf(c: *Child, b: []const u8) ?ElfInfo {
+// the kernel identity and refuses by name), ET_DYN maps at `dyn_bias` +
+// p_vaddr (static-pie mains take USER_VA_BASE; the PT_INTERP loader takes
+// INTERP_BASE so the two never collide). Pages are zeroed at alloc, so
+// bss (memsz > filesz) needs no fill. A PT_INTERP segment doesn't load —
+// its path is captured into `ipath` and the caller resolves it through
+// the child's fs view (dynamic images without one still refuse by name).
+fn loadElf(c: *Child, b: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen: ?*usize) ?ElfInfo {
+    if (ilen != null) ilen.?.* = 0;
     if (b.len < EHDR or b[0] != 0x7F or b[1] != 'E' or b[2] != 'L' or
         b[3] != 'F' or b[4] != 2 or b[5] != 1) return null;
     const etype = u16le(b, 16);
     if (u16le(b, 18) != 0x3E or (etype != 2 and etype != 3)) return null;
-    const bias: usize = if (etype == 3) USER_VA_BASE else 0;
+    const bias: usize = if (etype == 3) dyn_bias else 0;
     const entry = u64le(b, 24);
     const phoff: usize = @intCast(u64le(b, 32));
     const phentsz: usize = u16le(b, 54);
@@ -725,9 +748,17 @@ fn loadElf(c: *Child, b: []const u8) ?ElfInfo {
     while (i < phnum) : (i += 1) {
         const ph = phoff + i * phentsz;
         const ptype = u32le(b, ph);
-        if (ptype == 3) { // PT_INTERP — dynamic images are a later rung
-            say("ELF REFUSE: PT_INTERP (dynamic) not served yet\n");
-            return null;
+        if (ptype == 3) { // PT_INTERP — capture the loader path; the
+            // caller opens it through the fs view and loads it at
+            // INTERP_BASE as a second ET_DYN image.
+            const off: usize = @intCast(u64le(b, ph + 8));
+            const filesz: usize = @intCast(u64le(b, ph + 32));
+            if (ilen != null and ipath != null and off + filesz <= b.len and
+                filesz <= ipath.?.len) {
+                @memcpy(ipath.?.ptr, b[off .. off + filesz]);
+                ilen.?.* = filesz;
+            }
+            continue;
         }
         if (ptype != 1) continue; // PT_LOAD only
         const off: usize = @intCast(u64le(b, ph + 8));
@@ -813,20 +844,20 @@ fn copyToUser(c: *Child, va: usize, src: []const u8) usize {
     return n;
 }
 
-fn buildStack(c: *Child, info: ElfInfo) ?usize {
+fn buildStack(c: *Child, info: ElfInfo, at_base: u64) ?usize {
     var i: usize = 0;
     const sbase = USER_STACK_TOP - USER_STACK_PAGES * 0x1000;
     while (i < USER_STACK_PAGES) : (i += 1) {
         _ = mapUserPage(c, sbase + i * 0x1000) orelse return null;
     }
     // strings + AT_RANDOM block live at the very top
-    const arg0 = "child.elf";
+    const arg0 = std.mem.sliceTo(child_arg0[0..], 0);
     var top = USER_STACK_TOP;
     var n: usize = 0;
     while (n <= arg0.len) : (n += 1) { // include the NUL
         const phys = userPhys(c, top - arg0.len - 1 + n);
         const dst: *u8 = @ptrFromInt(phys + ((top - arg0.len - 1 + n) & 0xFFF));
-        dst.* = arg0[n];
+        dst.* = if (n < arg0.len) arg0[n] else 0;
     }
     top -= arg0.len + 1;
     const arg0_va = top;
@@ -841,8 +872,13 @@ fn buildStack(c: *Child, info: ElfInfo) ?usize {
         const dst: *u8 = @ptrFromInt(phys + ((rand_va + n) & 0xFFF));
         dst.* = @truncate(s);
     }
-    // the vector: argc, argv, NULL, envp NULL, auxv pairs, AT_NULL
-    const auxv = [_][2]u64{
+    // the vector: argc, argv, NULL, envp NULL, auxv pairs, AT_NULL.
+    // AT_BASE is present only when an interpreter was loaded — ld.so
+    // reads it as its own load bias; the main binary's phdrs/entry stay
+    // in AT_PHDR/AT_ENTRY either way.
+    var auxv: [16][2]u64 = undefined;
+    var na: usize = 0;
+    const fixed = [_][2]u64{
         .{ 3, info.phdr_va },  // AT_PHDR
         .{ 4, info.phent },   // AT_PHENT
         .{ 5, info.phnum },   // AT_PHNUM
@@ -856,20 +892,85 @@ fn buildStack(c: *Child, info: ElfInfo) ?usize {
         .{ 17, 100 },         // AT_CLKTCK
         .{ 23, 0 },           // AT_SECURE
         .{ 25, rand_va },     // AT_RANDOM
-        .{ 0, 0 },            // AT_NULL
     };
-    const vec_slots = 1 + 1 + 1 + 1 + auxv.len * 2; // argc argv0 NUL envpNUL pairs
+    for (fixed) |p| { auxv[na] = p; na += 1; }
+    if (at_base != 0) { auxv[na] = .{ 7, at_base }; na += 1; }
+    auxv[na] = .{ 0, 0 }; na += 1;
+    const vec_slots = 1 + 1 + 1 + 1 + na * 2; // argc argv0 NUL envpNUL pairs
     const sp = (top - vec_slots * 8) & ~@as(usize, 0xF);
     var at = sp;
     userWrite(c, at, 1); at += 8;          // argc
     userWrite(c, at, arg0_va); at += 8;    // argv[0]
     userWrite(c, at, 0); at += 8;          // argv NULL
     userWrite(c, at, 0); at += 8;          // envp NULL
-    for (auxv) |pair| {
+    for (auxv[0..na]) |pair| {
         userWrite(c, at, pair[0]); at += 8;
         userWrite(c, at, pair[1]); at += 8;
     }
     return sp;
+}
+
+// Load the PT_INTERP interpreter through the child's fs view — the same
+// ops record the child itself would use for openat()/read(). Header and
+// phdrs go through a small stack buffer; each PT_LOAD streams straight
+// into its mapped user pages via read_at — the kernel never buffers a
+// whole image (the bump heap can't afford a second copy of ld.so).
+fn loadViaFs(c: *Child, path: []const u8) ?ElfInfo {
+    const ops = c.fsv orelse return null;
+    var z: [256]u8 = undefined;
+    if (path.len >= z.len) return null;
+    @memcpy(z[0..path.len], path);
+    z[path.len] = 0;
+    const h = ops.open(ops.ctx, @ptrCast(&z));
+    if (h < 0) return null;
+    const fh: u64 = @intCast(h);
+    var hd: [4096]u8 = undefined;
+    const hn = ops.read_at(ops.ctx, fh, 0, &hd, hd.len);
+    if (hn < @as(i64, EHDR)) { ops.close(ops.ctx, fh); return null; }
+    const b: []const u8 = hd[0..@intCast(hn)];
+    if (b[0] != 0x7F or b[1] != 'E' or b[2] != 'L' or b[3] != 'F' or
+        b[4] != 2 or b[5] != 1) { ops.close(ops.ctx, fh); return null; }
+    if (u16le(b, 16) != 3 or u16le(b, 18) != 0x3E) { ops.close(ops.ctx, fh); return null; }
+    const entry: usize = @intCast(u64le(b, 24));
+    const phoff: usize = @intCast(u64le(b, 32));
+    const phentsz: usize = u16le(b, 54);
+    const phnum: usize = u16le(b, 56);
+    if (phnum == 0 or phentsz < PHDR or phoff + phnum * phentsz > b.len) {
+        ops.close(ops.ctx, fh);
+        return null;
+    }
+    var max_va: usize = 0;
+    var i: usize = 0;
+    while (i < phnum) : (i += 1) {
+        const ph = phoff + i * phentsz;
+        if (u32le(b, ph) != 1) continue; // PT_LOAD only
+        const off: usize = @intCast(u64le(b, ph + 8));
+        const vaddr: usize = @intCast(u64le(b, ph + 16));
+        const filesz: usize = @intCast(u64le(b, ph + 32));
+        const memsz: usize = @intCast(u64le(b, ph + 40));
+        const va = INTERP_BASE + vaddr;
+        if (va + memsz > max_va) max_va = va + memsz;
+        var p = va & ~@as(usize, 0xFFF);
+        while (p < va + memsz) : (p += 0x1000) {
+            _ = mapUserPage(c, p) orelse { ops.close(ops.ctx, fh); return null; };
+        }
+        var n: usize = 0;
+        while (n < filesz) {
+            const take = @min(@as(usize, 0x1000) - ((va + n) & 0xFFF), filesz - n);
+            const dst: [*]u8 = @ptrFromInt(userPhys(c, va + n) + ((va + n) & 0xFFF));
+            const rn = ops.read_at(ops.ctx, fh, off + n, dst, take);
+            if (rn != @as(i64, @intCast(take))) { ops.close(ops.ctx, fh); return null; }
+            n += take;
+        }
+    }
+    ops.close(ops.ctx, fh);
+    return .{ .entry = INTERP_BASE + entry, .phdr_va = 0, .phent = 0, .phnum = 0, .bias = INTERP_BASE, .brk_base = (max_va + 0xFFF) & ~@as(usize, 0xFFF) };
+}
+
+fn rdcr2() u64 {
+    return asm volatile ("mov %cr2, %[v]"
+        : [v] "=r" (-> u64),
+    );
 }
 
 fn rdtsc() u64 {
@@ -914,6 +1015,12 @@ pub export var saved_rsp: u64 = 0;
 pub export var saved_rip: u64 = 0;
 pub export var last_exit: u64 = 0;
 
+// argv[0] for the next spawn: the exec path's basename, written by the
+// caller before koru_spawn_elf — POSIX's own convention (argv0 is the
+// name the program was invoked as, which for a multi-call binary IS the
+// program). Default is the embedded-child name.
+pub export var child_arg0: [64]u8 = "child.elf".* ++ [_]u8{0} ** 55;
+
 // Canonical capability number for a syscall nr. Bits 0..63 name
 // capabilities; for NRs <64 the bit IS the Linux nr, so a bag reads
 // like a syscall mask. NRs ≥64 have no bit — they fold onto reserved
@@ -928,6 +1035,7 @@ fn canonNr(nr: u64) u64 {
         231 => 60,
         318 => 61,
         158, 218, 273, 302 => 62,
+        72 => 62, // fcntl folds to the proc-self group — our handles carry no flag state
         else => nr,
     };
 }
@@ -1004,6 +1112,43 @@ fn childSeek(c: *Child, fdu: u64, off: i64, whence: u32) i64 {
     const fd: usize = @intCast(fdu);
     if (fd < 3 or c.fds[fd] == 0) return -9;
     return ops.seek(ops.ctx, c.fds[fd], off, whence);
+}
+
+// File-backed private mmap: fd resolves through the fs view like open's
+// siblings, pages come from the frame allocator, and the fill reads the
+// file straight into the mapped pages (one copy — ops write into the
+// identity VA). MAP_FIXED honors the address inside the user window when
+// the range is free; an already-mapped page is reused, not remapped.
+fn childMmapFile(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fdu: u64, off: u64) i64 {
+    const ops = c.fsv orelse return -38;
+    if (flags & 0x01 != 0) return -95; // EOPNOTSUPP — shared maps need write-through
+    if (off & 0xFFF != 0) return -22; // EINVAL — file offset must be page-aligned
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    if (fd < 3 or c.fds[fd] == 0) return -9; // EBADF
+    var base: usize = 0;
+    if (flags & 0x10 != 0 and addru != 0) { // MAP_FIXED
+        base = @intCast(addru);
+        if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
+    } else {
+        base = c.mmap_top;
+        c.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
+    }
+    var p: usize = 0;
+    while (p < len) : (p += 0x1000) {
+        if (userEntry(c, base + p) & 1 == 0) {
+            _ = mapUserPage(c, base + p) orelse return -12; // ENOMEM
+        }
+        const dst: [*]u8 = @ptrFromInt(userPhys(c, base + p));
+        const take = @min(@as(usize, 0x1000), len - p);
+        const n = ops.read_at(ops.ctx, c.fds[fd], off + p, dst, take);
+        if (n < 0) return n; // provider errno passes through
+    }
+    // prot applies to the FINAL mapping, not just fresh pages: ld.so
+    // reserves a span PROT_NONE then MAP_FIXEDs each LOAD with its real
+    // prot — reused pages must pick up the new W bit, not keep the old.
+    setUserWritable(c, base, len, prot & 2 != 0);
+    return @intCast(base);
 }
 
 fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
@@ -1099,6 +1244,19 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         39 => { // getpid
             f.rax = 1;
         },
+        72 => { // fcntl(fd, cmd, arg) — our fds are opaque handles with no
+            // flag state; the flags a libc sets (CLOEXEC, NONBLOCK) have no
+            // consumer in this child, so the honest answer is success.
+            f.rax = 0;
+        },
+        63 => { // uname(buf) — the kernel's own identity, honestly named:
+            // a real GNU uname prints what we are, not a Linux costume.
+            var uts: [390]u8 = std.mem.zeroes([390]u8);
+            const fields = [_][]const u8{ "koru-os", "child0", "0.1", "native", "x86_64", "" };
+            for (fields, 0..) |s, i| @memcpy(uts[i * 65 ..][0..s.len], s);
+            const n = copyToUser(c, @intCast(f.rdi), &uts);
+            f.rax = if (n < 390) @bitCast(@as(i64, -14)) else 0;
+        },
         16 => { // ioctl — no ttys exist; ENOTTY is the honest answer
             f.rax = @bitCast(@as(i64, -25));
         },
@@ -1119,11 +1277,17 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = c.brk;
             }
         },
-        9 => { // mmap — anonymous private only; file-backed refuses ENODEV
+        9 => { // mmap(addr,len,prot,flags,fd,off)
+            // anon-private: bump-alloc from the mmap arena. file-backed:
+            // MAP_PRIVATE only (shared writes would need a write-through
+            // the read-only view can't make), fd must be a live fs-view
+            // handle, offset page-aligned — fill is read_at straight into
+            // the mapped pages; bytes past EOF stay zero (a mapped tail
+            // SIGBUSes on real linux; zeroing is the honest v1).
             const len: usize = @intCast(f.rsi);
-            if (f.r10 & 0x20 == 0 or len == 0) { // MAP_ANONYMOUS required
-                f.rax = @bitCast(@as(i64, -19)); // ENODEV
-            } else {
+            if (len == 0) {
+                f.rax = @bitCast(@as(i64, -22));
+            } else if (f.r10 & 0x20 != 0) { // MAP_ANONYMOUS
                 const base = c.mmap_top;
                 var p: usize = 0;
                 var ok = true;
@@ -1137,7 +1301,33 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     c.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
                     f.rax = base;
                 }
+            } else {
+                f.rax = @bitCast(childMmapFile(c, f.rdi, len, f.rdx, f.r10, f.r8, f.r9));
             }
+        },
+        10 => { // mprotect(addr,len,prot) — the W bit is real; PROT_EXEC
+            // is advisory (no NXE): text/relro RO transitions ld.so needs
+            // land exactly through setUserWritable.
+            const base: usize = @intCast(f.rdi);
+            const len: usize = @intCast(f.rsi);
+            setUserWritable(c, base, len, f.rdx & 2 != 0);
+            f.rax = 0;
+        },
+        11 => { // munmap(addr,len) — frames go back to the pmm, not to a
+            // deferred freelist: the child paid them, the child gets them back.
+            var p: usize = @intCast(f.rdi & ~@as(u64, 0xFFF));
+            const end: usize = @intCast(f.rdi + f.rsi);
+            while (p < end) : (p += 0x1000) {
+                const e = userEntry(c, p);
+                if (e & 1 != 0) {
+                    _ = pmm.free(e & ~@as(u64, 0xFFF));
+                    const upd: *[512]u64 = @ptrFromInt(c.upd);
+                    const pd_i = (p - USER_VA_BASE) >> 21;
+                    const pt: *[512]u64 = @ptrFromInt(@as(usize, @intCast(upd[pd_i] & ~@as(u64, 0xFFF))));
+                    pt[(p >> 12) & 0x1FF] = 0;
+                }
+            }
+            f.rax = 0;
         },
         158 => { // arch_prctl(code, addr) — the TLS seam: FS base per child
             if (f.rdi == 0x1002) { // ARCH_SET_FS
@@ -1192,7 +1382,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 : .{ .memory = true });
             unreachable;
         },
-        else => f.rax = @bitCast(@as(i64, -38)), // ENOSYS
+        else => {
+            say("SEAM ENOSYS nr=");
+            puthex(f.rax);
+            say("\n");
+            f.rax = @bitCast(@as(i64, -38));
+        },
     }
 }
 
@@ -1381,22 +1576,39 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
             say("RING3 FAIL: page alloc\n");
             return -1;
         }
-        const info = loadElf(c, imgs[i][0..sizes[i]]) orelse {
+        c.fsv = fsv;
+        c.fds = .{0} ** 8;
+        var ipath: [256]u8 = undefined;
+        var ilen: usize = 0;
+        const info = loadElf(c, imgs[i][0..sizes[i]], USER_VA_BASE, &ipath, &ilen) orelse {
             say("ELF LOAD FAIL\n");
             return -2;
         };
+        var entry = info.entry;
+        var at_base: u64 = 0;
+        if (ilen > 0) { // PT_INTERP — resolve the loader through the fs view
+            if (c.fsv == null) {
+                say("ELF REFUSE: PT_INTERP needs an fs view\n");
+                return -2;
+            }
+            const iname = std.mem.sliceTo(ipath[0..ilen], 0);
+            const iinfo = loadViaFs(c, iname) orelse {
+                say("ELF REFUSE: PT_INTERP loader unreadable\n");
+                return -2;
+            };
+            at_base = INTERP_BASE;
+            entry = iinfo.entry;
+        }
         c.rights = rights[i];
         c.frame = std.mem.zeroes(UserFrame);
-        c.frame.rip = info.entry;
+        c.frame.rip = entry;
         c.frame.cs = 0x23; // user code64
         c.frame.rflags = 0x202; // IF=1 — the child may be ticked mid-flight
-        c.frame.rsp = buildStack(c, info) orelse return -1;
+        c.frame.rsp = buildStack(c, info, at_base) orelse return -1;
         c.brk_base = info.brk_base;
         c.brk = info.brk_base;
         c.mmap_top = MMAP_BASE;
         c.fsbase = 0;
-        c.fsv = fsv;
-        c.fds = .{0} ** 8;
         c.frame.ss = 0x1B; // user data
         c.state = .runnable;
         nchildren += 1;

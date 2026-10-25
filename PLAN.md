@@ -243,6 +243,32 @@ paths. The bug it exposed: `arch_prctl(SET_FS)` recorded the base but
 only `resumeChild` wrote the MSR — muslhello survived on a preemption
 tick's incidental reload; the fix writes FS_BASE before sysret on the
 prctl path itself.
+
+**PT_INTERP — real dynamic ELF (boot 28/28)** — the loader now runs
+genuinely dynamic binaries. `loadElf` parses PT_INTERP; the interp
+path resolves through the child's *own* fs view (`loadViaFs` — open
++ read_at, streaming headers through a 4 KiB stack buffer and each
+PT_LOAD straight into its mapped pages — no whole-file copy, the
+4 MiB bump heap can't afford a second ld.so), lands as a second
+ET_DYN at `INTERP_BASE`, and `AT_BASE` rides the auxv. File-backed
+mmap is a copied private mapping (pages via `read_at`; `mprotect`
+honors the W-bit — PROT_EXEC advisory without NXE). The bug a real
+loader exposed: musl `map_library` reserves spans PROT_NONE then
+MAP_FIXEDs each LOAD with its real prot — prot must apply to
+*reused* pages, not just fresh ones, or GOT writes fault RO.
+ext2 went multi-group with the payload (inodeLoc reads the GDT;
+create allocates per-group bitmaps+counts; sparse holes read as
+zeros). `canonNr` grew `openat→2`, `exit_group→60`, entropy→61,
+proc-self→62, `fcntl→62`; `uname(63)` answers `koru-os`.
+`scripts/stage-dynamic.sh` pulls pinned Alpine v3.22 apks onto the
+16 MiB image. Gate evidence (`boot_real.k`): `HI=41` — a zig pair
+(`hi.elf` + `liblibhi.so`) crossed a *non-self* DSO boundary
+(openat→file-mmap→reloc→call); **BusyBox v1.37.0** ran its full
+applet dump through musl ld.so; **GNU coreutils `uname` ran a
+5-lib closure (libcrypto/libacl/libattr/libutmps/libskarnet —
+the `cfs open` trail is the search order) and printed `koru-os`** —
+a current-distro userspace binary, not a fixture. Legit refuses
+on the trail (getuid=102, prctl=157) are the loud axis, not bugs.
 `build-hosted.sh <prog> [out] [shim]` selects the shim; check-hosted
 asserts both fixtures link for `x86_64-freebsd` (no linux-only
 primitive may leak into the shared seam).
