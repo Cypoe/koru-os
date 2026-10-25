@@ -1,12 +1,12 @@
 // koru shell rung: a musl child that prompts, blocks on read(0) one byte
 // at a time (each keypress is a real IRQ1 wake), echoes, and on Enter
 // tokenizes the line into an argv block — NUL-separated strings passed
-// to nr 57 as (path, rights, blob, bloblen). The spawner parks on the
+// to nr 512 as (path, rights, blob, bloblen). The spawner parks on the
 // child's exit; the status comes back in rax. Bare names resolve in
 // bin/ (PATH's honest first shape); 'q' quits the shell.
 //
 // `a | b` is the pipeline arm: pipe() mints a kernel ring into the
-// shell's fd table; nr58 spawn_start projects ends into each child —
+// shell's fd table; nr513 spawn_start projects ends into each child —
 // the READER spawns first (its read parks on the empty ring, .pipe wait
 // kind), then the writer with fd1 wired to the write end. The shell
 // closes its own ends (writer's exit is then the only EOS source) and
@@ -15,9 +15,13 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 
-#define KORU_SPAWN 57
-#define KORU_SPAWN_START 58
+// koru's own ABI lives at 512+ — musl's namespace keeps its real nrs:
+// nr57 IS fork (musl _Fork sends it), nr61 wait4 is real already.
+// canonNr folds 512/513 onto caps 57/58, so bags read the same.
+#define KORU_SPAWN 512
+#define KORU_SPAWN_START 513
 #define KORU_WAIT 61
 #define NO_FD (~0UL)
 
@@ -88,7 +92,8 @@ int main(void) {
             int wcode = -1, rcode = -1;
             syscall(KORU_WAIT, wr, &wcode);
             syscall(KORU_WAIT, rd, &rcode);
-            printf("pipe: w=%d r=%d\n", wcode, rcode);
+            // nr61 hands a real wait4 status word — the code is encoded
+            printf("pipe: w=%d r=%d\n", WEXITSTATUS(wcode), WEXITSTATUS(rcode));
             continue;
         }
 

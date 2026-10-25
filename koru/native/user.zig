@@ -501,6 +501,8 @@ pub fn init() void {
 // Per-child state the seam reads at ring transition. One child at a time
 // (spawn blocks), so plain globals are honest.
 pub export var child_ursp: u64 = 0; // user rsp saved across the syscall
+pub export var child_entry: u64 = 0; // 1 = syscall gate, 0 = int80 — fork's
+                                    // resume frame differs between them
 pub export var rsp0_val: u64 = 0; // kernel stack top for the syscall entry
 pub export var child_rights: u64 = 0; // nr bitmask — the bag, enforced
 
@@ -601,6 +603,11 @@ const ChildFsOps = extern struct {
     seek: *const fn (ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64,
     stat: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64, // 144B linux stat
     close: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) void,
+    // dup bumps the handle's provider-side refcount and returns the
+    // handle to record — fork and spawn-fd-wiring SHARE the open file
+    // (POSIX: one offset across dup'd fds), so close must refcount, not
+    // free on the first drop.
+    dup: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) i64,
 };
 
 const WaitKind = enum { none, conin, blk, exit, pipe };
@@ -652,6 +659,8 @@ var sched_active = false;
 pub export var sched_switches: u64 = 0;
 pub export var kctx_resumes: u64 = 0;
 pub export var tick_kctx: u64 = 0;
+pub export var forks: u64 = 0;      // nr57 fork calls served
+pub export var fork_pages: u64 = 0; // user pages the copies moved
 // schedPreempt arms this before entering schedLoop; switchInto consumes
 // it — the first dispatch after a tick is tick-driven by construction.
 var tick_armed: bool = false;
@@ -1162,7 +1171,15 @@ fn canonNr(nr: u64) u64 {
         231 => 60,
         318 => 61,
         158, 218, 273, 302 => 62,
+        14 => 62, // rt_sigprocmask — proc-self metadata, no signals exist
         72 => 62, // fcntl folds to the proc-self group — our handles carry no flag state
+        // koru's own ABI lives at 512+, out of musl's namespace — nr57 is
+        // REAL fork now (musl _Fork sends it with zero args); clone(56)
+        // folds to the same "create a child" cap — the flag-shape refusal
+        // is the arm's job, not the bag's. Bits 57/58 name the caps.
+        56 => 57,
+        512 => 57,
+        513 => 58,
         else => nr,
     };
 }
@@ -1479,18 +1496,30 @@ fn releaseFds(c: *Child) void {
     }
 }
 
-// Spawn wiring: project one of the SPAWNER's fd entries into the child's
-// table. Pipes bump endpoint refs; fs entries SHARE the handle (same
-// offset/pos — dup semantics, not an independent open).
-fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) void {
+// Spawn wiring and fork share this: project one of the SOURCE's fd
+// entries into the destination's table. Pipes bump endpoint refs; fs
+// entries go through the provider's dup op — the handle is refcounted
+// provider-side (same offset, POSIX share semantics), so a close in one
+// table can never free the handle out from under the other. false =
+// the provider refused; the caller unwinds what it already cloned.
+fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
     const kind = src.fdkinds[sfd];
-    dst.fdkinds[dfd] = kind;
-    dst.fds[dfd] = src.fds[sfd];
     switch (kind) {
         .pipe_r => pipes[@intCast(src.fds[sfd])].rrefs += 1,
         .pipe_w => pipes[@intCast(src.fds[sfd])].wrefs += 1,
+        .fs => {
+            const ops = src.fsv orelse return false;
+            const nh = ops.dup(ops.ctx, src.fds[sfd]);
+            if (nh < 0) return false;
+            dst.fdkinds[dfd] = kind;
+            dst.fds[dfd] = @intCast(nh);
+            return true;
+        },
         else => {},
     }
+    dst.fdkinds[dfd] = kind;
+    dst.fds[dfd] = src.fds[sfd];
+    return true;
 }
 
 // nr 22 — pipe(fds[2]): mint a ring, write the two NEW fd numbers into
@@ -1523,9 +1552,10 @@ fn childPipe(c: *Child, pva: u64) i64 {
     return 0;
 }
 
-// nr 61 — wait(pid, status): pid is the roster-slot nid spawn_start
-// handed back. -1 waits for ANY zombie. Reaping marks the slot .dead:
-// the status is claimed once and a reused slot can never serve it twice.
+// nr 61 — wait(pid, status): pid is the pid-domain id spawn_start/fork
+// handed back (slot+1; slots are internal, 0 is never a pid). -1 waits
+// for ANY zombie. Reaping marks the slot .dead: the status is claimed
+// once and a reused slot can never serve it twice.
 const ANY_PID: usize = ~@as(usize, 0);
 fn childWait(c: *Child, pid: i64, stva: u64) i64 {
     while (true) {
@@ -1539,12 +1569,13 @@ fn childWait(c: *Child, pid: i64, stva: u64) i64 {
                 if (st == .runnable or st == .blocked) live = true;
             }
         } else {
-            if (pid < 0 or pid >= MAXCHILDREN) {
+            if (pid < 1 or pid > MAXCHILDREN) {
                 asm volatile ("sti" ::: .{ .memory = true });
-                return -10; // ECHILD — no such roster slot
+                return -10; // ECHILD — no such pid
             }
-            const st = children[@intCast(pid)].state;
-            if (st == .zombie) slot = @intCast(pid);
+            const s: usize = @intCast(pid - 1);
+            const st = children[s].state;
+            if (st == .zombie) slot = s;
             live = st == .runnable or st == .blocked;
         }
         if (slot) |g| {
@@ -1553,21 +1584,25 @@ fn childWait(c: *Child, pid: i64, stva: u64) i64 {
             children[g].waitable = false;
             asm volatile ("sti" ::: .{ .memory = true });
             if (stva != 0) {
+                // the wait4 status word is ENCODED — exit code in the
+                // high byte (WIFEXITED tests the low 7 bits for signals,
+                // WEXITSTATUS reads the code back out). A raw code would
+                // misreport a clean exit as a signal death.
                 var stb: [4]u8 = undefined;
-                const sv: u32 = @truncate(@as(u64, @bitCast(status)));
+                const sv: u32 = @truncate(@as(u64, @bitCast(status)) << 8);
                 stb[0] = @truncate(sv);
                 stb[1] = @truncate(sv >> 8);
                 stb[2] = @truncate(sv >> 16);
                 stb[3] = @truncate(sv >> 24);
                 if (copyToUser(c, @intCast(stva), &stb) < 4) return -14;
             }
-            return @intCast(g);
+            return @intCast(g + 1); // pid domain — slots are internal
         }
         if (!live) {
             asm volatile ("sti" ::: .{ .memory = true });
             return -10; // ECHILD — nobody left that could still die
         }
-        c.wait_pid = if (pid == -1) ANY_PID else @intCast(pid);
+        c.wait_pid = if (pid == -1) ANY_PID else @intCast(pid - 1); // slot
         kblock(.exit); // a death mark wakes us; the loop re-questions
     }
 }
@@ -1631,14 +1666,20 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
             _ = freeChild(nc);
             return -9; // EBADF — wiring names a dead slot
         }
-        cloneFd(nc, 0, c, @intCast(in_src));
+        if (!cloneFd(nc, 0, c, @intCast(in_src))) {
+            _ = freeChild(nc);
+            return -12; // ENOMEM — provider refused the dup
+        }
     }
     if (out_src != SPAWN_NO_FD) {
         if (out_src >= c.fds.len or c.fdkinds[@intCast(out_src)] == .none) {
             _ = freeChild(nc);
             return -9;
         }
-        cloneFd(nc, 1, c, @intCast(out_src));
+        if (!cloneFd(nc, 1, c, @intCast(out_src))) {
+            _ = freeChild(nc);
+            return -12;
+        }
     }
     var ipath: [256]u8 = undefined;
     var ilen: usize = 0;
@@ -1679,16 +1720,16 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
     return @intCast(g);
 }
 
-// nr 57 — koru spawn. fork's NR slot, loudly different semantics: no
-// address-space copy, the child starts from a *path in the caller's fs
-// view* and the caller parks on it until exit — the spawned child's
-// status IS the return value (a blocking spawn, not fork+exec+wait4).
-// A real musl fork() here hits EFAULT on its non-pointer rdi — refused,
-// not misrouted. nr58 (spawn_start) is the detached twin: same builder,
-// same args plus r8/r9 fd wiring, but it returns the slot nid at once
-// and the child is .waitable — its status parks in a .zombie until
-// nr61 wait claims it. Both children of a pipeline must coexist; the
-// fused shape can never express that.
+// nr 512 — koru spawn. It USED to squat musl's nr57 fork slot; musl
+// _Fork really does syscall(57) with zero args, so the koru ABI moved
+// to 512+ (canonNr folds 512/513 onto caps 57/58 — bags unchanged).
+// The child starts from a *path in the caller's fs view* and the caller
+// parks on it until exit — the spawned child's status IS the return
+// value (a blocking spawn, not fork+exec+wait4). nr513 (spawn_start)
+// is the detached twin: same builder, same args plus r8/r9 fd wiring,
+// returns the pid at once; the child is .waitable — its status parks in
+// a .zombie until nr61 wait claims it. Both children of a pipeline must
+// coexist; the fused shape can never express that.
 fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     const r = spawnBuild(c, f, false, SPAWN_NO_FD, SPAWN_NO_FD);
     if (r < 0) return r;
@@ -1709,6 +1750,111 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     }
     c.wait_pid = 0;
     return c.spawn_ret;
+}
+
+// Clone the caller's whole user space into `dst`: walk the parent's upd
+// tree — every present pde gets its own pt frame, every present pte a
+// fresh page carrying the parent's bytes AND flag bits verbatim (a
+// PROT_NONE/read-only leaf stays that way in the child — the copy is
+// honest, not all-writable like mapUserPage's loader pages). Eager, not
+// CoW: a fault-driven shared-page copy is its own rung; today's honest
+// measure is fork_pages.
+fn cloneUserSpace(dst: *Child, src: *Child) bool {
+    const supd: *const [512]u64 = @ptrFromInt(src.upd);
+    const dupd: *[512]u64 = @ptrFromInt(dst.upd);
+    for (supd, 0..) |pde, i| {
+        if (pde & 1 == 0) continue;
+        const spt: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(pde & ~@as(u64, 0xFFF))));
+        const dpt: *[512]u64 = @ptrCast(allocPage() orelse return false);
+        // flags ride verbatim — including NX (bit 63), which no leaf sets
+        // today but a copied entry must never silently widen.
+        const PDE_FLAGS: u64 = 0x8000_0000_0000_0FFF;
+        dupd[i] = @as(u64, @intFromPtr(dpt)) | (pde & PDE_FLAGS);
+        for (spt, 0..) |e, j| {
+            if (e & 1 == 0) continue;
+            const np = allocPage() orelse return false;
+            const old: *const [4096]u8 = @ptrFromInt(@as(usize, @intCast(e & ~@as(u64, 0xFFF))));
+            @memcpy(np, old);
+            dpt[j] = @as(u64, @intFromPtr(np)) | (e & PDE_FLAGS);
+            fork_pages += 1;
+        }
+    }
+    return true;
+}
+
+// nr 57 — fork(): a real address-space copy at the POSIX ABI tier. This
+// does NOT relax the koru spawn contract's F2 — ambient copy stays
+// refused there; fork is the musl-personality verb, and the copy it
+// performs is explicit work in the aspace layer, metered in fork_pages.
+// The child's frame is synthesized as "just returned from this syscall
+// with rax=0": it resumes on the instruction after `syscall`, in its
+// own copy of the stack, with its own page tables. Entry path matters:
+// the syscall gate keeps user rip/rflags in the frame's rcx/r11 slots
+// and the user rsp in the courier; int80's hw tail sits 120B deeper.
+fn childFork(c: *Child, f: *TrapFrame) i64 {
+    var slot: ?usize = null;
+    for (0..MAXCHILDREN) |i| {
+        const s = children[i].state;
+        if (s == .empty or s == .dead) { slot = i; break; }
+    }
+    const g = slot orelse return -11; // EAGAIN — roster full
+    const nc = &children[g];
+    nc.* = .{};
+    if (!buildTables(nc)) return -12; // ENOMEM
+    if (!cloneUserSpace(nc, c)) {
+        _ = freeChild(nc);
+        return -12;
+    }
+    nc.fsv = c.fsv;
+    // dup the whole fd projection — fs handles go through the provider's
+    // dup (refcounted share, one offset), pipe ends bump ring refs.
+    for (0..c.fds.len) |i| {
+        if (c.fdkinds[i] == .none) continue;
+        if (!cloneFd(nc, i, c, i)) {
+            releaseFds(nc);
+            _ = freeChild(nc);
+            return -12;
+        }
+    }
+    if (g >= nchildren) nchildren = g + 1;
+    nc.rights = c.rights; // fork inherits the bag — same security domain
+    nc.waitable = true;   // the status holds in a zombie for nr61 wait
+    nc.fsbase = c.fsbase;
+    nc.brk = c.brk;
+    nc.brk_base = c.brk_base;
+    nc.mmap_top = c.mmap_top;
+    nc.ursp = c.ursp;
+    const fr: *const [15]u64 = @ptrCast(f);
+    for (0..15) |k| nc.frame.gp[k] = fr[k];
+    nc.frame.gp[0] = 0; // the child sees fork()==0
+    if (child_entry == 1) {
+        nc.frame.rip = f.rcx;
+        nc.frame.cs = 0x23;
+        nc.frame.rflags = f.r11;
+        nc.frame.rsp = c.ursp;
+        nc.frame.ss = 0x1B;
+    } else {
+        const hw: *const [5]u64 = @ptrFromInt(@intFromPtr(f) + 15 * 8);
+        nc.frame.rip = hw[0];
+        nc.frame.cs = hw[1];
+        nc.frame.rflags = hw[2];
+        nc.frame.rsp = hw[3];
+        nc.frame.ss = hw[4];
+    }
+    nc.state = .runnable;
+    forks += 1;
+    return @intCast(g + 1); // pid domain — slot+1; 0 means "the child"
+}
+
+// nr 56 — clone: this rung serves only the fork-shaped flag set
+// (SIGCHLD alone, flags==0x11). CLONE_VM/VFORK/THREAD/PARENT are each
+// their own axis — refused by name, never silently forked.
+fn childClone(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdi == 0x11) return childFork(c, f);
+    say("SEAM REFUSE clone flags=");
+    puthex(f.rdi);
+    say(" (not the fork shape)\n");
+    return -38; // ENOSYS
 }
 
 export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
@@ -1812,13 +1958,20 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 // pipe_w entries in the caller's projection.
             f.rax = @bitCast(childPipe(c, f.rdi));
         },
-        57 => { // koru spawn(path, rights) — parks on child-exit, not fork
+        56 => { // clone(flags,...) — only the fork shape (SIGCHLD) this rung
+            f.rax = @bitCast(childClone(c, f));
+        },
+        57 => { // fork() — real POSIX: copy the caller's space, child gets 0
+            f.rax = @bitCast(childFork(c, f));
+        },
+        512 => { // koru spawn(path, rights, blob, blen) — fused spawn+wait,
+                 // out of musl's namespace; canonNr folds it to cap 57.
             f.rax = @bitCast(childSpawn(c, f));
         },
-        58 => { // spawn_start(path, rights, blob, blen, r8=in, r9=out) —
-                // same builder, detached: returns the slot nid now; the
-                // child is .waitable and its death leaves a .zombie.
-            f.rax = @bitCast(spawnBuild(c, f, true, f.r8, f.r9));
+        513 => { // koru spawn_start — detached twin, returns the pid; r8/r9
+                 // name the caller's fd entries to project into fd0/fd1.
+            const r = spawnBuild(c, f, true, f.r8, f.r9);
+            f.rax = @bitCast(if (r < 0) r else r + 1); // slot → pid domain
         },
         61 => { // wait(pid, status) — pid is a slot nid, -1 any zombie
             f.rax = @bitCast(childWait(c, @bitCast(f.rdi), f.rsi));
@@ -1859,8 +2012,14 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         17 => { // pread64(fd, buf, len, off) — read without moving pos
             f.rax = @bitCast(childPread(c, f.rdi, f.rsi, f.rdx, f.r10));
         },
-        39 => { // getpid
-            f.rax = 1;
+        14 => { // rt_sigprocmask — no signals exist to mask; musl's
+                // _Fork calls this on both sides. A no-op success, same
+                // class as fcntl's flagless handles.
+            f.rax = 0;
+        },
+        39 => { // getpid — the pid domain is slot+1 (0 can never answer
+                // "am I the child" ambiguously)
+            f.rax = @intCast(cur_child + 1);
         },
         72 => { // fcntl(fd, cmd, arg) — our fds are opaque handles with no
             // flag state; the flags a libc sets (CLOEXEC, NONBLOCK) have no
@@ -2009,8 +2168,8 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             }
             const dead = &children[cur_child];
             dead.exit_status = @bitCast(last_exit);
-            // .waitable (nr58) parks the status in a .zombie for wait to
-            // claim; the fused nr57 child has no claimant and goes .dead.
+            // .waitable (nr513/fork) parks the status in a .zombie for
+            // wait to claim; a fused nr512 child has no claimant — .dead.
             dead.state = if (dead.waitable) .zombie else .dead;
             const nf = freeChild(dead);
             say("pmm: reap freed=");
@@ -2247,6 +2406,7 @@ comptime {
         \\
         \\ .globl ring3_entry80
         \\ ring3_entry80:
+        \\   movq $0, child_entry(%rip)
         \\   push %r15
         \\   push %r14
         \\   push %r13
@@ -2294,6 +2454,7 @@ comptime {
         \\ .globl ring3_syscall_entry
         \\ ring3_syscall_entry:
         \\   mov %rsp, child_ursp(%rip)
+        \\   movq $1, child_entry(%rip)
         \\   mov rsp0_val(%rip), %rsp
         \\   push %r15
         \\   push %r14
@@ -2440,6 +2601,10 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
     koru_putdec(pipe_rwaits);
     say(" wwaits=");
     koru_putdec(pipe_wwaits);
+    say(" forks=");
+    koru_putdec(forks);
+    say(" fpages=");
+    koru_putdec(fork_pages);
     say("\n");
     return @intCast(last_exit);
 }

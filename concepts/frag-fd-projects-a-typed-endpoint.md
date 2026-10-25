@@ -23,18 +23,31 @@ writer gone → drain-then-0), or EPIPE (last reader gone → -32 on the
 woken writer). Endpoint refs move on `pipe()` (mint), spawn-wiring
 clone (bump), and close/exit (drop); the ring dies with both ends.
 
-Wiring is **explicit per spawn**, never inherit-all: nr58 spawn_start
-is nr57's detached twin — same `spawnBuild`, plus r8/r9 naming the
-caller's fd entries to project into the child's fd0/fd1. The clone
-bumps pipe refs; an fs clone SHARES the handle (dup semantics — same
-offset, not an independent open). Detached implies lifecycle: the
+Wiring is **explicit per spawn**, never inherit-all: nr513 spawn_start
+is nr512's detached twin — same `spawnBuild`, plus r8/r9 naming the
+caller's fd entries to project into the child's fd0/fd1. **Fd-dup is a
+per-kind endpoint operation, not a table copy** — fork made that ruling
+unavoidable: pipes bump the ring's endpoint refs; an `.fs` clone calls
+the provider's `dup` op (`ChildFsOps.dup`, ext2's OpenFile carries a
+refcount) and `releaseFds` drops refs, never closes outright. The file
+offset lives in the shared OpenFile — a child's read advances the
+parent's cursor, which is POSIX fork semantics, not two opens. The
+prior claim that "an fs clone SHARES the handle" was aspirational: it
+shared the pointer but `releaseFds` closed unconditionally — a latent
+double-close no fixture had wired an fs fd into until fork wired all of
+them. Detached implies lifecycle: the
 child is `.waitable`, its death leaves a `.zombie` holding
 `exit_status`, and nr61 wait(pid,status) — pid is the roster-slot nid,
 -1 waits any — claims it once; reap marks `.dead` so a reused slot can
-never serve a claimed status twice. nr57 stays fused (spawn+park+status
-in rax) for the common case; a pipeline is two nr58s + closes + two
-nr61s, and the READER spawns first so reader-parks-on-empty is
-deterministic evidence, not timing luck.
+never serve a claimed status twice. The status word is wait4-encoded
+(code<<8) — musl's WIFEXITED/WEXITSTATUS decode it; writing the raw
+code is a lie musl can't read. koru's verbs moved to nr512
+(fused spawn+park+status in rax) and nr513 (spawn_start) when musl's
+nr57 turned out to be REAL fork — low numbers are Linux's table, ours
+live at 512+ (see frag-fork-is-eager-copy-at-the-syscall-edge). A
+pipeline is two nr513s + closes + two nr61s, and the READER spawns
+first so reader-parks-on-empty is deterministic evidence, not timing
+luck.
 
 Oracle lessons this rung paid for:
 

@@ -511,7 +511,9 @@ fn readFile(fs: *Fs, ino: u32) ReadResult {
 // cargo. The view is read-only and by-inode underneath — paths are a
 // view (lookupPath), the read is always inode+offset.
 
-const OpenFile = struct { ino: u32, size: u32, pos: u64 };
+// A handle is refcounted: fork and spawn fd-wiring dup it (share the
+// offset — POSIX), so close frees only when the last reference drops.
+const OpenFile = struct { ino: u32, size: u32, pos: u64, refs: u32 };
 
 const ChildFsOps = extern struct {
     ctx: ?*anyopaque,
@@ -521,6 +523,7 @@ const ChildFsOps = extern struct {
     seek: *const fn (ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64,
     stat: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
     close: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) void,
+    dup: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) i64,
 };
 
 // readAt: inode + byte-range → bytes, reading only the blocks covered —
@@ -565,7 +568,7 @@ fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     if (rd16(&it, loc.off) & 0o170000 != 0o100000) return -21; // EISDIR/ENOTREG
     const h = malloc(@sizeOf(OpenFile)) orelse return -12; // ENOMEM
     const fp: *OpenFile = @ptrCast(@alignCast(h));
-    fp.* = .{ .ino = ino, .size = rd32(&it, loc.off + 4), .pos = 0 };
+    fp.* = .{ .ino = ino, .size = rd32(&it, loc.off + 4), .pos = 0, .refs = 1 };
     return @intCast(@intFromPtr(fp));
 }
 
@@ -620,12 +623,24 @@ fn cfStat(ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64 {
 
 fn cfClose(ctx: ?*anyopaque, h: u64) callconv(.c) void {
     _ = ctx;
-    free(@ptrFromInt(@as(usize, @intCast(h))));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    if (fp.refs > 0) fp.refs -= 1;
+    if (fp.refs == 0) free(fp);
+}
+
+// dup: same handle, +1 ref — the child shares the file (one offset),
+// and each table's close drops exactly its own reference.
+fn cfDup(ctx: ?*anyopaque, h: u64) callconv(.c) i64 {
+    _ = ctx;
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    fp.refs += 1;
+    return @bitCast(h);
 }
 
 fn childFs(fs: *Fs) ChildFsOps {
     return .{ .ctx = @ptrCast(fs), .open = cfOpen, .read = cfRead,
-              .read_at = cfReadAt, .seek = cfSeek, .stat = cfStat, .close = cfClose };
+              .read_at = cfReadAt, .seek = cfSeek, .stat = cfStat, .close = cfClose,
+              .dup = cfDup };
 }
 
 ~proc fetch|zig {

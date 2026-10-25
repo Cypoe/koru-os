@@ -487,7 +487,11 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
   wires fd0/fd1 explicitly and leaves a .waitable child whose .zombie
   nr61 wait claims once; .pipe is the fifth wait kind — reader-parks-on-
   empty, EPIPE/EOS on last-end close; pipegen|catc drains 20B through a
-  real ring with rwaits counted); general wait
+  real ring with rwaits counted); fork landed (nr57 = real musl _Fork,
+  koru verbs at 512+; eager user-aspace copy, frame synthesized at the
+  gate, fds dup per kind with refcounted fs handles; clone refuses
+  non-SIGCHLD shapes by name; forktest proves shared fd offset + private
+  pages + zombie reaping); general wait
   keys are now mechanical: new kind + a waker mark + a recheck loop
   (frame allocator + reclaim landed: refcounted 4KiB frames, pinned-buffer
    + pair-release shapes proven; bump heap remains for program data)
@@ -502,7 +506,6 @@ Also open, smaller:
 
 - pins as Table *rows* (generation/retarget/stale-on-use for object ids),
   pin leasing + eviction
-- `exec(nid)` resolving the provider from the pin itself (no caller-held fs)
 - rename/unlink/link/`..`/`.` so "identity survives the view" is provable
 - bootable media: GRUB multiboot2 image (link.ld already carries the
   header), init that doesn't halt-on-exit, shutdown/reboot

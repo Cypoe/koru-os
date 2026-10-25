@@ -29,6 +29,15 @@ the cap groupings it invents are exactly what grant objects replace.
 Also corrected on contact: getpid is NR 39, not our invented NR 2 —
 a real binary's `open(2)` must never resolve to a getpid answer.
 
+**Evolved (fork rung):** the low numbers are Linux's table VERBATIM —
+musl `_Fork` sends nr57 with zero args, so our spawn/fork verbs moved
+to nr512/513 (folded back onto caps 57/58 so bags keep working).
+`clone(56)` folds onto cap 57: clone and fork are one "create a child"
+capability; the flag-shape refusal lives in the arm, not the bit.
+`rt_sigprocmask(14)` folds to cap 62 (proc-self). Every fold is one
+more hand-named cap grouping — the bitmask keeps enumerating the
+objects the grant-bag design must name.
+
 Named caveat that follows: a real cap-mode child must be static — dynamic
 rtld opens libs by path → ECAPMODE. Extern-ELF ambitions (fish/foot/
 Quickshell) run fine on the linux arm; under Capsicum they want static

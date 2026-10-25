@@ -170,6 +170,7 @@ else
         cp "$ROOT/koru/native/tests/args.c" "$WORK/args.c"
         cp "$ROOT/koru/native/tests/catc.c" "$WORK/catc.c"
         cp "$ROOT/koru/native/tests/pipegen.c" "$WORK/pipegen.c"
+        cp "$ROOT/koru/native/tests/forktest.c" "$WORK/forktest.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -180,6 +181,7 @@ else
         ARGSWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/args.elf")")"
         CATCWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/catc.elf")")"
         PIPEGENWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pipegen.elf")")"
+        FORKTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/forktest.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -193,6 +195,7 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/args.elf" "$WORK/args.c" > "$WORK/args.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/catc.elf" "$WORK/catc.c" > "$WORK/catc.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/pipegen.elf" "$WORK/pipegen.c" > "$WORK/pipegen.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/forktest.elf" "$WORK/forktest.c" > "$WORK/forktest.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
@@ -204,6 +207,7 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ARGSWSL args.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $CATCWSL catc.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIPEGENWSL pipegen.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $FORKTESTWSL forktest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -441,9 +445,9 @@ else
         sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_shell.k" > "$sh_src"
         if bash "$ROOT/scripts/build-native.sh" "$sh_src" "$WORK/boot_shell.elf" > "$WORK/boot_shell.build" 2>&1; then
             shport=$((5400 + $$ % 300))
-            # three command rounds (pie, args, pipe) at human-key cadence
-            # plus two grandchild ELF loads — 15s isn't the budget anymore
-            timeout "$((TIMEOUT * 3))" "$QEMU" -kernel "$WORK/boot_shell.elf" -serial stdio \
+            # four command rounds (pie, args, pipe, fork) at human-key
+            # cadence plus three grandchild ELF loads — a real budget
+            timeout "$((TIMEOUT * 4))" "$QEMU" -kernel "$WORK/boot_shell.elf" -serial stdio \
                 -display none -m 64M -no-reboot \
                 -monitor "tcp:127.0.0.1:$shport,server,nowait" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -524,6 +528,31 @@ else
                         sleep 0.25
                     done
                 fi
+                # fork rung: "forktest.elf" — musl _Fork issues a bare
+                # nr57; the kernel copies the space, dups the fd table
+                # through provider refcounts, the child resumes at the
+                # post-syscall rip with rax=0. FORKC [-from] proves the
+                # SHARED file offset; FORKP x=1 proves private memory.
+                done4=0
+                if [ "${done3:-0}" -eq 1 ]; then
+                    for _ in $(seq 1 20); do
+                        exec 4<>"/dev/tcp/127.0.0.1/$shport" 2>/dev/null && break
+                        sleep 0.5
+                    done
+                    if [ -e /dev/fd/4 ]; then
+                        for k in f o r k t e s t dot e l f ret; do
+                            printf 'sendkey %s\n' "$k" >&4 2>/dev/null || break
+                            keys=$((keys+1))
+                            sleep 0.3
+                        done
+                        exec 4>&-
+                    fi
+                    for _ in $(seq 1 80); do
+                        grep -qF 'exit=7' "$WORK/boot_shell.serial" 2>/dev/null && { done4=1; break; }
+                        kill -0 $shq 2>/dev/null || break
+                        sleep 0.25
+                    done
+                fi
                 # reprompt observed before quitting
                 for _ in $(seq 1 40); do
                     grep -c 'koru> ' "$WORK/boot_shell.serial" 2>/dev/null | grep -q '^[4-9]' && break
@@ -544,14 +573,16 @@ else
             wait $shq 2>/dev/null || true
             if [ "$prompt" -eq 0 ]; then
                 bad "shell-repl: no 'koru> ' prompt — sh never reached read(0): $(tail -4 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
-            elif [ "$keys" -lt 44 ]; then
-                bad "shell-repl: monitor injection failed ($keys/44 keys sent)"
+            elif [ "$keys" -lt 56 ]; then
+                bad "shell-repl: monitor injection failed ($keys/56 keys sent)"
             elif [ "${done1:-0}" -eq 0 ]; then
                 bad "shell-repl: spawn never completed: $(tail -6 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             elif [ "${done2:-0}" -eq 0 ]; then
                 bad "shell-repl: argv evidence missing — args.elf run never completed: $(tail -6 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             elif [ "${done3:-0}" -eq 0 ]; then
                 bad "shell-repl: pipeline evidence missing — pipegen|catc run never completed: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
+            elif [ "${done4:-0}" -eq 0 ]; then
+                bad "shell-repl: fork evidence missing — forktest run never completed: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             elif grep -qF 'SHELL COMPLETE' "$WORK/boot_shell.serial" \
                  && grep -qF 'real pie child says hi' "$WORK/boot_shell.serial" \
                  && grep -qF 'exit=42' "$WORK/boot_shell.serial" \
@@ -562,10 +593,15 @@ else
                  && grep -qF 'PIPE-DATA-1234567890' "$WORK/boot_shell.serial" \
                  && grep -qF 'CATC n=20' "$WORK/boot_shell.serial" \
                  && grep -qF 'pipe: w=52 r=51' "$WORK/boot_shell.serial" \
+                 && grep -qF 'FORKC cb=[-from] n=5 x=42' "$WORK/boot_shell.serial" \
+                 && grep -qF 'FORKP p=3 w=3 ex=1 st=33 x=1 pb=[hello]' "$WORK/boot_shell.serial" \
+                 && grep -qF 'FORKC clonev ret=-1 errno=38' "$WORK/boot_shell.serial" \
+                 && grep -qE 'forks=1 fpages=[1-9]' "$WORK/boot_shell.serial" \
+                 && grep -qF 'exit=7' "$WORK/boot_shell.serial" \
                  && grep -qF 'shell: exec sh status=47' "$WORK/boot_shell.serial" \
                  && grep -qE 'yields=[1-9]' "$WORK/boot_shell.serial" \
                  && grep -qE 'rwaits=[1-9]' "$WORK/boot_shell.serial"; then
-                ok "shell-repl: pie.elf via nr57, args.elf argv, pipegen|catc 20B through a real ring (rwaits>0), zombies waited, q quit (47)"
+                ok "shell-repl: pie.elf via nr512, args.elf argv, pipegen|catc 20B through a real ring (rwaits>0), forktest.elf real musl fork (shared fd offset + private space + zombie reaped + clone CLONE_VM refused), q quit (47)"
             else
                 bad "shell-repl: evidence missing: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             fi
