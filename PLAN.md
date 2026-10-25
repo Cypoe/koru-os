@@ -474,9 +474,12 @@ the `cyberboot` path — with virtio-gpu later for damage/3D).
 
 ```
 kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
-  kstack — conin/blk/exit are wait_kind tags on one primitive; open:
-  tick-preempt of kctx children — they resume at block/exit
-  boundaries) + FPU state; shell REPL landed (nr57 spawn-on-exit,
+  kstack — conin/blk/exit are wait_kind tags on one primitive; the tick
+  is a full scheduling point — schedPreempt saves the CPL3 frame and
+  tails into the shared schedLoop/switchInto dispatcher, so a woken
+  continuation resumes at the next tick (tick-kctx row measures it);
+  open: kernel contexts themselves are non-preemptible while running)
+  + FPU state; shell REPL landed (nr57 spawn-on-exit,
   status to rax); general wait keys are now mechanical: new kind +
   a waker mark + a recheck loop
   (frame allocator + reclaim landed: refcounted 4KiB frames, pinned-buffer

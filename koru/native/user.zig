@@ -309,12 +309,16 @@ const ExcFrame = extern struct {
     // ss/usp trail when the source was CPL=3 — hardware layout, unread.
 };
 
-// Tick preemption, in place: if the interrupted context was CPL3 and the
-// epoch is live, the on-stack frame IS the outgoing child's context — copy
-// it into its slot, copy the next runnable child's saved frame over the
-// stack image, flip CR3 to its space, and let irq_exc_common's tail resume
-// it. cs&3 != 3 means the tick interrupted CPL0 work (ISR, syscall, kmain)
-// — there is no user frame on the stack to steal, so nothing rotates.
+// Tick preemption: if the interrupted context was CPL3 and the epoch is
+// live, the on-stack frame IS the outgoing child's context — copy it into
+// its slot, EOI the tick (the tail-switch never reaches the dispatch
+// epilogue's EOI), and hand off to schedLoop. Selection, rotation order,
+// and BOTH resumable shapes live in one dispatcher now: a woken kernel
+// continuation (kctx != 0) is a real rotation target — switchInto pops
+// its pushed block instead of iretq'ing, which is the cell in-place
+// surgery could never express. cs&3 != 3 means the tick interrupted CPL0
+// work (ISR, syscall, a live continuation) — no user frame to steal, so
+// nothing rotates; kernel calls stay non-preemptible.
 fn schedPreempt(f: *ExcFrame) void {
     if (!sched_active or nchildren == 0) return;
     if (f.cs & 3 != 3) return;
@@ -326,32 +330,9 @@ fn schedPreempt(f: *ExcFrame) void {
     c.frame.rflags = st[19];
     c.frame.rsp = st[20];
     c.frame.ss = st[21];
-    var nxt = cur_child;
-    for (0..nchildren) |k| {
-        const j = (cur_child + 1 + k) % nchildren;
-        // a runnable child with a live kernel context cannot be iretq'd
-        // into — preempt is user-frame surgery only; kctx waiters resume
-        // at the next schedLoop/exit boundary instead.
-        if (children[j].state == .runnable and children[j].kctx == 0) {
-            nxt = j;
-            break;
-        }
-    }
-    if (nxt == cur_child) return;
-    const nx = &children[nxt];
-    armChild(nxt); // rights + both rsp0s + FS_BASE follow the rotation
-    const out: [*]u64 = @ptrCast(f);
-    for (0..15) |i| out[i] = nx.frame.gp[i];
-    out[17] = nx.frame.rip;
-    out[18] = nx.frame.cs;
-    out[19] = nx.frame.rflags;
-    out[20] = nx.frame.rsp;
-    out[21] = nx.frame.ss;
-    asm volatile ("mov %[c], %%cr3"
-        :
-        : [c] "r" (nx.pml4),
-        : .{ .memory = true });
-    sched_switches += 1;
+    picEoi(0x20);
+    tick_armed = true;
+    schedLoop();
 }
 
 export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
@@ -658,6 +639,11 @@ var nchildren: usize = 0;
 var cur_child: usize = 0;
 var sched_active = false;
 pub export var sched_switches: u64 = 0;
+pub export var kctx_resumes: u64 = 0;
+pub export var tick_kctx: u64 = 0;
+// schedPreempt arms this before entering schedLoop; switchInto consumes
+// it — the first dispatch after a tick is tick-driven by construction.
+var tick_armed: bool = false;
 
 // Child memory comes from the frame allocator, not the bump heap: every
 // table and user page is a refcounted frame that freeChild returns on
@@ -1697,7 +1683,12 @@ fn resumeChild(nxt: usize) noreturn {
 // returned into; anything else is a saved user frame.
 fn switchInto(n: usize) noreturn {
     const c = &children[n];
+    sched_switches += 1;
+    const via_tick = tick_armed;
+    tick_armed = false;
     if (c.kctx != 0) {
+        kctx_resumes += 1;
+        if (via_tick) tick_kctx += 1;
         const k = c.kctx;
         c.kctx = 0;
         armChild(n);
@@ -2015,6 +2006,10 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
     sched_active = false;
     say("sched: switches=");
     koru_putdec(sched_switches);
+    say(" kctx=");
+    koru_putdec(kctx_resumes);
+    say(" tick_kctx=");
+    koru_putdec(tick_kctx);
     say("\n");
     return @intCast(last_exit);
 }

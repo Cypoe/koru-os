@@ -42,8 +42,17 @@ The discipline that makes it correct:
   the *waiter's* `spawn_ret` before marking it runnable, so slot reuse
   can never clobber the payload.
 
-What remains distinct: tick preemption stays frame-based (a CPL3
-`ExcFrame` copied into `c.frame`), and preempt *skips* runnable children
-with live `kctx` — they resume at the next schedLoop/exit boundary, a
-known latency bound, not a deadlock. Tick-driven kernel preemption is
-the open piece of kernel-as-context.
+The tick is a full scheduling point. `schedPreempt` keeps only its
+frame-capture step (a CPL3 `ExcFrame` copied into `c.frame`), early-EOIs
+IRQ0, and tails into `schedLoop` — selection and BOTH resumable shapes
+live in one dispatcher, so a woken continuation is a rotation target,
+not a deferred class. Deleting the in-place rotation also deleted the
+`kctx == 0` skip: a waiter woken while a sibling spins now resumes at
+the next tick, never later — the `boot_tkctx` row measures it
+(`tick_kctx` counts tick-driven continuation resumes; the spinner that
+never blocks makes the tick the only boundary that can reach it).
+
+What remains distinct: a *running* kernel continuation is still
+non-preemptible — a tick interrupting CPL0 early-returns; kernel call
+depth bounds the worst case. Preemptible kernel contexts (IST, a second
+saved kernel frame) are the next cell, not this one.

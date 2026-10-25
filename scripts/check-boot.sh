@@ -128,21 +128,26 @@ IMGWSL="$(wsl -e wslpath -u "$(cygpath -w "$IMG")" 2>/dev/null)" || IMGWSL=""
 ELF="$WORK/child.elf"
 ELFA="$WORK/childA.elf"
 ELFB="$WORK/childB.elf"
+SPIN="$WORK/spin.elf"
 ELFWSL=""
 if command -v python >/dev/null 2>&1; then
     python "$ROOT/scripts/mk-child-elf.py" "$ELF" > /dev/null 2>&1
     python "$ROOT/scripts/mk-ticker-elf.py" "$ELFA" A 30 8000000 43 > /dev/null 2>&1
     python "$ROOT/scripts/mk-ticker-elf.py" "$ELFB" B 30 8000000 44 > /dev/null 2>&1
+    python "$ROOT/scripts/mk-ticker-elf.py" "$SPIN" S 60 8000000 43 > /dev/null 2>&1
     ELFWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELF")" 2>/dev/null)" || ELFWSL=""
     ELFAWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELFA")" 2>/dev/null)" || ELFAWSL=""
     ELFBWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELFB")" 2>/dev/null)" || ELFBWSL=""
+    SPINWSL="$(wsl -e wslpath -u "$(cygpath -w "$SPIN")" 2>/dev/null)" || SPINWSL=""
 elif command -v py >/dev/null 2>&1; then
     py -3 "$ROOT/scripts/mk-child-elf.py" "$(cygpath -w "$ELF")" > /dev/null 2>&1
     py -3 "$ROOT/scripts/mk-ticker-elf.py" "$(cygpath -w "$ELFA")" A 30 8000000 43 > /dev/null 2>&1
     py -3 "$ROOT/scripts/mk-ticker-elf.py" "$(cygpath -w "$ELFB")" B 30 8000000 44 > /dev/null 2>&1
+    py -3 "$ROOT/scripts/mk-ticker-elf.py" "$(cygpath -w "$SPIN")" S 60 8000000 43 > /dev/null 2>&1
     ELFWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELF")" 2>/dev/null)" || ELFWSL=""
     ELFAWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELFA")" 2>/dev/null)" || ELFAWSL=""
     ELFBWSL="$(wsl -e wslpath -u "$(cygpath -w "$ELFB")" 2>/dev/null)" || ELFBWSL=""
+    SPINWSL="$(wsl -e wslpath -u "$(cygpath -w "$SPIN")" 2>/dev/null)" || SPINWSL=""
 fi
 if [ -z "$IMGWSL" ] || [ -z "$ELFWSL" ]; then
     bad "boot_ext2: WSL/wslpath or python unavailable — cannot build the ext2 image"
@@ -150,7 +155,7 @@ else
     if MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 128 -O none -L koru-native "$IMGWSL" 16384 > "$WORK/mke2fs.out" 2>&1 \
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFWSL child.elf" "$IMGWSL" > "$WORK/debugfs.out" 2>&1 \
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "mkdir bin" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
-        && { printf 'cd bin\nwrite %s childA.elf\nwrite %s childB.elf\n' "$ELFAWSL" "$ELFBWSL" > "$WORK/debugfs.cmds" \
+        && { printf 'cd bin\nwrite %s childA.elf\nwrite %s childB.elf\nwrite %s spin.elf\n' "$ELFAWSL" "$ELFBWSL" "$SPINWSL" > "$WORK/debugfs.cmds" \
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -f "$(wsl -e wslpath -u "$(cygpath -w "$WORK/debugfs.cmds")")" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1; }; then
         # real-ELF rung: gcc static-pie ET_DYN staged beside the hand-made
         # child — the loader bias+stack path exercised on a real toolchain
@@ -482,6 +487,57 @@ else
             fi
         else
             bad "boot_shell: build failed"; tail -6 "$WORK/boot_shell.build"
+        fi
+
+        # tick-kctx rung: run2(spin.elf, getc.elf) — the spinner never
+        # blocks, so when the monitor's sendkey wakes getc's .conin
+        # continuation the ONLY boundary that can reach it is the next
+        # PIT tick rotating the running spinner out. sched: tick_kctx=N
+        # counts dispatches that resumed a live kernel context from the
+        # tick path — [1-9] is the measured proof; GOT=x that the
+        # resumed read completed itself.
+        tk_src="$WORK/boot_tkctx.k"
+        sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_tkctx.k" > "$tk_src"
+        if bash "$ROOT/scripts/build-native.sh" "$tk_src" "$WORK/boot_tkctx.elf" > "$WORK/boot_tkctx.build" 2>&1; then
+            tkport=$((5600 + $$ % 300))
+            timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_tkctx.elf" -serial stdio \
+                -display none -m 64M -no-reboot \
+                -monitor "tcp:127.0.0.1:$tkport,server,nowait" \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on \
+                > "$WORK/boot_tkctx.serial" 2>&1 &
+            tkq=$!
+            prompt=0
+            for _ in $(seq 1 60); do
+                grep -qF '?>' "$WORK/boot_tkctx.serial" 2>/dev/null && { prompt=1; break; }
+                sleep 0.25
+            done
+            keys=0
+            if [ "$prompt" -eq 1 ]; then
+                for _ in $(seq 1 20); do
+                    exec 4<>"/dev/tcp/127.0.0.1/$tkport" 2>/dev/null && break
+                    sleep 0.5
+                done
+                if [ -e /dev/fd/4 ]; then
+                    printf 'sendkey x\n' >&4 2>/dev/null && keys=1
+                    sleep 1   # let the monitor drain before the socket closes
+                    exec 4>&-
+                fi
+            fi
+            wait $tkq 2>/dev/null || true
+            if [ "$prompt" -eq 0 ]; then
+                bad "tick-kctx: no '?> ' prompt — getc never reached read(0): $(tail -4 "$WORK/boot_tkctx.serial" | tr -d '\0' | tr '\n' '|')"
+            elif [ "$keys" -eq 0 ]; then
+                bad "tick-kctx: monitor connect/sendkey failed — no injection happened"
+            elif grep -qF 'GOT=x' "$WORK/boot_tkctx.serial" \
+                 && grep -qF 'TKCTX COMPLETE' "$WORK/boot_tkctx.serial" \
+                 && grep -qE 'tick_kctx=[1-9]' "$WORK/boot_tkctx.serial"; then
+                ok "tick-kctx: IRQ1 woke the blocked read mid-spin; a PIT tick resumed the kernel continuation (GOT=x, drained)"
+            else
+                bad "tick-kctx: evidence missing: $(tail -8 "$WORK/boot_tkctx.serial" | tr -d '\0' | tr '\n' '|')"
+            fi
+        else
+            bad "boot_tkctx: build failed"; tail -6 "$WORK/boot_tkctx.build"
         fi
     else
         bad "boot_ext2: image build failed: $(tail -2 "$WORK/mke2fs.out" "$WORK/debugfs.out")"
