@@ -4,7 +4,16 @@ id: frag-wake-completes-the-parked-syscall
 provenance: koru-os native session — console-input wait-queue rung, 2026-10
 ts: 2026-10-25
 tags: [native, sched, blocking, syscall, irq, contract]
+status: superseded
 ---
+
+Superseded by `frag-block-is-a-kernel-continuation` (2026-10): the
+kernel-context switch generalized blocking — a parked child now suspends
+its own call on its own kstack and the wake is a mark, not a completion.
+This frag's invariants (entry-faithful rebuild, wake writes the return)
+described the evacuation mechanism, which no longer exists. The durable
+pieces that still hold: a blocked child is `.blocked` not dead
+(`anyLive`), and all-blocked legitimately halts the CPU.
 
 A blocking read is a **state**, not a return code. `read(0)` on an empty
 console ring does not answer 0 or EAGAIN — the child rebuilds its syscall

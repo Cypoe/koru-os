@@ -474,8 +474,9 @@ else
             elif grep -qF 'SHELL COMPLETE' "$WORK/boot_shell.serial" \
                  && grep -qF 'real pie child says hi' "$WORK/boot_shell.serial" \
                  && grep -qF 'exit=42' "$WORK/boot_shell.serial" \
-                 && grep -qF 'shell: exec sh status=47' "$WORK/boot_shell.serial"; then
-                ok "shell-repl: sh spawned pie.elf via nr57 parked on exit (status 42 home), q quit (47)"
+                 && grep -qF 'shell: exec sh status=47' "$WORK/boot_shell.serial" \
+                 && grep -qE 'yields=[1-9]' "$WORK/boot_shell.serial"; then
+                ok "shell-repl: sh spawned pie.elf via nr57 parked on exit (status 42 home), q quit (47), mid-call blk yields scheduled"
             else
                 bad "shell-repl: evidence missing: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             fi

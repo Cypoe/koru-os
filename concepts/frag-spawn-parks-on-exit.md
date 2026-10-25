@@ -10,17 +10,18 @@ Wait-on-exit is the **same machine** as wait-on-input, not a second
 primitive. `ring3_trap` nr 57 (`childSpawn`) names a path through the
 caller's own scoped fs view, builds the child (fresh tables, streamed
 `loadElfViaFs`, PT_INTERP through the same view), primes its UserFrame,
-then *parks the spawner itself* on `wait_pid` — the identical
-TrapFrame→UserFrame rebuild `coninRead` uses. The child's exit arm is the
-wake: it writes its status into the parked parent's `gp[0]` and flips it
-runnable. The spawn syscall's return value IS the child's exit status;
-there is no separate waitpid syscall to design first.
+then *parks the spawner itself* — `while (child alive) kblock(.exit)`.
+The child's exit arm writes the status into the waiter's `spawn_ret`
+(living in the waiter, so dead-slot reuse can't clobber it) and marks it
+runnable; the resumed spawn call returns the status as rax itself.
 
-Two wait keys now exist and the roster treats them uniformly — a
-`.blocked` child names what it waits on (`wait_buf`/`wait_cap` for a
-conin byte, `wait_pid` for a descendant) and the epoch holds open while
-any `.runnable` OR `.blocked` remains. Generalizing to a wait-key table
-is mechanical from here, not architectural.
+Mechanism evolved (2026-10): the park is now a suspended kernel
+continuation on the parent's own kstack — see
+`frag-block-is-a-kernel-continuation`. The semantic above is unchanged:
+spawn's return value IS the child's exit status; no waitpid primitive.
+`.blk` joined `.conin` and `.exit` as a third wait kind — virtio DMA
+waits mid-call now schedule the roster instead of halting (`yields=` in
+the blk stats is the measured evidence).
 
 Rights on the seam: the spawned bag is `requested ∩ parent's bag` —
 a child can shed capabilities, never grow them. A `fork()` from musl

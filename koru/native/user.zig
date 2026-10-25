@@ -329,15 +329,17 @@ fn schedPreempt(f: *ExcFrame) void {
     var nxt = cur_child;
     for (0..nchildren) |k| {
         const j = (cur_child + 1 + k) % nchildren;
-        if (children[j].state == .runnable) {
+        // a runnable child with a live kernel context cannot be iretq'd
+        // into — preempt is user-frame surgery only; kctx waiters resume
+        // at the next schedLoop/exit boundary instead.
+        if (children[j].state == .runnable and children[j].kctx == 0) {
             nxt = j;
             break;
         }
     }
     if (nxt == cur_child) return;
     const nx = &children[nxt];
-    cur_child = nxt;
-    child_rights = nx.rights;
+    armChild(nxt); // rights + both rsp0s + FS_BASE follow the rotation
     const out: [*]u64 = @ptrCast(f);
     for (0..15) |i| out[i] = nx.frame.gp[i];
     out[17] = nx.frame.rip;
@@ -360,11 +362,14 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             schedPreempt(f);
         } else if (f.vec == 0x21) {
             kbd.irq(); // 8042 scancode → input ring
-            wakeConin(); // a landed ASCII byte completes a parked read(0)
+            // a landed ASCII byte is worth a conin wake; a bare break
+            // code is not — the resumed read would just re-block.
+            if (kbd.conPending()) wakeKind(.conin);
         } else if (virtio_irq_line != 0xFF and f.vec == 0x20 + @as(u64, virtio_irq_line)) {
             virtio_irq_ack();
             virtio_seen += 1;
             if (virtio_seen == 1) say("irq: virtio delivered\n");
+            wakeKind(.blk); // a retired request resumes its parked trap
         } else {
             // unclaimed line: report once, then mask it at the PIC so a
             // level-asserted storm can't drown the boot (PS/2 aux fires
@@ -617,6 +622,8 @@ const ChildFsOps = extern struct {
     close: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) void,
 };
 
+const WaitKind = enum { none, conin, blk, exit };
+
 const Child = struct {
     pml4: usize = 0,
     pdpt: usize = 0,
@@ -631,11 +638,19 @@ const Child = struct {
     state: ChildState = .empty,
     fsv: ?*const ChildFsOps = null, // scoped fs view (the spawning fs)
     fds: [8]u64 = .{0} ** 8,        // provider handles; 0..2 are stdio
-    waiting_conin: bool = false,    // parked in read(0) on the console ring
-    wait_buf: u64 = 0,              // user VA the wake fills on IRQ1
-    wait_len: u64 = 0,
-    waiting_exit: bool = false,     // parked in spawn() on a child's exit
-    wait_pid: usize = 0,            // roster slot of the awaited child
+    // blocking is a kernel continuation, not a rebuilt user frame: kblock
+    // pushes callee-saved on this child's own kstack and stores the rsp
+    // here; a waker just flips .runnable and the next switchInto pops the
+    // block and returns into the parked call — the syscall completes
+    // itself on whatever entry path it arrived on.
+    wait_kind: WaitKind = .none,    // what the .blocked child waits on
+    wait_pid: usize = 0,            // .exit: roster slot of the awaited child
+    kctx: u64 = 0,                  // saved kernel rsp while blocked mid-call
+    spawn_ret: i64 = 0,             // .exit wake: the dead child's status
+    ursp: u64 = 0,                  // user rsp at syscall entry — child_ursp
+                                    // is a per-syscall global; a blocked
+                                    // syscall outlives it, so we snapshot
+                                    // here and the epilogue reads it back
 };
 
 var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{} };
@@ -1249,85 +1264,33 @@ fn stw(st: *[144]u8, off: usize, v: u64) void {
     for (0..8) |i| st[off + i] = @truncate(v >> @intCast(i * 8));
 }
 
-// Park a trapping child: rebuild its TrapFrame as an iret-resumable
-// UserFrame in the slot. The tail source depends on the entry — syscall
-// landed user rip/rflags in rcx/r11 with the user rsp stashed in
-// child_ursp; int 0x80's hardware frame already carries a complete iret
-// tail right below the pushed GP block (st[15..19]). Shared by every
-// wait-key park: conin today, spawn below.
-fn saveTrapFrame(c: *Child, f: *TrapFrame, from80: bool) void {
-    const st: [*]const u64 = @ptrCast(f);
-    for (0..15) |i| c.frame.gp[i] = st[i];
-    if (from80) {
-        c.frame.rip = st[15];
-        c.frame.cs = st[16];
-        c.frame.rflags = st[17];
-        c.frame.rsp = st[18];
-        c.frame.ss = st[19];
-    } else {
-        c.frame.rip = f.rcx;
-        c.frame.cs = 0x23;
-        c.frame.rflags = f.r11;
-        c.frame.rsp = child_ursp;
-        c.frame.ss = 0x1B;
-    }
-}
-
-// read(0): drain the console byte ring into the user buffer. Empty ring
-// is a real block, not EAGAIN — the child's syscall TrapFrame rebuilds a
-// full UserFrame (rcx = user rip, r11 = user rflags, child_ursp = user
-// rsp), the child parks on conin, the roster rotates or the CPU halts;
-// the IRQ1 wake completes the read into wait_buf and puts the count in
-// gp[0] — the resumed child lands post-syscall with rax already right.
-fn coninRead(c: *Child, f: *TrapFrame, from80: bool) i64 {
+// read(0): drain the console byte ring into the user buffer. An empty
+// ring is a real block — kblock suspends this very call on the child's
+// own kstack and IRQ1's wake resumes it; the next loop iteration drains
+// the landed byte and returns through the normal syscall path.
+fn coninRead(c: *Child, f: *TrapFrame) i64 {
     const want: usize = @intCast(f.rdx);
     if (want == 0) return 0;
     const bva: usize = @intCast(f.rsi);
-    var n: usize = 0;
-    while (n < want) : (n += 1) {
-        const ch = kbd.conByte() orelse break;
-        const va = bva + n;
-        if (userEntry(c, va) & 1 == 0) break;
-        const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
-        ub[0] = ch;
-    }
-    if (n != 0) return @intCast(n);
-    if (userEntry(c, bva) & 1 == 0) return -14; // EFAULT — no page for a byte
-
-    // Empty ring: park — the trap frame rebuilds as an iret-resumable
-    // UserFrame and the wake completes the call.
-    saveTrapFrame(c, f, from80);
-    c.wait_buf = f.rsi;
-    c.wait_len = f.rdx;
-    c.waiting_conin = true;
-    c.state = .blocked;
-    if (nextRunnable()) |nx| resumeChild(nx);
-    // No other runnable child but the epoch is still open — halt here on
-    // rsp0 until IRQ1's wake flips us runnable. schedPreempt sees cs=8 and
-    // won't rotate, so the wake's own write is what ends the halt.
-    while (c.state == .blocked) asm volatile ("sti; hlt");
-    resumeChild(cur_child);
-}
-
-// IRQ1 lands a console byte — a parked read(0) completes right here in
-// the handler: bytes into the child's wait_buf, the count into gp[0]
-// (its saved rax), state flips runnable — the next rotation resumes it.
-fn wakeConin() void {
-    for (0..nchildren) |i| {
-        const c = &children[i];
-        if (c.state != .blocked or !c.waiting_conin) continue;
+    while (true) {
         var n: usize = 0;
-        while (n < c.wait_len) : (n += 1) {
+        while (n < want) : (n += 1) {
             const ch = kbd.conByte() orelse break;
-            const va: usize = @intCast(c.wait_buf + n);
+            const va = bva + n;
             if (userEntry(c, va) & 1 == 0) break;
             const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
             ub[0] = ch;
         }
-        if (n == 0) continue; // break code / unmapped — stay parked
-        c.frame.gp[0] = n;
-        c.waiting_conin = false;
-        c.state = .runnable;
+        if (n != 0) return @intCast(n);
+        if (userEntry(c, bva) & 1 == 0) return -14; // EFAULT — no page for a byte
+        // Check-under-mask then park: the byte must not land between the
+        // drain's empty verdict and the blocked mark, or nobody wakes us.
+        asm volatile ("cli" ::: .{ .memory = true });
+        if (!kbd.conPending()) {
+            kblock(.conin); // returns with IF=1 — a wake happened
+        } else {
+            asm volatile ("sti" ::: .{ .memory = true });
+        }
     }
 }
 
@@ -1338,7 +1301,7 @@ fn wakeConin() void {
 // A real musl fork() here hits EFAULT on its non-pointer rdi — refused,
 // not misrouted. The new child joins THIS epoch's roster (flat, ≤4):
 // it competes in the tick rotation while the spawner waits.
-fn childSpawn(c: *Child, f: *TrapFrame, from80: bool) i64 {
+fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     if (c.fsv == null) return -38; // ENOSYS — no fs view, nothing to exec
     var pb: [256]u8 = undefined;
     const path = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
@@ -1390,16 +1353,32 @@ fn childSpawn(c: *Child, f: *TrapFrame, from80: bool) i64 {
     nc.brk = info.brk_base;
     nc.mmap_top = MMAP_BASE;
     nc.state = .runnable;
-    // park the spawner on this child's exit — the exit arm completes the
-    // syscall by writing the status into our saved rax.
-    saveTrapFrame(c, f, from80);
-    c.waiting_exit = true;
+    // park on the child's exit: each kblock hands the roster to whoever
+    // is runnable (the grandchild included); the exit arm writes our
+    // spawn_ret before marking us runnable, so the status we return IS
+    // the child's exit code — the syscall completes itself.
     c.wait_pid = g;
-    c.state = .blocked;
-    resumeChild(g); // run the new child first — the spawner waits anyway
+    while (true) {
+        asm volatile ("cli" ::: .{ .memory = true });
+        if (children[g].state == .dead) {
+            asm volatile ("sti" ::: .{ .memory = true });
+            break;
+        }
+        kblock(.exit);
+    }
+    c.wait_pid = 0;
+    return c.spawn_ret;
 }
 
-export fn ring3_trap(f: *TrapFrame, from80: u64) callconv(.c) void {
+export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
+    // child_ursp is written per-ENTRY by the syscall gate — a trap that
+    // parks mid-call outlives it (other children's syscalls clobber it),
+    // so the running child's rsp lives in its slot. The defer publishes
+    // it back right before any return path reaches the epilogue, which
+    // reloads it for sysret — the global is a courier, not the home.
+    const me = &children[cur_child];
+    me.ursp = child_ursp;
+    defer child_ursp = me.ursp;
     // bag check before dispatch: an nr not granted in child_rights is a
     // capability refusal, loud on serial AND visible to the child as
     // -EACCES — not a silent ENOSYS. Bits name CAPABILITIES, not raw
@@ -1460,10 +1439,10 @@ export fn ring3_trap(f: *TrapFrame, from80: u64) callconv(.c) void {
         },
         0 => { // read(fd, buf, len) — fd0 is the console ring: it returns
                // bytes or parks the child; fs handles ride the view.
-            f.rax = if (f.rdi == 0) @bitCast(coninRead(c, f, from80 != 0)) else @bitCast(childRead(c, f.rdi, f.rsi, f.rdx));
+            f.rax = if (f.rdi == 0) @bitCast(coninRead(c, f)) else @bitCast(childRead(c, f.rdi, f.rsi, f.rdx));
         },
         57 => { // koru spawn(path, rights) — parks on child-exit, not fork
-            f.rax = @bitCast(childSpawn(c, f, from80 != 0));
+            f.rax = @bitCast(childSpawn(c, f));
         },
         3 => { // close(fd)
             const fd = f.rdi;
@@ -1615,31 +1594,24 @@ export fn ring3_trap(f: *TrapFrame, from80: u64) callconv(.c) void {
         },
         60, 231 => { // exit/exit_group(code) — child dies, frames go back
             last_exit = f.rdi;
-            children[cur_child].state = .dead;
             const dead_slot = cur_child;
-            // wake a parent parked in spawn() on this slot — its saved
-            // rax takes our exit status; that IS spawn's return value.
+            // Wake spawn-waiters with the status already in hand: a
+            // parent's loop breaks on observing this slot .dead, then
+            // reads its OWN spawn_ret — the value can't be clobbered by
+            // the dead slot's reuse because it lives in the waiter.
             for (0..nchildren) |i| {
                 const p = &children[i];
-                if (p.state == .blocked and p.waiting_exit and p.wait_pid == dead_slot) {
-                    p.frame.gp[0] = last_exit;
-                    p.waiting_exit = false;
+                if (p.state == .blocked and p.wait_kind == .exit and p.wait_pid == dead_slot) {
+                    p.spawn_ret = @bitCast(last_exit);
                     p.state = .runnable;
                 }
             }
+            children[cur_child].state = .dead;
             const nf = freeChild(&children[cur_child]);
             say("pmm: reap freed=");
             puthex(nf);
             say("\n");
-            if (nextRunnable()) |n| resumeChild(n);
-            // Runnable ran out but blocked siblings can still wake — the
-            // epoch ends only when the roster is fully dead, so halt on
-            // rsp0 and let IRQ1's wake flip one runnable (or it exits,
-            // which is this same path again).
-            while (anyLive()) {
-                if (nextRunnable()) |n| resumeChild(n);
-                asm volatile ("sti; hlt");
-            }
+            if (anyLive()) schedLoop(); // runnable or parked — keep the epoch
             asm volatile (
                 \\ mov %[cr3], %%rax
                 \\ mov %%rax, %%cr3
@@ -1686,19 +1658,28 @@ fn wrmsr(msr: u32, v: u64) void {
         : [c] "{ecx}" (msr), [a] "{eax}" (@as(u32, @truncate(v))), [d] "{edx}" (@as(u32, @truncate(v >> 32))));
 }
 
-// Resume child `nxt`: repoint both ring-0 entry stacks (syscall rsp0_val
-// and TSS.rsp0) at its own kstack, rsp -> its saved frame, CR3 -> its
-// space, then the shared pop+iretq tail. Never returns — the current
-// context (kernel stack or a dead child's syscall frame) is abandoned by
-// construction.
-fn resumeChild(nxt: usize) noreturn {
-    const c = &children[nxt];
-    cur_child = nxt;
+// Arm child `n` as the running context: roster cursor, its rights bag on
+// the seam, both ring-0 entry stacks (syscall rsp0_val and TSS.rsp0)
+// repointed at its own kstack, and its TLS base in FS_BASE. Every
+// transition — frame resume, kernel-context switch, tick rotation —
+// goes through here so a child never traps on a bystander's stack.
+fn armChild(n: usize) void {
+    const c = &children[n];
+    cur_child = n;
     child_rights = c.rights;
-    const ktop = kstackTop(nxt);
+    const ktop = kstackTop(n);
     rsp0_val = ktop;
     @as(*u64, @ptrCast(@alignCast(&tss[4]))).* = ktop;
     wrmsr(0xC0000100, c.fsbase); // FS_BASE — the child's TLS home
+}
+
+// Resume child `nxt` at user level: rsp -> its saved UserFrame (a field
+// of the slot, not any stack), CR3 -> its space, then the shared
+// pop+iretq tail. Never returns — the current context (kernel stack or
+// a dead child's syscall frame) is abandoned by construction.
+fn resumeChild(nxt: usize) noreturn {
+    const c = &children[nxt];
+    armChild(nxt);
     asm volatile (
         \\ mov %[fr], %%rsp
         \\ mov %[cr3], %%rax
@@ -1710,6 +1691,113 @@ fn resumeChild(nxt: usize) noreturn {
         : .{ .memory = true });
     unreachable;
 }
+
+// Run child `n` however it waits to be run: a live kernel continuation
+// (kctx != 0 — it blocked mid-call) gets its pushed block popped and
+// returned into; anything else is a saved user frame.
+fn switchInto(n: usize) noreturn {
+    const c = &children[n];
+    if (c.kctx != 0) {
+        const k = c.kctx;
+        c.kctx = 0;
+        armChild(n);
+        asm volatile (
+            \\ mov %[cr3], %%rax
+            \\ mov %%rax, %%cr3
+            \\ mov %[k], %%rsp
+            \\ pop %%r15
+            \\ pop %%r14
+            \\ pop %%r13
+            \\ pop %%r12
+            \\ pop %%rbx
+            \\ pop %%rbp
+            \\ ret
+            :
+            : [k] "r" (k),
+              [cr3] "r" (c.pml4)
+            : .{ .memory = true });
+        unreachable;
+    }
+    resumeChild(n);
+}
+
+// The scheduler loop on whatever kernel stack it was entered on: pick a
+// runnable child and switchInto it, or hlt (IF already 1) to the next
+// IRQ. Reached from ksched (a child just blocked) and from the exit
+// arm's not-drained tail. A roster with nothing runnable but blocked
+// children halts here — that is the epoch holding open, correctly.
+fn schedLoop() noreturn {
+    asm volatile ("sti" ::: .{ .memory = true });
+    while (true) {
+        if (nextRunnable()) |n| switchInto(n);
+        asm volatile ("hlt" ::: .{ .memory = true });
+    }
+}
+
+// kblock's continuation point: koru_kblock (asm) pushed the callee-saved
+// block on this child's kstack and handed us its rsp; record it and
+// enter the scheduler. The mark (state/wait_kind) happened under cli in
+// the caller — schedLoop's sti publishes both atomically wrt wakes.
+export fn ksched(saved: u64) callconv(.c) noreturn {
+    children[cur_child].kctx = saved;
+    schedLoop();
+}
+
+// Park the running child mid-call on `kind`: the caller has already
+// rechecked its wait condition under cli; we mark, save kernel context,
+// and schedule. Returns on this same stack when a waker flips us
+// runnable — with IF=1 and the caller-saved set dead, like any call.
+// Contract: call with IF=0 so the mark can't race the wait condition.
+fn kblock(kind: WaitKind) void {
+    const c = &children[cur_child];
+    c.wait_kind = kind;
+    c.state = .blocked;
+    koru_kblock();
+    c.wait_kind = .none;
+}
+
+// Wake every child blocked on `kind` — the resumed continuation
+// re-decides, so waking is always just a mark, never surgery.
+fn wakeKind(kind: WaitKind) void {
+    if (!sched_active) return;
+    for (0..nchildren) |i| {
+        const c = &children[i];
+        if (c.state == .blocked and c.wait_kind == kind) c.state = .runnable;
+    }
+}
+
+// virtio's parkOnce calls here when a request can't complete yet: in a
+// live epoch the wait is a real block (yield to the roster); outside one
+// there is no schedulable context and the caller keeps its hlt path.
+// Returns nonzero if it blocked-and-woke. Called with IF=0; returns IF=1.
+export fn koru_blk_sleep() callconv(.c) c_int {
+    if (!sched_active or nchildren == 0) return 0;
+    kblock(.blk);
+    return 1;
+}
+
+// Kernel-context switch: kblock() calls here like a function; we push
+// the callee-saved set on the CURRENT child's kstack (the whole live
+// call chain above stays put — that is the point of per-child kstacks)
+// and tail into ksched, which schedules on this same stack. A later
+// switchInto pops the block and rets — control lands back in kblock's
+// caller as if the call had returned, the syscall completing itself.
+comptime {
+    asm (
+        \\ .section .text
+        \\ .globl koru_kblock
+        \\ koru_kblock:
+        \\   push %rbp
+        \\   push %rbx
+        \\   push %r12
+        \\   push %r13
+        \\   push %r14
+        \\   push %r15
+        \\   mov %rsp, %rdi
+        \\   jmp ksched
+    );
+}
+extern fn koru_kblock() void;
 
 // The epoch's entry: called (via `call sched_launch` inside koru_spawn_run's
 // save block) once all children are primed — resumes the first runnable.
@@ -1765,7 +1853,6 @@ comptime {
         \\   push %rbx
         \\   push %rax
         \\   mov %rsp, %rdi
-        \\   mov $1, %esi
         \\   call ring3_trap
         \\   pop %rax
         \\   pop %rbx
@@ -1818,7 +1905,6 @@ comptime {
         // ring3_trap's call site is call-conformant (movaps GPFs else).
         // rdi takes the frame BEFORE the pad.
         \\   mov %rsp, %rdi
-        \\   xor %esi, %esi
         \\   sub $8, %rsp
         \\   call ring3_trap
         \\   add $8, %rsp

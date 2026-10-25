@@ -121,6 +121,7 @@ pub export var irq_pin: u8 = 0;
 pub export var virtio_irq_count: u64 = 0;
 pub export var blk_reqs: u64 = 0;
 pub export var blk_parks: u64 = 0;
+pub export var blk_yields: u64 = 0; // waits that scheduled, not halted
 extern fn koru_irq_unmask(irq: u8) void;
 extern fn koru_say(s: [*:0]const u8) void;
 extern fn koru_putdec(v: u64) void;
@@ -371,20 +372,29 @@ pub export fn uk_blkdev_queue_submit_one(d: ?*anyopaque, queue_id: u16, req: ?*B
     return 1; // STATUS_SUCCESS bit, as the lift checks it
 }
 
-// Park until the next interrupt: cli, re-read the used index under the
-// mask, then sti;hlt — sti and hlt execute as one atomic enable-and-sleep,
-// so a completion landing between the caller's check and here cannot be
-// slept past. The virtio INTx is the real wake; the unmasked PIT tick is
-// the backstop that keeps a dropped completion from sleeping forever. A
-// caller with IF=0 cannot wake — it gets a plain return and keeps polling.
+// Park until the next interrupt. Two waits exist: inside a live epoch
+// (syscall context — syscall's SFMASK already masked IF, which is why
+// this runs cli'd by default there) the wait is a real kernel-context
+// block via koru_blk_sleep — the roster schedules through the DMA window
+// and the completion's IRQ resumes us mid-call. Outside an epoch (kmain
+// mount) cli, re-read the used index under the mask, then sti;hlt —
+// sti and hlt execute as one atomic enable-and-sleep, so a completion
+// landing between the caller's check and here cannot be slept past. A
+// caller with IF=0 and no epoch cannot wake — it polls.
+extern fn koru_blk_sleep() callconv(.c) c_int;
+
 fn parkOnce() void {
     const flags = asm volatile ("pushfq\n\tpop %[f]"
         : [f] "=r" (-> u64)
         :
         : .{ .memory = true });
-    if (flags & 0x200 == 0) return;
     asm volatile ("cli" ::: .{ .memory = true });
     if (used.idx == last_used_idx) {
+        if (koru_blk_sleep() != 0) { // mid-call block — resumed with IF=1
+            blk_yields += 1;
+            return;
+        }
+        if (flags & 0x200 == 0) return; // no epoch, can't wake — poll
         blk_parks += 1;
         asm volatile ("sti\n\thlt" ::: .{ .memory = true });
     } else {
@@ -435,6 +445,8 @@ pub export fn uk_blkdev_unconfigure(d: ?*anyopaque) callconv(.c) c_int {
     koru_putdec(blk_reqs);
     koru_say(" parks=");
     koru_putdec(blk_parks);
+    koru_say(" yields=");
+    koru_putdec(blk_yields);
     koru_say(" irqs=");
     koru_putdec(virtio_irq_count);
     koru_say("\n");

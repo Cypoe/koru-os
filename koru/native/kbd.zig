@@ -78,6 +78,12 @@ pub fn irq() void {
     }
 }
 
+// is a console byte pending? — the under-mask recheck read(0) does
+// before blocking, so a byte landing mid-check can't be slept past
+pub fn conPending() bool {
+    return ctail != chead;
+}
+
 // one pending console byte for read(0), or null — nonblocking pop
 pub fn conByte() ?u8 {
     if (ctail == chead) return null;
