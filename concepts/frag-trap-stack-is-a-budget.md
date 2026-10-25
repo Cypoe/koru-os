@@ -17,11 +17,20 @@ names the victim, never the cause — which makes this corruption class
 expensive to find and cheap to prevent.
 
 The ruling: **deepening the seam is a stack-budget decision.** A syscall
-arm that invokes fs/exec/provider chains either fits the declared rsp0 or
-the design moves — per-task kernel stacks are the honest end-state (the
-shared 64KiB bump is a stopgap that works because the trap frame is
-*abandoned*, not stacked, on a parked child). Nothing may silently widen
-the seam's depth and call it "the allocator is broken."
+arm that invokes fs/exec/provider chains either fits its stack or the
+design moves. Nothing may silently widen the seam's depth and call it
+"the allocator is broken."
+
+Resolution (landed this rung): **every live child owns a bounded trap
+context** — `kstacks[MAXCHILDREN][32KiB]`, and `resumeChild` repoints
+both ring-0 entry stacks (`rsp0_val` for `syscall`, TSS.rsp0 for
+CPL3 interrupts) at the resumed child's own top. An overflow now burns
+only the offending child's slot, never a bystander's. Per-slot statics
+match the fixed roster; a dynamic roster moves them to pmm frames with
+it. What remains open is kernel-as-context proper: a parked frame is
+still *evacuated* into `wait_frame`, not schedulable mid-call — the
+kstack is dead scratch between user epochs, so a trap that must block
+halfway through provider depth still cannot park without unwinding.
 
 Corollary from the same rung: an allocator hint is a heuristic, not a
 boundary — `pmm.alloc` scanning `hint..managed` without wraparound made

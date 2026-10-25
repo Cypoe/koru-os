@@ -186,14 +186,26 @@ var gdt2: [8]u64 align(8) = .{
 };
 var tss: [104]u8 align(16) = [_]u8{0} ** 104;
 var idt: [512]u64 align(16) = [_]u64{0} ** 512;
-// The trap stack: rsp0 for syscall/int80 AND the IRQ/EXC frame context.
-// Must absorb the deepest trap-side call chain — a parked childSpawn
-// streams an ELF through fs read_at + virtio-blk on this stack alone
-// (loadElfViaFs' 4 KiB head buffer + provider frames) — 4 KiB corrupted
-// pmm's tables below it and read as ghosts ("unowned" frees, #GP death).
-// Per-task kstacks are their own rung; until then this is sized for the
-// deepest single trap, not for nesting.
-var kstack: [64 * 1024]u8 align(16) = [_]u8{0} ** (64 * 1024);
+// Kernel stacks are per-child: every live child owns a bounded trap
+// context, so a trap path that calls provider depth (fs+ELF load) can
+// only burn its own slot — never a bystander's tables (the shared-4KiB
+// overflow that read as impossible pmm refusals). Sized for the deepest
+// measured chain — childSpawn's loadElfViaFs head buffer + ext2/virtio
+// frames — with 4x margin; a parked frame is evacuated into wait_frame,
+// never stacked, so the kstack is dead scratch between user epochs.
+// Static per-slot because the roster itself is fixed — a dynamic roster
+// moves these to pmm frames with it.
+const KSTACK: usize = 32 * 1024;
+var kstacks: [MAXCHILDREN][KSTACK]u8 align(16) = undefined;
+
+fn kstackTop(n: usize) u64 {
+    return @intFromPtr(&kstacks[n]) + KSTACK;
+}
+
+// Boot/idle rsp0: the TSS+rsp0_val value before the first child resumes
+// and the context all-blocked halts run on. Live traps always land on
+// the current child's own stack — resumeChild repoints both.
+var kstack: [8192]u8 align(16) = [_]u8{0} ** 8192;
 
 fn patchTssDesc() void {
     const base: u64 = @intFromPtr(&tss);
@@ -1668,19 +1680,24 @@ fn anyLive() bool {
     return false;
 }
 
-// Resume child `nxt`: rsp -> its saved frame, CR3 -> its space, then the
-// shared pop+iretq tail. Never returns — the current context (kernel stack
-// or a dead child's syscall frame) is abandoned by construction.
 fn wrmsr(msr: u32, v: u64) void {
     asm volatile ("wrmsr"
         :
         : [c] "{ecx}" (msr), [a] "{eax}" (@as(u32, @truncate(v))), [d] "{edx}" (@as(u32, @truncate(v >> 32))));
 }
 
+// Resume child `nxt`: repoint both ring-0 entry stacks (syscall rsp0_val
+// and TSS.rsp0) at its own kstack, rsp -> its saved frame, CR3 -> its
+// space, then the shared pop+iretq tail. Never returns — the current
+// context (kernel stack or a dead child's syscall frame) is abandoned by
+// construction.
 fn resumeChild(nxt: usize) noreturn {
     const c = &children[nxt];
     cur_child = nxt;
     child_rights = c.rights;
+    const ktop = kstackTop(nxt);
+    rsp0_val = ktop;
+    @as(*u64, @ptrCast(@alignCast(&tss[4]))).* = ktop;
     wrmsr(0xC0000100, c.fsbase); // FS_BASE — the child's TLS home
     asm volatile (
         \\ mov %[fr], %%rsp
