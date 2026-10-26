@@ -382,15 +382,10 @@ fn freeBlock(fs: *Fs, phys: u32) bool {
     return writeBlock(fs, 1, &fs.sb);
 }
 
-// Free every data block an inode maps: direct pointers, the single-
-// indirect table and its leaves. Double-indirect is a named refusal —
-// freeing it needs a two-level walk the rung doesn't carry, and the
-// callers check before touching any directory entry.
-fn fileBlocksFreeable(fs: *Fs, it: []const u8, off: usize) bool {
-    _ = fs;
-    return rd32(it, off + 40 + 13 * 4) == 0;
-}
-
+// Free every block an inode maps: direct pointers, the single-
+// indirect table and its leaves, and each double-indirect leaf table
+// plus the root — the full write-side span, since any of it can now
+// be allocated.
 fn freeFileBlocks(fs: *Fs, it: []const u8, off: usize) bool {
     for (0..12) |i| {
         const b = rd32(it, off + 40 + i * 4);
@@ -405,6 +400,23 @@ fn freeFileBlocks(fs: *Fs, it: []const u8, off: usize) bool {
             if (b != 0 and !freeBlock(fs, b)) return false;
         }
         if (!freeBlock(fs, ind)) return false;
+    }
+    const dind = rd32(it, off + 40 + 13 * 4);
+    if (dind != 0) { // double-indirect: walk each leaf table
+        var db: [BS]u8 = undefined;
+        if (!readBlock(fs, dind, &db)) return false;
+        var sb: [BS]u8 = undefined;
+        for (0..BS / 4) |i| {
+            const leaf = rd32(&db, i * 4);
+            if (leaf == 0) continue;
+            if (!readBlock(fs, leaf, &sb)) return false;
+            for (0..BS / 4) |j| {
+                const b = rd32(&sb, j * 4);
+                if (b != 0 and !freeBlock(fs, b)) return false;
+            }
+            if (!freeBlock(fs, leaf)) return false;
+        }
+        if (!freeBlock(fs, dind)) return false;
     }
     return true;
 }
@@ -674,6 +686,136 @@ fn blkAt(fs: *Fs, it: []const u8, off: usize, k: usize, ind: *[BS]u8, ind2: *[BS
     return rd32(leaf, (d % (BS / 4)) * 4);
 }
 
+// blkAtAlloc — the write-side mirror of blkAt: resolve the logical
+// block or ALLOCATE the missing pieces. `it` is the caller's inode
+// buffer — direct pointers and i_block[12..13] mutate in it (the
+// caller writes the inode back); allocated indirect TABLES are
+// zeroed and written to disk immediately (an indirect block owns
+// its pointers the moment it exists). fresh=true says the data
+// block is newly allocated — its stale bytes are not file content,
+// so the caller zero-fills instead of read-modify-writing. meta
+// counts allocated indirect blocks for i_blocks accounting.
+// Triple-indirect refuses by returning null (the caller names it).
+const AllocResult = struct { phys: u32, fresh: bool, meta: u32 };
+const PTRS = BS / 4;
+
+fn zeroedBlock(fs: *Fs, b: u32) bool {
+    var z: [BS]u8 = undefined;
+    @memset(&z, 0);
+    return writeBlock(fs, b, &z);
+}
+
+fn blkAtAlloc(fs: *Fs, it: *[BS]u8, off: usize, k: u32) ?AllocResult {
+    if (k < 12) {
+        var p = rd32(it, off + 40 + k * 4);
+        if (p != 0) return .{ .phys = p, .fresh = false, .meta = 0 };
+        p = allocBlock(fs) orelse return null;
+        wr32(it, off + 40 + k * 4, p);
+        return .{ .phys = p, .fresh = true, .meta = 0 };
+    }
+    const d = k - 12;
+    if (d < PTRS) { // single-indirect
+        var meta: u32 = 0;
+        var ib = rd32(it, off + 40 + 12 * 4);
+        if (ib == 0) {
+            ib = allocBlock(fs) orelse return null;
+            wr32(it, off + 40 + 12 * 4, ib);
+            if (!zeroedBlock(fs, ib)) return null;
+            meta = 1;
+        }
+        var tb: [BS]u8 = undefined;
+        if (!readBlock(fs, ib, &tb)) return null;
+        var p = rd32(&tb, d * 4);
+        if (p != 0) return .{ .phys = p, .fresh = false, .meta = meta };
+        p = allocBlock(fs) orelse return null;
+        wr32(&tb, d * 4, p);
+        if (!writeBlock(fs, ib, &tb)) return null;
+        return .{ .phys = p, .fresh = true, .meta = meta };
+    }
+    const d2 = d - PTRS;
+    if (d2 >= PTRS * PTRS) return null; // triple-indirect — named by the caller
+    var meta: u32 = 0;
+    var db = rd32(it, off + 40 + 13 * 4);
+    if (db == 0) {
+        db = allocBlock(fs) orelse return null;
+        wr32(it, off + 40 + 13 * 4, db);
+        if (!zeroedBlock(fs, db)) return null;
+        meta = 1;
+    }
+    var dbuf: [BS]u8 = undefined;
+    if (!readBlock(fs, db, &dbuf)) return null;
+    const si = d2 / PTRS;
+    const ei = d2 % PTRS;
+    var sb = rd32(&dbuf, si * 4);
+    var sbuf: [BS]u8 = undefined;
+    if (sb == 0) {
+        sb = allocBlock(fs) orelse return null;
+        wr32(&dbuf, si * 4, sb);
+        if (!writeBlock(fs, db, &dbuf)) return null;
+        meta += 1;
+        @memset(&sbuf, 0); // fresh leaf — no read; it starts as zeros
+        const p = allocBlock(fs) orelse return null;
+        wr32(&sbuf, ei * 4, p);
+        if (!writeBlock(fs, sb, &sbuf)) return null;
+        return .{ .phys = p, .fresh = true, .meta = meta };
+    }
+    if (!readBlock(fs, sb, &sbuf)) return null;
+    var p = rd32(&sbuf, ei * 4);
+    if (p != 0) return .{ .phys = p, .fresh = false, .meta = meta };
+    p = allocBlock(fs) orelse return null;
+    wr32(&sbuf, ei * 4, p);
+    if (!writeBlock(fs, sb, &sbuf)) return null;
+    return .{ .phys = p, .fresh = true, .meta = meta };
+}
+
+// writeSpan: the shared growth engine behind cfWrite and obj-write —
+// resolve-or-allocate each logical block through blkAtAlloc (direct →
+// single → double indirect), RMW partial EXISTING blocks, zero-fill
+// fresh ones. i_size/i_blocks fold back here; a partial return still
+// writes the inode back so on-disk pointers match the bytes written.
+fn writeSpan(fs: *Fs, ino: u32, start: u64, src: [*]const u8, len: usize) i64 {
+    const loc = inodeLoc(fs, ino) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    var data: [BS]u8 = undefined;
+    var done: usize = 0;
+    var grew: u32 = 0;
+    var ioerr = false;
+    while (done < len) {
+        const k: u32 = @intCast((start + done) / BS);
+        var r: AllocResult = undefined;
+        if (k >= 12 + PTRS + PTRS * PTRS) { // past double-indirect
+            if (done == 0) return -28; // ENOSPC
+            break;
+        }
+        r = blkAtAlloc(fs, &it, loc.off, k) orelse {
+            if (done == 0) return -28;
+            break;
+        };
+        const boff: usize = @intCast((start + done) % BS);
+        const take = @min(len - done, BS - boff);
+        if (r.fresh or (boff == 0 and take == BS)) {
+            @memset(&data, 0);
+        } else if (!readBlock(fs, r.phys, &data)) {
+            ioerr = true;
+            break;
+        }
+        @memcpy(data[boff .. boff + take], src[done .. done + take]);
+        if (!writeBlock(fs, r.phys, &data)) {
+            ioerr = true;
+            break;
+        }
+        grew += r.meta + @intFromBool(r.fresh);
+        done += take;
+    }
+    const size = rd32(&it, loc.off + 4);
+    if (start + done > size) wr32(&it, loc.off + 4, @intCast(start + done));
+    if (grew != 0) wr32(&it, loc.off + 28, rd32(&it, loc.off + 28) + grew * @as(u32, @intCast(BS / 512)));
+    if (!writeBlock(fs, loc.block, &it)) return -5;
+    if (ioerr and done == 0) return -5;
+    return @intCast(done);
+}
+
 fn readFile(fs: *Fs, ino: u32) ReadResult {
     const loc = inodeLoc(fs, ino) orelse return .{ .err = .inode_read };
     var it: [BS]u8 = undefined;
@@ -815,11 +957,9 @@ fn mkfile(fs: *Fs, dir_ino: u32, name: []const u8) ?u32 {
     return ino;
 }
 
-// truncate: O_TRUNC's arm — give back every block the file maps, leave
-// the inode at size 0. Same freeable-check as unlink: double-indirect
-// refuses BEFORE any state moves.
+// truncate: O_TRUNC's arm — give back every block the file maps
+// (the full direct/indirect span), leave the inode at size 0.
 fn truncateFile(fs: *Fs, loc: anytype, it: *[BS]u8) bool {
-    if (!fileBlocksFreeable(fs, it, loc.off)) return false;
     if (!freeFileBlocks(fs, it, loc.off)) return false;
     for (0..15) |i| wr32(it, loc.off + 40 + i * 4, 0);
     wr32(it, loc.off + 4, 0);
@@ -883,49 +1023,22 @@ fn cfReadAt(ctx: ?*anyopaque, h: u64, off: u64, dst: [*]u8, len: usize) callconv
 
 // cfWrite: inode + byte-range ← bytes. The bounded write contract:
 // direct blocks only — a write that lands past 12 KiB of file span
-// refuses ENOSPC by name (single-indirect allocation is a named cell).
-// Within the bound: missing blocks allocate on demand (sparse growth),
-// partial blocks read-modify-write, i_size/i_blocks fold back. The
-// provider never checks the verb — the seam's fdverbs did that at open;
-// a read-mode handle arriving here is defense-in-depth EBADF.
+// cfWrite: positioned write through writeSpan — direct, single- and
+// double-indirect blocks allocate on demand; past ~66 MiB refuses
+// ENOSPC by name (triple-indirect is a named cell). The provider
+// never checks the verb — the seam's fdverbs did that at open; a
+// read-mode handle arriving here is defense-in-depth EBADF.
 fn cfWrite(ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) i64 {
     const fs: *Fs = @ptrCast(@alignCast(ctx));
     const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
     if (fp.mode == 0) return -9; // EBADF — a read handle has no write verb
     const start: u64 = if (fp.append) fp.size else fp.pos;
-    const loc = inodeLoc(fs, fp.ino) orelse return -5;
-    var it: [BS]u8 = undefined;
-    if (!readBlock(fs, loc.block, &it)) return -5;
-    var data: [BS]u8 = undefined;
-    var done: usize = 0;
-    var grew: u32 = 0;
-    while (done < len) {
-        const k: usize = @intCast((start + done) / BS);
-        if (k >= 12) return if (done > 0) @intCast(done) else -28; // ENOSPC — direct blocks only
-        var phys = rd32(&it, loc.off + 40 + k * 4);
-        const boff: usize = @intCast((start + done) % BS);
-        const take = @min(len - done, BS - boff);
-        if (phys == 0) {
-            phys = allocBlock(fs) orelse return if (done > 0) @intCast(done) else -28;
-            wr32(&it, loc.off + 40 + k * 4, phys);
-            grew += 1;
-            @memset(&data, 0);
-        } else if (boff != 0 or take < BS) {
-            if (!readBlock(fs, phys, &data)) return -5;
-        } else {
-            @memset(&data, 0); // whole block overwritten — no read needed
-        }
-        @memcpy(data[boff .. boff + take], src[done .. done + take]);
-        if (!writeBlock(fs, phys, &data)) return -5;
-        done += take;
-    }
-    const end = start + done;
+    const n = writeSpan(fs, fp.ino, start, src, len);
+    if (n < 0) return n;
+    const end = start + @as(u64, @intCast(n));
     if (end > fp.size) fp.size = @intCast(end);
-    if (grew != 0) wr32(&it, loc.off + 28, rd32(&it, loc.off + 28) + grew * @as(u32, @intCast(BS / 512)));
-    wr32(&it, loc.off + 4, fp.size);
-    if (!writeBlock(fs, loc.block, &it)) return -5;
     fp.pos = end;
-    return @intCast(done);
+    return n;
 }
 
 fn cfKey(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
@@ -985,7 +1098,6 @@ fn doRename(fs: *Fs, oldp: []const u8, newp: []const u8) i64 {
         var dit: [BS]u8 = undefined;
         if (!readBlock(fs, dloc.block, &dit)) return -5;
         if (rd16(&dit, dloc.off) & 0o170000 == 0o040000) return -21; // EISDIR
-        if (!fileBlocksFreeable(fs, &dit, dloc.off)) return -38;
         _ = dirRemove(fs, ndir, nsp.leaf) orelse return -5;
         if (!freeFileBlocks(fs, &dit, dloc.off) or !freeInode(fs, dst)) return -5;
     }
@@ -1001,9 +1113,9 @@ fn cfRename(ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.
 }
 
 // cfUnlink: remove a name; when the link count reaches zero the inode
-// and its blocks return to the bitmaps. Regular files only — a dir is
-// EISDIR, not a silent recurse. Double-indirect content refuses BEFORE
-// the directory entry moves — the refusal leaves the fs untouched.
+// and its blocks return to the bitmaps — the whole mapped span
+// (direct + single + double indirect walks). Regular files only — a
+// dir is EISDIR, not a silent recurse.
 fn cfUnlink(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     const fs: *Fs = @ptrCast(@alignCast(ctx));
     var dir: [BS]u8 = undefined;
@@ -1014,7 +1126,6 @@ fn cfUnlink(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return -5;
     if (rd16(&it, loc.off) & 0o170000 == 0o040000) return -21; // EISDIR
-    if (!fileBlocksFreeable(fs, &it, loc.off)) return -38;
     _ = dirRemove(fs, dino, sp.leaf) orelse return -5;
     const links = rd16(&it, loc.off + 26) - 1;
     if (links == 0) {
@@ -1332,37 +1443,10 @@ fn pinErr(e: PinErr) []const u8 {
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return .{ .refused = "inode read failed" };
     if (rd16(&it, loc.off) & 0o170000 != 0o100000) return .{ .refused = "not a regular file" };
-    var data: [BS]u8 = undefined;
-    var done: usize = 0;
-    var size = rd32(&it, loc.off + 4);
-    var grew: u32 = 0;
-    while (done < buf.len) {
-        const k: usize = @intCast((off + done) / BS);
-        if (k >= 12) return .{ .refused = "past direct-block span (ENOSPC)" };
-        var phys = rd32(&it, loc.off + 40 + k * 4);
-        const boff: usize = @intCast((off + done) % BS);
-        const take = @min(buf.len - done, BS - boff);
-        if (phys == 0) {
-            phys = allocBlock(fs) orelse return .{ .refused = "out of blocks" };
-            wr32(&it, loc.off + 40 + k * 4, phys);
-            grew += 1;
-            @memset(&data, 0);
-        } else if (boff != 0 or take < BS) {
-            if (!readBlock(fs, phys, &data)) return .{ .refused = "data read failed" };
-        } else {
-            @memset(&data, 0);
-        }
-        @memcpy(data[boff .. boff + take], buf.ptr[done .. done + take]);
-        if (!writeBlock(fs, phys, &data)) return .{ .refused = "data write failed" };
-        done += take;
-    }
-    const end = off + done;
-    if (end > size) size = @intCast(end);
-    if (grew != 0) wr32(&it, loc.off + 28, rd32(&it, loc.off + 28) + grew * @as(u32, @intCast(BS / 512)));
-    wr32(&it, loc.off + 4, size);
-    if (!writeBlock(fs, loc.block, &it)) return .{ .refused = "inode write failed" };
+    const n = writeSpan(fs, r.ino, off, buf.ptr, buf.len);
+    if (n < 0) return .{ .refused = "object write failed (ENOSPC or EIO)" };
     if (xfer(fs, OP_FFLUSH, 0, 0) != 0) return .{ .refused = "flush failed" };
-    return .{ .ok = @intCast(done) };
+    return .{ .ok = n };
 }
 
 ~pub tor verify { fs: *Fs<!mounted>, path: string, size: u32 }

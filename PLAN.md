@@ -509,7 +509,8 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
       the KGRB section stream; openat is the first object-checked arm)
       → fs.object verbs + nid dispatch (LANDED: obj-stat/obj-read/
         obj-write + nr514 openobj dispatch by pin key; the iface lift
-        factors when a second fs provider lands); dirs/indirects open
+        factors when a second fs provider lands); indirect writes
+        LANDED (blkAtAlloc: single+double, triple ENOSPC); dirs open
         → input + display (virtio-gpu | GOP), PCI enum + MSI-X, ACPI
           → init/shell/process userland (fork/exec, pipes/IPC)
             → nativeCompositor + Hyprland/Noctalia oracle harness
@@ -521,8 +522,9 @@ Also open, smaller:
   pin leasing + eviction
 - ~~rename/unlink/`..`/`.` so "identity survives the view" is provable~~ —
   landed (writable-fs rung): pin→rename→exec-bynid proves identity
-  outlives the view; still open: link/mkdir/rmdir, single+double
-  indirect write allocation
+  outlives the view; still open: link/mkdir/rmdir
+  (single+double indirect write allocation landed — files to ~66 MiB,
+  sparse, host debugfs IND/DIND evidence)
 - bootable media: GRUB multiboot2 image (link.ld already carries the
   header), init that doesn't halt-on-exit, shutdown/reboot
 - SMP (ACPI MADT + IOAPIC + AP bringup) — required before real hardware

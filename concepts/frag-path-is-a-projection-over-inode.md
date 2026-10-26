@@ -19,12 +19,20 @@ sitting on the pin's inode. Identity-outlives-view is now a gate row.
 The writable view this rung opened is bounded and every bound is a
 named refusal, not a silent edge:
 
-- `write`/`writev` on `.fs` fds write through `cfWrite` — direct
-  blocks only; past 12 KiB of file span is `-ENOSPC` (single-indirect
-  allocation is a named cell). Sparse growth allocates on demand,
-  partial blocks read-modify-write, `i_size`/`i_blocks` fold back.
-- `unlink` frees the inode + direct + single-indirect chains;
-  double-indirect content refuses BEFORE the directory entry moves.
+- `write`/`writev` on `.fs` fds write through `writeSpan` — the
+  shared growth engine over `blkAtAlloc` (direct → single → double
+  indirect, ~66 MiB of file span; triple-indirect is `-ENOSPC` by
+  name). Missing tables allocate and hit disk immediately (an
+  indirect block owns its pointers the moment it exists), fresh data
+  blocks zero-fill — a newly allocated block's stale bytes are not
+  file content — partial EXISTING blocks read-modify-write, and a
+  partial write still folds `i_size`/`i_blocks` back so on-disk
+  pointers match the bytes written. Measured: 40 KiB in one write
+  crosses `(IND)`, a sparse write at 300 KiB crosses `(DIND)`, and
+  host debugfs lists both tables on disk after QEMU exits.
+- `unlink` frees the inode + the whole mapped span — direct,
+  single-indirect, and each double-indirect leaf table plus its
+  root. O_TRUNC rides the same walk.
 - `rename` serves both musl spellings (nr316 `renameat2` flags=0 →
   nr264 `renameat` fallback → nr82), replaces a regular-file
   destination POSIX-style, refuses a directory destination.

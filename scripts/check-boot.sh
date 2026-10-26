@@ -373,11 +373,15 @@ else
         # writable view: a musl child created, wrote, read-back, renamed
         # and unlinked through REAL syscalls — fopen("w")→openat O_CREAT,
         # write(1) on a V_WRITE fd, rename(2), unlink(2) — and the file
-        # kept its (dev,ino) key across the rename.
+        # kept its (dev,ino) key across the rename. WTEST-BIG: 40 KiB in
+        # one write crosses single-indirect (k=12..39); an lseek to
+        # 300 KiB + write crosses double-indirect (k=300 → leaf); the
+        # sparse tail reads back through the same tables.
         if grep -qE "WTEST w=[0-9]+ rb=[0-9]+ ino=[0-9a-fx]+ renamed=1 same-ino=[0-9]+ unl=1 dot=1 DONE" "$WORK/boot_ext2.serial" \
+           && grep -qE "WTEST-BIG w=40960 rb=40960 sz=307205 sum=[0-9a-f]+ mism=0 DONE" "$WORK/boot_ext2.serial" \
            && ! grep -qF "WTEST-FAIL" "$WORK/boot_ext2.serial" \
            && grep -qF "exec wtest.elf status=0" "$WORK/boot_ext2.serial"; then
-            ok "fs-write: musl child created/wrote/renamed/unlinked via the scoped view (same-ino across rename)"
+            ok "fs-write: musl child created/wrote/renamed/unlinked via the scoped view; 40KiB+300KiB-sparse through IND+DIND tables"
         else
             bad "fs-write: evidence missing: $(grep -aE 'WTEST|wtest|REFUSE|FAIL' "$WORK/boot_ext2.serial" | tail -6 | tr '\n' '|')"
         fi
@@ -407,6 +411,16 @@ else
                 ok "fs-persist: host sees moved.elf@ino$pin_ino + wren.txt; wlive.txt renamed away"
             else
                 bad "fs-persist: host image check failed: moved=$mvino_disk wren=$(echo "$wrenstat" | head -1) wlive=$(echo "$wlivstat" | head -1)"
+            fi
+            # big.txt's block map must show the indirect TABLES the
+            # write allocated — (IND): the single-indirect root,
+            # (DIND): the double-indirect root — host-visible, not
+            # just serial-claimed.
+            bigstat=$(MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -R "stat big.txt" "$IMGWSL" 2>&1)
+            if echo "$bigstat" | grep -qF "(IND):" && echo "$bigstat" | grep -qF "(DIND):"; then
+                ok "fs-indirect: host sees big.txt's IND+DIND tables on disk"
+            else
+                bad "fs-indirect: indirect tables not on disk: $(echo "$bigstat" | grep -i 'block' | head -3 | tr '\n' '|')"
             fi
         fi
         # (PIT IRQ0 evidence lives on boot_multi — its epoch spans ticks;

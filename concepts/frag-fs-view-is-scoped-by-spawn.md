@@ -38,10 +38,14 @@ The split of custody that makes it honest:
   `O_CREAT` needs `+W` on the parent DIRECTORY's key, rename/unlink
   need `+W` on the directories they mutate — the directory is always
   the object a path-mutation touches. Bounds, all refused by name:
-  direct-block writes only (file span ≤ 12KiB, indirect-position
-  writes are `ENOSPC`), unlink frees direct + single-indirect chains
-  (double-indirect → `ENOTSUP`-class refusal before any state moves),
-  mkdir/link/rmdir are named cells.
+  writes allocate through the full direct + single + double-indirect
+  span (~66 MiB; triple-indirect is `ENOSPC`), unlink frees the whole
+  mapped span including double-indirect leaf tables, mkdir/link/rmdir
+  are named cells. The growth engine is `blkAtAlloc`/`writeSpan` —
+  resolve-or-allocate per logical block, fresh blocks zero-fill (a
+  newly allocated block's stale bytes are not file content), partial
+  EXISTING blocks read-modify-write, i_blocks counts indirect tables
+  too.
 - **Handles are opaque ints to the kernel; pointers to the provider.**
   fd slot → `OpenFile*` only inside ext2's own ops — a forged fd just
   misses a slot and is EBADF, not a pointer the kernel trusts.

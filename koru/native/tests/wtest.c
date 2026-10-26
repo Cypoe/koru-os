@@ -68,6 +68,41 @@ int main(void) {
     CHK(fd4 >= 0, "dotdot");
     if (fd4 >= 0) close(fd4);
 
+    // 6. the 12 KiB ceiling is gone: 40 KiB in one write crosses into
+    //    the single-indirect table (k=12..39 allocate through i_block[12]),
+    //    then an lseek to 300 KiB + write crosses the double-indirect
+    //    root (k=300 → i_block[13] → leaf). Read-back checksums both.
+    static unsigned char big[40960];
+    for (int i = 0; i < (int)sizeof(big); i++) big[i] = (unsigned char)(i * 31 + i / 97);
+    int bfd = open("/big.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    CHK(bfd >= 0, "big-creat");
+    ssize_t bw = write(bfd, big, sizeof(big));
+    CHK(bw == (ssize_t)sizeof(big), "big-write");
+    CHK(lseek(bfd, 300 * 1024, SEEK_SET) == 300 * 1024, "big-seek");
+    CHK(write(bfd, "tail!", 5) == 5, "sparse-write");
+    close(bfd);
+    bfd = open("/big.txt", O_RDONLY);
+    CHK(bfd >= 0, "big-reopen");
+    static unsigned char bb[40960];
+    ssize_t br = read(bfd, bb, sizeof(bb));
+    unsigned long long sum = 0;
+    int bad = 0;
+    for (int i = 0; i < (int)sizeof(bb); i++) {
+        sum += bb[i];
+        if (bb[i] != big[i]) bad++;
+    }
+    CHK(br == (ssize_t)sizeof(big) && bad == 0, "big-readback");
+    CHK(lseek(bfd, 300 * 1024, SEEK_SET) == 300 * 1024, "sparse-seek");
+    char tail[8] = {0};
+    CHK(read(bfd, tail, 5) == 5 && memcmp(tail, "tail!", 5) == 0, "sparse-readback");
+    struct stat bst;
+    CHK(fstat(bfd, &bst) == 0, "big-fstat");
+    close(bfd);
+    printf("WTEST-BIG w=%d rb=%d sz=%d sum=%llx mism=%d %s\n",
+           (int)bw, (int)br, (int)bst.st_size, sum, bad,
+           bad == 0 ? "DONE" : "FAILS");
+    // /big.txt stays — the host debugfs row reads its IND/DIND tables.
+
     printf("WTEST w=%d rb=%d ino=%llx renamed=%d same-ino=%d unl=%d dot=%d %s\n",
            (int)w, (int)n, (unsigned long long)st1.st_ino,
            st2.st_ino == st1.st_ino ? 1 : 0,
