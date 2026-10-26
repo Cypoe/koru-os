@@ -47,6 +47,18 @@ named refusal, not a silent edge:
 - `.`/`..` cost zero code — `dirFind` resolves the on-disk entries
   like any name (`/bin/../hello.txt` opens). No path parser ever
   special-cases them.
+- `link` is the same doctrine one notch sharper: a second name on the
+  SAME inode — `st_nlink` reads the inode's honest name count, the
+  object dies when the count reaches zero, and `link`+`unlink` alone
+  reproduce every name move `rename` can do (measured: relinking the
+  renamed inode back under its old name restored the persist row).
+- `mkdir`/`rmdir` mint and retire dir inodes as first-class objects —
+  `.`/`..` are real on-disk entries, so a subdir's `..` is a REAL
+  reference: `mkdir` bumps the parent's `i_links_count`, `rmdir`
+  drops it. `rmdir` is its own verb — `unlink` on a dir stays
+  `EISDIR`, a non-empty dir is `ENOTEMPTY`, and
+  `unlinkat(AT_REMOVEDIR)` routes to the rmdir arm rather than
+  refusing `ENOSYS` (musl's `rmdir(2)` lands there).
 
 **Oracle lesson — writev is not write.** The first green-looking
 write run returned `rb=0`: musl's `fwrite`/`fclose` emit **writev(2)**,

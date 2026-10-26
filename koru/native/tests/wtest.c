@@ -8,6 +8,9 @@
 //                 projection over it
 //   WTEST-UNLINK— unlink(2): the name dies, subsequent open is ENOENT
 //   WTEST-DOTDOT— "/bin/../hello.txt" resolves through the on-disk ..
+//   WTEST-DIR — mkdir(2)/link(2)/rmdir(2): dirs are minted objects, a
+//               hardlink is a second name on the same inode, rmdir
+//               refuses ENOTEMPTY then succeeds on the emptied dir
 // The gate greps the composite WTEST line; /wren.txt is left in the
 // image so the host-side debugfs check can see the mutation persisted.
 #include <stdio.h>
@@ -102,6 +105,40 @@ int main(void) {
            (int)bw, (int)br, (int)bst.st_size, sum, bad,
            bad == 0 ? "DONE" : "FAILS");
     // /big.txt stays — the host debugfs row reads its IND/DIND tables.
+
+    // 7. mkdir + link + rmdir — directories are real objects (a dirfd
+    //    never exists — proof is a creat INSIDE the dir, an ENOTEMPTY
+    //    refusal, then an empty rmdir). A hardlink is a second name on
+    //    the SAME inode: nlink counts the names and the object survives
+    //    losing one of them.
+    CHK(mkdir("/wdir", 0755) == 0, "mkdir");
+    int dfd = open("/wdir/inside.txt", O_WRONLY | O_CREAT);
+    CHK(dfd >= 0, "dir-creat");
+    if (dfd >= 0) close(dfd);
+    CHK(link("/wren.txt", "/wdir/hard.txt") == 0, "link");
+    int hfd = open("/wdir/hard.txt", O_RDONLY);
+    CHK(hfd >= 0, "link-open");
+    struct stat st3;
+    CHK(hfd >= 0 && fstat(hfd, &st3) == 0, "link-fstat");
+    CHK(st3.st_ino == st2.st_ino && st3.st_nlink == 2, "link-same-ino");
+    if (hfd >= 0) close(hfd);
+    CHK(unlink("/wren.txt") == 0, "unlink-onename");
+    hfd = open("/wdir/hard.txt", O_RDONLY);
+    CHK(hfd >= 0, "survives-unlink");
+    struct stat st4;
+    CHK(hfd >= 0 && fstat(hfd, &st4) == 0 && st4.st_nlink == 1, "nlink-1");
+    if (hfd >= 0) close(hfd);
+    errno = 0;
+    CHK(rmdir("/wdir") < 0 && errno == ENOTEMPTY, "rmdir-notempty");
+    // link+unlink is the whole name-moving mechanism — restore wren.txt
+    // (the fs-persist host row reads it back) by re-linking the same
+    // inode under the old name, then dropping the dir's name.
+    CHK(link("/wdir/hard.txt", "/wren.txt") == 0, "relink");
+    CHK(unlink("/wdir/inside.txt") == 0, "unlink-inside");
+    CHK(unlink("/wdir/hard.txt") == 0, "unlink-hard");
+    CHK(rmdir("/wdir") == 0, "rmdir");
+    errno = 0;
+    CHK(open("/wdir/inside.txt", O_RDONLY) < 0 && errno == ENOENT, "dir-gone");
 
     printf("WTEST w=%d rb=%d ino=%llx renamed=%d same-ino=%d unl=%d dot=%d %s\n",
            (int)w, (int)n, (unsigned long long)st1.st_ino,

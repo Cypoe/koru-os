@@ -671,6 +671,15 @@ const ChildFsOps = extern struct {
     // open_key: open by object identity — the nr514 openobj arm's
     // provider half. No path exists to walk; the key IS the name.
     open_key: *const fn (ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64,
+    // mkdir(path): mint a dir inode and land the leaf in the parent —
+    // a distinct verb, never open+O_CREAT wearing a dir.
+    mkdir: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    // rmdir(path): remove an EMPTY directory name — the only door for
+    // dir removal; unlink on a dir stays EISDIR.
+    rmdir: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    // link(old, new): a second name on the SAME inode — nlink counts
+    // the names; the object dies when the count reaches zero.
+    link: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
 };
 
 const WaitKind = enum { none, conin, blk, exit, pipe, gpu };
@@ -1261,10 +1270,11 @@ fn canonNr(nr: u64) u64 {
     return switch (nr) {
         257 => 2, // openat folds to open — one "fs object" capability
         // path-mutation verbs share the fs-object class: creat(85),
-        // rename(82)/renameat(264)/renameat2(316), unlink(87)/unlinkat(263).
+        // rename(82)/renameat(264)/renameat2(316), unlink(87)/unlinkat(263),
+        // mkdir(83)/mkdirat(258), rmdir(84), link(86)/linkat(265).
         // The class bit grants mount-wide; object grants narrow them by
         // verb — the mutated object is always a directory's key.
-        85, 82, 264, 316, 87, 263 => 2,
+        85, 82, 264, 316, 87, 263, 83, 258, 84, 86, 265 => 2,
         231 => 60,
         318 => 61,
         158, 218, 273, 302 => 62,
@@ -1530,6 +1540,78 @@ fn childUnlink(c: *Child, pva: usize) i64 {
         }
     }
     return ops.unlink(ops.ctx, @ptrCast(&pb));
+}
+
+// mkdir/rmdir: single-name dir verbs — the mutated object is the PARENT
+// directory, exactly the unlink grant shape. rmdir is its own verb on
+// purpose: unlink on a dir is EISDIR, and a non-empty dir is ENOTEMPTY.
+fn childMkdir(c: *Child, pva: usize) i64 {
+    const ops = c.fsv orelse return -38;
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    pb[p.len] = 0;
+    if ((c.rights >> 2) & 1 == 0) {
+        var db: [256]u8 = undefined;
+        const dp = parentPath(p, &db);
+        db[dp.len] = 0;
+        const dk = ops.key(ops.ctx, @ptrCast(&db));
+        if (dk < 0) return dk;
+        if (!grantCovers(c, 2, @bitCast(dk), V_WRITE)) {
+            say("SEAM REFUSE mkdir dir-obj=");
+            puthex(@bitCast(dk));
+            say(" (no W grant)\n");
+            return -13;
+        }
+    }
+    return ops.mkdir(ops.ctx, @ptrCast(&pb));
+}
+
+fn childRmdir(c: *Child, pva: usize) i64 {
+    const ops = c.fsv orelse return -38;
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    pb[p.len] = 0;
+    if ((c.rights >> 2) & 1 == 0) {
+        var db: [256]u8 = undefined;
+        const dp = parentPath(p, &db);
+        db[dp.len] = 0;
+        const dk = ops.key(ops.ctx, @ptrCast(&db));
+        if (dk < 0) return dk;
+        if (!grantCovers(c, 2, @bitCast(dk), V_WRITE)) {
+            say("SEAM REFUSE rmdir dir-obj=");
+            puthex(@bitCast(dk));
+            say(" (no W grant)\n");
+            return -13;
+        }
+    }
+    return ops.rmdir(ops.ctx, @ptrCast(&pb));
+}
+
+// link: a second name on an existing inode. The mutation lands in the
+// NEW path's parent dir — the old path is only resolved, never
+// mutated, so the grant check covers the destination directory alone.
+fn childLink(c: *Child, ova: usize, nva: usize) i64 {
+    const ops = c.fsv orelse return -38;
+    var ob: [256]u8 = undefined;
+    var nb: [256]u8 = undefined;
+    const op = userPath(c, ova, &ob) orelse return -14;
+    const np = userPath(c, nva, &nb) orelse return -14;
+    ob[op.len] = 0;
+    nb[np.len] = 0;
+    if ((c.rights >> 2) & 1 == 0) {
+        var db: [256]u8 = undefined;
+        const dp = parentPath(np, &db);
+        db[dp.len] = 0;
+        const dk = ops.key(ops.ctx, @ptrCast(&db));
+        if (dk < 0) return dk;
+        if (!grantCovers(c, 2, @bitCast(dk), V_WRITE)) {
+            say("SEAM REFUSE link dir-obj=");
+            puthex(@bitCast(dk));
+            say(" (no W grant)\n");
+            return -13;
+        }
+    }
+    return ops.link(ops.ctx, @ptrCast(&ob), @ptrCast(&nb));
 }
 
 fn childRead(c: *Child, fdu: u64, buva: u64, want: u64) i64 {
@@ -2384,13 +2466,44 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             }
         },
         87, 263 => { // unlink / unlinkat — removes a name; AT_REMOVEDIR
-                     // asks for rmdir, which this rung doesn't serve.
-            if (f.rax == 263 and
-                (f.rdi != @as(u64, @bitCast(@as(i64, -100))) or (f.rdx & 0x200) != 0)) {
-                f.rax = @bitCast(if ((f.rdx & 0x200) != 0) @as(i64, -38) else -9);
+                     // routes to the rmdir verb (musl's rmdir(2) lands
+                     // here — unlink on a dir is EISDIR, never a merge).
+            if (f.rax == 263 and (f.rdx & 0x200) != 0) {
+                if (f.rdi != @as(u64, @bitCast(@as(i64, -100)))) {
+                    f.rax = @bitCast(@as(i64, -9)); // only AT_FDCWD has meaning
+                } else {
+                    f.rax = @bitCast(childRmdir(c, @intCast(f.rsi)));
+                }
+            } else if (f.rax == 263 and
+                       f.rdi != @as(u64, @bitCast(@as(i64, -100)))) {
+                f.rax = @bitCast(@as(i64, -9));
             } else {
                 const pva: usize = if (f.rax == 87) @intCast(f.rdi) else @intCast(f.rsi);
                 f.rax = @bitCast(childUnlink(c, pva));
+            }
+        },
+        83, 258 => { // mkdir / mkdirat — mints a dir object; only
+                     // AT_FDCWD is meaningful (no dirfd views exist).
+            if (f.rax == 258 and f.rdi != @as(u64, @bitCast(@as(i64, -100)))) {
+                f.rax = @bitCast(@as(i64, -9));
+            } else {
+                const pva: usize = if (f.rax == 83) @intCast(f.rdi) else @intCast(f.rsi);
+                f.rax = @bitCast(childMkdir(c, pva));
+            }
+        },
+        84 => { // rmdir — removes an EMPTY directory name
+            f.rax = @bitCast(childRmdir(c, @intCast(f.rdi)));
+        },
+        86, 265 => { // link / linkat — a second name on the same inode;
+                     // flags must be 0 (no AT_SYMLINK_FOLLOW/EMPTY_PATH).
+            if (f.rax == 265 and
+                (f.rdi != @as(u64, @bitCast(@as(i64, -100))) or
+                 f.rdx != @as(u64, @bitCast(@as(i64, -100))) or f.r8 != 0)) {
+                f.rax = @bitCast(if (f.r8 != 0) @as(i64, -38) else -9);
+            } else {
+                const ova: usize = if (f.rax == 86) @intCast(f.rdi) else @intCast(f.rsi);
+                const nva: usize = if (f.rax == 86) @intCast(f.rsi) else @intCast(f.r10);
+                f.rax = @bitCast(childLink(c, ova, nva));
             }
         },
         0 => { // read(fd, buf, len) — kind dispatch: conin returns bytes

@@ -752,15 +752,17 @@ else
         # writable view: a musl child created, wrote, read-back, renamed
         # and unlinked through REAL syscalls — fopen("w")→openat O_CREAT,
         # write(1) on a V_WRITE fd, rename(2), unlink(2) — and the file
-        # kept its (dev,ino) key across the rename. WTEST-BIG: 40 KiB in
-        # one write crosses single-indirect (k=12..39); an lseek to
-        # 300 KiB + write crosses double-indirect (k=300 → leaf); the
+        # kept its (dev,ino) key across the rename. mkdir(2)/link(2)/
+        # rmdir(2) mint a dir, alias the inode (nlink counts names), and
+        # refuse ENOTEMPTY before succeeding on the emptied dir. WTEST-BIG:
+        # 40 KiB in one write crosses single-indirect (k=12..39); an lseek
+        # to 300 KiB + write crosses double-indirect (k=300 → leaf); the
         # sparse tail reads back through the same tables.
         if grep -qE "WTEST w=[0-9]+ rb=[0-9]+ ino=[0-9a-fx]+ renamed=1 same-ino=[0-9]+ unl=1 dot=1 DONE" "$WORK/boot_ext2.serial" \
            && grep -qE "WTEST-BIG w=40960 rb=40960 sz=307205 sum=[0-9a-f]+ mism=0 DONE" "$WORK/boot_ext2.serial" \
            && ! grep -qF "WTEST-FAIL" "$WORK/boot_ext2.serial" \
            && grep -qF "exec wtest.elf status=0" "$WORK/boot_ext2.serial"; then
-            ok "fs-write: musl child created/wrote/renamed/unlinked via the scoped view; 40KiB+300KiB-sparse through IND+DIND tables"
+            ok "fs-write: musl child created/wrote/renamed/unlinked/mkdir'd/link'd/rmdir'd via the scoped view; IND+DIND + nlink counted"
         else
             bad "fs-write: evidence missing: $(grep -aE 'WTEST|wtest|REFUSE|FAIL' "$WORK/boot_ext2.serial" | tail -6 | tr '\n' '|')"
         fi

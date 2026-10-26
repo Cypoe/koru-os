@@ -346,6 +346,48 @@ fn dirRemove(fs: *Fs, dir_ino: u32, name: []const u8) ?u32 {
     return null;
 }
 
+// dirIsEmpty: only "." and ".." entries (and ino==0 holes) may survive
+// the scan — anything else is ENOTEMPTY at the caller, never a silent
+// recurse.
+fn dirIsEmpty(fs: *Fs, dino: u32, blk: []u8) bool {
+    const loc = inodeLoc(fs, dino) orelse return false;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return false;
+    for (0..12) |i| {
+        const blkno = rd32(&it, loc.off + 40 + i * 4);
+        if (blkno == 0) return true;
+        if (!readBlock(fs, blkno, blk)) return false;
+        var p: usize = 0;
+        while (p < BS) {
+            const rec = rd16(blk, p + 4);
+            if (rec < 8) return true;
+            const ein = rd32(blk, p);
+            const nl = entryNl(fs, blk, p);
+            if (ein != 0) {
+                const nm = blk[p + 8 .. p + 8 + nl];
+                const dot = nl == 1 and nm[0] == '.';
+                const dotdot = nl == 2 and nm[0] == '.' and nm[1] == '.';
+                if (!dot and !dotdot) return false;
+            }
+            p += rec;
+        }
+    }
+    return true;
+}
+
+// bumpLinks: i_links_count += delta, written back on the inode's own
+// block. mkdir moves it on the PARENT (a subdir's ".." is a real
+// reference); link moves it on the file; nlink is only ever recomputed
+// here, never trusted from a caller.
+fn bumpLinks(fs: *Fs, ino: u32, delta: i16) bool {
+    const loc = inodeLoc(fs, ino) orelse return false;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return false;
+    const nl: i32 = rd16(&it, loc.off + 26);
+    wr16(&it, loc.off + 26, @intCast(nl + delta));
+    return writeBlock(fs, loc.block, &it);
+}
+
 // ---- inode and block bitmap verbs (multi-group, like create's) -------
 // Each verb updates the group-descriptor free count and the superblock
 // total, then writes both back — the on-disk counters stay honest.
@@ -951,6 +993,15 @@ const ChildFsOps = extern struct {
     // device is EXDEV, never resolved to a local inode); the inode
     // must be a live regular file.
     open_key: *const fn (ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64,
+    // mkdir(path): mint a dir inode ("." + "..") and land the leaf name
+    // in the parent — a distinct verb, never open+O_CREAT wearing a dir.
+    mkdir: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    // rmdir(path): remove an EMPTY directory name — unlink on a dir
+    // stays EISDIR; this is the only door for dir removal.
+    rmdir: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    // link(old, new): a second name on the SAME inode — no copy, no
+    // move; nlink counts the names and the object dies at zero.
+    link: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
 };
 
 // readAt: inode + byte-range → bytes, reading only the blocks covered —
@@ -1186,6 +1237,106 @@ fn cfUnlink(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     return 0;
 }
 
+// doMkdir: a fresh dir inode — mode 0o40755, nlink=2 ("." here, ".." in
+// the parent) — one data block carrying the two bootstrap entries; the
+// leaf then lands in the parent and the parent's nlink grows because a
+// subdir's ".." is a real reference.
+fn doMkdir(fs: *Fs, path: []const u8) i64 {
+    var dir: [BS]u8 = undefined;
+    const sp = splitPath(path);
+    if (sp.leaf.len == 0) return -22; // EINVAL — no leaf to mint
+    const dino = lookupPath(fs, sp.dir, &dir) orelse return -2;
+    if (dirFind(fs, dino, sp.leaf, &dir) != null) return -17; // EEXIST
+    const ino = allocInode(fs) orelse return -28; // ENOSPC
+    const loc = inodeLoc(fs, ino) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    @memset(it[loc.off .. loc.off + 128], 0);
+    wr16(&it, loc.off + 0, 0o40755);
+    wr16(&it, loc.off + 26, 2);
+    const nb = allocBlock(fs) orelse { _ = freeInode(fs, ino); return -28; };
+    var blk: [BS]u8 = undefined;
+    @memset(&blk, 0);
+    // "." names itself; ".." names the parent and swallows the block
+    wr32(&blk, 0, ino);
+    wr16(&blk, 4, 12);
+    if (fs.filetype) { blk[6] = 1; blk[7] = 2; } else wr16(&blk, 6, 1);
+    blk[8] = '.';
+    wr32(&blk, 12, dino);
+    wr16(&blk, 16, @intCast(BS - 12));
+    if (fs.filetype) { blk[18] = 2; blk[19] = 2; } else wr16(&blk, 18, 2);
+    blk[20] = '.'; blk[21] = '.';
+    if (!writeBlock(fs, nb, &blk)) return -5;
+    wr32(&it, loc.off + 40, nb);
+    wr32(&it, loc.off + 4, BS);
+    wr32(&it, loc.off + 28, @intCast(BS / 512));
+    if (!writeBlock(fs, loc.block, &it)) return -5;
+    if (!dirAdd(fs, dino, sp.leaf, ino, 2)) {
+        _ = freeBlock(fs, nb);
+        _ = freeInode(fs, ino);
+        return -12;
+    }
+    if (!bumpLinks(fs, dino, 1)) return -5;
+    if (xfer(fs, OP_FFLUSH, 0, 0) != 0) return -5;
+    return 0;
+}
+
+fn cfMkdir(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    return doMkdir(fs, std.mem.span(path));
+}
+
+// cfRmdir: the dir must be a dir and must be empty — "." and ".." are
+// the only tolerated entries; the parent's nlink drops because the
+// victim's ".." reference dies with it.
+fn cfRmdir(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    var dir: [BS]u8 = undefined;
+    const sp = splitPath(std.mem.span(path));
+    const dino = lookupPath(fs, sp.dir, &dir) orelse return -2;
+    const vict = dirFind(fs, dino, sp.leaf, &dir) orelse return -2;
+    const loc = inodeLoc(fs, vict) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    if (rd16(&it, loc.off) & 0o170000 != 0o040000) return -20; // ENOTDIR
+    if (!dirIsEmpty(fs, vict, &dir)) return -39; // ENOTEMPTY
+    _ = dirRemove(fs, dino, sp.leaf) orelse return -5;
+    if (!bumpLinks(fs, dino, -1)) return -5;
+    if (!freeFileBlocks(fs, &it, loc.off) or !freeInode(fs, vict)) return -5;
+    if (xfer(fs, OP_FFLUSH, 0, 0) != 0) return -5;
+    return 0;
+}
+
+// doLink: a second name on the SAME inode — the name is a view, the
+// inode the identity, so the entry just points at it and nlink counts
+// the names. Directories refuse EPERM — a second name on a dir would
+// make ".." ambiguous.
+fn doLink(fs: *Fs, oldp: []const u8, newp: []const u8) i64 {
+    var dir: [BS]u8 = undefined;
+    const nsp = splitPath(newp);
+    if (nsp.leaf.len == 0) return -22; // EINVAL
+    const fino = lookupPath(fs, oldp, &dir) orelse return -2;
+    const floc = inodeLoc(fs, fino) orelse return -5;
+    var fit: [BS]u8 = undefined;
+    if (!readBlock(fs, floc.block, &fit)) return -5;
+    const fmode = rd16(&fit, floc.off);
+    if (fmode & 0o170000 == 0o040000) return -1; // EPERM — no dir links
+    const dino = lookupPath(fs, nsp.dir, &dir) orelse return -2;
+    if (dirFind(fs, dino, nsp.leaf, &dir) != null) return -17; // EEXIST
+    const ftype: u8 = if (fmode & 0o170000 == 0o120000) 7 else 1;
+    if (!dirAdd(fs, dino, nsp.leaf, fino, ftype)) return -12;
+    const nl = rd16(&fit, floc.off + 26);
+    wr16(&fit, floc.off + 26, nl + 1);
+    if (!writeBlock(fs, floc.block, &fit)) return -5;
+    if (xfer(fs, OP_FFLUSH, 0, 0) != 0) return -5;
+    return 0;
+}
+
+fn cfLink(ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    return doLink(fs, std.mem.span(old), std.mem.span(new));
+}
+
 fn cfSeek(ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64 {
     const fs: *Fs = @ptrCast(@alignCast(ctx));
     _ = fs;
@@ -1213,7 +1364,13 @@ fn cfStat(ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64 {
     }.s;
     w64(dst, 0, fs.dev_id);                          // st_dev
     w64(dst, 8, fp.ino);                             // st_ino
-    w64(dst, 16, 1);                                 // st_nlink
+    // st_nlink is the inode's real link count — hardlinks made it honest.
+    var nlink: u64 = 1;
+    if (inodeLoc(fs, fp.ino)) |iloc| {
+        var ib: [BS]u8 = undefined;
+        if (readBlock(fs, iloc.block, &ib)) nlink = rd16(&ib, iloc.off + 26);
+    }
+    w64(dst, 16, nlink);                             // st_nlink
     for (0..4) |i| dst[24 + i] = @truncate(@as(u64, 0o100644) >> @intCast(i * 8)); // st_mode u32
     w64(dst, 48, fp.size);                           // st_size
     w64(dst, 56, BS);                                // st_blksize
@@ -1241,7 +1398,8 @@ fn childFs(fs: *Fs) ChildFsOps {
     return .{ .ctx = @ptrCast(fs), .open = cfOpen, .read = cfRead,
               .read_at = cfReadAt, .seek = cfSeek, .stat = cfStat, .close = cfClose,
               .dup = cfDup, .key = cfKey, .write = cfWrite,
-              .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey };
+              .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey,
+              .mkdir = cfMkdir, .rmdir = cfRmdir, .link = cfLink };
 }
 
 ~proc fetch|zig {
