@@ -419,9 +419,29 @@ compositing on the hosted arm; **`kvview` (vendored webkit2gtk)
 rendered a page and read back the DOM title** — the webview rung
 the user asked for; and a measured-refusal oracle: **hyprland
 (aquamarine) requires `zwp_linux_dmabuf_v1`** — WSLg is software,
-no dmabuf, no `/dev/dri` — the row pins *why* so a dmabuf-capable
-environment flips it on contact. Hyprland-as-protocol stands —
-and the koru-side wayland provider now exists:
+no dmabuf — the row pins *why* the direct WSLg path refuses. The
+environment answer now exists: **live Hyprland 0.56.2 runs in the
+vroot** (`hosted/vroot/hypr-oracle.sh`). `kv-shim` is a ~700-line
+dmabuf-v4 parent compositor whose feedback names vgem's `card0`;
+a per-entry fake sysfs satisfies libdrm's dev_t→node resolution;
+aquamarine opens the node, builds a **real GBM allocator**, and
+commits real dmabuf frames the shim maps straight out of the BO
+(vgem BOs are mmapable — the oracle reads pixels, not logs).
+Gated end-to-end: allocator + `wayland-1` socket + `hyprctl
+clients` showing foot tiled on WAYLAND-1 + a frame dump whose
+pixels carry foot's terminal and the configured magenta border
+(`PXEVID nonbg>800k magenta>7k`). Two oracle lessons landed in
+`concepts/frag-a-wayland-server-never-steals-resource-link.md`:
+`resource->link` is libwayland's (stealing it corrupts the
+client's resource map — the stall was a shim segfault, not a
+scheduler wedge), and an empty mode list makes `preferred`
+resolve to `0x0` — Hyprland disables the output; the oracle must
+name the geometry. Remaining named bounds: vgem must be loaded
+on the host (`modprobe vgem` as root — the row skips honestly
+when `/dev/dri/card0` is absent); the run is a manual oracle, not
+yet a check-hosted row; the second host realization path and
+Quickshell/Noctalia on top are still open. And the koru-side
+wayland provider exists too:
 
 **`linux-wayland` — the second hosted surface arm (gated)** —
 `koru/hosted/wayland.zig` implements the same `koruos.surface` +

@@ -24,6 +24,16 @@ for n in null full; do ln -sf /tmp/kvnull "$R/dev/$n"; done
 ln -sf /tmp/kvfifo-urandom "$R/dev/urandom"
 ln -sf /tmp/kvfifo-random  "$R/dev/random"
 ln -sf /tmp/kvfifo-zero    "$R/dev/zero"
+# host DRM nodes (vgem's card0 is the aquamarine allocator's GBM target —
+# headless Hyprland needs *an* allocator, not a real GPU). A single-node
+# file bind works where whole-/dev binds are refused; absent hosts skip
+# and aquamarine keeps refusing by name, which is honest.
+mkdir -p "$R/dev/dri"
+for n in /dev/dri/*; do
+    [ -e "$n" ] || continue
+    b=$(basename "$n"); : > "$R/dev/dri/$b"
+    mount --bind "$n" "$R/dev/dri/$b" 2>/dev/null || rm -f "$R/dev/dri/$b"
+done
 cp -L /etc/resolv.conf "$R/etc/resolv.conf" 2>/dev/null
 cp -L /etc/hosts "$R/etc/hosts" 2>/dev/null
 exec chroot "$R" env -i \
