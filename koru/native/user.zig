@@ -618,6 +618,9 @@ const ChildFsOps = extern struct {
     write: *const fn (ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) i64,
     rename: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
     unlink: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    // open_key: open by object identity — the nr514 openobj arm's
+    // provider half. No path exists to walk; the key IS the name.
+    open_key: *const fn (ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64,
 };
 
 const WaitKind = enum { none, conin, blk, exit, pipe };
@@ -1224,6 +1227,8 @@ fn canonNr(nr: u64) u64 {
         56 => 57,
         512 => 57,
         513 => 58,
+        514 => 2, // openobj — the object axis' open; folds to the fs-object
+                  // class and the key argument IS the object it names
         else => nr,
     };
 }
@@ -1351,6 +1356,48 @@ fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
     c.fds[fd] = @intCast(h);
     c.fdkinds[fd] = .fs;
     const mode: u8 = @intCast(flags & 3);
+    c.fdverbs[fd] = switch (mode) {
+        0 => V_READ,
+        1 => V_WRITE,
+        else => V_READ | V_WRITE,
+    };
+    return @intCast(fd);
+}
+
+// nr514 openobj(key, flags) — koru's object-axis open. There is no
+// path: the key argument IS the object, so for an object-grant child
+// the grant check is the syscall itself — grant{cap:2, obj:key} must
+// name the same key at the same verbs. A class-bit child is
+// mount-wide as always. This is the arm a nid-scoped bag was built
+// for: identity as the name, no projection in between.
+fn childOpenObj(c: *Child, key: u64, flags: u64) i64 {
+    const ops = c.fsv orelse return -38; // ENOSYS — no fs view to serve it
+    const mode: u8 = @intCast(flags & 3);
+    var need: u8 = switch (mode) {
+        0 => V_READ,
+        1 => V_WRITE,
+        else => V_READ | V_WRITE,
+    };
+    if ((flags & 0o1000) != 0) need |= V_WRITE; // O_TRUNC mutates the file
+    if ((flags & 0o100) != 0) return -38; // O_CREAT needs a directory — paths only
+    if ((c.rights >> 2) & 1 == 0 and !grantCovers(c, 2, key, need)) {
+        say("SEAM REFUSE openobj obj=");
+        puthex(key);
+        say(" (no nid grant)\n");
+        return -13;
+    }
+    const h = ops.open_key(ops.ctx, key, @intCast(flags));
+    if (h < 0) return h;
+    var fd: usize = 3;
+    while (fd < c.fds.len) : (fd += 1) {
+        if (c.fdkinds[fd] == .none) break;
+    }
+    if (fd == c.fds.len) {
+        ops.close(ops.ctx, @intCast(h));
+        return -24; // EMFILE
+    }
+    c.fds[fd] = @intCast(h);
+    c.fdkinds[fd] = .fs;
     c.fdverbs[fd] = switch (mode) {
         0 => V_READ,
         1 => V_WRITE,
@@ -2265,6 +2312,10 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         },
         85 => { // creat(path) ≡ open(path, O_WRONLY|O_CREAT|O_TRUNC)
             f.rax = @bitCast(childOpen(c, @intCast(f.rdi), 0o1101));
+        },
+        514 => { // openobj(key, flags) — koru's object-axis open; the
+                 // key is the name, no path ever resolves.
+            f.rax = @bitCast(childOpenObj(c, f.rdi, f.rsi));
         },
         82, 264, 316 => { // rename / renameat / renameat2 — the directory
                           // entries move; the inode (the identity) does

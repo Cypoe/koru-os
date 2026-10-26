@@ -47,5 +47,41 @@ int main(void) {
     long mask = ~0L & ~(1L << 2);                  // class open REMOVED
     long rst = syscall(KORU_SPAWN, "grantc.elf", mask, blob, (long)(p - blob));
     printf("GTEST st=%ld key=%llx\n", rst, key);
+
+    // Second spawn — the OBJECT-AXIS half. mk a payload file the
+    // oracle child never names by path; its only fs verb is
+    // openobj(key) — the grant's obj IS the syscall's argument.
+    int ofd = open("/objw.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (ofd < 0) { printf("GTEST-ObjT no create\n"); return 3; }
+    write(ofd, "obj-payload\n", 12);
+    close(ofd);
+    ofd = open("/objw.txt", O_RDONLY);
+    struct stat ost;
+    if (ofd < 0 || fstat(ofd, &ost) < 0) { printf("GTEST-ObjT no stat\n"); return 4; }
+    close(ofd);
+    unsigned long long okey = ((unsigned long long)ost.st_dev << 32) | (unsigned long long)ost.st_ino;
+    char keydec[24];
+    int kl = snprintf(keydec, sizeof(keydec), "%llu", okey);
+
+    p = blob;
+    for (int i = 0; i < 4; i++) *p++ = (SECT_MAGIC >> (8 * i)) & 0xff;
+    for (int i = 0; i < 2; i++) *p++ = 2 >> (8 * i);
+    for (int i = 0; i < 2; i++) *p++ = TAG_ARGV >> (8 * i);
+    // argv: "objt.elf\0" + "<key dec>\0" — the object crosses as argv.
+    int avlen = 9 + kl + 1;
+    for (int i = 0; i < 2; i++) *p++ = avlen >> (8 * i);
+    const char an[] = "objt.elf";
+    for (unsigned i = 0; i < sizeof(an); i++) *p++ = an[i];
+    for (int i = 0; i < kl; i++) *p++ = keydec[i];
+    *p++ = 0;
+    for (int i = 0; i < 2; i++) *p++ = TAG_GRANT >> (8 * i);
+    for (int i = 0; i < 2; i++) *p++ = 16 >> (8 * i);
+    for (int i = 0; i < 8; i++) *p++ = (okey >> (8 * i)) & 0xff;
+    *p++ = 3;                                      // verbs: R|W
+    *p++ = 2;
+    for (int i = 0; i < 6; i++) *p++ = 0;
+
+    rst = syscall(KORU_SPAWN, "objt.elf", mask, blob, (long)(p - blob));
+    printf("GTEST-ObjT st=%ld\n", rst);
     return 0;
 }

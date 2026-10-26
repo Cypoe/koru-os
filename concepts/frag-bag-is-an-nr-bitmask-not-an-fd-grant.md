@@ -65,6 +65,17 @@ capability; the flag-shape refusal lives in the arm, not the bit.
 more hand-named cap grouping — the bitmask keeps enumerating the
 objects the grant-bag design must name.
 
+**Evolved (fs.object rung):** the first syscall that NAMES the object
+landed — `nr514 openobj(key, flags)` folds to cap 2, and for an
+object-grant child `grantCovers(c, 2, key, need)` compares the
+SYSCALL'S OWN ARGUMENT against the grant's `obj` — no path resolves
+first, no post-open stat. `objt.elf` proves the loop closes:
+`{cap:2, obj:key, R|W}` + no class bit reads and writes `/objw.txt`
+without ever naming the path (`OBJ-OPEN fd=3`, `OBJ-READ`,
+`OBJ-WRITE`), a non-granted key refuses at the seam (`SEAM REFUSE
+openobj obj=0x9`). The bag's object axis finally has a verb that takes
+it literally.
+
 Named caveat that follows: a real cap-mode child must be static — dynamic
 rtld opens libs by path → ECAPMODE. Extern-ELF ambitions (fish/foot/
 Quickshell) run fine on the linux arm; under Capsicum they want static

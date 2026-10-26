@@ -173,6 +173,7 @@ else
         cp "$ROOT/koru/native/tests/forktest.c" "$WORK/forktest.c"
         cp "$ROOT/koru/native/tests/granttest.c" "$WORK/granttest.c"
         cp "$ROOT/koru/native/tests/grantc.c" "$WORK/grantc.c"
+        cp "$ROOT/koru/native/tests/objt.c" "$WORK/objt.c"
         cp "$ROOT/koru/native/tests/wtest.c" "$WORK/wtest.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
@@ -187,6 +188,7 @@ else
         FORKTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/forktest.elf")")"
         GRANTTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/granttest.elf")")"
         GRANTCWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/grantc.elf")")"
+        OBJTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/objt.elf")")"
         WTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wtest.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
@@ -204,6 +206,7 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/forktest.elf" "$WORK/forktest.c" > "$WORK/forktest.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/granttest.elf" "$WORK/granttest.c" > "$WORK/granttest.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/grantc.elf" "$WORK/grantc.c" > "$WORK/grantc.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/objt.elf" "$WORK/objt.c" > "$WORK/objt.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wtest.elf" "$WORK/wtest.c" > "$WORK/wtest.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
@@ -219,6 +222,7 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $FORKTESTWSL forktest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GRANTTESTWSL granttest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GRANTCWSL grantc.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $OBJTWSL objt.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WTESTWSL wtest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
@@ -305,6 +309,18 @@ else
             ok "exec-bynid: pin resolved provider via mounted table (status=43); stale pin refused post-unmount"
         else
             bad "exec-bynid: evidence missing: $(grep -aE 'exec-bynid|FAIL|pin:' "$WORK/boot_ext2.serial" | tail -5 | tr '\n' '|')"
+        fi
+        # the object axis, callable: obj-stat/obj-read dispatch BY NID
+        # through the pin → mounted-table walk — POST-RENAME. The same
+        # ino answers and the read returns the ELF magic: identity-keyed
+        # verbs, no path ever walked.
+        pin_ino_obj=$(sed -n 's/.*pinned child.elf ino=\([0-9]*\).*/\1/p' "$WORK/boot_ext2.serial" | head -1)
+        if [ -n "$pin_ino_obj" ] \
+           && grep -qE "ext2n: obj-stat nid dev=0 ino=$pin_ino_obj size=[0-9]+" "$WORK/boot_ext2.serial" \
+           && grep -qE "ext2n: obj-read nid n=4 magic=464c457f" "$WORK/boot_ext2.serial"; then
+            ok "fs-object: obj-stat/obj-read by nid — ino=$pin_ino_obj, ELF magic read by identity post-rename"
+        else
+            bad "fs-object: evidence missing: $(grep -aE 'obj-stat|obj-read|FAIL' "$WORK/boot_ext2.serial" | tail -4 | tr '\n' '|')"
         fi
         # the pin round-trip: pin(path) re-mints the SAME nid (identity is
         # derived from the object, not the view) and exec_nid re-runs the
@@ -682,10 +698,15 @@ else
                  && grep -qF 'GRANT-WRITE-DENY fd=-1 e=13' "$WORK/boot_shell.serial" \
                  && grep -qF 'GRANT-AMPLIFY r=-1 e=13' "$WORK/boot_shell.serial" \
                  && grep -qF 'GTEST st=9' "$WORK/boot_shell.serial" \
+                 && grep -qE 'OBJ-OPEN fd=[3-9]' "$WORK/boot_shell.serial" \
+                 && grep -qF 'OBJ-READ n=12 [obj-payload' "$WORK/boot_shell.serial" \
+                 && grep -qF 'OBJ-WRITE w=10' "$WORK/boot_shell.serial" \
+                 && grep -qF 'OBJ-DENY fd=-1 e=13' "$WORK/boot_shell.serial" \
+                 && grep -qF 'GTEST-ObjT st=0' "$WORK/boot_shell.serial" \
                  && grep -qF 'shell: exec sh status=47' "$WORK/boot_shell.serial" \
                  && grep -qE 'yields=[1-9]' "$WORK/boot_shell.serial" \
                  && grep -qE 'rwaits=[1-9]' "$WORK/boot_shell.serial"; then
-                ok "shell-repl: pie.elf via nr512, args.elf argv, pipegen|catc 20B through a real ring (rwaits>0), forktest.elf real musl fork (shared fd offset + private space + zombie reaped + clone CLONE_VM refused), grantc.elf nid-grant open (GRANT-OPEN/-DENY/-AMPLIFY), q quit (47)"
+                ok "shell-repl: pie.elf via nr512, args.elf argv, pipegen|catc 20B through a real ring (rwaits>0), forktest.elf real musl fork (shared fd offset + private space + zombie reaped + clone CLONE_VM refused), grantc.elf nid-grant open (GRANT-OPEN/-DENY/-AMPLIFY), objt.elf openobj-by-key (OBJ-OPEN/-READ/-WRITE, wrong key refused), q quit (47)"
             else
                 bad "shell-repl: evidence missing: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             fi

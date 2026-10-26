@@ -756,6 +756,11 @@ const ChildFsOps = extern struct {
     write: *const fn (ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) i64,
     rename: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
     unlink: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    // open_key(key, flags): open by OBJECT IDENTITY — no path is
+    // walked. The key's dev must name this fs (a key from another
+    // device is EXDEV, never resolved to a local inode); the inode
+    // must be a live regular file.
+    open_key: *const fn (ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64,
 };
 
 // readAt: inode + byte-range → bytes, reading only the blocks covered —
@@ -930,6 +935,29 @@ fn cfKey(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     return @bitCast((@as(u64, fs.dev_id) << 32) | ino);
 }
 
+// cfOpenKey: identity → handle, skipping the directory walk entirely.
+// This is the object axis' open: a child that names the key never
+// touches a path — and the seam's grant names the same key.
+fn cfOpenKey(ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    if (key >> 32 != fs.dev_id) return -18; // EXDEV — not this provider's object
+    const ino: u32 = @intCast(key & 0xFFFFFFFF);
+    if (ino < fs.first_ino or ino > fs.inodes_count) return -2; // ENOENT
+    const loc = inodeLoc(fs, ino) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    const mode = rd16(&it, loc.off);
+    if (mode == 0 or rd16(&it, loc.off + 26) == 0) return -2; // freed inode — ENOENT
+    if (mode & 0o170000 != 0o100000) return -21; // EISDIR
+    const h = malloc(@sizeOf(OpenFile)) orelse return -12;
+    const fp: *OpenFile = @ptrCast(@alignCast(h));
+    const amode: u8 = @intCast(flags & 3);
+    fp.* = .{ .ino = ino, .size = rd32(&it, loc.off + 4),
+               .pos = if ((flags & O_APPEND) != 0) rd32(&it, loc.off + 4) else 0,
+               .refs = 1, .mode = amode, .append = (flags & O_APPEND) != 0 };
+    return @intCast(@intFromPtr(fp));
+}
+
 // doRename shared by the tor and the child view: remove the source
 // name, re-link the SAME inode under the new name — identity is the
 // inode, the names are directory entries pointing at it. Replacing an
@@ -1054,7 +1082,7 @@ fn childFs(fs: *Fs) ChildFsOps {
     return .{ .ctx = @ptrCast(fs), .open = cfOpen, .read = cfRead,
               .read_at = cfReadAt, .seek = cfSeek, .stat = cfStat, .close = cfClose,
               .dup = cfDup, .key = cfKey, .write = cfWrite,
-              .rename = cfRename, .unlink = cfUnlink };
+              .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey };
 }
 
 ~proc fetch|zig {
@@ -1190,20 +1218,44 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
 | ok { status: i64, dev: u32, ino: u32 }
 | refused string
 
-~proc exec-by-nid|zig {
+// resolvePin: nid → the live mounted Fs + inode — the shared walk
+// behind exec-by-nid and every obj-* verb. Two tables: the pin store
+// (nid → key + foreign name) then the mounted registry (dev → *Fs).
+// Every miss refuses by name — never a dead provider's ops record.
+const PinErr = enum { unbound, unreadable, scheme, unmounted };
+
+fn resolvePin(nid: u64) union(enum) { ok: struct { fs: *Fs, ino: u32 }, err: PinErr } {
     const key = koruos_nid_obj_key(nid);
-    if (key < 0) return .{ .refused = "nid not bound to an object" };
+    if (key < 0) return .{ .err = .unbound };
     var fb: [64]u8 = undefined;
     const fl = koruos_nid_obj_foreign(nid, &fb, fb.len);
-    if (fl < 0) return .{ .refused = "nid's foreign name unreadable" };
+    if (fl < 0) return .{ .err = .unreadable };
     if (!std.mem.startsWith(u8, fb[0..@intCast(fl)], "ext2/"))
-        return .{ .refused = "nid pins a scheme this provider does not serve" };
+        return .{ .err = .scheme };
     const k: u64 = @bitCast(key);
     const dev: u32 = @intCast(k >> 32);
     if (dev >= mounted.len or mounted[dev] == null)
-        return .{ .refused = "nid's provider is not mounted" };
-    const fs = mounted[dev].?;
-    const ino: u32 = @intCast(k & 0xFFFFFFFF);
+        return .{ .err = .unmounted };
+    return .{ .ok = .{ .fs = mounted[dev].?, .ino = @intCast(k & 0xFFFFFFFF) } };
+}
+
+fn pinErr(e: PinErr) []const u8 {
+    return switch (e) {
+        .unbound => "nid not bound to an object",
+        .unreadable => "nid's foreign name unreadable",
+        .scheme => "nid pins a scheme this provider does not serve",
+        .unmounted => "nid's provider is not mounted",
+    };
+}
+
+~proc exec-by-nid|zig {
+    const r = switch (resolvePin(nid)) {
+        .ok => |v| v,
+        .err => |e| return .{ .refused = pinErr(e) },
+    };
+    const fs = r.fs;
+    const dev = fs.dev_id;
+    const ino = r.ino;
     const bp = switch (readFile(fs, ino)) {
         .ok => |b| b,
         .err => |e| return .{ .refused = readErr(e) },
@@ -1214,6 +1266,103 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
     free(@ptrCast(bp));
     if (st < 0) return .{ .refused = "spawn provider refused the image" };
     return .{ .ok = .{ .status = st, .dev = dev, .ino = ino } };
+}
+
+// ---- object verbs — the fs.object half of this provider ---------------
+// The object axis, callable: a nid names the object, these verbs act on
+// it. No path is ever walked — the pin resolves provider+inode through
+// resolvePin, the verb goes by-inode. A rename BETWEEN pin and obj-read
+// is invisible to the caller: identity, not view.
+
+// obj-read: nid + offset → {n, first4} — flat fields (a returned Buf
+// would leak and the .k tier prints flat). first4 is the first ≤4
+// bytes packed LE — for an ELF it IS the magic, proof bytes ride home.
+~pub tor obj-read { nid: u64, off: u64, len: u32 }
+| ok { n: i64, first4: u32 }
+| refused string
+
+~proc obj-read|zig {
+    const r = switch (resolvePin(nid)) {
+        .ok => |v| v,
+        .err => |e| return .{ .refused = pinErr(e) },
+    };
+    var tmp: [64]u8 = undefined;
+    if (len > tmp.len) return .{ .refused = "obj-read bound is 64 bytes" };
+    const n = readAt(r.fs, r.ino, off, &tmp, len);
+    if (n < 0) return .{ .refused = "object read failed" };
+    var f4: u32 = 0;
+    var i: usize = 0;
+    while (i < @min(@as(usize, @intCast(n)), 4)) : (i += 1)
+        f4 |= @as(u32, tmp[i]) << @intCast(8 * i);
+    return .{ .ok = .{ .n = n, .first4 = f4 } };
+}
+
+// obj-stat: nid → the object's descriptor — the proof surface for
+// "the pin still names what you pinned".
+~pub tor obj-stat { nid: u64 }
+| ok { dev: u32, ino: u32, size: u32, mode: u16 }
+| refused string
+
+~proc obj-stat|zig {
+    const r = switch (resolvePin(nid)) {
+        .ok => |v| v,
+        .err => |e| return .{ .refused = pinErr(e) },
+    };
+    const loc = inodeLoc(r.fs, r.ino) orelse return .{ .refused = "inode locate failed" };
+    var it: [BS]u8 = undefined;
+    if (!readBlock(r.fs, loc.block, &it)) return .{ .refused = "inode read failed" };
+    return .{ .ok = .{ .dev = r.fs.dev_id, .ino = r.ino,
+                       .size = rd32(&it, loc.off + 4), .mode = rd16(&it, loc.off) } };
+}
+
+// obj-write: nid + offset + bytes → count — mutation BY IDENTITY.
+// Direct blocks only (cfWrite's bound); a write past 12 KiB of span is
+// ENOSPC by name.
+~pub tor obj-write { nid: u64, off: u64, buf: *Buf }
+| ok i64
+| refused string
+
+~proc obj-write|zig {
+    const r = switch (resolvePin(nid)) {
+        .ok => |v| v,
+        .err => |e| return .{ .refused = pinErr(e) },
+    };
+    const fs = r.fs;
+    const loc = inodeLoc(fs, r.ino) orelse return .{ .refused = "inode locate failed" };
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return .{ .refused = "inode read failed" };
+    if (rd16(&it, loc.off) & 0o170000 != 0o100000) return .{ .refused = "not a regular file" };
+    var data: [BS]u8 = undefined;
+    var done: usize = 0;
+    var size = rd32(&it, loc.off + 4);
+    var grew: u32 = 0;
+    while (done < buf.len) {
+        const k: usize = @intCast((off + done) / BS);
+        if (k >= 12) return .{ .refused = "past direct-block span (ENOSPC)" };
+        var phys = rd32(&it, loc.off + 40 + k * 4);
+        const boff: usize = @intCast((off + done) % BS);
+        const take = @min(buf.len - done, BS - boff);
+        if (phys == 0) {
+            phys = allocBlock(fs) orelse return .{ .refused = "out of blocks" };
+            wr32(&it, loc.off + 40 + k * 4, phys);
+            grew += 1;
+            @memset(&data, 0);
+        } else if (boff != 0 or take < BS) {
+            if (!readBlock(fs, phys, &data)) return .{ .refused = "data read failed" };
+        } else {
+            @memset(&data, 0);
+        }
+        @memcpy(data[boff .. boff + take], buf.ptr[done .. done + take]);
+        if (!writeBlock(fs, phys, &data)) return .{ .refused = "data write failed" };
+        done += take;
+    }
+    const end = off + done;
+    if (end > size) size = @intCast(end);
+    if (grew != 0) wr32(&it, loc.off + 28, rd32(&it, loc.off + 28) + grew * @as(u32, @intCast(BS / 512)));
+    wr32(&it, loc.off + 4, size);
+    if (!writeBlock(fs, loc.block, &it)) return .{ .refused = "inode write failed" };
+    if (xfer(fs, OP_FFLUSH, 0, 0) != 0) return .{ .refused = "flush failed" };
+    return .{ .ok = @intCast(done) };
 }
 
 ~pub tor verify { fs: *Fs<!mounted>, path: string, size: u32 }
