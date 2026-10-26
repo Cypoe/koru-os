@@ -658,9 +658,12 @@ Also open, smaller:
   LAPIC ICR → trampoline page → APs run kernel code + ack; measured
   -smp 4, 3/3 online). ~~IOAPIC routing~~ — landed (ioapic.zig:
   IOREDTBL + MADT ISOs → LAPIC delivery, PIC masked; all legacy
-  IRQ rows green through the second door). Still open: routing
-  destinations beyond the BSP (per-CPU IOREDTBL dests), sched
-  roster membership, per-CPU state — required before real hardware
+  IRQ rows green through the second door). AP roster substrate
+  landed: each AP arms the shared IDT + its own LVT timer (PIT-
+  calibrated), takes per-CPU ticks in kernel context, claims a
+  roster bit (mask=f under -smp 4). Still open: claim-and-run —
+  children scheduled onto APs (per-CPU current/TSS/rsp0 + the
+  big-lock seam), per-CPU IOREDTBL dests — before real hardware
 - KolibriOS study: first pass done —
   `notes/kolibrios-donor-read.md` (syscall table, VFS seam, devman
   driver model, v86, **GUI/windowing incl. win_map + damage

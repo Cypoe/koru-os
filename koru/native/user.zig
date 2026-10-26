@@ -25,6 +25,7 @@
 
 const std = @import("std");
 const ioapic = @import("ioapic");
+const smp = @import("smp");
 
 extern var pml4: [512]u64;
 extern var pdpt: [512]u64;
@@ -403,10 +404,14 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
         return;
     }
     if (f.vec >= 0x30) {
-        // message-signaled: the device wrote the vector; the LAPIC gets
-        // the EOI, not the PIC. Routing is the same shape as INTx — a
-        // provider-exported vector matched against the delivery.
-        if (gpu_msix_vec != 0xFF and f.vec == gpu_msix_vec) {
+        // LAPIC-local + message-signaled: the timer LVT is per-CPU
+        // hardware (each AP's own tick — roster substrate), MSI is the
+        // device writing the vector. Both take the LAPIC EOI.
+        if (f.vec == smp.TIMER_VEC) {
+            smp.lapicTick();
+            // per-CPU preemption lands with the roster claim — for now
+            // the tick is evidence the AP runs kernel interrupt context.
+        } else if (gpu_msix_vec != 0xFF and f.vec == gpu_msix_vec) {
             gpu_irq_ack();
             gpu_msix_seen += 1;
             if (gpu_msix_seen == 1) say("irq: vgpu msix delivered\n");
@@ -630,17 +635,29 @@ fn loadTables() void {
     const rsp0: u64 = @intFromPtr(&kstack) + kstack.len;
     @as(*u64, @ptrCast(@alignCast(&tss[4]))).* = rsp0;
 
+    loadIdt();
+    enableSyscall();
+}
+
+// Shared IDT arming — every CPU lidt's the same table before it can
+// take interrupts. The AP's GDT is the boot gdt64 (kernel segs only);
+// user segs + TSS stay BSP-side until per-CPU TSS lands, so an AP
+// makes no ring transitions yet — its ticks are CPL0 work.
+export fn koru_ap_arm_idt() callconv(.c) void {
+    loadIdt();
+}
+
+fn loadIdt() void {
+    setIdtGate(0x80, @intFromPtr(&ring3_entry80), true);
     var idt_ptr: [10]u8 align(2) = undefined;
     idt_ptr[0] = 0xFF;
     idt_ptr[1] = 0xFF;
     const ibase: u64 = @intFromPtr(&idt);
     inline for (0..8) |i| idt_ptr[2 + i] = @intCast((ibase >> (8 * i)) & 0xFF);
-    setIdtGate(0x80, @intFromPtr(&ring3_entry80), true);
     asm volatile ("lidt (%[p])"
         :
         : [p] "r" (&idt_ptr),
         : .{ .memory = true });
-    enableSyscall();
 }
 
 // ---- child space -----------------------------------------------------------

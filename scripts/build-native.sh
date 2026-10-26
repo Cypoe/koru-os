@@ -47,7 +47,7 @@ cp "$PROG" "$WORK/program.$EXT"
     --dep pci --dep mmio -Mvirtiopci="$ROOT/koru/native/virtiopci.zig" \
     --dep pci -Mvirtio="$ROOT/koru/native/virtio.zig" \
     --dep pmm -Maspace="$ROOT/koru/native/aspace.zig" \
-    --dep pmm --dep kbd --dep mmio --dep ioapic -Muser="$ROOT/koru/native/user.zig" \
+    --dep pmm --dep kbd --dep mmio --dep ioapic --dep smp -Muser="$ROOT/koru/native/user.zig" \
     -Mpmm="$ROOT/koru/native/pmm.zig" \
     --dep mouse --dep comp -Mkbd="$ROOT/koru/native/kbd.zig" \
     --dep kbd -Mmouse="$ROOT/koru/native/mouse.zig" \

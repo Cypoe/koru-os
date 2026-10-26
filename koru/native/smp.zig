@@ -12,8 +12,10 @@
 // The protocol is a handshake, not fire-and-forget: the BSP writes the
 // params block into the page, pulses INIT + two SIPIs through the ICR,
 // and spins on the AP's ack with a tick-bounded deadline. A silent AP
-// is named refused, never assumed. APs park in hlt after acking —
-// roster membership in sched is a later cell.
+// is named refused, never assumed. After acking, the AP arms the shared
+// IDT and its own LVT timer (calibrated against PIT ticks on the BSP),
+// sets its roster bit, and sched-idles on hlt — a CPU that takes kernel
+// interrupts on its own tables is the substrate claim-and-run builds on.
 
 const std = @import("std");
 const acpi = @import("acpi");
@@ -127,16 +129,58 @@ fn waitTicks(n: u64) void {
     while (irq_ticks < d) asm volatile ("hlt");
 }
 
+// LAPIC timer: the per-CPU tick. Vector 0x3E lives in the dispatch's
+// message-signaled range and takes the LAPIC-EOI arm; the period is
+// calibrated on the BSP against PIT ticks (the only clock source all
+// CPUs agree on this early) and each AP programs its own LVT — local
+// timers are per-CPU hardware, there is no shared tick to steal.
+pub const TIMER_VEC: u8 = 0x3E;
+var lapicPeriod: u32 = 0;
+pub var apTicks: [16]u64 = .{0} ** 16;
+pub var cpuRoster: u32 = 0; // bitmask of online apic ids — the roster datum
+
+extern fn koru_ap_arm_idt() void; // user.zig — shared IDT under kernel segs
+
+// Per-CPU tick handler — called from the dispatch's LAPIC arm. Counts
+// by *local* apic id: the register reads the running CPU's LAPIC, not
+// a global, so no argument needs passing through the frame.
+pub fn lapicTick() void {
+    const id: usize = @intCast(lapic(0x20).* >> 24);
+    if (id < apTicks.len) apTicks[id] += 1;
+}
+
+// One-shot LAPIC timer paced against two PIT ticks → the count for an
+// ~18.2 Hz periodic rate. Runs on the BSP before any AP is armed.
+fn calibrateTimer() u32 {
+    lapic(0x3E0).* = 0x3; // DCR: divide by 16
+    lapic(0x320).* = @as(u32, TIMER_VEC) | (1 << 16); // LVT timer: one-shot, masked
+    lapic(0x380).* = 0xFFFFFFFF;
+    const t0 = irq_ticks;
+    while (irq_ticks -% t0 < 2) asm volatile ("hlt");
+    const elapsed = 0xFFFFFFFF - lapic(0x390).*;
+    lapic(0x320).* = 1 << 16; // masked — the BSP's own timer stays PIT-paced
+    return @intCast(elapsed / 2);
+}
+
 pub var apAcked: u32 = 0;
 pub var apSeenId: u32 = 0;
 
 // The AP's first kernel code — reads its id from the params block,
-// acks, parks. Prints stay BSP-side (no serial lock on this arm yet);
-// the mailbox IS the AP's voice.
+// acks, arms the shared IDT and its own LVT timer, claims a roster
+// bit, then sched-idles. Prints stay BSP-side (no serial lock on this
+// arm yet); the tick counters and roster mask are the AP's voice.
 export fn apMain() callconv(.c) noreturn {
     const id = @as(*volatile u32, @ptrFromInt(TRAMP + O_APICID)).*;
     apSeenId = id;
     @atomicStore(u32, &apAcked, 1, .seq_cst);
+
+    koru_ap_arm_idt();
+    lapic(0xF0).* = lapic(0xF0).* | 0x13F; // SVR: enable + spurious vec 0x3F
+    lapic(0x3E0).* = 0x3; // DCR: divide by 16
+    lapic(0x320).* = @as(u32, TIMER_VEC) | (1 << 17); // LVT timer: periodic
+    lapic(0x380).* = lapicPeriod;
+    if (id < 32) _ = @atomicRmw(u32, &cpuRoster, .Or, @as(u32, 1) << @intCast(id), .seq_cst);
+    asm volatile ("sti");
     while (true) asm volatile ("hlt");
 }
 
@@ -164,6 +208,9 @@ pub fn init() void {
     @memcpy(dst[0..n], src[0..n]);
 
     lapic(0xF0).* |= 0x1FF; // SVR — spurious vector + LAPIC enable
+    lapicPeriod = calibrateTimer();
+    sayf("smp: lapic timer period={d} (~18hz)\n", .{lapicPeriod});
+    if (bsp < 32) cpuRoster |= @as(u32, 1) << @intCast(bsp);
 
     var i: usize = 0;
     var brought: usize = 0;
@@ -173,6 +220,17 @@ pub fn init() void {
         if (startAp(id)) brought += 1;
     }
     sayf("smp: {d}/{d} ap(s) online\n", .{ brought, acpi.ncpusEnabled - 1 });
+    // ~1 s of real time, then the per-CPU tick counters speak: a nonzero
+    // count is proof the AP is running kernel interrupt context on its
+    // own IDT/LAPIC — roster membership measured, not assumed.
+    waitTicks(20);
+    i = 0;
+    while (i < acpi.ncpus) : (i += 1) {
+        const id = acpi.apicIds[i];
+        if (id == bsp) continue;
+        sayf("smp: ap id={d} ticks={d}\n", .{ id, apTicks[@min(id, 15)] });
+    }
+    sayf("smp: cpu roster mask={x}\n", .{cpuRoster});
 }
 
 fn startAp(id: u8) bool {
