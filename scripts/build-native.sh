@@ -35,7 +35,9 @@ cp "$PROG" "$WORK/program.$EXT"
     -O ReleaseSafe \
     -fno-entry -fno-stack-protector -mno-red-zone \
     -T "$ROOT/koru/native/link.ld" \
-    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm --dep kbd --dep pci --dep mmio --dep virtiopci --dep mouse --dep comp -Mroot="$ROOT/koru/native/boot.zig" \
+    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm --dep kbd --dep pci --dep mmio --dep virtiopci --dep mouse --dep comp --dep acpi --dep smp -Mroot="$ROOT/koru/native/boot.zig" \
+    -Macpi="$ROOT/koru/native/acpi.zig" \
+    --dep pmm --dep mmio --dep acpi -Msmp="$ROOT/koru/native/smp.zig" \
     --dep compiler_env -Mprogram="$WORK/output_emitted.zig" \
     -Mcompiler_env="$ROOT/koru/native/compiler_env.zig" \
     -Mruntime="$ROOT/koru/native/runtime.zig" \

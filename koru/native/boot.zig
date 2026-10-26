@@ -23,7 +23,8 @@ const fb = @import("fb.zig");
 const pmm = @import("pmm");
 const kbd = @import("kbd");
 const pci = @import("pci");
-const acpi = @import("acpi.zig");
+const acpi = @import("acpi");
+const smp = @import("smp");
 const gpu = @import("gpu.zig");
 const surf = @import("surf.zig");
 const mouse = @import("mouse");
@@ -162,6 +163,7 @@ comptime {
     \\   jmp 1b
     \\ .section .rodata
     \\ .balign 8
+    \\ .globl gdt64_ptr        // AP trampolines reuse this GDT for the long jump
     \\ gdt64:
     \\   .quad 0x0000000000000000
     \\   .quad 0x00AF9A000000FFFF
@@ -188,6 +190,7 @@ export fn kmain(mbi: u32) callconv(.c) noreturn {
     user.init(); // IDT + PIC + sti — interrupts live before the program
     kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
     mouse.init(); // 8042 aux channel — PS/2 mouse, IRQ12
+    smp.init();  // INIT-SIPI-SIPI — APs ack + park before userland runs
     fb.init(mbi);
     comp.init(); // nativeCompositor — owns the scanout's scene from here
     aspace.selftest();

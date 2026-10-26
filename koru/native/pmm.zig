@@ -116,7 +116,7 @@ fn frameNo(phys: u64) u64 {
     return phys / FRAME;
 }
 
-fn reserve(phys: u64, len: u64) void {
+pub fn reserve(phys: u64, len: u64) void {
     var p = phys & ~@as(u64, FRAME - 1);
     const end = (phys + len + FRAME - 1) & ~@as(u64, FRAME - 1);
     while (p < end) : (p += FRAME) {

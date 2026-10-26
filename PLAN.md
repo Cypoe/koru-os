@@ -619,7 +619,8 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
           owned cursor over the delta stream — four screendump-verified
           states: UNDER/SCENE/REVEAL/IDLE+cursor); ACPI LANDED
           (RSDP + table directory + MADT/FADT payload + powerctl
-          door — AP bringup is SMP's cell)
+          door); SMP bringup LANDED (smp.zig INIT-SIPI-SIPI,
+          trampoline page, AP ack — sched roster is the open cell)
           → init/shell/process userland (fork/exec, pipes/IPC)
             → Hyprland/Noctalia oracle harness over the real scene
 ```
@@ -644,9 +645,10 @@ Also open, smaller:
   ~~shutdown/reboot~~ — landed:
   `koruos_powerctl` door, S5 payload AML-decoded off FADT+DSDT, reboot
   via the 8042 pulse (`frag-power-door-decodes-firmware`)
-- SMP (MADT payload parsed — lapic base, enabled cpus, ioapics, ISOs;
-  still open: IOAPIC routing + INIT/SIPI AP bringup) — required before
-  real hardware
+- SMP: ~~INIT-SIPI-SIPI AP bringup~~ — landed (smp.zig: MADT roster →
+  LAPIC ICR → trampoline page → APs run kernel code + ack; measured
+  -smp 4, 3/3 online). Still open: IOAPIC routing of IRQs to APs, sched
+  roster membership, per-CPU state — required before real hardware
 - KolibriOS study: first pass done —
   `notes/kolibrios-donor-read.md` (syscall table, VFS seam, devman
   driver model, v86, **GUI/windowing incl. win_map + damage

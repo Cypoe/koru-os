@@ -225,6 +225,10 @@ pub var ncpus: usize = 0;
 pub var ncpusEnabled: usize = 0;
 pub var nioapics: usize = 0;
 pub var isos: usize = 0;
+// LAPIC ids of the counted CPUs — IPI targets for bringup. 64 is a
+// stated bound, not a guess: past it the count still reports honestly
+// and the id array simply doesn't cover the tail.
+pub var apicIds: [64]u8 = undefined;
 
 fn parseMadt() void {
     const t = findTable("APIC") orelse {
@@ -240,6 +244,7 @@ fn parseMadt() void {
         if (elen < 2 or off + elen > t.len) break;
         switch (etype) {
             0 => {
+                if (ncpus < 64) apicIds[ncpus] = p[off + 3];
                 ncpus += 1;
                 if (elen >= 8 and (rd32(p, off + 4) & 1) != 0) ncpusEnabled += 1;
             },

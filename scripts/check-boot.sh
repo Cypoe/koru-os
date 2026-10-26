@@ -118,6 +118,21 @@ for acf in acpi reboot; do
     fi
 done
 
+# smp: INIT-SIPI-SIPI on the LAPIC — MADT's roster becomes running CPUs.
+# Reuses the boot_hello ELF under -smp 4: the BSP writes the trampoline
+# page params, pulses INIT + 2xSIPI per APIC id, and each AP must ack
+# from real 64-bit code before the tick deadline. The roster minus the
+# BSP must all report online.
+timeout 40 "$QEMU" -kernel "$WORK/boot_hello.elf" -smp 4 -serial stdio \
+    -display none -m 64M -no-reboot > "$WORK/boot_smp.serial" 2>&1 || true
+if grep -qF "smp: bsp id=0" "$WORK/boot_smp.serial" \
+   && grep -qF "smp: ap id=1 online" "$WORK/boot_smp.serial" \
+   && grep -qF "smp: 3/3 ap(s) online" "$WORK/boot_smp.serial"; then
+    ok "smp: INIT-SIPI-SIPI — 3 APs ran kernel code and acked inside the deadline"
+else
+    bad "smp: $(grep -aE 'madt|smp' "$WORK/boot_smp.serial" | tr '\n' '|')"
+fi
+
 # iso: SeaBIOS -> GRUB -> multiboot2 — the real-loader path -kernel/PVH
 # never exercises. Three proofs ride one boot: GRUB's own serial banner
 # (a loader ran), "fb: backend=mb2" (the loader answered the header's fb
