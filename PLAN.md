@@ -636,8 +636,12 @@ Also open, smaller:
   outlives the view; still open: link/mkdir/rmdir
   (single+double indirect write allocation landed — files to ~66 MiB,
   sparse, host debugfs IND/DIND evidence)
-- bootable media: GRUB multiboot2 image (link.ld already carries the
-  header), init that doesn't halt-on-exit. ~~shutdown/reboot~~ — landed:
+- ~~bootable media: GRUB multiboot2 image~~ — landed: `build-iso.sh`
+  emits an El Torito ISO, SeaBIOS → GRUB → mb2 measured end-to-end
+  (loader answers the fb request tag — `backend=mb2`; e820 off tag 6;
+  RSDP via tag at a different address than PVH's). Still open inside the
+  cell: init that doesn't halt-on-exit, install-to-disk
+  ~~shutdown/reboot~~ — landed:
   `koruos_powerctl` door, S5 payload AML-decoded off FADT+DSDT, reboot
   via the 8042 pulse (`frag-power-door-decodes-firmware`)
 - SMP (MADT payload parsed — lapic base, enabled cpus, ioapics, ISOs;

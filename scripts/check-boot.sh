@@ -118,6 +118,27 @@ for acf in acpi reboot; do
     fi
 done
 
+# iso: SeaBIOS -> GRUB -> multiboot2 — the real-loader path -kernel/PVH
+# never exercises. Three proofs ride one boot: GRUB's own serial banner
+# (a loader ran), "fb: backend=mb2" (the loader answered the header's fb
+# request — PVH can never mint tag 8), and e820/ACPI off the mbi —
+# pmm walks tag 6, acpi finds the RSDP via tag/EBDA at a different
+# address than PVH's. Then the program's own marker.
+if bash "$ROOT/scripts/build-iso.sh" "$FIX/boot_hello.k" "$WORK/koru.iso" \
+    > "$WORK/iso.build" 2>&1; then
+    timeout 60 "$QEMU" -cdrom "$WORK/koru.iso" -boot d -serial stdio \
+        -display none -m 128M -no-reboot > "$WORK/boot_iso.serial" 2>&1 || true
+    if grep -qF "GRUB: multiboot2" "$WORK/boot_iso.serial" \
+       && grep -qF "fb: backend=mb2" "$WORK/boot_iso.serial" \
+       && grep -qF "KORU NATIVE BOOT OK" "$WORK/boot_iso.serial"; then
+        ok "iso: SeaBIOS+GRUB mb2 chain — loader fb answered, e820/ACPI off the mbi, program ran"
+    else
+        bad "iso: evidence missing: $(grep -aE 'GRUB|pmm:|fb:|acpi|KORU' "$WORK/boot_iso.serial" | tail -8 | tr '\n' '|')"
+    fi
+else
+    bad "iso: build failed"; tail -6 "$WORK/iso.build"
+fi
+
 # fb: the koruos/fb seam over a BGA-programmed linear framebuffer — QEMU's
 # built-in multiboot loader does not answer the mb2 fb request tag, so the
 # provider programs the std VGA's VBE_DISPI registers itself and takes the
