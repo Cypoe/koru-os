@@ -18,6 +18,33 @@ Held consequence: bag v2 is the nid-scoped grant-object design — grants name
 optional: the NR axis cannot express "this fd, read-only" — the object axis
 cannot be approximated by syscall filtering without false precision.
 
+**Landed (grantbag rung), measured not designed:** the bag is now TWO
+representations of one grant list. The u64 mask is the CLASS projection —
+bit C means `grant {cap:C, obj:ANY}` — and `Child.grants[]` holds the
+object-scoped records `{obj, verbs, cap}` (16B wire records). An object
+grant lights its class at the seam gate (dispatch may look); the arm's
+object check is what separates mount-wide from this-nid. `obj` is the
+pin keyspace verbatim — `st_dev<<32|st_ino` — so a musl child names an
+object with `fstat`, and `childOpen`'s post-open `ops.stat` yields the
+same key for the check; **zero provider changes**. Attenuation is
+enforced AT MARSHAL TIME: a grant the caller's bag can't cover refuses
+the whole spawn before a slot is allocated. The spawn blob became the
+bag's wire form — `'KGRB'` + TLV sections (argv=1, grants=2, env=3 is
+F5's future home) — §8.6's `[grant]` list made bytes at the musl edge.
+
+Measured: `granttest.elf` fstats hello.txt → marshals `{cap:open,
+obj:key, +R}` → grandchild runs with the open class bit REMOVED — its
+openat succeeds ONLY through the grant (`GRANT-OPEN`), `openat(sh.elf)`
+refuses `SEAM REFUSE openat obj=0x0c (no nid grant)` naming the object
+(`GRANT-DENY e=13`), and marshaling a grant for an uncovered key refuses
+the spawn at parse time (`GRANT-AMPLIFY r=-1 e=13`). §8.6's `as`/
+`provenance` stay implicit at this tier (provenance IS the calling
+parent); fd-entry grants, wiring attenuation, env section, and the
+koru-tier grant list are the open cells. Oracle lesson: type-punned
+stores into a marshal buffer misalign BY CONSTRUCTION (u64 at blob+21)
+— zig cc Debug instruments UBSan and `a_crash`'s `hlt` reads as a GP
+fault at va=0; marshal byte-wise, the wire is byte-defined anyway.
+
 **Evolved (real-ELF rung):** the bits are now formally *capability
 indices*, not raw NRs — real binaries need the Linux NR table, and NRs
 ≥64 (arch_prctl 158, set_tid_address 218, set_robust_list 273,

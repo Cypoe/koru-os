@@ -171,6 +171,8 @@ else
         cp "$ROOT/koru/native/tests/catc.c" "$WORK/catc.c"
         cp "$ROOT/koru/native/tests/pipegen.c" "$WORK/pipegen.c"
         cp "$ROOT/koru/native/tests/forktest.c" "$WORK/forktest.c"
+        cp "$ROOT/koru/native/tests/granttest.c" "$WORK/granttest.c"
+        cp "$ROOT/koru/native/tests/grantc.c" "$WORK/grantc.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -182,6 +184,8 @@ else
         CATCWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/catc.elf")")"
         PIPEGENWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pipegen.elf")")"
         FORKTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/forktest.elf")")"
+        GRANTTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/granttest.elf")")"
+        GRANTCWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/grantc.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -196,6 +200,8 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/catc.elf" "$WORK/catc.c" > "$WORK/catc.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/pipegen.elf" "$WORK/pipegen.c" > "$WORK/pipegen.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/forktest.elf" "$WORK/forktest.c" > "$WORK/forktest.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/granttest.elf" "$WORK/granttest.c" > "$WORK/granttest.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/grantc.elf" "$WORK/grantc.c" > "$WORK/grantc.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
@@ -208,6 +214,8 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $CATCWSL catc.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIPEGENWSL pipegen.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $FORKTESTWSL forktest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GRANTTESTWSL granttest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GRANTCWSL grantc.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -553,6 +561,32 @@ else
                         sleep 0.25
                     done
                 fi
+                # grantbag rung: "granttest.elf" — the parent fstats
+                # hello.txt into the pin keyspace (dev<<32|ino) and
+                # marshals a GRANT section into the KGRB blob; the
+                # grandchild runs with the open CLASS BIT REMOVED, so its
+                # openat only succeeds through the nid grant. GRANT-OPEN /
+                # GRANT-DENY / GRANT-AMPLIFY are the three measured claims.
+                done5=0
+                if [ "${done4:-0}" -eq 1 ]; then
+                    for _ in $(seq 1 20); do
+                        exec 4<>"/dev/tcp/127.0.0.1/$shport" 2>/dev/null && break
+                        sleep 0.5
+                    done
+                    if [ -e /dev/fd/4 ]; then
+                        for k in g r a n t t e s t dot e l f ret; do
+                            printf 'sendkey %s\n' "$k" >&4 2>/dev/null || break
+                            keys=$((keys+1))
+                            sleep 0.3
+                        done
+                        exec 4>&-
+                    fi
+                    for _ in $(seq 1 80); do
+                        grep -qF 'GTEST st=9' "$WORK/boot_shell.serial" 2>/dev/null && { done5=1; break; }
+                        kill -0 $shq 2>/dev/null || break
+                        sleep 0.25
+                    done
+                fi
                 # reprompt observed before quitting
                 for _ in $(seq 1 40); do
                     grep -c 'koru> ' "$WORK/boot_shell.serial" 2>/dev/null | grep -q '^[4-9]' && break
@@ -573,8 +607,8 @@ else
             wait $shq 2>/dev/null || true
             if [ "$prompt" -eq 0 ]; then
                 bad "shell-repl: no 'koru> ' prompt — sh never reached read(0): $(tail -4 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
-            elif [ "$keys" -lt 56 ]; then
-                bad "shell-repl: monitor injection failed ($keys/56 keys sent)"
+            elif [ "$keys" -lt 70 ]; then
+                bad "shell-repl: monitor injection failed ($keys/70 keys sent)"
             elif [ "${done1:-0}" -eq 0 ]; then
                 bad "shell-repl: spawn never completed: $(tail -6 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             elif [ "${done2:-0}" -eq 0 ]; then
@@ -583,6 +617,8 @@ else
                 bad "shell-repl: pipeline evidence missing — pipegen|catc run never completed: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             elif [ "${done4:-0}" -eq 0 ]; then
                 bad "shell-repl: fork evidence missing — forktest run never completed: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
+            elif [ "${done5:-0}" -eq 0 ]; then
+                bad "shell-repl: grantbag evidence missing — granttest run never completed: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             elif grep -qF 'SHELL COMPLETE' "$WORK/boot_shell.serial" \
                  && grep -qF 'real pie child says hi' "$WORK/boot_shell.serial" \
                  && grep -qF 'exit=42' "$WORK/boot_shell.serial" \
@@ -598,10 +634,14 @@ else
                  && grep -qF 'FORKC clonev ret=-1 errno=38' "$WORK/boot_shell.serial" \
                  && grep -qE 'forks=1 fpages=[1-9]' "$WORK/boot_shell.serial" \
                  && grep -qF 'exit=7' "$WORK/boot_shell.serial" \
+                 && grep -qE 'GRANT-OPEN n=[1-9]' "$WORK/boot_shell.serial" \
+                 && grep -qF 'GRANT-DENY fd=-1 e=13' "$WORK/boot_shell.serial" \
+                 && grep -qF 'GRANT-AMPLIFY r=-1 e=13' "$WORK/boot_shell.serial" \
+                 && grep -qF 'GTEST st=9' "$WORK/boot_shell.serial" \
                  && grep -qF 'shell: exec sh status=47' "$WORK/boot_shell.serial" \
                  && grep -qE 'yields=[1-9]' "$WORK/boot_shell.serial" \
                  && grep -qE 'rwaits=[1-9]' "$WORK/boot_shell.serial"; then
-                ok "shell-repl: pie.elf via nr512, args.elf argv, pipegen|catc 20B through a real ring (rwaits>0), forktest.elf real musl fork (shared fd offset + private space + zombie reaped + clone CLONE_VM refused), q quit (47)"
+                ok "shell-repl: pie.elf via nr512, args.elf argv, pipegen|catc 20B through a real ring (rwaits>0), forktest.elf real musl fork (shared fd offset + private space + zombie reaped + clone CLONE_VM refused), grantc.elf nid-grant open (GRANT-OPEN/-DENY/-AMPLIFY), q quit (47)"
             else
                 bad "shell-repl: evidence missing: $(tail -8 "$WORK/boot_shell.serial" | tr -d '\0' | tr '\n' '|')"
             fi

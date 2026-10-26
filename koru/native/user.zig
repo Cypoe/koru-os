@@ -9,10 +9,13 @@
 // full GP frame (rcx=user rip / r11=user rflags ride in the frame),
 // and calls ring3_trap. SYSRETQ restores both from the frame.
 //
-// Rights: child_rights is a per-spawn nr bitmask — the dispatcher
-// refuses (-EACCES, loud on serial) any nr not in the bag BEFORE
-// dispatch. This is where the spawn lift's bag model becomes
-// load-bearing: exec hands the bag down, the seam enforces it.
+// Rights: the bag is class grants (the rights bitmask — dispatcher
+// refuses -EACCES, loud on serial, any nr not covered BEFORE dispatch)
+// plus object grants (Child.grants[], nid-keyed records the spawn blob
+// marshals; an object grant lights its class for dispatch, and arms
+// like openat check the object side). This is where the spawn lift's
+// bag model becomes load-bearing: exec hands the bag down, the seam
+// enforces it.
 //
 // Honest scope: int 0x80's gate stays installed (same dispatcher — it
 // enforces the same bag), exit still resumes the spawn caller rather
@@ -504,7 +507,7 @@ pub export var child_ursp: u64 = 0; // user rsp saved across the syscall
 pub export var child_entry: u64 = 0; // 1 = syscall gate, 0 = int80 — fork's
                                     // resume frame differs between them
 pub export var rsp0_val: u64 = 0; // kernel stack top for the syscall entry
-pub export var child_rights: u64 = 0; // nr bitmask — the bag, enforced
+// (child_rights retired — the gate reads the armed child's bag directly)
 
 // Program the SYSCALL MSRs. STAR: syscall base 0x08 (CS=0x08, SS=0x10),
 // sysret base 0x10 (SS=0x18|3=0x1B user data, CS=0x20|3=0x23 user code —
@@ -618,6 +621,27 @@ const WaitKind = enum { none, conin, blk, exit, pipe };
 // kind, never on the number — closing fd0 detaches like any discharge.
 const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w };
 
+// ---- the bag: class grants + nid-scoped object grants ------------------
+// DESIGN-0001 §8.6's grant {handle, verbs, as} distilled to the syscall
+// edge: obj is the object key in the pin keyspace (dev<<32|ino — the same
+// number a musl child computes from fstat's st_dev/st_ino), cap is the
+// canonical class the grant serves (canonNr domain, <64), verbs attenuate.
+// The u64 `rights` mask is NOT a second mechanism — it is the bag's class
+// projection: bit C set == grant {cap:C, obj:ANY}. grants[] holds only the
+// object-scoped entries; the seam gate passes a class if EITHER form names
+// it, and object-bearing arms (openat) then check the object side.
+const MAXGRANTS = 8;
+const V_READ: u8 = 1;
+const V_WRITE: u8 = 2;
+const V_EXEC: u8 = 4;
+const Grant = extern struct { obj: u64, verbs: u8, cap: u8, pad: [6]u8 };
+
+// The spawn blob is a section stream — 'KGRB' + nsec + TLVs. argv is one
+// section, grants another; env lands as a third when F5 gets its rung.
+const SECT_MAGIC: u32 = 0x4252474B; // 'KGRB'
+const TAG_ARGV: u16 = 1;
+const TAG_GRANT: u16 = 2;
+
 const Child = struct {
     pml4: usize = 0,
     pdpt: usize = 0,
@@ -628,7 +652,10 @@ const Child = struct {
     brk_base: usize = 0, // lowest legal break — end of the loaded image
     mmap_top: usize = 0, // bump cursor of the mmap arena
     frame: UserFrame = std.mem.zeroes(UserFrame),
-    rights: u64 = 0,
+    rights: u64 = 0,                 // class-grant projection of the bag
+    grants: [MAXGRANTS]Grant = undefined, // object-scoped grants (ngrants
+                                     // is the bound — never read past it)
+    ngrants: u8 = 0,
     state: ChildState = .empty,
     fsv: ?*const ChildFsOps = null, // scoped fs view (the spawning fs)
     fds: [8]u64 = .{0} ** 8,        // endpoint id by kind: fs handle or pipe idx
@@ -1163,8 +1190,9 @@ pub export var child_arg0: [64]u8 = "child.elf".* ++ [_]u8{0} ** 55;
 // caps: 62 = "describe/modify own process metadata" (arch_prctl FS,
 // set_tid_address, set_robust_list, prlimit64), 61 = "entropy"
 // (getrandom), and 231 -> 60 (exit_group IS exit for single-threaded
-// children). The grant-object bag replacing this bitmask is the
-// standing axis (concepts/frag-bag-*); high-NR folding is interim.
+// children). The mask is the bag's CLASS side; nid-scoped object grants
+// live in Child.grants[] and arrive through the spawn blob's KGRB
+// section stream (concepts/frag-bag-*).
 fn canonNr(nr: u64) u64 {
     return switch (nr) {
         257 => 2, // openat folds to open — one "fs lookup" capability
@@ -1184,6 +1212,45 @@ fn canonNr(nr: u64) u64 {
     };
 }
 
+// The seam gate's question: does ANY grant — class bit or object record —
+// name this capability? An object grant lights its class for dispatch;
+// the arm's object check is what separates "mount-wide" from "this nid".
+fn bagAllows(c: *const Child, cnr: u64) bool {
+    if ((c.rights >> @as(u6, @intCast(cnr))) & 1 == 1) return true;
+    for (c.grants[0..c.ngrants]) |g| if (g.cap == cnr) return true;
+    return false;
+}
+
+// Does an object grant cover (cap, obj, verbs)? Called when the class bit
+// is absent — the bit would already cover every object and verb.
+fn grantCovers(c: *const Child, cnr: u64, obj: u64, verbs: u8) bool {
+    for (c.grants[0..c.ngrants]) |g|
+        if (g.cap == cnr and g.obj == obj and (g.verbs & verbs) == verbs) return true;
+    return false;
+}
+
+// Attenuation, §8.6's "never amplify": a minted object grant must be
+// covered by the parent's own bag — a class bit covers every object, an
+// object grant covers the same object at a subset of its verbs.
+fn parentCovers(p: *const Child, g: Grant) bool {
+    if ((p.rights >> @as(u6, @intCast(g.cap))) & 1 == 1) return true;
+    for (p.grants[0..p.ngrants]) |pg|
+        if (pg.cap == g.cap and pg.obj == g.obj and (pg.verbs & g.verbs) == g.verbs) return true;
+    return false;
+}
+
+fn readU16(b: []const u8, off: usize) u16 {
+    return @as(u16, b[off]) | (@as(u16, b[off + 1]) << 8);
+}
+
+fn readU32(b: []const u8, off: usize) u32 {
+    return @as(u32, readU16(b, off)) | (@as(u32, readU16(b, off + 2)) << 16);
+}
+
+fn readU64(b: []const u8, off: usize) u64 {
+    return @as(u64, readU32(b, off)) | (@as(u64, readU32(b, off + 4)) << 32);
+}
+
 // ---- the child's fs view ---------------------------------------------------
 // fd slots 3..7 hold provider handles minted by fsv.open; the provider
 // owns the handle (ino+pos) — the kernel side translates fds, copies
@@ -1200,6 +1267,23 @@ fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
     pb[p.len] = 0;
     const h = ops.open(ops.ctx, @ptrCast(&pb));
     if (h < 0) return h; // provider's errno passes through (ENOENT &c.)
+    // Object-scoped grants: a bag WITHOUT the open class bit narrows the
+    // view to named objects. The handle's stat yields (st_dev,st_ino) —
+    // the same key pins record — and a grant {cap:open, obj:key, +read}
+    // must match or the handle dies unclaimed with EACCES. The provider
+    // did the walk; the refusal is the kernel's, naming the object.
+    if ((c.rights >> 2) & 1 == 0) {
+        var sb: [144]u8 = [_]u8{0} ** 144;
+        const stok = ops.stat(ops.ctx, @intCast(h), &sb) == 0;
+        const key = (readU64(&sb, 0) << 32) | readU64(&sb, 8);
+        if (!stok or !grantCovers(c, 2, key, V_READ)) {
+            ops.close(ops.ctx, @intCast(h));
+            say("SEAM REFUSE openat obj=");
+            puthex(key);
+            say(" (no nid grant)\n");
+            return -13;
+        }
+    }
     var fd: usize = 3;
     while (fd < c.fds.len) : (fd += 1) {
         if (c.fdkinds[fd] == .none) break;
@@ -1618,17 +1702,77 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
     if (c.fsv == null) return -38; // ENOSYS — no fs view, nothing to exec
     var pb: [256]u8 = undefined;
     const path = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
-    // argv block: rdx/r10 name a NUL-separated string blob in OUR space —
-    // one bounded copy, no pointer-array chase. Absent block defaults
-    // argv[0] to the path (POSIX's own convention). The blob is checked
-    // before any loading: oversized/unmapped/malformed refuses loudly.
+    // The blob IS the bag's wire form: rdx/r10 name a bounded 'KGRB'
+    // section stream in OUR space — argv rides section 1 (NUL-separated,
+    // unchanged), grant records section 2, env lands as 3. One bounded
+    // copy, no pointer-array chase; a present-but-malformed stream is
+    // EINVAL, an unknown tag is EINVAL — never a silent skip. Absent
+    // stream defaults argv[0] to the path (POSIX's own convention).
     const ABLOB_MAX = 512;
+    var blob: [ABLOB_MAX]u8 = undefined;
     var ablob: [ABLOB_MAX]u8 = undefined;
     var ablen: usize = 0;
+    var grecs: [MAXGRANTS]Grant = undefined;
+    var ngrecs: usize = 0;
     if (f.rdx != 0 and f.r10 != 0) {
-        if (f.r10 > ABLOB_MAX) return -22; // EINVAL — block exceeds the cap
-        ablen = copyFromUser(c, @intCast(f.rdx), ablob[0..f.r10]);
-        if (ablen < f.r10) return -14; // EFAULT — block straddles unmapped
+        const blen: usize = @intCast(f.r10);
+        if (blen > ABLOB_MAX) return -22; // EINVAL — block exceeds the cap
+        if (copyFromUser(c, @intCast(f.rdx), blob[0..blen]) < blen) return -14; // EFAULT
+        if (blen < 6 or readU32(&blob, 0) != SECT_MAGIC) return -22; // not a section stream
+        var pos: usize = 6;
+        var s: usize = 0;
+        const nsec = readU16(&blob, 4);
+        while (s < nsec) : (s += 1) {
+            if (pos + 4 > blen) return -22;
+            const tag = readU16(&blob, pos);
+            const slen = readU16(&blob, pos + 2);
+            pos += 4;
+            if (pos + slen > blen) return -22;
+            switch (tag) {
+                TAG_ARGV => {
+                    if (slen > ablob.len) return -7;
+                    @memcpy(ablob[0..slen], blob[pos .. pos + slen]);
+                    ablen = slen;
+                },
+                TAG_GRANT => {
+                    if (slen % 16 != 0) return -22;
+                    var gi: usize = 0;
+                    while (gi < slen) : (gi += 16) {
+                        const g = Grant{
+                            .obj = readU64(&blob, pos + gi),
+                            .verbs = blob[pos + gi + 8],
+                            .cap = blob[pos + gi + 9],
+                            .pad = .{0} ** 6,
+                        };
+                        if (g.cap >= 64) return -22;
+                        if (ngrecs == MAXGRANTS) return -7; // E2BIG — bag full
+                        // attenuation at marshal time: the grant must be
+                        // covered by the CALLER's bag or the whole spawn
+                        // refuses — amplification is never minted.
+                        if (!parentCovers(c, g)) {
+                            say("SEAM REFUSE grant cap=");
+                            puthex(g.cap);
+                            say(" obj=");
+                            puthex(g.obj);
+                            say(" — exceeds parent's bag\n");
+                            return -13; // EACCES
+                        }
+                        grecs[ngrecs] = g;
+                        ngrecs += 1;
+                    }
+                },
+                else => return -22, // unknown section — refuse by tag
+            }
+            pos += slen;
+        }
+        if (pos != blen) return -22;
+    } else {
+        if (path.len + 1 > ABLOB_MAX) return -7;
+        @memcpy(ablob[0..path.len], path);
+        ablob[path.len] = 0;
+        ablen = path.len + 1;
+    }
+    if (ablen > 0) { // argv section or the default — bound the vector
         var bi: usize = 0;
         var na: usize = 0;
         while (bi < ablen and na < MAXARGS) {
@@ -1702,6 +1846,10 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
     }
     if (g >= nchildren) nchildren = g + 1;
     nc.rights = f.rsi & c.rights; // a spawned bag can only narrow
+    // the mask is the class side; the sectioned blob carried the object
+    // side — already attenuated against the caller's bag at parse time.
+    nc.ngrants = @intCast(ngrecs);
+    for (grecs[0..ngrecs], 0..) |gr, i| nc.grants[i] = gr;
     nc.waitable = waitable;
     nc.frame = std.mem.zeroes(UserFrame);
     nc.frame.rip = entry;
@@ -1818,6 +1966,8 @@ fn childFork(c: *Child, f: *TrapFrame) i64 {
     }
     if (g >= nchildren) nchildren = g + 1;
     nc.rights = c.rights; // fork inherits the bag — same security domain
+    nc.grants = c.grants;
+    nc.ngrants = c.ngrants;
     nc.waitable = true;   // the status holds in a zombie for nr61 wait
     nc.fsbase = c.fsbase;
     nc.brk = c.brk;
@@ -1866,14 +2016,13 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
     const me = &children[cur_child];
     me.ursp = child_ursp;
     defer child_ursp = me.ursp;
-    // bag check before dispatch: an nr not granted in child_rights is a
-    // capability refusal, loud on serial AND visible to the child as
-    // -EACCES — not a silent ENOSYS. Bits name CAPABILITIES, not raw
-    // numbers: NRs that are the same capability fold to a canonical
-    // number first (exit_group 231 -> exit 60), so a bag wider than
-    // u64 is not needed while the surface stays small.
+    // bag check before dispatch: an nr not granted by the armed child's
+    // bag is a capability refusal, loud on serial AND visible to the
+    // child as -EACCES — not a silent ENOSYS. Bits name capability
+    // CLASSES (the mask is the class projection); object grants light
+    // their class for dispatch and the arm checks the object side.
     const cnr = canonNr(f.rax);
-    if (cnr >= 64 or (child_rights >> @as(u6, @intCast(cnr))) & 1 == 0) {
+    if (cnr >= 64 or !bagAllows(me, cnr)) {
         say("SEAM REFUSE nr=");
         puthex(f.rax);
         say(" (not in child bag)\n");
@@ -2230,7 +2379,6 @@ fn wrmsr(msr: u32, v: u64) void {
 fn armChild(n: usize) void {
     const c = &children[n];
     cur_child = n;
-    child_rights = c.rights;
     const ktop = kstackTop(n);
     rsp0_val = ktop;
     @as(*u64, @ptrCast(@alignCast(&tss[4]))).* = ktop;

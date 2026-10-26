@@ -495,7 +495,9 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
   keys are now mechanical: new kind + a waker mark + a recheck loop
   (frame allocator + reclaim landed: refcounted 4KiB frames, pinned-buffer
    + pair-release shapes proven; bump heap remains for program data)
-    → syscall surface + nid-scoped grant bags (replaces NR bitmask)
+    → syscall surface + nid-scoped grant bags (LANDED: mask = class
+      projection + grants[] object records in the pin keyspace; blob is
+      the KGRB section stream; openat is the first object-checked arm)
       → fs.object iface + nid dispatch; fs writes/dirs/indirects
         → input + display (virtio-gpu | GOP), PCI enum + MSI-X, ACPI
           → init/shell/process userland (fork/exec, pipes/IPC)
