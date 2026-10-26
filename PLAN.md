@@ -518,8 +518,11 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
 
 Also open, smaller:
 
-- pins as Table *rows* (generation/retarget/stale-on-use for object ids),
-  pin leasing + eviction
+- ~~pins as Table *rows* (generation/retarget/stale-on-use for object ids),
+  pin leasing + eviction~~ — landed: pin rows are the *lease* (`{nid,
+  gen, live}`) separate from durable nid identity; remount bumps the
+  mount epoch and stales old rows at use, re-pin re-leases the same nid,
+  `unpin` evicts; every nid-dispatched verb shares the row check
 - ~~rename/unlink/`..`/`.` so "identity survives the view" is provable~~ —
   landed (writable-fs rung): pin→rename→exec-bynid proves identity
   outlives the view; still open: link/mkdir/rmdir

@@ -104,6 +104,10 @@ const Fs = struct {
     // address space; a stack-local copy would be borrowed scratch whose
     // lifetime silently depends on exec staying synchronous.
     vfs: ChildFsOps,
+    // This mount's generation — a pin row minted under an earlier one
+    // is STALE: a remount cannot prove it's the same image, so identity
+    // is re-asserted by re-pinning, never by resurrection.
+    mount_gen: u32,
 };
 
 // The mounted-provider table exec-by-nid walks: pin → key → dev → the
@@ -111,6 +115,48 @@ const Fs = struct {
 // BEFORE freeing — a pin outlives its provider's mount and the refusal
 // says so, never a dangling *Fs.
 var mounted: [8]?*Fs = .{null} ** 8;
+
+// Pin rows — the LEASE on an object identity. The arm-realized store
+// mints durable identity (nid → key + foreign, forever); this table is
+// the live binding: a row carries the MOUNT GENERATION it was minted
+// under, a remount bumps the generation and old rows go stale at use —
+// never silently resurrected — and `unpin` drops the row explicitly.
+// Identity survives the row; capability doesn't. Full table refuses at
+// pin time by name — pins are released by unpin, never silently evicted.
+const PinRow = struct { nid: u64, gen: u32, live: bool };
+var pin_rows: [32]PinRow = undefined;
+var pin_row_n: u32 = 0;
+var mount_seq: u32 = 0;
+
+fn pinRowFor(nid: u64) ?*PinRow {
+    for (pin_rows[0..pin_row_n]) |*r|
+        if (r.live and r.nid == nid) return r;
+    return null;
+}
+
+// pin mints or re-leases: an existing row takes the CURRENT
+// generation (re-pinning is re-leasing — the same object re-asserts
+// its binding); a full table refuses loudly.
+fn pinRowMint(nid: u64, gen: u32) bool {
+    if (pinRowFor(nid)) |r| {
+        r.gen = gen;
+        return true;
+    }
+    if (pin_row_n == pin_rows.len) return false;
+    pin_rows[pin_row_n] = .{ .nid = nid, .gen = gen, .live = true };
+    pin_row_n += 1;
+    return true;
+}
+
+// pinRowCheck: the live-binding gate every nid-dispatched verb passes —
+// a row must exist (unpin killed it) and its generation must match the
+// resolved mount's (a remount moved the epoch). Returns the stale kind.
+const RowErr = enum { evicted, stale };
+fn pinRowCheck(nid: u64, fs: *Fs) ?RowErr {
+    const r = pinRowFor(nid) orelse return .evicted;
+    if (r.gen != fs.mount_gen) return .stale;
+    return null;
+}
 
 fn rd32(b: []const u8, off: usize) u32 { return std.mem.readInt(u32, b[off..][0..4], .little); }
 fn rd16(b: []const u8, off: usize) u16 { return std.mem.readInt(u16, b[off..][0..2], .little); }
@@ -482,6 +528,8 @@ fn pattern(i: usize) u8 {
     fs.inode_bitmap = rd32(&fs.bgd, 4);
     fs.inode_table = rd32(&fs.bgd, 8);
     fs.vfs = childFs(fs); // the ops record's home is the mount itself
+    mount_seq += 1;
+    fs.mount_gen = mount_seq; // this mount's epoch — stale rows refuse at use
     if (fs.dev_id < mounted.len) mounted[fs.dev_id] = fs;
     return .{ .ok = .{ .fs = fs, .blocks = fs.blocks_count, .free_blocks = rd32(sb, 12), .free_inodes = rd32(sb, 16), .inodes = fs.inodes_count } };
 }
@@ -1271,7 +1319,23 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
     const ino = lookupPath(fs, path, &dir) orelse return .{ .refused = .{ .fs = fs, .reason = "path not found" } };
     const nid = pinNid(fs, ino);
     if (nid == 0) return .{ .refused = .{ .fs = fs, .reason = "nid store refused the pin" } };
+    if (!pinRowMint(nid, fs.mount_gen))
+        return .{ .refused = .{ .fs = fs, .reason = "pin rows full — unpin releases a slot" } };
     return .{ .ok = .{ .fs = fs, .ino = ino, .nid = nid } };
+}
+
+// unpin: drop the row — the lease ends here. The nid's identity lives
+// on in the arm-realized store (durable); what dies is the capability
+// to dispatch on it. Use-after-unpin refuses "pin's row evicted" —
+// the identity did not die, the binding did.
+~[retain]pub tor unpin { nid: u64 }
+| ok i64
+| refused string
+
+~proc unpin|zig {
+    const r = pinRowFor(nid) orelse return .{ .refused = "pin has no live row" };
+    r.live = false;
+    return .{ .ok = 1 };
 }
 
 // rename: mutate the view, never the identity — a directory entry moves
@@ -1304,6 +1368,12 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
     if (key < 0) return .{ .refused = .{ .fs = fs, .reason = "nid not bound to an object" } };
     const k: u64 = @bitCast(key);
     if (k >> 32 != fs.dev_id) return .{ .refused = .{ .fs = fs, .reason = "nid bound on another device" } };
+    if (pinRowCheck(nid, fs)) |re| {
+        return .{ .refused = .{ .fs = fs, .reason = switch (re) {
+            .evicted => "pin's row evicted — the identity outlived the lease",
+            .stale => "stale pin — mount generation moved (re-pin to re-lease)",
+        } } };
+    }
     const ino: u32 = @intCast(k & 0xFFFFFFFF);
     const bp = switch (readFile(fs, ino)) {
         .ok => |b| b,
@@ -1333,7 +1403,7 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
 // behind exec-by-nid and every obj-* verb. Two tables: the pin store
 // (nid → key + foreign name) then the mounted registry (dev → *Fs).
 // Every miss refuses by name — never a dead provider's ops record.
-const PinErr = enum { unbound, unreadable, scheme, unmounted };
+const PinErr = enum { unbound, unreadable, scheme, unmounted, evicted, stale };
 
 fn resolvePin(nid: u64) union(enum) { ok: struct { fs: *Fs, ino: u32 }, err: PinErr } {
     const key = koruos_nid_obj_key(nid);
@@ -1347,7 +1417,11 @@ fn resolvePin(nid: u64) union(enum) { ok: struct { fs: *Fs, ino: u32 }, err: Pin
     const dev: u32 = @intCast(k >> 32);
     if (dev >= mounted.len or mounted[dev] == null)
         return .{ .err = .unmounted };
-    return .{ .ok = .{ .fs = mounted[dev].?, .ino = @intCast(k & 0xFFFFFFFF) } };
+    const fs = mounted[dev].?;
+    switch (pinRowCheck(nid, fs) orelse return .{ .ok = .{ .fs = fs, .ino = @intCast(k & 0xFFFFFFFF) } }) {
+        .evicted => return .{ .err = .evicted },
+        .stale => return .{ .err = .stale },
+    }
 }
 
 fn pinErr(e: PinErr) []const u8 {
@@ -1356,6 +1430,8 @@ fn pinErr(e: PinErr) []const u8 {
         .unreadable => "nid's foreign name unreadable",
         .scheme => "nid pins a scheme this provider does not serve",
         .unmounted => "nid's provider is not mounted",
+        .evicted => "pin's row evicted — the identity outlived the lease",
+        .stale => "stale pin — mount generation moved (re-pin to re-lease)",
     };
 }
 

@@ -423,6 +423,21 @@ else
                 bad "fs-indirect: indirect tables not on disk: $(echo "$bigstat" | grep -i 'block' | head -3 | tr '\n' '|')"
             fi
         fi
+        # pin rows: generation + stale-on-use + re-lease + eviction.
+        # After remount the old pin is STALE (mount generation moved);
+        # re-pinning moved.elf re-mints the SAME nid (identity is
+        # deterministic) and re-leases the row; unpin then evicts it —
+        # dispatch refuses "row evicted". Identity durable, binding leased.
+        pinnid1=$(sed -n 's/.*pinned child.elf ino=[0-9]* nid=\([0-9a-f]*\).*/\1/p' "$WORK/boot_ext2.serial" | head -1)
+        pinnid2=$(sed -n 's/.*re-pinned moved.elf ino=[0-9]* nid=\([0-9a-f]*\).*/\1/p' "$WORK/boot_ext2.serial" | head -1)
+        if [ -n "$pinnid1" ] && [ "$pinnid1" = "$pinnid2" ] \
+           && grep -qF "stale pin refused post-remount: stale pin — mount generation moved" "$WORK/boot_ext2.serial" \
+           && grep -qE "exec-bynid re-leased ino=$pin_ino status=43" "$WORK/boot_ext2.serial" \
+           && grep -qF "evicted pin refused: pin's row evicted" "$WORK/boot_ext2.serial"; then
+            ok "pin-rows: remount stales the row; re-pin re-leased the SAME nid ($pinnid1); unpin evicted it"
+        else
+            bad "pin-rows: lifecycle evidence missing: p1=$pinnid1 p2=$pinnid2 $(grep -aE 'stale|re-pinned|evicted|re-leased|unpin' "$WORK/boot_ext2.serial" | tail -6 | tr '\n' '|')"
+        fi
         # (PIT IRQ0 evidence lives on boot_multi — its epoch spans ticks;
         # the ext2 run now finishes inside one tick period because the
         # blk wait is parked, not burned)
