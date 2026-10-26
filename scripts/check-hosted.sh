@@ -460,6 +460,34 @@ if [ "$KVOK" -eq 1 ]; then
     else
         bad "vroot-hyprland: unexpected outcome (env changed?): $(tail -3 "$WORK/vroot-hypr.out" | tr '\n' '|')"
     fi
+
+    # Live Hyprland oracle: kv-shim (dmabuf-v4 parent) -> aquamarine GBM
+    # on vgem card0 -> real Hyprland -> foot + Quickshell layer-bar +
+    # Noctalia layers (when the build-release is staged). vgem is host
+    # kernel state the gate can provision (passwordless root on WSL);
+    # a failed modprobe reports the environment honestly, never fakes.
+    REPWSL="$(MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e wslpath -u "$(cygpath -w "$ROOT")" 2>/dev/null)"
+    MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e test -e /dev/dri/card0 \
+        || MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -u root -e modprobe vgem > /dev/null 2>&1 \
+        || true
+    if ! MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e test -e /dev/dri/card0; then
+        bad "vroot-hypr-oracle: no /dev/dri/card0 and vgem would not load (host kernel state)"
+    else
+        MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+            "cd '$REPWSL' && timeout 180 bash hosted/vroot/hypr-oracle.sh" \
+            > "$WORK/hypr-oracle.out" 2>&1
+        if grep -qF "ORACLE-PASS" "$WORK/hypr-oracle.out" \
+           && grep -qF "QS-UP" "$WORK/hypr-oracle.out"; then
+            if grep -qF "NOC-UP" "$WORK/hypr-oracle.out"; then
+                stages="foot+quickshell+noctalia"
+            else
+                stages="foot+quickshell (noctalia skipped — not staged)"
+            fi
+            ok "vroot-hypr-oracle: $stages — real dmabuf commits + pixel evidence ($(grep -oE 'nonbg=[0-9]+' "$WORK/hypr-oracle.out" | tail -1))"
+        else
+            bad "vroot-hypr-oracle: $(grep -aE 'ORACLE-FAIL|NOC-FAIL|PXEVID' "$WORK/hypr-oracle.out" | tail -3 | tr '\n' '|')"
+        fi
+    fi
 fi
 
 # --- hosted/freebsd (Capsicum arm) — build-check -------------------------
