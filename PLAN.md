@@ -452,11 +452,18 @@ raises three layer-shell surfaces** (`hyprctl layers` names
 lesson doing this: a reused swapchain BO holds only the freshly
 damaged pixels — readback must accumulate damage into a
 compositor-side frame or the evidence reads a mostly-black
-frame. Remaining named bounds: vgem must be loaded on the host
-(`modprobe vgem` as root — the row skips honestly when
-`/dev/dri/card0` is absent); the run is a manual oracle, not yet
-a check-hosted row; the second host realization path is still
-open. And the koru-side wayland provider exists too:
+frame. The run is a **check-hosted row** now — `vroot-hypr-oracle`
+provisions vgem itself (`wsl -u root modprobe vgem`; a failed
+modprobe reports host kernel state by name) and asserts the stage
+list, 44/44 with all clients compositing. The **second host
+realization path** landed inside it: the koru linux-wayland
+provider (musl-static, zero deps) runs in-jail on `wayland-1` —
+`hyprctl clients` names the `koru-os` toplevel and the frame
+carries its fill (`KORU-SURF-PXEVID red=439820`) — surfaces
+realized by the real compositor, not WSLg. Remaining named
+bounds: vgem must be loaded on the host when the rootfs is fresh
+(the gate provisions it). And the koru-side wayland provider
+exists too:
 
 **`linux-wayland` — the second hosted surface arm (gated)** —
 `koru/hosted/wayland.zig` implements the same `koruos.surface` +
@@ -596,14 +603,19 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
         → input + display, MSI-X, ACPI — PCI enum + virtio-gpu LANDED
           (pci.zig enumerate-once table; virtiopci.zig modern
           transport + VERSION_1 + MSI-X; gpu.zig 2D chain, screendump-
-          verified pixels; GOP/ACPI still open); surfaces-over-fb
+          verified pixels; ACPI discovery LANDED — acpi.zig scans
+          EBDA/BIOS-window for RSDP, checksums every layer, walks the
+          RSDT/XSDT into a table directory (i440fx: FACP/APIC/HPET/
+          WAET) with findTable() for the MADT/FACP consumers; GOP and
+          MADT payload-parse still open); surfaces-over-fb
           LANDED (surf.zig pool, *Surf<open!>, present = damage →
           comp); PS/2 mouse LANDED (mouse.zig aux channel, IRQ12,
           flag-routed bytes, monitor-driven motion+button evidence);
           nativeCompositor LANDED (comp.zig z-stack scene, damage →
           composite → fb:present, detach reveal repaint, compositor-
           owned cursor over the delta stream — four screendump-verified
-          states: UNDER/SCENE/REVEAL/IDLE+cursor); ACPI open
+          states: UNDER/SCENE/REVEAL/IDLE+cursor); ACPI LANDED
+          (RSDP + table directory — MADT payload parse is SMP's cell)
           → init/shell/process userland (fork/exec, pipes/IPC)
             → Hyprland/Noctalia oracle harness over the real scene
 ```

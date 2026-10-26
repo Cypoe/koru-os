@@ -73,6 +73,18 @@ else
     bad "pci-enum: table incomplete: $(grep -a '^pci:' "$WORK/boot_hello.serial" | tr '\n' '|')"
 fi
 
+# acpi: RSDP discovery + SDT table walk — under QEMU -kernel no loader
+# hands us a pointer, so the bare-metal scan (EBDA head, then the
+# 0xE0000-0xFFFFF BIOS window) IS the path. SeaBIOS answers rev=0 with
+# an RSDT carrying the i440fx set: FACP/APIC/HPET/WAET — the names
+# MADT-parse (SMP) and shutdown will ask findTable for.
+if grep -qE "acpi: rsdp@[0-9a-f]+ rev=0 oem=BOCHS" "$WORK/boot_hello.serial" \
+   && grep -qE "acpi: tables=[0-9]+ FACP.*APIC" "$WORK/boot_hello.serial"; then
+    ok "acpi: RSDP scanned, RSDT walked — FACP/APIC/HPET/WAET registered"
+else
+    bad "acpi: discovery evidence missing: $(grep -a '^acpi:' "$WORK/boot_hello.serial" | tr '\n' '|')"
+fi
+
 # fb: the koruos/fb seam over a BGA-programmed linear framebuffer — QEMU's
 # built-in multiboot loader does not answer the mb2 fb request tag, so the
 # provider programs the std VGA's VBE_DISPI registers itself and takes the

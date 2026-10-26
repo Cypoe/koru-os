@@ -23,6 +23,7 @@ const fb = @import("fb.zig");
 const pmm = @import("pmm");
 const kbd = @import("kbd");
 const pci = @import("pci");
+const acpi = @import("acpi.zig");
 const gpu = @import("gpu.zig");
 const surf = @import("surf.zig");
 const mouse = @import("mouse");
@@ -180,6 +181,7 @@ comptime {
 // multiboot2 info block's physical address (EBX at _start).
 export fn kmain(mbi: u32) callconv(.c) noreturn {
     pmm.init(mbi); // frames live before anything allocates
+    acpi.init(mbi); // RSDP + table directory — MADT/FACP names resolved
     pci.init();  // config-space scan while IF=0 — the dump can't
                  // interleave with IRQ prints; providers look up, never
                  // rescan
