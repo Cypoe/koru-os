@@ -26,6 +26,11 @@ serial --speed=115200 --unit=0
 terminal_input serial
 terminal_output serial
 set timeout=0
+if [ "$grub_platform" = "efi" ]; then
+    insmod efi_gop   # GOP modes must exist before multiboot2 tries to
+                     # satisfy the fb request — else "no suitable video
+                     # mode" and the kernel falls back to BGA
+fi
 menuentry "koru-os" {
     echo "GRUB: multiboot2 /boot/koru.elf"
     insmod multiboot2

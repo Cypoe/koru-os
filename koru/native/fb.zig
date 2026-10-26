@@ -73,8 +73,9 @@ fn fromMbi(mbi_phys: u32) bool {
         if (t == 8 and s >= @sizeOf(Mb2Fb)) {
             const f: *align(1) const Mb2Fb = @ptrCast(base + off);
             if (f.bpp == 32 and f.fb_type == 1) { // direct-color linear only
-                adopt(f.addr, f.pitch, f.width, f.height);
-                return true;
+                if (adopt(f.addr, f.pitch, f.width, f.height)) return true;
+                koru_say("fb: mb2 mode set but LFB unmappable — refused\n");
+                return false;
             }
             return false;
         }
@@ -125,20 +126,27 @@ fn fromBga() bool {
     bgaWrite(DISPI_YRES, h);
     bgaWrite(DISPI_BPP, 32);
     bgaWrite(DISPI_ENABLE, DISPI_ON_LFB);
-    adopt(bar, @as(u32, w) * 4, w, h);
+    if (!adopt(bar, @as(u32, w) * 4, w, h)) {
+        koru_say("fb: bga mode set but LFB unmappable — refused\n");
+        return false;
+    }
     return true;
 }
 
 // --- shared adopt --------------------------------------------------------
 
-fn adopt(phys: u64, pitch: u32, w: u32, h: u32) void {
-    if (!mmio.map(phys, @as(u64, pitch) * h)) return;
+// Returns false when the LFB's phys can't be mapped — the caller must
+// not claim the backend: a mode tag that names memory we cannot reach
+// is a refusal, not a framebuffer.
+fn adopt(phys: u64, pitch: u32, w: u32, h: u32) bool {
+    if (!mmio.map(phys, @as(u64, pitch) * h)) return false;
     fb_base = @ptrFromInt(@as(usize, @intCast(phys))); // identity map
     fb_width = w;
     fb_height = h;
     fb_pitch = pitch;
     present = true;
     backend = .lfb;
+    return true;
 }
 
 // --- init + externs ------------------------------------------------------

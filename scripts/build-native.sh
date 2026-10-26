@@ -42,7 +42,7 @@ cp "$PROG" "$WORK/program.$EXT"
     -Mcompiler_env="$ROOT/koru/native/compiler_env.zig" \
     -Mruntime="$ROOT/koru/native/runtime.zig" \
     -Mpci="$ROOT/koru/native/pci.zig" \
-    -Mmmio="$ROOT/koru/native/mmio.zig" \
+    --dep pmm -Mmmio="$ROOT/koru/native/mmio.zig" \
     --dep pci --dep mmio -Mvirtiopci="$ROOT/koru/native/virtiopci.zig" \
     --dep pci -Mvirtio="$ROOT/koru/native/virtio.zig" \
     --dep pmm -Maspace="$ROOT/koru/native/aspace.zig" \

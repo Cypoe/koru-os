@@ -609,8 +609,11 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
           WAET) with findTable() for the consumers; MADT+FADT
           payload LANDED (lapic/cpus/ioapics/isos counted, pm1a +
           DSDT _S5 AML-decoded); powerctl door LANDED — S5 write
-          powers QEMU off, 8042 pulse resets it; GOP still
-          open); surfaces-over-fb
+          powers QEMU off, 8042 pulse resets it); UEFI arm LANDED
+          (OVMF → GRUB-EFI → mb2: GOP-programmed fb via tag 8,
+          compositor on it; RSDP via tag 14, pm1a=b004 —
+          decode-don't-hardcode measured on a second firmware);
+          surfaces-over-fb
           LANDED (surf.zig pool, *Surf<open!>, present = damage →
           comp); PS/2 mouse LANDED (mouse.zig aux channel, IRQ12,
           flag-routed bytes, monitor-driven motion+button evidence);

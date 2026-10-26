@@ -154,6 +154,32 @@ else
     bad "iso: build failed"; tail -6 "$WORK/iso.build"
 fi
 
+# efi: OVMF -> GRUB-EFI -> multiboot2 — the UEFI arm of the same ISO.
+# Three measurements only this path can produce: OVMF hands the RSDP
+# through mb2 tag 14/15 (no BIOS window exists to scan), GRUB-EFI
+# answers the fb request through GOP (efi_gop is insmod'd first — the
+# tag 8 framebuffer here is GOP-programmed memory), and FADT decodes
+# pm1a=b004 where SeaBIOS says 0604 — the AML-decode ruling measured
+# against a second firmware.
+OVMF_FD="$(dirname "$QEMU")/share/edk2-x86_64-code.fd"
+if [ ! -f "$OVMF_FD" ]; then
+    bad "efi: OVMF fd missing at $OVMF_FD"
+else
+    timeout 60 "$QEMU" \
+        -drive if=pflash,format=raw,readonly=on,file="$OVMF_FD" \
+        -cdrom "$WORK/koru.iso" -boot d -serial stdio \
+        -display none -m 128M -no-reboot > "$WORK/boot_efi.serial" 2>&1 || true
+    if grep -qF "BdsDxe: starting Boot0001" "$WORK/boot_efi.serial" \
+       && grep -qF "fb: backend=mb2" "$WORK/boot_efi.serial" \
+       && grep -qF "comp: compositor live" "$WORK/boot_efi.serial" \
+       && grep -qF "fadt: pm1a=b004" "$WORK/boot_efi.serial" \
+       && grep -qF "KORU NATIVE BOOT OK" "$WORK/boot_efi.serial"; then
+        ok "efi: OVMF+GRUB-EFI chain — GOP fb via tag 8, compositor on it; ACPI off mb2 tag (pm1a=b004)"
+    else
+        bad "efi: $(grep -aE 'BdsDxe|acpi|fb:|comp:|KORU' "$WORK/boot_efi.serial" | tail -8 | tr '\n' '|')"
+    fi
+fi
+
 # fb: the koruos/fb seam over a BGA-programmed linear framebuffer — QEMU's
 # built-in multiboot loader does not answer the mb2 fb request tag, so the
 # provider programs the std VGA's VBE_DISPI registers itself and takes the
