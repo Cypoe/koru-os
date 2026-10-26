@@ -233,7 +233,16 @@ borrowed fs. The kernel side owns only fds 3..7 + child-memory copies
 partial read (`readAt` walks blkAt per covered block — whole-file
 `readFile` stays for exec). Surface: `open`/`openat` (257 folds to
 cap 2), `read`, `close`, `lseek`, `fstat` (144B linux stat), `pread64`.
-The view is read-only — `O_WRONLY`/`O_RDWR` get `EROFS`. Gate evidence
+The view is writable now — `O_WRONLY`/`O_RDWR`/`O_CREAT`/`O_TRUNC`
+serve through `cfWrite`/`mkfile` (direct blocks, ≤12KiB — larger spans
+refuse ENOSPC by name), `rename`/`unlink` mutate directory entries,
+`write`/`writev` dispatch on the fd's recorded verbs (fdverbs — the
+projection IS a grant), and object-scoped `W` grants name the mutated
+object: the file for write-open, the parent directory for
+create/unlink/rename. `boot_ext2.k` measures `pin → rename →
+exec-by-nid` — the post-rename exec resolves the same inode, the stale
+path refuses, and host-side debugfs finds `moved.elf` on the pin's
+inode after QEMU exits. Gate evidence
 (`boot_real.k`): **a real musl binary `open()`/`read()`/`close()`d
 `hello.txt` on its own ext2 and printed the bytes** — file contents,
 not just the image, now reach ring-3. This is the PT_INTERP rung's
@@ -508,7 +517,10 @@ Also open, smaller:
 
 - pins as Table *rows* (generation/retarget/stale-on-use for object ids),
   pin leasing + eviction
-- rename/unlink/link/`..`/`.` so "identity survives the view" is provable
+- ~~rename/unlink/`..`/`.` so "identity survives the view" is provable~~ —
+  landed (writable-fs rung): pin→rename→exec-bynid proves identity
+  outlives the view; still open: link/mkdir/rmdir, single+double
+  indirect write allocation, `fs.object` iface + nid dispatch
 - bootable media: GRUB multiboot2 image (link.ld already carries the
   header), init that doesn't halt-on-exit, shutdown/reboot
 - SMP (ACPI MADT + IOAPIC + AP bringup) — required before real hardware

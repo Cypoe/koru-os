@@ -600,7 +600,7 @@ const MAXCHILDREN: usize = 4;
 // hostexec, spawn:exec) gets open() == -ENOSYS, not a borrowed fs.
 const ChildFsOps = extern struct {
     ctx: ?*anyopaque,
-    open: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    open: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64,
     read: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64,
     read_at: *const fn (ctx: ?*anyopaque, h: u64, off: u64, dst: [*]u8, len: usize) callconv(.c) i64,
     seek: *const fn (ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64,
@@ -611,6 +611,13 @@ const ChildFsOps = extern struct {
     // (POSIX: one offset across dup'd fds), so close must refcount, not
     // free on the first drop.
     dup: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) i64,
+    // key: path → object key (dev<<32|ino) with NO handle — the seam's
+    // pre-open grant check; a directory's key names the object a
+    // create/unlink/rename mutates.
+    key: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    write: *const fn (ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) i64,
+    rename: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
+    unlink: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
 };
 
 const WaitKind = enum { none, conin, blk, exit, pipe };
@@ -660,6 +667,10 @@ const Child = struct {
     fsv: ?*const ChildFsOps = null, // scoped fs view (the spawning fs)
     fds: [8]u64 = .{0} ** 8,        // endpoint id by kind: fs handle or pipe idx
     fdkinds: [8]FdKind = .{.none} ** 8,
+    fdverbs: [8]u8 = .{0} ** 8,     // the fd IS a grant — V_READ/V_WRITE
+                                    // recorded when the projection was
+                                    // minted; read/write dispatch checks
+                                    // the verb, not just the kind
     // blocking is a kernel continuation, not a rebuilt user frame: kblock
     // pushes callee-saved on this child's own kstack and stores the rsp
     // here; a waker just flips .runnable and the next switchInto pops the
@@ -1056,7 +1067,7 @@ fn loadElfViaFs(c: *Child, path: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen
     if (path.len >= z.len) return null;
     @memcpy(z[0..path.len], path);
     z[path.len] = 0;
-    const h = ops.open(ops.ctx, @ptrCast(&z));
+    const h = ops.open(ops.ctx, @ptrCast(&z), 0); // O_RDONLY — ELF load
     if (h < 0) return null;
     const fh: u64 = @intCast(h);
     var hd: [4096]u8 = undefined;
@@ -1195,7 +1206,12 @@ pub export var child_arg0: [64]u8 = "child.elf".* ++ [_]u8{0} ** 55;
 // section stream (concepts/frag-bag-*).
 fn canonNr(nr: u64) u64 {
     return switch (nr) {
-        257 => 2, // openat folds to open — one "fs lookup" capability
+        257 => 2, // openat folds to open — one "fs object" capability
+        // path-mutation verbs share the fs-object class: creat(85),
+        // rename(82)/renameat(264)/renameat2(316), unlink(87)/unlinkat(263).
+        // The class bit grants mount-wide; object grants narrow them by
+        // verb — the mutated object is always a directory's key.
+        85, 82, 264, 316, 87, 263 => 2,
         231 => 60,
         318 => 61,
         158, 218, 273, 302 => 62,
@@ -1254,36 +1270,76 @@ fn readU64(b: []const u8, off: usize) u64 {
 // ---- the child's fs view ---------------------------------------------------
 // fd slots 3..7 hold provider handles minted by fsv.open; the provider
 // owns the handle (ino+pos) — the kernel side translates fds, copies
-// through child memory via the identity map, and refuses what the view
-// doesn't carry (O_WRONLY/O_RDWR → EROFS; no view at all → ENOSYS).
+// through child memory via the identity map, and gates mutation on the
+// fd's recorded verbs (fdverbs — the projection IS a grant) plus the
+// bag's W-verb object check on the resolved key. A child with no view
+// still gets open() == -ENOSYS, not a borrowed fs.
 
 var fsbounce: [4096]u8 = undefined;
 
+// Split "a/b/c" → parent path in buf ("a/b"; "" for a root leaf — the
+// empty path resolves to the root directory, ino 2, by lookupPath's
+// walk). Every path-mutating op's grant names this directory object.
+fn parentPath(p: []const u8, buf: []u8) []u8 {
+    var n: usize = 0;
+    if (std.mem.lastIndexOfScalar(u8, p, '/')) |i| {
+        if (i > 0) {
+            n = @min(i, buf.len - 1);
+            @memcpy(buf[0..n], p[0..n]);
+        }
+    }
+    return buf[0..n];
+}
+
+// The seam's object check, pre-open: a bag without the open class bit
+// narrows the view to named objects — the provider resolves the object
+// key (dev<<32|ino) WITHOUT minting a handle, and a grant
+// {cap:2, obj:key, verbs} must match. Write modes need W; O_CREAT on a
+// missing path names the parent DIRECTORY (that's the mutated object);
+// the refusal arrives before any handle exists.
+fn openCovered(c: *Child, ops: *const ChildFsOps, p: [*:0]const u8, flags: u64) i64 {
+    const mode: u8 = @intCast(flags & 3);
+    var need: u8 = switch (mode) {
+        0 => V_READ,
+        1 => V_WRITE,
+        else => V_READ | V_WRITE,
+    };
+    if ((flags & 0o1000) != 0) need |= V_WRITE; // O_TRUNC mutates the file
+    const k = ops.key(ops.ctx, p);
+    if (k >= 0) {
+        if (grantCovers(c, 2, @bitCast(k), need)) return 0;
+        say("SEAM REFUSE openat obj=");
+        puthex(@bitCast(k));
+        if (mode == 0) say(" (no R grant)") else say(" (no W grant)");
+        say("\n");
+        return -13;
+    }
+    if ((flags & 0o100) == 0) return k; // ENOENT passes through
+    var db: [256]u8 = undefined;
+    const dp = parentPath(std.mem.span(p), &db);
+    db[dp.len] = 0;
+    const dk = ops.key(ops.ctx, @ptrCast(&db));
+    if (dk < 0) return dk;
+    if (grantCovers(c, 2, @bitCast(dk), V_WRITE)) return 0;
+    say("SEAM REFUSE create dir-obj=");
+    puthex(@bitCast(dk));
+    say(" (no W grant)\n");
+    return -13;
+}
+
 fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
     const ops = c.fsv orelse return -38; // ENOSYS — this child has no fs view
-    if (flags & 3 != 0) return -30; // EROFS — the view is read-only
     var pb: [256]u8 = undefined;
     const p = userPath(c, pva, &pb) orelse return -14; // EFAULT
     pb[p.len] = 0;
-    const h = ops.open(ops.ctx, @ptrCast(&pb));
-    if (h < 0) return h; // provider's errno passes through (ENOENT &c.)
-    // Object-scoped grants: a bag WITHOUT the open class bit narrows the
-    // view to named objects. The handle's stat yields (st_dev,st_ino) —
-    // the same key pins record — and a grant {cap:open, obj:key, +read}
-    // must match or the handle dies unclaimed with EACCES. The provider
-    // did the walk; the refusal is the kernel's, naming the object.
+    // The class bit covers every object+verb (mount-wide); without it
+    // the object-scoped check runs against the resolved key.
     if ((c.rights >> 2) & 1 == 0) {
-        var sb: [144]u8 = [_]u8{0} ** 144;
-        const stok = ops.stat(ops.ctx, @intCast(h), &sb) == 0;
-        const key = (readU64(&sb, 0) << 32) | readU64(&sb, 8);
-        if (!stok or !grantCovers(c, 2, key, V_READ)) {
-            ops.close(ops.ctx, @intCast(h));
-            say("SEAM REFUSE openat obj=");
-            puthex(key);
-            say(" (no nid grant)\n");
-            return -13;
-        }
+        const cov = openCovered(c, ops, @ptrCast(&pb), flags);
+        if (cov < 0) return cov;
     }
+    const h = ops.open(ops.ctx, @ptrCast(&pb), @intCast(flags));
+    if (h < 0) return h; // provider's errno passes through (ENOENT &c.)
     var fd: usize = 3;
     while (fd < c.fds.len) : (fd += 1) {
         if (c.fdkinds[fd] == .none) break;
@@ -1294,7 +1350,89 @@ fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
     }
     c.fds[fd] = @intCast(h);
     c.fdkinds[fd] = .fs;
+    const mode: u8 = @intCast(flags & 3);
+    c.fdverbs[fd] = switch (mode) {
+        0 => V_READ,
+        1 => V_WRITE,
+        else => V_READ | V_WRITE,
+    };
     return @intCast(fd);
+}
+
+// write(1) on an .fs fd: the fd's verbs were fixed at open — a read
+// projection refuses EBADF like POSIX, the provider never re-checks.
+fn childWrite(c: *Child, fd: usize, buva: u64, want: u64) i64 {
+    const ops = c.fsv orelse return -38;
+    var total: i64 = 0;
+    var off: u64 = 0;
+    while (off < want) {
+        const chunk: usize = @intCast(@min(@as(u64, fsbounce.len), want - off));
+        const got = copyFromUser(c, @intCast(buva + off), fsbounce[0..chunk]);
+        if (got == 0) return if (total == 0) -14 else total; // EFAULT
+        const n = ops.write(ops.ctx, c.fds[fd], &fsbounce, got);
+        if (n <= 0) return if (total == 0) n else total;
+        total += n;
+        off += @intCast(n);
+        if (n < got) break; // provider stopped short — don't spin
+    }
+    return total;
+}
+
+// rename/unlink: the mutated objects are the parent DIRECTORIES — a
+// bag without the fs-object class bit must hold {cap:2, obj:dirkey, +W}
+// for each directory the operation touches.
+fn childRename(c: *Child, ova: usize, nva: usize) i64 {
+    const ops = c.fsv orelse return -38;
+    var ob: [256]u8 = undefined;
+    var nb: [256]u8 = undefined;
+    const op = userPath(c, ova, &ob) orelse return -14;
+    const np = userPath(c, nva, &nb) orelse return -14;
+    ob[op.len] = 0;
+    nb[np.len] = 0;
+    if ((c.rights >> 2) & 1 == 0) {
+        var d1: [256]u8 = undefined;
+        var d2: [256]u8 = undefined;
+        const p1 = parentPath(op, &d1);
+        const p2 = parentPath(np, &d2);
+        d1[p1.len] = 0;
+        d2[p2.len] = 0;
+        const k1 = ops.key(ops.ctx, @ptrCast(&d1));
+        const k2 = ops.key(ops.ctx, @ptrCast(&d2));
+        if (k1 < 0) return k1;
+        if (k2 < 0) return k2;
+        if (!grantCovers(c, 2, @bitCast(k1), V_WRITE) or
+            !grantCovers(c, 2, @bitCast(k2), V_WRITE))
+        {
+            say("SEAM REFUSE rename dir-objs=");
+            puthex(@bitCast(k1));
+            say("/");
+            puthex(@bitCast(k2));
+            say(" (no W grant)\n");
+            return -13;
+        }
+    }
+    return ops.rename(ops.ctx, @ptrCast(&ob), @ptrCast(&nb));
+}
+
+fn childUnlink(c: *Child, pva: usize) i64 {
+    const ops = c.fsv orelse return -38;
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    pb[p.len] = 0;
+    if ((c.rights >> 2) & 1 == 0) {
+        var db: [256]u8 = undefined;
+        const dp = parentPath(p, &db);
+        db[dp.len] = 0;
+        const dk = ops.key(ops.ctx, @ptrCast(&db));
+        if (dk < 0) return dk;
+        if (!grantCovers(c, 2, @bitCast(dk), V_WRITE)) {
+            say("SEAM REFUSE unlink dir-obj=");
+            puthex(@bitCast(dk));
+            say(" (no W grant)\n");
+            return -13;
+        }
+    }
+    return ops.unlink(ops.ctx, @ptrCast(&pb));
 }
 
 fn childRead(c: *Child, fdu: u64, buva: u64, want: u64) i64 {
@@ -1577,6 +1715,7 @@ fn releaseFds(c: *Child) void {
         }
         c.fds[i] = 0;
         c.fdkinds[i] = .none;
+        c.fdverbs[i] = 0;
     }
 }
 
@@ -1597,12 +1736,14 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
             if (nh < 0) return false;
             dst.fdkinds[dfd] = kind;
             dst.fds[dfd] = @intCast(nh);
+            dst.fdverbs[dfd] = src.fdverbs[sfd];
             return true;
         },
         else => {},
     }
     dst.fdkinds[dfd] = kind;
     dst.fds[dfd] = src.fds[sfd];
+    dst.fdverbs[dfd] = src.fdverbs[sfd]; // the verbs ride the projection
     return true;
 }
 
@@ -1631,8 +1772,10 @@ fn childPipe(c: *Child, pva: u64) i64 {
     }
     c.fdkinds[slots[0]] = .pipe_r;
     c.fds[slots[0]] = pi;
+    c.fdverbs[slots[0]] = V_READ;
     c.fdkinds[slots[1]] = .pipe_w;
     c.fds[slots[1]] = pi;
+    c.fdverbs[slots[1]] = V_WRITE;
     return 0;
 }
 
@@ -1805,6 +1948,9 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
     nc.fdkinds[0] = .conin;
     nc.fdkinds[1] = .conout;
     nc.fdkinds[2] = .conout;
+    nc.fdverbs[0] = V_READ;
+    nc.fdverbs[1] = V_WRITE;
+    nc.fdverbs[2] = V_WRITE;
     if (in_src != SPAWN_NO_FD) {
         if (in_src >= c.fds.len or c.fdkinds[@intCast(in_src)] == .none) {
             _ = freeChild(nc);
@@ -2053,29 +2199,58 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         f.rax = f.rdx;
                     },
                     .pipe_w => f.rax = @bitCast(pipeWriteEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
-                    .fs => f.rax = @bitCast(@as(i64, -30)), // EROFS
+                    // The fd is the grant: a write verb was minted at
+                    // open or this projection never carried one — EBADF,
+                    // the POSIX refusal for a bad-mode write.
+                    .fs => f.rax = @bitCast(if (c.fdverbs[fdi] & V_WRITE != 0)
+                        childWrite(c, fdi, f.rsi, f.rdx) else -9),
                     else => f.rax = @bitCast(@as(i64, -9)),
                 }
             }
         },
-        20 => { // writev(fd, iov, iovcnt) -> total
-            const iov: [*]const u64 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
-            var total: u64 = 0;
-            var i: usize = 0;
-            while (i < f.rdx) : (i += 1) {
-                const base: usize = @intCast(iov[i * 2]);
-                const len: usize = @intCast(iov[i * 2 + 1]);
-                if (len == 0) continue; // libcs send trailing {NULL,0} iovs
-                if (base == 0) {
-                    f.rax = @bitCast(@as(i64, -14)); // EFAULT
-                    return;
+        20 => { // writev(fd, iov, iovcnt) — kind dispatch like write(1):
+                // conout sinks each iov to serial, pipe_w feeds the ring
+                // per iov, .fs writes through the view when the fd's verb
+                // allows. musl's stdio is a writev caller — this arm is
+                // why a FILE*'s bytes reach the file, not the console.
+            if (f.rdi >= c.fds.len) {
+                f.rax = @bitCast(@as(i64, -9));
+            } else {
+                const fdi: usize = @intCast(f.rdi);
+                const iov: [*]const u64 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
+                var total: i64 = 0;
+                var i: usize = 0;
+                var fail: i64 = 0;
+                while (i < f.rdx) : (i += 1) {
+                    const base: usize = @intCast(iov[i * 2]);
+                    const len: usize = @intCast(iov[i * 2 + 1]);
+                    if (len == 0) continue; // libcs send trailing {NULL,0} iovs
+                    if (base == 0) { fail = -14; break; }
+                    switch (c.fdkinds[fdi]) {
+                        .conout => {
+                            const buf: [*]const u8 = @ptrFromInt(base);
+                            var n: usize = 0;
+                            while (n < len) : (n += 1) serPut(buf[n]);
+                            total += @intCast(len);
+                        },
+                        .fs => {
+                            if (c.fdverbs[fdi] & V_WRITE == 0) { fail = -9; break; }
+                            const n = childWrite(c, fdi, @intCast(base), @intCast(len));
+                            if (n < 0) { fail = n; break; }
+                            total += n;
+                            if (n < len) break; // short write — stop
+                        },
+                        .pipe_w => {
+                            const n = pipeWriteEnd(c, @intCast(c.fds[fdi]), @intCast(base), @intCast(len));
+                            if (n < 0) { fail = n; break; }
+                            total += n;
+                            if (n < len) break;
+                        },
+                        else => { fail = -9; break; },
+                    }
                 }
-                const buf: [*]const u8 = @ptrFromInt(base);
-                var n: usize = 0;
-                while (n < len) : (n += 1) serPut(buf[n]);
-                total += len;
+                f.rax = @bitCast(if (total > 0) total else if (fail != 0) fail else @as(i64, 0));
             }
-            f.rax = total;
         },
         2, 257 => { // open(path,flags) / openat(dirfd,path,flags)
             // Scoped fs view: paths resolve inside the fs the child was
@@ -2088,6 +2263,35 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @bitCast(childOpen(c, pva, fl));
             }
         },
+        85 => { // creat(path) ≡ open(path, O_WRONLY|O_CREAT|O_TRUNC)
+            f.rax = @bitCast(childOpen(c, @intCast(f.rdi), 0o1101));
+        },
+        82, 264, 316 => { // rename / renameat / renameat2 — the directory
+                          // entries move; the inode (the identity) does
+                          // not. renameat2 flags must be 0 (no exchange/
+                          // noreplace/whiteout verbs exist yet).
+            if (f.rax == 316 and f.r8 != 0) {
+                f.rax = @bitCast(@as(i64, -38)); // ENOSYS — no renameat2 verbs
+            } else if (f.rax != 82 and
+                       (f.rdi != @as(u64, @bitCast(@as(i64, -100))) or
+                        f.rdx != @as(u64, @bitCast(@as(i64, -100))))) {
+                f.rax = @bitCast(@as(i64, -9)); // only AT_FDCWD has meaning
+            } else {
+                const ova: usize = if (f.rax == 82) @intCast(f.rdi) else @intCast(f.rsi);
+                const nva: usize = if (f.rax == 82) @intCast(f.rsi) else @intCast(f.r10);
+                f.rax = @bitCast(childRename(c, ova, nva));
+            }
+        },
+        87, 263 => { // unlink / unlinkat — removes a name; AT_REMOVEDIR
+                     // asks for rmdir, which this rung doesn't serve.
+            if (f.rax == 263 and
+                (f.rdi != @as(u64, @bitCast(@as(i64, -100))) or (f.rdx & 0x200) != 0)) {
+                f.rax = @bitCast(if ((f.rdx & 0x200) != 0) @as(i64, -38) else -9);
+            } else {
+                const pva: usize = if (f.rax == 87) @intCast(f.rdi) else @intCast(f.rsi);
+                f.rax = @bitCast(childUnlink(c, pva));
+            }
+        },
         0 => { // read(fd, buf, len) — kind dispatch: conin returns bytes
                // or parks; fs handles ride the view; pipe_r drains the
                // ring or parks on empty (EOS when writers are gone).
@@ -2097,7 +2301,8 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 const fdi: usize = @intCast(f.rdi);
                 f.rax = @bitCast(switch (c.fdkinds[fdi]) {
                     .conin => coninRead(c, f),
-                    .fs => childRead(c, f.rdi, f.rsi, f.rdx),
+                    .fs => if (c.fdverbs[fdi] & V_READ != 0)
+                        childRead(c, f.rdi, f.rsi, f.rdx) else -9,
                     .pipe_r => pipeReadEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
                     else => @as(i64, -9),
                 });
@@ -2129,7 +2334,9 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                // conin/conout close just detaches.
             if (f.rdi < c.fds.len) {
                 const fd: usize = @intCast(f.rdi);
-                switch (c.fdkinds[fd]) {
+                const had = c.fdkinds[fd];
+                c.fdverbs[fd] = 0;
+                switch (had) {
                     .none => f.rax = @bitCast(@as(i64, -9)),
                     .conin, .conout => {
                         c.fdkinds[fd] = .none;
@@ -2142,7 +2349,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         f.rax = 0;
                     },
                     .pipe_r, .pipe_w => {
-                        pipeCloseEnd(@intCast(c.fds[fd]), c.fdkinds[fd]);
+                        pipeCloseEnd(@intCast(c.fds[fd]), had);
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
                         f.rax = 0;
@@ -2673,6 +2880,7 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         // provider children get the stdio projection too — stdio is a
         // typed entry now, not an fd-number special case
         c.fdkinds = .{ .conin, .conout, .conout, .none, .none, .none, .none, .none };
+        c.fdverbs = .{ V_READ, V_WRITE, V_WRITE, 0, 0, 0, 0, 0 };
         var ipath: [256]u8 = undefined;
         var ilen: usize = 0;
         const info = loadElf(c, imgs[i][0..sizes[i]], USER_VA_BASE, &ipath, &ilen) orelse {

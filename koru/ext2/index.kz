@@ -193,6 +193,222 @@ fn lookupPath(fs: *Fs, path: []const u8, dirblk: []u8) ?u32 {
     return ino;
 }
 
+// Split "a/b/c" into the parent directory's path and the leaf name —
+// every path-mutating op (create/unlink/rename) mutates a directory,
+// never the leaf itself, and the grant names that directory's object.
+fn splitPath(path: []const u8) struct { dir: []const u8, leaf: []const u8 } {
+    if (std.mem.lastIndexOfScalar(u8, path, '/')) |i| {
+        const leaf = path[i + 1 ..];
+        if (i == 0) return .{ .dir = "", .leaf = leaf }; // "/x" → root
+        return .{ .dir = path[0..i], .leaf = leaf };
+    }
+    return .{ .dir = "", .leaf = path };
+}
+
+fn entryNl(fs: *Fs, blk: []const u8, p: usize) usize {
+    return if (fs.filetype) blk[p + 6] else rd16(blk, p + 6);
+}
+
+// Insert a name → ino entry into a directory inode. Scans every direct
+// block for an entry whose rec_len exceeds its real size — the slack
+// splits in two, the tail carrying the new name. No slack anywhere:
+// grow the directory by one freshly-allocated block (i_size += BS).
+// Refuses when the name collides, the dir is out of direct blocks, or
+// the leaf is "."/".." — mutating those is never a caller's verb.
+fn dirAdd(fs: *Fs, dir_ino: u32, name: []const u8, ino: u32, ftype: u8) bool {
+    if (name.len == 0 or name.len > 255) return false;
+    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
+    var scratch: [BS]u8 = undefined;
+    if (dirFind(fs, dir_ino, name, &scratch) != null) return false; // EEXIST
+    const need: usize = (8 + name.len + 3) & ~@as(usize, 3);
+    const loc = inodeLoc(fs, dir_ino) orelse return false;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return false;
+    var blk: [BS]u8 = undefined;
+    for (0..12) |i| {
+        const blkno = rd32(&it, loc.off + 40 + i * 4);
+        if (blkno == 0) {
+            // grow: allocate a block, the new entry spans it whole
+            const nb = allocBlock(fs) orelse return false;
+            @memset(&blk, 0);
+            wr32(&blk, 0, ino);
+            wr16(&blk, 4, BS);
+            if (fs.filetype) { blk[6] = @intCast(name.len); blk[7] = ftype; }
+            else wr16(&blk, 6, @intCast(name.len));
+            @memcpy(blk[8 .. 8 + name.len], name);
+            if (!writeBlock(fs, nb, &blk)) return false;
+            wr32(&it, loc.off + 40 + i * 4, nb);
+            wr32(&it, loc.off + 4, rd32(&it, loc.off + 4) + @as(u32, @intCast(BS))); // i_size
+            wr32(&it, loc.off + 28, rd32(&it, loc.off + 28) + @as(u32, @intCast(BS / 512)));
+            return writeBlock(fs, loc.block, &it);
+        }
+        if (!readBlock(fs, blkno, &blk)) return false;
+        var p: usize = 0;
+        while (p < BS) {
+            const rec = rd16(&blk, p + 4);
+            if (rec < 8) return false;
+            const real = (8 + entryNl(fs, &blk, p) + 3) & ~@as(usize, 3);
+            if (rec >= real + need) {
+                wr16(&blk, p + 4, @intCast(real));
+                const e = p + real;
+                wr32(&blk, e, ino);
+                wr16(&blk, e + 4, @intCast(rec - real));
+                if (fs.filetype) { blk[e + 6] = @intCast(name.len); blk[e + 7] = ftype; }
+                else wr16(&blk, e + 6, @intCast(name.len));
+                @memcpy(blk[e + 8 .. e + 8 + name.len], name);
+                return writeBlock(fs, blkno, &blk);
+            }
+            p += rec;
+        }
+    }
+    return false; // directory out of direct blocks — named bound
+}
+
+// Remove `name` from a directory inode. The victim's rec_len folds into
+// its in-block predecessor; a block-leading entry has none — its inode
+// field zeroes instead (dirFind already skips ino==0 holes). Returns
+// the removed entry's inode number — the object survives the name.
+fn dirRemove(fs: *Fs, dir_ino: u32, name: []const u8) ?u32 {
+    const loc = inodeLoc(fs, dir_ino) orelse return null;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return null;
+    if (rd16(&it, loc.off + 0) & 0o170000 != 0o040000) return null;
+    var blk: [BS]u8 = undefined;
+    for (0..12) |i| {
+        const blkno = rd32(&it, loc.off + 40 + i * 4);
+        if (blkno == 0) return null;
+        if (!readBlock(fs, blkno, &blk)) return null;
+        var p: usize = 0;
+        var prev: ?usize = null;
+        while (p < BS) {
+            const rec = rd16(&blk, p + 4);
+            if (rec < 8) return null;
+            const ino = rd32(&blk, p);
+            const nl = entryNl(fs, &blk, p);
+            if (ino != 0 and nl == name.len and std.mem.eql(u8, blk[p + 8 .. p + 8 + nl], name)) {
+                if (prev) |q| {
+                    wr16(&blk, q + 4, rd16(&blk, q + 4) + rec);
+                } else {
+                    wr32(&blk, p, 0); // block-leading: leave an ino=0 hole
+                }
+                return if (writeBlock(fs, blkno, &blk)) ino else null;
+            }
+            prev = p;
+            p += rec;
+        }
+    }
+    return null;
+}
+
+// ---- inode and block bitmap verbs (multi-group, like create's) -------
+// Each verb updates the group-descriptor free count and the superblock
+// total, then writes both back — the on-disk counters stay honest.
+
+fn allocInode(fs: *Fs) ?u32 {
+    var gdb: [BS]u8 = undefined;
+    if (!readBlock(fs, fs.first_data_block + 1, &gdb)) return null;
+    const ngroups = fs.inodes_count / fs.inodes_per_group;
+    var ib: [BS]u8 = undefined;
+    var g: u32 = 0;
+    while (g < ngroups) : (g += 1) {
+        if (!readBlock(fs, rd32(&gdb, g * 32 + 4), &ib)) return null;
+        var i: u32 = if (g == 0) fs.first_ino - 1 else 0;
+        while (i < fs.inodes_per_group) : (i += 1) {
+            if ((ib[i / 8] & (@as(u8, 1) << @intCast(i % 8))) == 0) {
+                ib[i / 8] |= @as(u8, 1) << @intCast(i % 8);
+                if (!writeBlock(fs, rd32(&gdb, g * 32 + 4), &ib)) return null;
+                wr16(&fs.bgd, g * 32 + 14, rd16(&fs.bgd, g * 32 + 14) - 1);
+                if (!writeBlock(fs, fs.first_data_block + 1, &fs.bgd)) return null;
+                wr32(&fs.sb, 16, rd32(&fs.sb, 16) - 1);
+                if (!writeBlock(fs, 1, &fs.sb)) return null;
+                return g * fs.inodes_per_group + i + 1;
+            }
+        }
+    }
+    return null;
+}
+
+fn freeInode(fs: *Fs, ino: u32) bool {
+    const g = (ino - 1) / fs.inodes_per_group;
+    const idx = (ino - 1) % fs.inodes_per_group;
+    var gdb: [BS]u8 = undefined;
+    if (!readBlock(fs, fs.first_data_block + 1, &gdb)) return false;
+    var ib: [BS]u8 = undefined;
+    if (!readBlock(fs, rd32(&gdb, g * 32 + 4), &ib)) return false;
+    ib[idx / 8] &= ~(@as(u8, 1) << @intCast(idx % 8));
+    if (!writeBlock(fs, rd32(&gdb, g * 32 + 4), &ib)) return false;
+    wr16(&fs.bgd, g * 32 + 14, rd16(&fs.bgd, g * 32 + 14) + 1);
+    if (!writeBlock(fs, fs.first_data_block + 1, &fs.bgd)) return false;
+    wr32(&fs.sb, 16, rd32(&fs.sb, 16) + 1);
+    return writeBlock(fs, 1, &fs.sb);
+}
+
+fn allocBlock(fs: *Fs) ?u32 {
+    var gdb: [BS]u8 = undefined;
+    if (!readBlock(fs, fs.first_data_block + 1, &gdb)) return null;
+    const ngroups = fs.inodes_count / fs.inodes_per_group;
+    var bb: [BS]u8 = undefined;
+    var g: u32 = 0;
+    while (g < ngroups) : (g += 1) {
+        if (!readBlock(fs, rd32(&gdb, g * 32 + 0), &bb)) return null;
+        var j: u32 = 0;
+        while (j < fs.blocks_per_group) : (j += 1) {
+            if ((bb[j / 8] & (@as(u8, 1) << @intCast(j % 8))) == 0) {
+                bb[j / 8] |= @as(u8, 1) << @intCast(j % 8);
+                if (!writeBlock(fs, rd32(&gdb, g * 32 + 0), &bb)) return null;
+                wr16(&fs.bgd, g * 32 + 12, rd16(&fs.bgd, g * 32 + 12) - 1);
+                if (!writeBlock(fs, fs.first_data_block + 1, &fs.bgd)) return null;
+                wr32(&fs.sb, 12, rd32(&fs.sb, 12) - 1);
+                if (!writeBlock(fs, 1, &fs.sb)) return null;
+                return fs.first_data_block + g * fs.blocks_per_group + j;
+            }
+        }
+    }
+    return null;
+}
+
+fn freeBlock(fs: *Fs, phys: u32) bool {
+    const g = (phys - fs.first_data_block) / fs.blocks_per_group;
+    const idx = (phys - fs.first_data_block) % fs.blocks_per_group;
+    var gdb: [BS]u8 = undefined;
+    if (!readBlock(fs, fs.first_data_block + 1, &gdb)) return false;
+    var bb: [BS]u8 = undefined;
+    if (!readBlock(fs, rd32(&gdb, g * 32 + 0), &bb)) return false;
+    bb[idx / 8] &= ~(@as(u8, 1) << @intCast(idx % 8));
+    if (!writeBlock(fs, rd32(&gdb, g * 32 + 0), &bb)) return false;
+    wr16(&fs.bgd, g * 32 + 12, rd16(&fs.bgd, g * 32 + 12) + 1);
+    if (!writeBlock(fs, fs.first_data_block + 1, &fs.bgd)) return false;
+    wr32(&fs.sb, 12, rd32(&fs.sb, 12) + 1);
+    return writeBlock(fs, 1, &fs.sb);
+}
+
+// Free every data block an inode maps: direct pointers, the single-
+// indirect table and its leaves. Double-indirect is a named refusal —
+// freeing it needs a two-level walk the rung doesn't carry, and the
+// callers check before touching any directory entry.
+fn fileBlocksFreeable(fs: *Fs, it: []const u8, off: usize) bool {
+    _ = fs;
+    return rd32(it, off + 40 + 13 * 4) == 0;
+}
+
+fn freeFileBlocks(fs: *Fs, it: []const u8, off: usize) bool {
+    for (0..12) |i| {
+        const b = rd32(it, off + 40 + i * 4);
+        if (b != 0 and !freeBlock(fs, b)) return false;
+    }
+    const ind = rd32(it, off + 40 + 12 * 4);
+    if (ind != 0) {
+        var tb: [BS]u8 = undefined;
+        if (!readBlock(fs, ind, &tb)) return false;
+        for (0..BS / 4) |i| {
+            const b = rd32(&tb, i * 4);
+            if (b != 0 and !freeBlock(fs, b)) return false;
+        }
+        if (!freeBlock(fs, ind)) return false;
+    }
+    return true;
+}
+
 fn pattern(i: usize) u8 {
     if (i % 64 == 63) return '\n';
     return @intCast('a' + ((i * 7 + i / 1024) % 26));
@@ -508,22 +724,38 @@ fn readFile(fs: *Fs, ino: u32) ReadResult {
 // resolve INSIDE this same ext2 — the scoped fs view. The seam calls
 // back through this ops record (koru/native's ChildFsOps ABI); a file
 // handle is an allocated OpenFile whose pointer is the kernel fd's
-// cargo. The view is read-only and by-inode underneath — paths are a
-// view (lookupPath), the read is always inode+offset.
+// cargo. The view is writable now — mutation is the seam's to gate (fd
+// verbs at open, W-grants on the mutated directory), the provider's to
+// execute. Reads are still by-inode underneath — paths are a view
+// (lookupPath), I/O is always inode+offset.
 
 // A handle is refcounted: fork and spawn fd-wiring dup it (share the
 // offset — POSIX), so close frees only when the last reference drops.
-const OpenFile = struct { ino: u32, size: u32, pos: u64, refs: u32 };
+const OpenFile = struct { ino: u32, size: u32, pos: u64, refs: u32, mode: u8, append: bool };
 
 const ChildFsOps = extern struct {
     ctx: ?*anyopaque,
-    open: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    // open(path, flags): linux flag word — O_ACCMODE in the low bits,
+    // O_CREAT/O_TRUNC/O_APPEND in the upper. Write modes mint a handle
+    // the seam must have already gated (fdverbs + object W grant).
+    open: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64,
     read: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64,
     read_at: *const fn (ctx: ?*anyopaque, h: u64, off: u64, dst: [*]u8, len: usize) callconv(.c) i64,
     seek: *const fn (ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64,
     stat: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
     close: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) void,
+    // dup bumps the handle's provider-side refcount and returns the
+    // handle to record — fork and spawn-fd-wiring SHARE the open file
+    // (POSIX: one offset across dup'd fds), so close must refcount, not
+    // free on the first drop.
     dup: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) i64,
+    // key(path) → the object key (dev<<32|ino) WITHOUT a handle — the
+    // seam's pre-open grant check resolves the object (or the parent
+    // directory for O_CREAT) before any handle exists.
+    key: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    write: *const fn (ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) i64,
+    rename: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
+    unlink: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
 };
 
 // readAt: inode + byte-range → bytes, reading only the blocks covered —
@@ -558,23 +790,81 @@ fn readAt(fs: *Fs, ino: u32, off: u64, dst: [*]u8, len: usize) i64 {
     return @intCast(done);
 }
 
-fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+// mkfile: a fresh regular inode linked into dir_ino — the O_CREAT
+// half of open. Shares create()'s allocation machinery: inode bitmap
+// scan, dir entry insert; blocks stay unallocated (size 0) — writes
+// grow it later, on demand.
+fn mkfile(fs: *Fs, dir_ino: u32, name: []const u8) ?u32 {
+    const ino = allocInode(fs) orelse return null;
+    const loc = inodeLoc(fs, ino) orelse return null;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return null;
+    @memset(it[loc.off .. loc.off + 128], 0);
+    wr16(&it, loc.off + 0, 0o100644);
+    wr16(&it, loc.off + 26, 1); // links
+    if (!writeBlock(fs, loc.block, &it)) return null;
+    if (!dirAdd(fs, dir_ino, name, ino, 1)) {
+        _ = freeInode(fs, ino); // the entry didn't land — give the ino back
+        return null;
+    }
+    return ino;
+}
+
+// truncate: O_TRUNC's arm — give back every block the file maps, leave
+// the inode at size 0. Same freeable-check as unlink: double-indirect
+// refuses BEFORE any state moves.
+fn truncateFile(fs: *Fs, loc: anytype, it: *[BS]u8) bool {
+    if (!fileBlocksFreeable(fs, it, loc.off)) return false;
+    if (!freeFileBlocks(fs, it, loc.off)) return false;
+    for (0..15) |i| wr32(it, loc.off + 40 + i * 4, 0);
+    wr32(it, loc.off + 4, 0);
+    wr32(it, loc.off + 28, 0);
+    return writeBlock(fs, loc.block, it);
+}
+
+// musl flag word (linux): accmode 3, O_CREAT 0100, O_EXCL 0200,
+// O_TRUNC 01000, O_APPEND 02000 — the subset the view serves.
+const O_CREAT: c_int = 0o100;
+const O_EXCL: c_int = 0o200;
+const O_TRUNC: c_int = 0o1000;
+const O_APPEND: c_int = 0o2000;
+
+fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64 {
     const fs: *Fs = @ptrCast(@alignCast(ctx));
+    const mode: u8 = @intCast(flags & 3); // 0=R, 1=W, 2=RW
     var dir: [BS]u8 = undefined;
-    const ino = lookupPath(fs, std.mem.span(path), &dir) orelse return -2; // ENOENT
-    const loc = inodeLoc(fs, ino) orelse return -5;
+    const p = std.mem.span(path);
+    var ino = lookupPath(fs, p, &dir);
+    if (ino == null) {
+        // O_CREAT: the mutated object is the parent directory — create
+        // the inode + the name inside it.
+        if ((flags & O_CREAT) == 0) return -2; // ENOENT
+        const sp = splitPath(p);
+        const dino = lookupPath(fs, sp.dir, &dir) orelse return -2;
+        ino = mkfile(fs, dino, sp.leaf) orelse return -5; // EIO covers the named bounds
+    } else if ((flags & O_CREAT) != 0 and (flags & O_EXCL) != 0) {
+        return -17; // EEXIST
+    }
+    const loc = inodeLoc(fs, ino.?) orelse return -5;
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return -5;
-    if (rd16(&it, loc.off) & 0o170000 != 0o100000) return -21; // EISDIR/ENOTREG
+    if (rd16(&it, loc.off) & 0o170000 != 0o100000) return -21; // EISDIR
+    if ((flags & O_TRUNC) != 0 and mode != 0) {
+        if (!truncateFile(fs, loc, &it)) return -38; // ENOSYS-class bound (double-ind)
+    }
     const h = malloc(@sizeOf(OpenFile)) orelse return -12; // ENOMEM
     const fp: *OpenFile = @ptrCast(@alignCast(h));
-    fp.* = .{ .ino = ino, .size = rd32(&it, loc.off + 4), .pos = 0, .refs = 1 };
+    const size = if ((flags & O_TRUNC) != 0 and mode != 0) 0 else rd32(&it, loc.off + 4);
+    fp.* = .{ .ino = ino.?, .size = size,
+               .pos = if ((flags & O_APPEND) != 0) size else 0,
+               .refs = 1, .mode = mode, .append = (flags & O_APPEND) != 0 };
     return @intCast(@intFromPtr(fp));
 }
 
 fn cfRead(ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64 {
     const fs: *Fs = @ptrCast(@alignCast(ctx));
     const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    if (fp.mode == 1) return -9; // EBADF — a write-only handle has no read verb
     const n = readAt(fs, fp.ino, fp.pos, dst, len);
     if (n > 0) fp.pos += @intCast(n);
     return n;
@@ -584,6 +874,129 @@ fn cfReadAt(ctx: ?*anyopaque, h: u64, off: u64, dst: [*]u8, len: usize) callconv
     const fs: *Fs = @ptrCast(@alignCast(ctx));
     const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
     return readAt(fs, fp.ino, off, dst, len);
+}
+
+// cfWrite: inode + byte-range ← bytes. The bounded write contract:
+// direct blocks only — a write that lands past 12 KiB of file span
+// refuses ENOSPC by name (single-indirect allocation is a named cell).
+// Within the bound: missing blocks allocate on demand (sparse growth),
+// partial blocks read-modify-write, i_size/i_blocks fold back. The
+// provider never checks the verb — the seam's fdverbs did that at open;
+// a read-mode handle arriving here is defense-in-depth EBADF.
+fn cfWrite(ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    if (fp.mode == 0) return -9; // EBADF — a read handle has no write verb
+    const start: u64 = if (fp.append) fp.size else fp.pos;
+    const loc = inodeLoc(fs, fp.ino) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    var data: [BS]u8 = undefined;
+    var done: usize = 0;
+    var grew: u32 = 0;
+    while (done < len) {
+        const k: usize = @intCast((start + done) / BS);
+        if (k >= 12) return if (done > 0) @intCast(done) else -28; // ENOSPC — direct blocks only
+        var phys = rd32(&it, loc.off + 40 + k * 4);
+        const boff: usize = @intCast((start + done) % BS);
+        const take = @min(len - done, BS - boff);
+        if (phys == 0) {
+            phys = allocBlock(fs) orelse return if (done > 0) @intCast(done) else -28;
+            wr32(&it, loc.off + 40 + k * 4, phys);
+            grew += 1;
+            @memset(&data, 0);
+        } else if (boff != 0 or take < BS) {
+            if (!readBlock(fs, phys, &data)) return -5;
+        } else {
+            @memset(&data, 0); // whole block overwritten — no read needed
+        }
+        @memcpy(data[boff .. boff + take], src[done .. done + take]);
+        if (!writeBlock(fs, phys, &data)) return -5;
+        done += take;
+    }
+    const end = start + done;
+    if (end > fp.size) fp.size = @intCast(end);
+    if (grew != 0) wr32(&it, loc.off + 28, rd32(&it, loc.off + 28) + grew * @as(u32, @intCast(BS / 512)));
+    wr32(&it, loc.off + 4, fp.size);
+    if (!writeBlock(fs, loc.block, &it)) return -5;
+    fp.pos = end;
+    return @intCast(done);
+}
+
+fn cfKey(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    var dir: [BS]u8 = undefined;
+    const ino = lookupPath(fs, std.mem.span(path), &dir) orelse return -2; // ENOENT
+    return @bitCast((@as(u64, fs.dev_id) << 32) | ino);
+}
+
+// doRename shared by the tor and the child view: remove the source
+// name, re-link the SAME inode under the new name — identity is the
+// inode, the names are directory entries pointing at it. Replacing an
+// existing regular-file destination unlinks it first (POSIX replace);
+// a directory destination refuses — rmdir is a named cell, not a
+// silent verb.
+fn doRename(fs: *Fs, oldp: []const u8, newp: []const u8) i64 {
+    var dir: [BS]u8 = undefined;
+    const osp = splitPath(oldp);
+    const nsp = splitPath(newp);
+    if (nsp.leaf.len == 0) return -22; // EINVAL — no leaf to rename onto
+    const sdir = lookupPath(fs, osp.dir, &dir) orelse return -2;
+    const ndir = lookupPath(fs, nsp.dir, &dir) orelse return -2;
+    const vict = dirFind(fs, sdir, osp.leaf, &dir) orelse return -2; // ENOENT
+    const loc = inodeLoc(fs, vict) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    const vmode = rd16(&it, loc.off);
+    const ftype: u8 = if (vmode & 0o170000 == 0o040000) 2 else 1;
+    // destination already linked: same inode → nop (POSIX); a file →
+    // unlink it; a dir → EISDIR, this rung doesn't serve rmdir.
+    if (dirFind(fs, ndir, nsp.leaf, &dir)) |dst| {
+        if (dst == vict) return 0;
+        const dloc = inodeLoc(fs, dst) orelse return -5;
+        var dit: [BS]u8 = undefined;
+        if (!readBlock(fs, dloc.block, &dit)) return -5;
+        if (rd16(&dit, dloc.off) & 0o170000 == 0o040000) return -21; // EISDIR
+        if (!fileBlocksFreeable(fs, &dit, dloc.off)) return -38;
+        _ = dirRemove(fs, ndir, nsp.leaf) orelse return -5;
+        if (!freeFileBlocks(fs, &dit, dloc.off) or !freeInode(fs, dst)) return -5;
+    }
+    if (!dirAdd(fs, ndir, nsp.leaf, vict, ftype)) return -12; // ENOMEM-class
+    _ = dirRemove(fs, sdir, osp.leaf);
+    if (xfer(fs, OP_FFLUSH, 0, 0) != 0) return -5;
+    return 0;
+}
+
+fn cfRename(ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    return doRename(fs, std.mem.span(old), std.mem.span(new));
+}
+
+// cfUnlink: remove a name; when the link count reaches zero the inode
+// and its blocks return to the bitmaps. Regular files only — a dir is
+// EISDIR, not a silent recurse. Double-indirect content refuses BEFORE
+// the directory entry moves — the refusal leaves the fs untouched.
+fn cfUnlink(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    var dir: [BS]u8 = undefined;
+    const sp = splitPath(std.mem.span(path));
+    const dino = lookupPath(fs, sp.dir, &dir) orelse return -2;
+    const vict = dirFind(fs, dino, sp.leaf, &dir) orelse return -2;
+    const loc = inodeLoc(fs, vict) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    if (rd16(&it, loc.off) & 0o170000 == 0o040000) return -21; // EISDIR
+    if (!fileBlocksFreeable(fs, &it, loc.off)) return -38;
+    _ = dirRemove(fs, dino, sp.leaf) orelse return -5;
+    const links = rd16(&it, loc.off + 26) - 1;
+    if (links == 0) {
+        if (!freeFileBlocks(fs, &it, loc.off) or !freeInode(fs, vict)) return -5;
+    } else {
+        wr16(&it, loc.off + 26, links);
+        if (!writeBlock(fs, loc.block, &it)) return -5;
+    }
+    if (xfer(fs, OP_FFLUSH, 0, 0) != 0) return -5;
+    return 0;
 }
 
 fn cfSeek(ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64 {
@@ -640,7 +1053,8 @@ fn cfDup(ctx: ?*anyopaque, h: u64) callconv(.c) i64 {
 fn childFs(fs: *Fs) ChildFsOps {
     return .{ .ctx = @ptrCast(fs), .open = cfOpen, .read = cfRead,
               .read_at = cfReadAt, .seek = cfSeek, .stat = cfStat, .close = cfClose,
-              .dup = cfDup };
+              .dup = cfDup, .key = cfKey, .write = cfWrite,
+              .rename = cfRename, .unlink = cfUnlink };
 }
 
 ~proc fetch|zig {
@@ -719,6 +1133,24 @@ fn pinNid(fs: *Fs, ino: u32) u64 {
     const nid = pinNid(fs, ino);
     if (nid == 0) return .{ .refused = .{ .fs = fs, .reason = "nid store refused the pin" } };
     return .{ .ok = .{ .fs = fs, .ino = ino, .nid = nid } };
+}
+
+// rename: mutate the view, never the identity — a directory entry moves
+// and the inode it names does not change, so a pin bound before the
+// rename resolves the same object after it. That is the durability
+// claim the boot fixture proves end-to-end.
+~pub tor rename { fs: *Fs<!mounted>, old: string, new: string }
+| ok *Fs<mounted!>
+| refused { fs: *Fs<mounted!>, reason: string }
+
+~proc rename|zig {
+    const r = doRename(fs, old, new);
+    if (r < 0) return .{ .refused = .{ .fs = fs, .reason = switch (r) {
+        -2 => "path not found", -21 => "destination is a directory",
+        -22 => "no leaf to rename onto", -38 => "object not freeable (double-indirect)",
+        else => "rename failed",
+    } } };
+    return .{ .ok = fs };
 }
 
 // exec-nid: exec by identity — no path is walked. The nid resolves to

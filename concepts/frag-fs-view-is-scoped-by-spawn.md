@@ -27,9 +27,21 @@ The split of custody that makes it honest:
   (`OpenFile{ino,pos}`), `lookupPath` for names, `readAt` for the
   partial read. Path strings are *views* — the read is always
   inode+offset, the same split `fetch`/`exec` already live by.
-- **The view is read-only by construction.** `O_WRONLY`/`O_RDWR` get
-  `-EROFS` — a property of *this* view (ext2's create-side scope
-  stays narrow), not a claim fs writes are forever banned.
+- **The view is writable; the seam gates mutation, the provider
+  executes.** The earlier "read-only by construction" ruling is dead —
+  `O_WRONLY`/`O_RDWR`/`O_CREAT`/`O_TRUNC` all serve. Two gates, both
+  kernel-side: `fdverbs[]` records the verbs minted into the fd
+  projection at open (read/write dispatch checks the verb, EBADF on
+  bad mode like POSIX), and the bag's object check resolves the mutated
+  object by key BEFORE any handle exists (`ops.key(path)` →
+  `dev<<32|ino`): a write-open needs `{cap:2, obj:filekey, +W}`, an
+  `O_CREAT` needs `+W` on the parent DIRECTORY's key, rename/unlink
+  need `+W` on the directories they mutate — the directory is always
+  the object a path-mutation touches. Bounds, all refused by name:
+  direct-block writes only (file span ≤ 12KiB, indirect-position
+  writes are `ENOSPC`), unlink frees direct + single-indirect chains
+  (double-indirect → `ENOTSUP`-class refusal before any state moves),
+  mkdir/link/rmdir are named cells.
 - **Handles are opaque ints to the kernel; pointers to the provider.**
   fd slot → `OpenFile*` only inside ext2's own ops — a forged fd just
   misses a slot and is EBADF, not a pointer the kernel trusts.

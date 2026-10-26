@@ -31,6 +31,14 @@ int main(void) {
     int fd2 = open("/sh.elf", O_RDONLY); // real object, no grant
     printf("GRANT-DENY fd=%ld e=%d\n", (long)fd2, errno);
 
+    // verb attenuation on the write axis: the grant names hello.txt but
+    // carries verbs=R only — a write-open on the SAME object must still
+    // refuse, naming the missing W. The pre-open key check decides this
+    // before any handle exists.
+    errno = 0;
+    int fd3 = open("/hello.txt", O_WRONLY);
+    printf("GRANT-WRITE-DENY fd=%ld e=%d\n", (long)fd3, errno);
+
     // over-grant attempt: a key this bag does not cover — parentCovers
     // must refuse the whole spawn before any image loads.
     unsigned char blob[64];

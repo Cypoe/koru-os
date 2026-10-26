@@ -173,6 +173,7 @@ else
         cp "$ROOT/koru/native/tests/forktest.c" "$WORK/forktest.c"
         cp "$ROOT/koru/native/tests/granttest.c" "$WORK/granttest.c"
         cp "$ROOT/koru/native/tests/grantc.c" "$WORK/grantc.c"
+        cp "$ROOT/koru/native/tests/wtest.c" "$WORK/wtest.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -186,6 +187,7 @@ else
         FORKTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/forktest.elf")")"
         GRANTTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/granttest.elf")")"
         GRANTCWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/grantc.elf")")"
+        WTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wtest.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -202,6 +204,7 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/forktest.elf" "$WORK/forktest.c" > "$WORK/forktest.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/granttest.elf" "$WORK/granttest.c" > "$WORK/granttest.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/grantc.elf" "$WORK/grantc.c" > "$WORK/grantc.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wtest.elf" "$WORK/wtest.c" > "$WORK/wtest.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
@@ -216,6 +219,7 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $FORKTESTWSL forktest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GRANTTESTWSL granttest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GRANTCWSL grantc.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WTESTWSL wtest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -296,7 +300,7 @@ else
         # fs: nid → key → dev → the mounted registry → the mount's own
         # vfs. The post-unmount call must refuse by name: the pin outlives
         # the mount but a dead provider never executes.
-        if grep -qE "ext2n: exec-bynid dev=0 ino=[0-9]+ status=43" "$WORK/boot_ext2.serial" \
+        if grep -qE "ext2n: exec-bynid post-rename dev=0 ino=[0-9]+ status=43" "$WORK/boot_ext2.serial" \
            && grep -qF "ext2n: exec-bynid post-unmount refused:" "$WORK/boot_ext2.serial"; then
             ok "exec-bynid: pin resolved provider via mounted table (status=43); stale pin refused post-unmount"
         else
@@ -349,6 +353,45 @@ else
             ok "irq-wake: blk waits are interrupt-paced (reqs=$reqs parks=$parks irqs=$irqs)"
         else
             bad "irq-wake: blk stats missing or unbounded: $blkline"
+        fi
+        # writable view: a musl child created, wrote, read-back, renamed
+        # and unlinked through REAL syscalls — fopen("w")→openat O_CREAT,
+        # write(1) on a V_WRITE fd, rename(2), unlink(2) — and the file
+        # kept its (dev,ino) key across the rename.
+        if grep -qE "WTEST w=[0-9]+ rb=[0-9]+ ino=[0-9a-fx]+ renamed=1 same-ino=[0-9]+ unl=1 dot=1 DONE" "$WORK/boot_ext2.serial" \
+           && ! grep -qF "WTEST-FAIL" "$WORK/boot_ext2.serial" \
+           && grep -qF "exec wtest.elf status=0" "$WORK/boot_ext2.serial"; then
+            ok "fs-write: musl child created/wrote/renamed/unlinked via the scoped view (same-ino across rename)"
+        else
+            bad "fs-write: evidence missing: $(grep -aE 'WTEST|wtest|REFUSE|FAIL' "$WORK/boot_ext2.serial" | tail -6 | tr '\n' '|')"
+        fi
+        # pin durability under view mutation: the pin bound BEFORE the
+        # rename resolves the same (dev,ino) after it — exec-by-nid ran
+        # the renamed ELF by identity alone, and the old path refuses.
+        pin_ino=$(sed -n 's/.*pinned child.elf ino=\([0-9]*\).*/\1/p' "$WORK/boot_ext2.serial" | head -1)
+        mv_ino=$(sed -n 's/.*moved.elf ino=\([0-9]*\).*/\1/p' "$WORK/boot_ext2.serial" | head -1)
+        if [ -n "$pin_ino" ] && [ "$pin_ino" = "$mv_ino" ] \
+           && grep -qE "exec-bynid post-rename dev=0 ino=$pin_ino status=43" "$WORK/boot_ext2.serial" \
+           && grep -qF "stale path child.elf refused:" "$WORK/boot_ext2.serial"; then
+            ok "pin-durable: rename moved the view not the identity — exec-bynid ran ino=$pin_ino post-rename"
+        else
+            bad "pin-durable: evidence missing: pin=$pin_ino mv=$mv_ino $(grep -aE 'moved|exec-bynid|stale|FAIL' "$WORK/boot_ext2.serial" | tail -5 | tr '\n' '|')"
+        fi
+        # host-side durability: debugfs reads the image AFTER QEMU exits
+        # — moved.elf must sit on the pin's inode, wren.txt (the musl
+        # child's own rename target) must persist, wlive.txt must be
+        # gone. The mutations are on disk, not just in the serial log.
+        if [ -n "$pin_ino" ]; then
+            mvstat=$(MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -R "stat moved.elf" "$IMGWSL" 2>&1)
+            mvino_disk=$(echo "$mvstat" | sed -n 's/.*Inode: \([0-9]*\).*/\1/p' | head -1)
+            wrenstat=$(MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -R "stat wren.txt" "$IMGWSL" 2>&1)
+            wlivstat=$(MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -R "stat wlive.txt" "$IMGWSL" 2>&1)
+            if [ "$mvino_disk" = "$pin_ino" ] && echo "$wrenstat" | grep -q "Inode:" \
+               && ! echo "$wlivstat" | grep -q "Inode:"; then
+                ok "fs-persist: host sees moved.elf@ino$pin_ino + wren.txt; wlive.txt renamed away"
+            else
+                bad "fs-persist: host image check failed: moved=$mvino_disk wren=$(echo "$wrenstat" | head -1) wlive=$(echo "$wlivstat" | head -1)"
+            fi
         fi
         # (PIT IRQ0 evidence lives on boot_multi — its epoch spans ticks;
         # the ext2 run now finishes inside one tick period because the
@@ -636,6 +679,7 @@ else
                  && grep -qF 'exit=7' "$WORK/boot_shell.serial" \
                  && grep -qE 'GRANT-OPEN n=[1-9]' "$WORK/boot_shell.serial" \
                  && grep -qF 'GRANT-DENY fd=-1 e=13' "$WORK/boot_shell.serial" \
+                 && grep -qF 'GRANT-WRITE-DENY fd=-1 e=13' "$WORK/boot_shell.serial" \
                  && grep -qF 'GRANT-AMPLIFY r=-1 e=13' "$WORK/boot_shell.serial" \
                  && grep -qF 'GTEST st=9' "$WORK/boot_shell.serial" \
                  && grep -qF 'shell: exec sh status=47' "$WORK/boot_shell.serial" \

@@ -11,8 +11,14 @@ handle by number. `Child.fds[]` carries an id per slot and `fdkinds[]`
 carries what the slot projects: `conin`/`conout` (stdio are real
 entries — closing fd0 detaches like any discharge), `fs` (a scoped-view
 handle), `pipe_r`/`pipe_w` (ends of a kernel ring). read/write/close/
-fstat dispatch on the kind; an fs write is EROFS by kind, not by flag
-lookup, and a pipe fd gets an honest S_IFIFO fstat.
+fstat dispatch on the kind, and a pipe fd gets an honest S_IFIFO
+fstat. **`fdverbs[]` carries the verbs the projection was minted with**
+— the first fd-entry grant: open records `R`/`W`/`RW` from the flag
+word, stdio and pipe ends stamp their implied verbs, `cloneFd` copies
+them, close clears them. Dispatch checks verb AND kind: a write on a
+read-mode `.fs` fd is EBADF (the POSIX refusal), not a provider error.
+The earlier "fs write is EROFS by kind" is dead — verbs live on the
+projection now.
 
 The pipe itself is a bounded kernel ring (2KiB) with refcounted ends —
 the fifth wait kind `.pipe` + `wait_pipe` rides the same kernel-
