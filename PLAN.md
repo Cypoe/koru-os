@@ -234,15 +234,20 @@ partial read (`readAt` walks blkAt per covered block — whole-file
 `readFile` stays for exec). Surface: `open`/`openat` (257 folds to
 cap 2), `read`, `close`, `lseek`, `fstat` (144B linux stat), `pread64`.
 The view is writable now — `O_WRONLY`/`O_RDWR`/`O_CREAT`/`O_TRUNC`
-serve through `cfWrite`/`mkfile` (direct blocks, ≤12KiB — larger spans
-refuse ENOSPC by name), `rename`/`unlink` mutate directory entries,
-`write`/`writev` dispatch on the fd's recorded verbs (fdverbs — the
-projection IS a grant), and object-scoped `W` grants name the mutated
-object: the file for write-open, the parent directory for
-create/unlink/rename. `boot_ext2.k` measures `pin → rename →
-exec-by-nid` — the post-rename exec resolves the same inode, the stale
-path refuses, and host-side debugfs finds `moved.elf` on the pin's
-inode after QEMU exits. Gate evidence
+serve through `cfWrite`/`mkfile` (indirect + double-indirect block
+tables carry past the direct ceiling), `rename`/`unlink` mutate
+directory entries, `mkdir`/`rmdir` mint and retire real dir inodes
+(nlink moves on the parent — a subdir's `..` is a real reference),
+`link` lands a second name on the same inode and `st_nlink` reads the
+inode's honest count, `write`/`writev` dispatch on the fd's recorded
+verbs (fdverbs — the projection IS a grant), and object-scoped `W`
+grants name the mutated object: the file for write-open, the parent
+directory for create/unlink/rename/mkdir/rmdir/link. `boot_ext2.k`
+measures `pin → rename → exec-by-nid` — the post-rename exec resolves
+the same inode, the stale path refuses, and host-side debugfs finds
+`moved.elf` on the pin's inode after QEMU exits; `wtest.elf`'s musl
+section proves mkdir→link→unlink→ENOTEMPTY→rmdir end-to-end through
+real syscalls. Gate evidence
 (`boot_real.k`): **a real musl binary `open()`/`read()`/`close()`d
 `hello.txt` on its own ext2 and printed the bytes** — file contents,
 not just the image, now reach ring-3. This is the PT_INTERP rung's
@@ -436,12 +441,22 @@ pixels carry foot's terminal and the configured magenta border
 client's resource map — the stall was a shim segfault, not a
 scheduler wedge), and an empty mode list makes `preferred`
 resolve to `0x0` — Hyprland disables the output; the oracle must
-name the geometry. Remaining named bounds: vgem must be loaded
-on the host (`modprobe vgem` as root — the row skips honestly
-when `/dev/dri/card0` is absent); the run is a manual oracle, not
-yet a check-hosted row; the second host realization path and
-Quickshell/Noctalia on top are still open. And the koru-side
-wayland provider exists too:
+name the geometry. On that live Hyprland: **Quickshell 0.3.2
+composites a real layer-shell bar** (deterministic QML fixture —
+the shim's accumulated frame carries the cyan band, `cyan>20k`),
+and **Noctalia 5.4.0 — the real C++/QtQuick shell daemon —
+raises three layer-shell surfaces** (`hyprctl layers` names
+`noctalia-wallpaper` 1280x800, `noctalia-bar-default`,
+`noctalia-panel`; the wallpaper covers the full frame,
+`NOC-PXEVID nonbg>500k`). The shim learned one more oracle
+lesson doing this: a reused swapchain BO holds only the freshly
+damaged pixels — readback must accumulate damage into a
+compositor-side frame or the evidence reads a mostly-black
+frame. Remaining named bounds: vgem must be loaded on the host
+(`modprobe vgem` as root — the row skips honestly when
+`/dev/dri/card0` is absent); the run is a manual oracle, not yet
+a check-hosted row; the second host realization path is still
+open. And the koru-side wayland provider exists too:
 
 **`linux-wayland` — the second hosted surface arm (gated)** —
 `koru/hosted/wayland.zig` implements the same `koruos.surface` +

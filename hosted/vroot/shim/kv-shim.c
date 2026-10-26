@@ -105,11 +105,16 @@ static struct wl_resource *buffer_create(struct wl_client *cl, uint32_t id,
 struct kv_surface {
     struct wl_resource *res;
     struct wl_resource *pending_buf, *cur_buf;
-    struct wl_list frame_cbs;      /* wl_resource links */
+    struct wl_list frame_cbs;      /* kv_framecb links */
     struct wl_resource *xdg_surf, *toplevel;
     char title[128], app_id[64];
     uint64_t commits;
     bool entered;
+    /* damage-driven accumulation: a commit's BO only owns the damaged
+     * rect — outside it, the surface keeps the previous frame. The shim
+     * is the scanout, so it keeps that accumulation itself. */
+    bool dmg; int dx, dy, dw, dh;   /* damage union since last commit */
+    uint8_t *frame; int fw, fh;     /* accumulated scanout (BGRA) */
     struct wl_list link;
 };
 
@@ -120,7 +125,9 @@ static uint32_t now_ms(void) {
     return ts.tv_sec * 1000u + ts.tv_nsec / 1000000u;
 }
 
-/* mmap plane0 of a dmabuf buffer, count non-black px, optional PPM. */
+/* mmap plane0 of a dmabuf buffer, accumulate the damaged rect into the
+ * surface's scanout frame, count non-black px, optional PPM of the
+ * ACCUMULATED frame (what a real compositor would show). */
 static void readback(struct kv_surface *s, struct kv_buffer *b) {
     if (b->nplanes < 1 || b->fds[0] < 0) return;
     size_t len = (size_t)b->stride[0] * b->h;
@@ -128,14 +135,36 @@ static void readback(struct kv_surface *s, struct kv_buffer *b) {
                       b->fds[0], 0);
     if (p == MAP_FAILED) { LOG("readback: mmap failed: %s", strerror(errno)); return; }
     p += b->offset[0];
+
+    /* damage rect: union recorded by damage/damage_buffer, else full */
+    int x0 = s->dmg ? s->dx : 0, y0 = s->dmg ? s->dy : 0;
+    int x1 = s->dmg ? s->dx + s->dw : b->w, y1 = s->dmg ? s->dy + s->dh : b->h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > b->w) x1 = b->w;
+    if (y1 > b->h) y1 = b->h;
+    s->dmg = false;
+
+    if (!s->frame || s->fw != b->w || s->fh != b->h) {
+        s->frame = realloc(s->frame, (size_t)b->w * b->h * 4);
+        s->fw = b->w; s->fh = b->h;
+        memset(s->frame, 0, (size_t)b->w * b->h * 4);
+    }
     uint64_t nonbg = 0;
+    for (int y = y0; y < y1; y++) {
+        uint8_t *dst = s->frame + (size_t)y * b->w * 4;
+        const uint8_t *src = p + (size_t)y * b->stride[0];
+        memcpy(dst + (size_t)x0 * 4, src + (size_t)x0 * 4,
+               (size_t)(x1 - x0) * 4);
+    }
     for (int y = 0; y < b->h; y += 2)
         for (int x = 0; x < b->w; x += 2) {
-            const uint8_t *px = p + (size_t)y * b->stride[0] + x * 4;
+            const uint8_t *px = s->frame + (size_t)y * b->w * 4 + (size_t)x * 4;
             if (px[0] || px[1] || px[2]) nonbg++;
         }
-    LOG("COMMIT buf=%dx%d fmt=%08x commit=%" PRIu64 " nonbg=%" PRIu64 "%s%s%s",
+    LOG("COMMIT buf=%dx%d fmt=%08x commit=%" PRIu64 " nonbg=%" PRIu64 " dmg=%d,%d+%dx%d%s%s%s",
         b->w, b->h, b->format, s->commits, nonbg,
+        x0, y0, x1 - x0, y1 - y0,
         s->app_id[0] ? " app=" : "", s->app_id,
         s->title[0] ? " title=" : "");
     if (s->title[0]) fprintf(stderr, "SHIM TITLE %s\n", s->title);
@@ -145,7 +174,7 @@ static void readback(struct kv_surface *s, struct kv_buffer *b) {
             fprintf(f, "P6\n%d %d\n255\n", b->w, b->h);
             for (int y = 0; y < b->h; y++)
                 for (int x = 0; x < b->w; x++) {
-                    const uint8_t *px = p + (size_t)y * b->stride[0] + x * 4;
+                    const uint8_t *px = s->frame + (size_t)y * b->w * 4 + (size_t)x * 4;
                     fputc(px[2], f); fputc(px[1], f); fputc(px[0], f);
                 }
             fclose(f);
@@ -158,6 +187,7 @@ static void readback(struct kv_surface *s, struct kv_buffer *b) {
 static void surface_destroy(struct wl_resource *res) {
     struct kv_surface *s = wl_resource_get_user_data(res);
     wl_list_remove(&s->link);
+    free(s->frame);
     free(s);
 }
 
@@ -170,13 +200,24 @@ static void sf_attach(struct wl_client *c, struct wl_resource *r,
     struct kv_surface *s = wl_resource_get_user_data(r);
     s->pending_buf = buf;
 }
+static void surf_damage(struct kv_surface *s, int32_t x, int32_t y,
+                        int32_t w, int32_t h) {
+    if (w <= 0 || h <= 0) return;
+    if (!s->dmg) { s->dx = x; s->dy = y; s->dw = w; s->dh = h; s->dmg = true; return; }
+    int x1 = s->dx + s->dw, y1 = s->dy + s->dh;
+    if (x < s->dx) s->dx = x;
+    if (y < s->dy) s->dy = y;
+    if (x + w > x1) x1 = x + w;
+    if (y + h > y1) y1 = y + h;
+    s->dw = x1 - s->dx; s->dh = y1 - s->dy;
+}
 static void sf_damage(struct wl_client *c, struct wl_resource *r,
                       int32_t a, int32_t b, int32_t d, int32_t e) {
-    (void)c;(void)r;(void)a;(void)b;(void)d;(void)e;
+    (void)c; surf_damage(wl_resource_get_user_data(r), a, b, d, e);
 }
 static void sf_damage_buffer(struct wl_client *c, struct wl_resource *r,
                              int32_t a, int32_t b, int32_t d, int32_t e) {
-    (void)c;(void)r;(void)a;(void)b;(void)d;(void)e;
+    (void)c; surf_damage(wl_resource_get_user_data(r), a, b, d, e);
 }
 /* frame callbacks: resource->link belongs to libwayland (it chains every
  * resource into client->wl_resource_list). Stealing it into our list
