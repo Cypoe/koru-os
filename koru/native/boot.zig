@@ -25,6 +25,7 @@ const kbd = @import("kbd");
 const pci = @import("pci");
 const acpi = @import("acpi");
 const smp = @import("smp");
+const ioapic = @import("ioapic");
 const gpu = @import("gpu.zig");
 const surf = @import("surf.zig");
 const mouse = @import("mouse");
@@ -187,6 +188,8 @@ export fn kmain(mbi: u32) callconv(.c) noreturn {
     pci.init();  // config-space scan while IF=0 — the dump can't
                  // interleave with IRQ prints; providers look up, never
                  // rescan
+    ioapic.init(); // GSI routes armed (masked) — every later unmask
+                   // takes the LAPIC door; PIC lines masked for good
     user.init(); // IDT + PIC + sti — interrupts live before the program
     kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
     mouse.init(); // 8042 aux channel — PS/2 mouse, IRQ12

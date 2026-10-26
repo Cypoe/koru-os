@@ -95,6 +95,21 @@ else
     bad "acpi-tables: payload evidence missing: $(grep -aE 'madt|fadt' "$WORK/boot_hello.serial" | tr '\n' '|')"
 fi
 
+# ioapic: the second interrupt door owns legacy delivery. MADT's IOAPIC
+# is probed (id/pins/gsi-base), the ISO table is honored (i440fx remaps
+# IRQ0 to GSI2 — assuming irq==gsi loses the timer), the provider's
+# unmask verb lands on IOREDTBL mask bits not the PIC IMR, and the PIC
+# is masked off entirely — every row below that takes a device IRQ
+# (timer/kbd/mouse/virtio/wake/sched) proves a LAPIC-delivered line.
+if grep -qE "ioapic: base=fec00000 id=[0-9]+ pins=24 gsi-base=0" "$WORK/boot_hello.serial" \
+   && grep -qF "irq0 -> gsi2 edge-high" "$WORK/boot_hello.serial" \
+   && grep -qF "ioapic: pic lines masked" "$WORK/boot_hello.serial" \
+   && grep -qF "ioapic: pin2 unmasked" "$WORK/boot_hello.serial"; then
+    ok "ioapic: IRQs routed through IOREDTBL to the LAPIC — ISO remap honored, PIC masked"
+else
+    bad "ioapic: routing evidence missing: $(grep -aE 'ioapic|irq0|unmask|timer' "$WORK/boot_hello.serial" | tr '\n' '|')"
+fi
+
 # powerctl: the power door exercised for real — boot_acpi calls
 # powerctl(5), the PM1a_CNT write powers QEMU OFF mid-boot; boot_reboot
 # calls powerctl(1), the 8042 pulse resets it (-no-reboot exits). The
@@ -953,7 +968,7 @@ else
             sw=$(sed -n 's/.*sched: switches=\([0-9]*\).*/\1/p' "$WORK/boot_multi.serial" | tail -1)
             trans=$(grep -o 'AB\|BA' "$WORK/boot_multi.serial" | wc -l)
             if grep -qF "irq: timer delivered" "$WORK/boot_multi.serial"; then
-                ok "irq-timer: PIT IRQ0 delivered through the PIC"
+                ok "irq-timer: PIT IRQ0 delivered through the IOAPIC/LAPIC door"
             else
                 bad "irq-timer: no timer evidence: $(tail -6 "$WORK/boot_multi.serial" | tr '\n' '|')"
             fi

@@ -623,7 +623,13 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
           states: UNDER/SCENE/REVEAL/IDLE+cursor); ACPI LANDED
           (RSDP + table directory + MADT/FADT payload + powerctl
           door); SMP bringup LANDED (smp.zig INIT-SIPI-SIPI,
-          trampoline page, AP ack — sched roster is the open cell)
+          trampoline page, AP ack — sched roster is the open cell);
+          IOAPIC routing LANDED (ioapic.zig: IOREDTBL routes legacy
+          lines to the LAPIC, MADT ISOs honored — IRQ0 arrives via
+          GSI2, PCI INTx level-low — PIC masked off, LAPIC EOI;
+          children share the kernel-half pdpt so IRQs landing on a
+          child CR3 find every mmio window — frag-kernel-half-is-
+          shared-not-copied)
           → init/shell/process userland (fork/exec, pipes/IPC)
             → Hyprland/Noctalia oracle harness over the real scene
 ```
@@ -650,7 +656,10 @@ Also open, smaller:
   via the 8042 pulse (`frag-power-door-decodes-firmware`)
 - SMP: ~~INIT-SIPI-SIPI AP bringup~~ — landed (smp.zig: MADT roster →
   LAPIC ICR → trampoline page → APs run kernel code + ack; measured
-  -smp 4, 3/3 online). Still open: IOAPIC routing of IRQs to APs, sched
+  -smp 4, 3/3 online). ~~IOAPIC routing~~ — landed (ioapic.zig:
+  IOREDTBL + MADT ISOs → LAPIC delivery, PIC masked; all legacy
+  IRQ rows green through the second door). Still open: routing
+  destinations beyond the BSP (per-CPU IOREDTBL dests), sched
   roster membership, per-CPU state — required before real hardware
 - KolibriOS study: first pass done —
   `notes/kolibrios-donor-read.md` (syscall table, VFS seam, devman

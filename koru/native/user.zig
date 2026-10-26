@@ -24,10 +24,10 @@
 // real.
 
 const std = @import("std");
+const ioapic = @import("ioapic");
 
 extern var pml4: [512]u64;
 extern var pdpt: [512]u64;
-extern var pd: [512]u64;
 
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
@@ -42,10 +42,10 @@ const ENT: u64 = 0x3; // present | writable
 const US: u64 = 0x4; // user-accessible
 
 // Child user space is its own pdpt slot — [USER_VA_BASE, USER_VA_END)
-// maps through c.upd, kept entirely clear of the kernel-half pd copy
-// (identity RAM) the ISR still needs on the child's CR3. Real ET_EXEC
-// vaddrs below 0x40000000 therefore refuse by name: the honest answer
-// is static-pie (ET_DYN) or a link above the identity region.
+// maps through c.upd, kept entirely clear of the shared kernel half
+// the ISR still needs on the child's CR3. Real ET_EXEC vaddrs below
+// 0x40000000 therefore refuse by name: the honest answer is static-pie
+// (ET_DYN) or a link above the identity region.
 const USER_VA_BASE: usize = 0x4000_0000; // pdpt[1] -> upd -> user pages
 const USER_VA_END: usize = 0x7FE0_0000;  // ~1 GiB of user space
 const USER_STACK_TOP: usize = 0x7FE0_0000; // stack pages map just below
@@ -274,11 +274,28 @@ pub export fn koru_irq_unmask(irq: u8) callconv(.c) void {
     say("irq: unmask line ");
     puthex(irq);
     say("\n");
+    if (ioapic.gsiFor(irq)) |gsi| {
+        ioapic.setMasked(gsi, false);
+        return;
+    }
     const port: u16 = if (irq < 8) 0x21 else 0xA1;
     const bit: u3 = @intCast(irq & 7);
     outb(port, inb(port) & ~(@as(u8, 1) << bit));
     // a slave line only reaches the CPU through master's cascade input 2
     if (irq >= 8) outb(0x21, inb(0x21) & ~@as(u8, 4));
+}
+
+// The line's delivery door decides the EOI: IOAPIC-routed lines are
+// LAPIC-delivered (the LAPIC EOI is also the IOAPIC's remote-IRR clear);
+// PIC lines keep the 8259 pair. Both arms call this — schedPreempt's
+// early EOI included — so the choice can't drift.
+fn eoiVec(vec: u64) void {
+    const l = vec - 0x20;
+    if (l < 16 and ioapic.isLapic(@intCast(l))) {
+        lapicEoi();
+    } else {
+        picEoi(vec);
+    }
 }
 
 pub export var irq_ticks: u64 = 0;
@@ -343,7 +360,7 @@ fn schedPreempt(f: *ExcFrame) void {
     c.frame.rflags = st[19];
     c.frame.rsp = st[20];
     c.frame.ss = st[21];
-    picEoi(0x20);
+    eoiVec(0x20);
     tick_armed = true;
     schedLoop();
 }
@@ -374,11 +391,15 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             puthex(f.vec);
             say(" (masked)\n");
             const l: u8 = @intCast(f.vec - 0x20);
-            const port: u16 = if (l < 8) 0x21 else 0xA1;
-            const bit: u3 = @intCast(l & 7);
-            outb(port, inb(port) | (@as(u8, 1) << bit));
+            if (ioapic.gsiFor(l)) |gsi| {
+                ioapic.setMasked(gsi, true);
+            } else {
+                const port: u16 = if (l < 8) 0x21 else 0xA1;
+                const bit: u3 = @intCast(l & 7);
+                outb(port, inb(port) | (@as(u8, 1) << bit));
+            }
         }
-        picEoi(f.vec);
+        eoiVec(f.vec);
         return;
     }
     if (f.vec >= 0x30) {
@@ -714,8 +735,9 @@ const TAG_GRANT: u16 = 2;
 const Child = struct {
     pml4: usize = 0,
     pdpt: usize = 0,
-    pd: usize = 0,   // kernel-half copy (identity RAM, ISR on child CR3)
     upd: usize = 0,  // user-half pd — pdpt[1], USER_VA_BASE..END
+                     // (kernel half shares pdpt slots with the BSP —
+                     //  no per-child kernel tables to own)
     fsbase: u64 = 0, // TLS base (arch_prctl) — MSR-loaded at resume
     brk: usize = 0,  // program break (brk syscall)
     brk_base: usize = 0, // lowest legal break — end of the loaded image
@@ -796,14 +818,13 @@ fn freeChild(c: *Child) usize {
         _ = pmm.free(pde & ~@as(u64, 0xFFF));
         freed += 1;
     }
-    for ([_]u64{ c.upd, c.pd, c.pdpt, c.pml4 }) |t| {
+    for ([_]u64{ c.upd, c.pdpt, c.pml4 }) |t| {
         if (t != 0) {
             _ = pmm.free(t);
             freed += 1;
         }
     }
     c.upd = 0;
-    c.pd = 0;
     c.pdpt = 0;
     c.pml4 = 0;
     return freed;
@@ -863,18 +884,24 @@ fn userPhys(c: *Child, vaddr: usize) usize {
 fn buildTables(c: *Child) bool {
     c.pml4 = @intFromPtr(allocPage() orelse return false);
     c.pdpt = @intFromPtr(allocPage() orelse return false);
-    c.pd = @intFromPtr(allocPage() orelse return false);
     c.upd = @intFromPtr(allocPage() orelse return false);
     const c_pml4: *[512]u64 = @ptrFromInt(c.pml4);
     const c_pdpt: *[512]u64 = @ptrFromInt(c.pdpt);
-    const c_pd: *[512]u64 = @ptrFromInt(c.pd);
-    // U/S must hold at every level for ring3 to reach a leaf; kernel leaves
-    // in the copied pd still lack the bit, so the kernel half stays
-    // ring0-only — and identical across children, which is what lets the
-    // ISR flip CR3 mid-dispatch without losing itself.
+    // The kernel half is shared, not snapshot: the child's pdpt copies
+    // the kernel's own entries, so every mmio window minted at boot
+    // (LAPIC/IOAPIC/BARs — all live above 1 GiB) exists on the child's
+    // CR3 by construction, and later mappings in an existing slot
+    // propagate since the pd is shared. Kernel leaves lack U/S at the
+    // leaf, so the shared half stays ring0-only — which is also what
+    // lets the ISR run on a child's CR3 without losing itself.
+    // pdpt[1] is the child-private user window; a kernel window already
+    // occupying it is an unresolvable overlap — refuse by name.
+    if (pdpt[1] != 0) {
+        say("aspace: kernel window occupies pdpt[1] — child space refused\n");
+        return false;
+    }
     c_pml4[0] = c.pdpt | US | ENT;
-    c_pdpt[0] = c.pd | US | ENT;
-    c_pd.* = pd;
+    c_pdpt.* = pdpt;
     c_pdpt[1] = c.upd | US | ENT;
     return true;
 }

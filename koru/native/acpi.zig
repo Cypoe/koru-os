@@ -225,6 +225,14 @@ pub var ncpus: usize = 0;
 pub var ncpusEnabled: usize = 0;
 pub var nioapics: usize = 0;
 pub var isos: usize = 0;
+// First I/O APIC's phys + GSI base, and the interrupt-source overrides
+// — the ISA->GSI remaps (IRQ0 is pin 2 on i440fx) plus polarity/trigger
+// overrides (PCI shares level-low). ioapic.zig owns the door; these are
+// just the names.
+pub var ioapicPhys: u64 = 0;
+pub var ioapicGsiBase: u32 = 0;
+pub const Iso = struct { src: u8, gsi: u32, flags: u16 };
+pub var isoList: [32]Iso = undefined;
 // LAPIC ids of the counted CPUs — IPI targets for bringup. 64 is a
 // stated bound, not a guess: past it the count still reports honestly
 // and the id array simply doesn't cover the tail.
@@ -248,8 +256,22 @@ fn parseMadt() void {
                 ncpus += 1;
                 if (elen >= 8 and (rd32(p, off + 4) & 1) != 0) ncpusEnabled += 1;
             },
-            1 => nioapics += 1,
-            2 => isos += 1,
+            1 => {
+                if (nioapics == 0 and elen >= 12) {
+                    ioapicPhys = rd32(p, off + 4);
+                    ioapicGsiBase = rd32(p, off + 8);
+                }
+                nioapics += 1;
+            },
+            2 => {
+                if (isos < 32 and elen >= 10)
+                    isoList[isos] = .{
+                        .src = p[off + 3],
+                        .gsi = rd32(p, off + 4),
+                        .flags = rd16(p, off + 8),
+                    };
+                isos += 1;
+            },
             else => {},
         }
         off += elen;

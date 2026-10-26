@@ -35,8 +35,9 @@ cp "$PROG" "$WORK/program.$EXT"
     -O ReleaseSafe \
     -fno-entry -fno-stack-protector -mno-red-zone \
     -T "$ROOT/koru/native/link.ld" \
-    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm --dep kbd --dep pci --dep mmio --dep virtiopci --dep mouse --dep comp --dep acpi --dep smp -Mroot="$ROOT/koru/native/boot.zig" \
+    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm --dep kbd --dep pci --dep mmio --dep virtiopci --dep mouse --dep comp --dep acpi --dep smp --dep ioapic -Mroot="$ROOT/koru/native/boot.zig" \
     -Macpi="$ROOT/koru/native/acpi.zig" \
+    --dep acpi --dep mmio --dep pci -Mioapic="$ROOT/koru/native/ioapic.zig" \
     --dep pmm --dep mmio --dep acpi -Msmp="$ROOT/koru/native/smp.zig" \
     --dep compiler_env -Mprogram="$WORK/output_emitted.zig" \
     -Mcompiler_env="$ROOT/koru/native/compiler_env.zig" \
@@ -46,7 +47,7 @@ cp "$PROG" "$WORK/program.$EXT"
     --dep pci --dep mmio -Mvirtiopci="$ROOT/koru/native/virtiopci.zig" \
     --dep pci -Mvirtio="$ROOT/koru/native/virtio.zig" \
     --dep pmm -Maspace="$ROOT/koru/native/aspace.zig" \
-    --dep pmm --dep kbd --dep mmio -Muser="$ROOT/koru/native/user.zig" \
+    --dep pmm --dep kbd --dep mmio --dep ioapic -Muser="$ROOT/koru/native/user.zig" \
     -Mpmm="$ROOT/koru/native/pmm.zig" \
     --dep mouse --dep comp -Mkbd="$ROOT/koru/native/kbd.zig" \
     --dep kbd -Mmouse="$ROOT/koru/native/mouse.zig" \
