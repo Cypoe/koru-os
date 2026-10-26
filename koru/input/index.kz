@@ -8,10 +8,12 @@
 // `motion` is a delta because a pointer position is a compositor-owned
 // concept, not a device fact.
 //
-// Providers: koru/native/kbd.zig (8042, IRQ1 ring) on koru-native;
-// koru/hosted/x11.zig (XSelectInput + XPending drain) on hosted. No fake
-// event source — where no input device exists the provider is simply not
-// bound and the arm refuses by name.
+// Providers: koru/native/kbd.zig (8042 kbd channel, IRQ1 ring) +
+// koru/native/mouse.zig (8042 aux channel, IRQ12 packet assembler) on
+// koru-native — one controller, two device channels told apart by status
+// bit5; koru/hosted/x11.zig (XSelectInput + XPending drain) on hosted.
+// No fake event source — where no input device exists the provider is
+// simply not bound and the arm refuses by name.
 //
 // This is deliberately the same shape on both arms: a painter that polls
 // on hosted must see the same event vocabulary it will see on native —
@@ -22,9 +24,9 @@
 
 ~std/realize:row(iface: koruos/input) {
     "resources": "input: raw key/button/motion events, polled ring — no blocking, no charmap",
-    "evidence": "V: koru/native/kbd.zig (8042 IRQ1) + koru/hosted/x11.zig (X event drain) extern koruos_input_*",
+    "evidence": "V: koru/native/kbd.zig + mouse.zig (8042 IRQ1/IRQ12) + koru/hosted/x11.zig (X event drain) extern koruos_input_*",
     "binds": [
-        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/kbd.zig", "8042 PS/2, IRQ1 through the IDT, 64-entry ring"] },
+        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/kbd.zig", "8042 kbd channel, IRQ1 through the IDT, 64-entry ring", "src:koru/native/mouse.zig", "8042 aux channel, IRQ12, 3-byte PS/2 packet assembler"] },
         { "arm": "hosted", "mechanism": "host-libc", "deltas": ["src:koru/hosted/x11.zig", "XSelectInput masks + XPending/XNextEvent drain"] }
     ]
 }

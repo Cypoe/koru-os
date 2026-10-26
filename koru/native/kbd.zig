@@ -12,6 +12,8 @@
 // read"; sleeping on input is the wait-queue rung, deliberately not a
 // faked blocking call here.
 
+const mouse = @import("mouse");
+
 extern fn koru_irq_unmask(irq: u8) void;
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
@@ -57,13 +59,10 @@ var con: [256]u8 = undefined;
 var chead: usize = 0;
 var ctail: usize = 0;
 
-// vec-0x21 path — called from user.zig's irq_exc_dispatch. Reads one byte
-// if the controller has one; on a full ring the byte is dropped and
-// counted, never silently overwritten.
-pub fn irq() void {
-    const st = inb(STATUS);
-    if (st & 1 == 0) return; // no output byte — nothing of ours here
-    const sc = inb(DATA);
+// one controller byte into the scancode ring + the ASCII conin map.
+// IRQ and the poll-drain both land here — the byte is the unit, not
+// the path it arrived by.
+pub fn feedByte(sc: u8) void {
     const next = (head + 1) % ring.len;
     if (next == tail) {
         drops += 1;
@@ -88,6 +87,20 @@ pub fn irq() void {
     }
 }
 
+// vec-0x21 path — called from user.zig's irq_exc_dispatch. Status bit5
+// (AUX) names whose byte it is: an aux byte pending during a phantom
+// IRQ1 belongs to the mouse packet assembler, not this ring.
+pub fn irq() void {
+    const st = inb(STATUS);
+    if (st & 1 == 0) return; // no output byte — nothing of ours here
+    const b = inb(DATA);
+    if ((st & 0x20) != 0) {
+        mouse.feedByte(b);
+        return;
+    }
+    feedByte(b);
+}
+
 // is a console byte pending? — the under-mask recheck read(0) does
 // before blocking, so a byte landing mid-check can't be slept past
 pub fn conPending() bool {
@@ -109,7 +122,9 @@ pub fn init() void {
     say("kbd: 8042 online, IRQ1 unmasked\n");
 }
 
-const InEv = extern struct {
+// the seam's event record — mouse.zig shares this exact type (one
+// owner, one layout), so a popped event assigns directly.
+pub const InEv = extern struct {
     kind: u32,
     code: u32,
     pressed: u32,
@@ -118,16 +133,20 @@ const InEv = extern struct {
 };
 
 pub export fn koruos_input_poll(out: *InEv) callconv(.c) u8 {
-    // drain-on-poll: a byte latched while IRQ1 was masked (or an edge lost
-    // to a phantom interrupt) still surfaces — the ring is the contract,
-    // not the edge.
-    if (inb(STATUS) & 1 != 0) {
-        const sc = inb(DATA);
-        const next = (head + 1) % ring.len;
-        if (next != tail) {
-            ring[head] = sc;
-            head = next;
-        }
+    // drain-on-poll: a byte latched while IRQs were masked (or an edge
+    // lost to a phantom interrupt) still surfaces — the ring is the
+    // contract, not the edge. Bit5 routes it: aux bytes assemble mouse
+    // packets, anything else is a scancode. Then device order, not
+    // arrival order: mouse events first, keys after — a merged
+    // timestamped stream is the compositor's refinement, not v0's lie.
+    const st = inb(STATUS);
+    if (st & 1 != 0) {
+        const b = inb(DATA);
+        if ((st & 0x20) != 0) mouse.feedByte(b) else feedByte(b);
+    }
+    if (mouse.pop()) |ev| {
+        out.* = ev;
+        return 1;
     }
     while (tail != head) {
         const sc = ring[tail];

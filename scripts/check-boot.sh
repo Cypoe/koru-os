@@ -258,6 +258,50 @@ else
     bad "boot_kbd: build failed"; tail -6 "$WORK/boot_kbd.build"
 fi
 
+# mouse: the 8042 aux channel — QEMU monitor `mouse_move`/`mouse_button`
+# drive real PS/2 packets through IRQ12 into mouse.zig's assembler; the
+# fixture accumulates motion deltas until a button edge lands and prints
+# the sum. Same injection contract as input-kbd: a dead monitor socket
+# fails loudly, never reads as "no pointer".
+ms_src="$WORK/boot_mouse.kz"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/input/tests/boot_mouse.kz" > "$ms_src"
+if bash "$ROOT/scripts/build-native.sh" "$ms_src" "$WORK/boot_mouse.elf" > "$WORK/boot_mouse.build" 2>&1; then
+    msport=$((4800 + $$ % 400))
+    timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_mouse.elf" -serial stdio \
+        -display none -m 64M -no-reboot \
+        -monitor "tcp:127.0.0.1:$msport,server,nowait" \
+        > "$WORK/boot_mouse.serial" 2>&1 &
+    msq=$!
+    inj=0
+    for _ in $(seq 1 20); do
+        exec 3<>"/dev/tcp/127.0.0.1/$msport" 2>/dev/null && break
+        sleep 0.5
+    done
+    if [ -e /dev/fd/3 ]; then
+        for _ in $(seq 1 30); do
+            printf 'mouse_move 40 30\n' >&3 2>/dev/null || break
+            sleep 0.15
+            printf 'mouse_button 1\n' >&3 2>/dev/null || break
+            sleep 0.15
+            printf 'mouse_button 0\n' >&3 2>/dev/null || break
+            inj=$((inj+1))
+            sleep 0.15
+        done
+        exec 3>&-
+    fi
+    wait $msq 2>/dev/null || true
+    if [ "$inj" -eq 0 ]; then
+        bad "input-mouse: monitor connect/injection failed — no injection happened"
+    elif grep -qF "mouse: PS/2 aux online" "$WORK/boot_mouse.serial" \
+         && grep -qE "MOUSE PTR dx=-?[0-9]+ dy=-?[0-9]+ btn=[1-3]" "$WORK/boot_mouse.serial"; then
+        ok "input-mouse: IRQ12 packets rode the seam (monitor moves+click -> motion+button events)"
+    else
+        bad "input-mouse: no pointer evidence: $(tail -6 "$WORK/boot_mouse.serial" | tr '\n' '|')"
+    fi
+else
+    bad "boot_mouse: build failed"; tail -6 "$WORK/boot_mouse.build"
+fi
+
 # aspace selftest runs in kmain on every boot — same-VA different-phys proof.
 if grep -qF "ASPACE" "$WORK/boot_hello.serial" && grep -qF "DISTINCT" "$WORK/boot_hello.serial"; then
     ok "aspace: per-domain CR3 proven (same VA, different phys)"

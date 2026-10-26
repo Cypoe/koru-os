@@ -344,11 +344,15 @@ the wait-queue rung's problem, not the iface's shape). Events are
 native, X keycode hosted) — charmap is a layer above; `motion` is a
 delta; `expose` is damage flowing *server→client* (a repaint
 demand — see below). Realized by `koru/native/kbd.zig` (8042 IRQ1 →
-64-entry ring, drain-on-poll covers edges lost while masked) on
-`koru-native` and by `x11.zig` (XSelectInput + XPending drain on
-the same connection that owns surfaces) on `hosted`. Evidence:
-QEMU `sendkey a` → IRQ1 → `KBD key code=30 pressed=1`; python
-ctypes `XSendEvent` → the painter's event loop. The *same* event
+64-entry ring, drain-on-poll covers edges lost while masked) plus
+`koru/native/mouse.zig` (8042 aux channel, IRQ12 → 3-byte packet
+assembler, button edges + raw deltas — status bit5 routes the
+shared port's bytes, the IRQ only doorbells) on `koru-native` and
+by `x11.zig` (XSelectInput + XPending drain on the same connection
+that owns surfaces) on `hosted`. Evidence: QEMU `sendkey a` → IRQ1
+→ `KBD key code=30 pressed=1`; monitor `mouse_move`/`mouse_button`
+→ IRQ12 → `MOUSE PTR dx=40 dy=-30 btn=1`; python ctypes
+`XSendEvent` → the painter's event loop. The *same* event
 vocabulary on both arms — neither provider got to bake semantics
 in alone.
 
@@ -538,7 +542,10 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
           verified pixels; GOP/ACPI still open); surfaces-over-fb
           LANDED (surf.zig pool, *Surf<open!>, present = blit +
           commit, screendump-verified rects; cascade placement is
-          the named bound — real stacking is the compositor's)
+          the named bound — real stacking is the compositor's);
+          PS/2 mouse LANDED (mouse.zig aux channel, IRQ12, flag-routed
+          bytes, monitor-driven motion+button evidence) — compositor
+          deps done: display + surfaces + pointer input; ACPI open
           → init/shell/process userland (fork/exec, pipes/IPC)
             → nativeCompositor + Hyprland/Noctalia oracle harness
 ```

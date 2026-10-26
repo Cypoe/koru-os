@@ -288,6 +288,9 @@ var virtio_seen: u64 = 0;
 extern var virtio_irq_line: u8;
 extern fn virtio_irq_ack() void;
 
+// mouse.zig's IRQ thunk — 8042 aux channel (PS/2 mouse), vec 0x2C.
+extern fn mouse_irq() void;
+
 // gpu.zig exports these once MSI-X is armed; 0xFF = unconfigured. The
 // device's used-ring retirements arrive as the LAPIC vector, not a
 // PIC line — the arm below EOI's the LAPIC and wakes the .gpu park.
@@ -356,6 +359,8 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             // a landed ASCII byte is worth a conin wake; a bare break
             // code is not — the resumed read would just re-block.
             if (kbd.conPending()) wakeKind(.conin);
+        } else if (f.vec == 0x2C) {
+            mouse_irq(); // 8042 aux channel — PS/2 mouse packet byte
         } else if (virtio_irq_line != 0xFF and f.vec == 0x20 + @as(u64, virtio_irq_line)) {
             virtio_irq_ack();
             virtio_seen += 1;

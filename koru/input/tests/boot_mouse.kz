@@ -1,0 +1,50 @@
+// boot_mouse — PS/2 aux-channel input through the koruos/input seam:
+// poll the lift until a motion (nonzero deltas) AND a button event both
+// arrive (the gate injects QEMU monitor `mouse_move`/`mouse_button`), or
+// the bounded spin runs out. Motion accumulates — QEMU splits a move
+// into several packets; the sum is the honest evidence, not a single
+// packet's quantum. Button carries X-style codes (1=L) so both arms'
+// callers see the same vocabulary.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/native
+~import koruos/input
+~import std/io
+
+const std = @import("std");
+
+var obuf: [256]u8 = undefined;
+
+// Bounded spin inside a proc — the lift stays in the path (poll_event's
+// emitted handler is the same tor flow would call), the loop is driver
+// code like the REPL's. 20M polls is generous for monitor injection.
+~pub tor waitptr {} -> string
+
+~proc waitptr|zig {
+    const h = koru_koruos.koru_input.poll_event.handler;
+    var tdx: i32 = 0;
+    var tdy: i32 = 0;
+    var btn: u32 = 0;
+    var press: u32 = 0;
+    var i: usize = 0;
+    while (i < 20_000_000) : (i += 1) {
+        switch (h(.{})) {
+            .motion => |m| { tdx += m.dx; tdy += m.dy; },
+            .button => |b| { if (b.pressed == 1) { btn = b.code; press = 1; } },
+            .refused => |r| return std.fmt.bufPrint(&$mod.obuf,
+                "refused: {s}", .{r}) catch "refused",
+            else => {},
+        }
+        if (btn != 0 and (tdx != 0 or tdy != 0))
+            return std.fmt.bufPrint(&$mod.obuf,
+                "PTR dx={d} dy={d} btn={d}", .{ tdx, tdy, btn }) catch "ptr";
+    }
+    return std.fmt.bufPrint(&$mod.obuf,
+        "timeout dx={d} dy={d} btn={d} p={d}", .{ tdx, tdy, btn, press }) catch "timeout";
+}
+
+~waitptr(): msg |> std/io:print.ln("MOUSE {{ msg:s }}")
+~std/io:print.ln("MOUSE COMPLETE")

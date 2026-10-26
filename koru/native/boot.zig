@@ -25,6 +25,7 @@ const kbd = @import("kbd");
 const pci = @import("pci");
 const gpu = @import("gpu.zig");
 const surf = @import("surf.zig");
+const mouse = @import("mouse");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -58,6 +59,7 @@ comptime {
     _ = &surf.koruos_surface_px;
     _ = &surf.koruos_surface_present;
     _ = &surf.koruos_surface_close;
+    _ = &mouse.mouse_irq;
 }
 
 // multiboot2 header — magic, architecture (i386), length, checksum, end tag.
@@ -182,6 +184,7 @@ export fn kmain(mbi: u32) callconv(.c) noreturn {
                  // rescan
     user.init(); // IDT + PIC + sti — interrupts live before the program
     kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
+    mouse.init(); // 8042 aux channel — PS/2 mouse, IRQ12
     fb.init(mbi);
     aspace.selftest();
     prog.main();
