@@ -1,0 +1,31 @@
+// boot_reboot — the reset half of the power door: mark ACPI-REBOOT-ARMED,
+// then koruos_powerctl(1) pulses the 8042 reset line (triple-fault
+// fallback). QEMU runs with -no-reboot so a real reset ends the VM —
+// the gate's evidence is the marker plus a pre-timeout exit.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/native
+~import std/io
+
+extern var stdout: ?*anyopaque;
+extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+fn say(s: [*:0]const u8) void {
+    _ = fputs(s, stdout);
+}
+
+extern fn koruos_powerctl(state: u32) callconv(.c) i32;
+
+~pub tor run {} -> string
+
+~proc run|zig {
+    say("ACPI-REBOOT-ARMED\n");
+    const rc = koruos_powerctl(1);
+    say("ACPI-REBOOT-IGNORED rc=\n");
+    _ = rc;
+    return "still-running";
+}
+
+~run(): r |> std/io:print.ln("{{ r:s }}")

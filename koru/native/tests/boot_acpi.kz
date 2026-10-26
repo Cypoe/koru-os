@@ -1,0 +1,33 @@
+// boot_acpi — ACPI power door, exercised for real: the fixture marks
+// ACPI-S5-ARMED then calls koruos_powerctl(5), which writes the
+// firmware-provided sleep type + SLP_EN into PM1a_CNT_BLK (the FADT's
+// register). QEMU should exit on its own — the gate's evidence is the
+// marker on serial AND the VM powering off before the timeout, not a
+// log that pretends the register took.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/native
+~import std/io
+
+extern var stdout: ?*anyopaque;
+extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+fn say(s: [*:0]const u8) void {
+    _ = fputs(s, stdout);
+}
+
+extern fn koruos_powerctl(state: u32) callconv(.c) i32;
+
+~pub tor run {} -> string
+
+~proc run|zig {
+    say("ACPI-S5-ARMED\n");
+    const rc = koruos_powerctl(5);
+    say("ACPI-S5-IGNORED rc=\n"); // a machine that ignored SLP_EN is here
+    _ = rc;
+    return "still-running";
+}
+
+~run(): r |> std/io:print.ln("{{ r:s }}")

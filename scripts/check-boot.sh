@@ -85,6 +85,39 @@ else
     bad "acpi: discovery evidence missing: $(grep -a '^acpi:' "$WORK/boot_hello.serial" | tr '\n' '|')"
 fi
 
+# madt/fadt: payload parses behind findTable — lapic/ioapic/cpu counts
+# for SMP, pm1a+_S5 for the power door. QEMU i440fx: 1 cpu, 1 ioapic,
+# 5 interrupt-source overrides, PM1a=0x604, _S5 typa=0 (SeaBIOS).
+if grep -qE "madt: lapic=fee00000 cpus=1\(1en\) ioapics=1 isos=[0-9]+" "$WORK/boot_hello.serial" \
+   && grep -qE "fadt: pm1a=604 dsdt@[0-9a-f]+ s5 typa=[0-9]+ typb=[0-9]+" "$WORK/boot_hello.serial"; then
+    ok "acpi-tables: MADT cpus/ioapics counted; FADT pm1a + DSDT _S5 decoded"
+else
+    bad "acpi-tables: payload evidence missing: $(grep -aE 'madt|fadt' "$WORK/boot_hello.serial" | tr '\n' '|')"
+fi
+
+# powerctl: the power door exercised for real — boot_acpi calls
+# powerctl(5), the PM1a_CNT write powers QEMU OFF mid-boot; boot_reboot
+# calls powerctl(1), the 8042 pulse resets it (-no-reboot exits). The
+# evidence is the marker AND QEMU terminating before the timeout — a
+# refused register write would hang, not exit.
+for acf in acpi reboot; do
+    akwant="ACPI-S5-ARMED"; [ "$acf" = reboot ] && akwant="ACPI-REBOOT-ARMED"
+    afsrc="$WORK/boot_$acf.kz"
+    sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_$acf.kz" > "$afsrc"
+    if bash "$ROOT/scripts/build-native.sh" "$afsrc" "$WORK/boot_$acf.elf" > "$WORK/boot_$acf.build" 2>&1; then
+        timeout 30 "$QEMU" -kernel "$WORK/boot_$acf.elf" -serial stdio \
+            -display none -m 64M -no-reboot > "$WORK/boot_$acf.serial" 2>&1
+        arc=$?
+        if grep -qF "$akwant" "$WORK/boot_$acf.serial" && [ $arc -ne 124 ]; then
+            ok "powerctl-$acf: marker + VM exited on the power door (rc=$arc)"
+        else
+            bad "powerctl-$acf: $(grep -aE 'ACPI|powerctl' "$WORK/boot_$acf.serial" | tail -3 | tr '\n' '|') rc=$arc"
+        fi
+    else
+        bad "powerctl-$acf: build failed"; tail -6 "$WORK/boot_$acf.build"
+    fi
+done
+
 # fb: the koruos/fb seam over a BGA-programmed linear framebuffer — QEMU's
 # built-in multiboot loader does not answer the mb2 fb request tag, so the
 # provider programs the std VGA's VBE_DISPI registers itself and takes the

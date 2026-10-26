@@ -606,8 +606,11 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
           verified pixels; ACPI discovery LANDED — acpi.zig scans
           EBDA/BIOS-window for RSDP, checksums every layer, walks the
           RSDT/XSDT into a table directory (i440fx: FACP/APIC/HPET/
-          WAET) with findTable() for the MADT/FACP consumers; GOP and
-          MADT payload-parse still open); surfaces-over-fb
+          WAET) with findTable() for the consumers; MADT+FADT
+          payload LANDED (lapic/cpus/ioapics/isos counted, pm1a +
+          DSDT _S5 AML-decoded); powerctl door LANDED — S5 write
+          powers QEMU off, 8042 pulse resets it; GOP still
+          open); surfaces-over-fb
           LANDED (surf.zig pool, *Surf<open!>, present = damage →
           comp); PS/2 mouse LANDED (mouse.zig aux channel, IRQ12,
           flag-routed bytes, monitor-driven motion+button evidence);
@@ -615,7 +618,8 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
           composite → fb:present, detach reveal repaint, compositor-
           owned cursor over the delta stream — four screendump-verified
           states: UNDER/SCENE/REVEAL/IDLE+cursor); ACPI LANDED
-          (RSDP + table directory — MADT payload parse is SMP's cell)
+          (RSDP + table directory + MADT/FADT payload + powerctl
+          door — AP bringup is SMP's cell)
           → init/shell/process userland (fork/exec, pipes/IPC)
             → Hyprland/Noctalia oracle harness over the real scene
 ```
@@ -633,8 +637,12 @@ Also open, smaller:
   (single+double indirect write allocation landed — files to ~66 MiB,
   sparse, host debugfs IND/DIND evidence)
 - bootable media: GRUB multiboot2 image (link.ld already carries the
-  header), init that doesn't halt-on-exit, shutdown/reboot
-- SMP (ACPI MADT + IOAPIC + AP bringup) — required before real hardware
+  header), init that doesn't halt-on-exit. ~~shutdown/reboot~~ — landed:
+  `koruos_powerctl` door, S5 payload AML-decoded off FADT+DSDT, reboot
+  via the 8042 pulse (`frag-power-door-decodes-firmware`)
+- SMP (MADT payload parsed — lapic base, enabled cpus, ioapics, ISOs;
+  still open: IOAPIC routing + INIT/SIPI AP bringup) — required before
+  real hardware
 - KolibriOS study: first pass done —
   `notes/kolibrios-donor-read.md` (syscall table, VFS seam, devman
   driver model, v86, **GUI/windowing incl. win_map + damage

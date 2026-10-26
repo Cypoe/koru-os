@@ -59,6 +59,23 @@ fn rd64(p: [*]const u8, off: usize) u64 {
     return std.mem.readInt(u64, p[off..][0..8], .little);
 }
 
+// ---- IO ---------------------------------------------------------------
+
+fn outw(port: u16, value: u16) void {
+    asm volatile ("outw %[value], %[port]"
+        :
+        : [value] "{ax}" (value),
+          [port] "{dx}" (port),
+        : .{ .memory = true });
+}
+fn outb(port: u16, value: u8) void {
+    asm volatile ("outb %[value], %[port]"
+        :
+        : [value] "{al}" (value),
+          [port] "{dx}" (port),
+        : .{ .memory = true });
+}
+
 // Valid RSDP at `pa`? Signature + v1 checksum (20 bytes); for rev>=2 the
 // extended checksum covers the whole descriptor.
 fn rsdpAt(pa: u64) bool {
@@ -190,4 +207,161 @@ pub fn init(mbi_phys: u32) void {
         sig4(&t.sig);
     }
     say("\n");
+
+    parseMadt();
+    parseFadt();
+}
+
+// ---- MADT ("APIC") — the SMP consumer's directory ----------------------
+//
+// The header's lapic_addr is the CR3-independent default; entries list
+// per-CPU local APICs (type 0 — the enable bit is real state), I/O
+// APICs (type 1), and interrupt-source overrides (type 2 — the legacy
+// IRQ→GSI remaps that make "IRQ1 is vector N" a table answer, not a
+// guess). Stored, not just printed: SMP's AP bringup reads these rows.
+
+pub var lapicPhys: u64 = 0;
+pub var ncpus: usize = 0;
+pub var ncpusEnabled: usize = 0;
+pub var nioapics: usize = 0;
+pub var isos: usize = 0;
+
+fn parseMadt() void {
+    const t = findTable("APIC") orelse {
+        say("madt: absent — no APIC table\n");
+        return;
+    };
+    const p: [*]const u8 = @ptrFromInt(t.phys);
+    lapicPhys = rd32(p, 36);
+    var off: usize = 44;
+    while (off + 2 <= t.len) {
+        const etype = p[off];
+        const elen = p[off + 1];
+        if (elen < 2 or off + elen > t.len) break;
+        switch (etype) {
+            0 => {
+                ncpus += 1;
+                if (elen >= 8 and (rd32(p, off + 4) & 1) != 0) ncpusEnabled += 1;
+            },
+            1 => nioapics += 1,
+            2 => isos += 1,
+            else => {},
+        }
+        off += elen;
+    }
+    sayf("madt: lapic={x} cpus={d}({d}en) ioapics={d} isos={d}\n", .{
+        lapicPhys, ncpus, ncpusEnabled, nioapics, isos,
+    });
+}
+
+// ---- FADT ("FACP") + _S5 — the power door ------------------------------
+//
+// Shutdown is a real register write, not a hack: PM1a_CNT_BLK comes
+// from the FADT, the S5 sleep type comes from the DSDT's \_S5 package —
+// the same two values firmware uses. The AML needed is one NameOp
+// naming "_S5_" at root and a small PackageOp of two byte constants —
+// decoded honestly (package length varint, BytePrefix/ZeroOp/OneOp
+// elements), not a magic constant.
+
+pub var pm1aCntBlk: u16 = 0;
+pub var s5Typa: u8 = 0;
+pub var s5Typb: u8 = 0;
+pub var s5Found: bool = false;
+
+// Decode one AML integer element; returns value + bytes consumed.
+fn amlInt(p: [*]const u8, n: usize) ?struct { v: u8, n: usize } {
+    if (n == 0) return null;
+    return switch (p[0]) {
+        0x00 => .{ .v = 0, .n = 1 }, // ZeroOp
+        0x01 => .{ .v = 1, .n = 1 }, // OneOp
+        0x0A => if (n >= 2) .{ .v = p[1], .n = 2 } else null, // BytePrefix
+        else => null,
+    };
+}
+
+// AML PkgLength: low 2 bits of the first byte say how many follow bytes
+// carry the rest of the length (6-bit lead when zero).
+fn pkgLen(p: [*]const u8, n: usize) ?struct { v: usize, n: usize } {
+    if (n == 0) return null;
+    const lead = p[0] >> 6;
+    if (lead == 0) return .{ .v = p[0] & 0x3F, .n = 1 };
+    var v: usize = p[0] & 0x0F;
+    var i: usize = 0;
+    while (i < lead) : (i += 1) {
+        if (i + 1 >= n) return null;
+        v |= @as(usize, p[i + 1]) << (4 + @as(u5, @intCast(i * 8)));
+    }
+    return .{ .v = v, .n = 1 + lead };
+}
+
+fn parseS5(dsdt: u64, dlen: u32) void {
+    const p: [*]const u8 = @ptrFromInt(dsdt);
+    var i: usize = 36; // AML starts after the SDT header
+    while (i + 6 < dlen) : (i += 1) {
+        // NameOp(0x08) [optional root prefix 0x5C] "_S5_"
+        if (p[i] != 0x08) continue;
+        var j = i + 1;
+        if (p[j] == 0x5C) j += 1;
+        if (!std.mem.eql(u8, p[j .. j + 4], "_S5_")) continue;
+        j += 4;
+        if (j >= dlen or p[j] != 0x12) return; // not a package — odd
+        j += 1;
+        const pl = pkgLen(p + j, dlen - j) orelse return;
+        j += pl.n;
+        if (j >= dlen) return;
+        const nEl = p[j];
+        j += 1;
+        if (nEl < 2) return;
+        const a = amlInt(p + j, dlen - j) orelse return;
+        const b = amlInt(p + j + a.n, dlen - j - a.n) orelse return;
+        s5Typa = a.v;
+        s5Typb = b.v;
+        s5Found = true;
+        return;
+    }
+}
+
+fn parseFadt() void {
+    const t = findTable("FACP") orelse {
+        say("fadt: absent — no power block\n");
+        return;
+    };
+    const p: [*]const u8 = @ptrFromInt(t.phys);
+    const dsdt = rd32(p, 40);
+    pm1aCntBlk = @truncate(rd32(p, 64));
+    if (dsdt != 0) parseS5(dsdt, rd32(@ptrFromInt(dsdt), 4));
+    sayf("fadt: pm1a={x} dsdt@{x} s5 typa={d} typb={d}{s}\n", .{
+        pm1aCntBlk, dsdt, s5Typa, s5Typb,
+        if (s5Found) "" else " (no _S5 package)",
+    });
+}
+
+// The kernel's power door. state 5 = S5 poweroff (PM1_CNT SLP_EN +
+// firmware's own sleep type — QEMU exits); state 1 = reboot (8042
+// pulse, triple-fault fallback). Never returns on success; a negative
+// errno-style code names the refusal when the tables gave us nothing.
+pub export fn koruos_powerctl(state: u32) callconv(.c) i32 {
+    switch (state) {
+        5 => {
+            if (!s5Found or pm1aCntBlk == 0) return -38; // ENOSYS
+            say("acpi: powerctl S5 pm1a=");
+            hexw(pm1aCntBlk, 4);
+            sayf(" typa={d} — power off\n", .{s5Typa});
+            outw(pm1aCntBlk, (@as(u16, s5Typa) << 10) | (1 << 13));
+            return 0; // a machine that ignored SLP_EN is still here
+        },
+        1 => {
+            say("acpi: powerctl reboot — 8042 pulse\n");
+            // 8042 reset line; if the chipset ignores it, triple fault
+            var i: usize = 0;
+            while (i < 100) : (i += 1) outb(0x64, 0xFE);
+            const dead = extern struct { limit: u16 = 0, base: u64 = 0 }{};
+            asm volatile ("lidt %[d]\n\tint3"
+                :
+                : [d] "m" (dead),
+            );
+            return 0;
+        },
+        else => return -22, // EINVAL
+    }
 }
