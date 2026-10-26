@@ -42,19 +42,8 @@ fn inw(port: u16) u16 {
         : [port] "{dx}" (port),
         : .{ .memory = true });
 }
-fn outl(port: u16, value: u32) void {
-    asm volatile ("outl %[value], %[port]"
-        :
-        : [value] "{eax}" (value),
-          [port] "{dx}" (port),
-        : .{ .memory = true });
-}
-fn inl(port: u16) u32 {
-    return asm volatile ("inl %[port], %[result]"
-        : [result] "={eax}" (-> u32),
-        : [port] "{dx}" (port),
-        : .{ .memory = true });
-}
+const pci = @import("pci");
+
 
 // --- source 1: multiboot2 tag 8 ----------------------------------------
 
@@ -113,34 +102,15 @@ fn bgaRead(idx: u16) u16 {
     return inw(BGA_DATA);
 }
 
-fn pciAddr(bus: u8, devno: u5, func: u3, off: u8) u32 {
-    return @as(u32, 0x80000000) | (@as(u32, bus) << 16) | (@as(u32, devno) << 11) |
-        (@as(u32, func) << 8) | (off & 0xFC);
-}
-fn pciRead32(bus: u8, devno: u5, func: u3, off: u8) u32 {
-    outl(0xCF8, pciAddr(bus, devno, func, off));
-    return inl(0xCFC);
-}
-
-// Scan for a display-class PCI device (class 0x03), return BAR0's phys base.
+// The display device comes out of pci.zig's enumerated table (class 0x03,
+// VGA-compatible subclass 0x00) — fb programs the mode, the substrate
+// owns config space.
 fn findDisplayBar() ?u64 {
-    var bus: u32 = 0;
-    while (bus < 256) : (bus += 1) {
-        var dev: u32 = 0;
-        while (dev < 32) : (dev += 1) {
-            const id = pciRead32(@intCast(bus), @intCast(dev), 0, 0x00);
-            if (id == 0xFFFFFFFF) continue;
-            const class = pciRead32(@intCast(bus), @intCast(dev), 0, 0x08) >> 24;
-            if (class != 0x03) continue;
-            const bar0 = pciRead32(@intCast(bus), @intCast(dev), 0, 0x10);
-            if ((bar0 & 1) != 0) return null; // I/O BAR — not our LFB shape
-            const cmd = pciRead32(@intCast(bus), @intCast(dev), 0, 0x04);
-            outl(0xCF8, pciAddr(@intCast(bus), @intCast(dev), 0, 0x04));
-            outl(0xCFC, cmd | 0x6); // mem-space + bus-master enable
-            return bar0 & ~@as(u32, 0xF);
-        }
-    }
-    return null;
+    const d = pci.findClass(0x03, 0x00) orelse return null;
+    const bar0 = d.bars[0];
+    if ((bar0 & 1) != 0) return null; // I/O BAR — not our LFB shape
+    pci.setCommand(d, pci.command(d) | 0x6); // mem-space + bus-master
+    return bar0 & ~@as(u32, 0xF);
 }
 
 fn fromBga() bool {

@@ -57,6 +57,22 @@ else
     bad "pmm: selftest failed: $(grep 'PMM' "$WORK/boot_hello.serial" | head -3 | tr '\n' '|')"
 fi
 
+# pci-enum: config-space enumeration is a substrate service — providers
+# look hardware up in the table, they never rescan the bus themselves.
+# The i440FX table is the evidence: host bridge, the PIIX3 multifunction
+# funcs (01.1 IDE + 01.3 ACPI found via header-type bit 7), the VGA fb
+# now claims through findClass, QEMU's default e1000 — and the count line
+# proves the whole scan, not a probe that stopped at its own device.
+if grep -qF "pci: 00:00.0 8086:1237 class=06/00/00" "$WORK/boot_hello.serial" \
+   && grep -qF "pci: 00:01.1 8086:7010 class=01/01" "$WORK/boot_hello.serial" \
+   && grep -qF "pci: 00:02.0 1234:1111 class=03/00" "$WORK/boot_hello.serial" \
+   && grep -qF "pci: 00:03.0 8086:100e class=02/00" "$WORK/boot_hello.serial" \
+   && grep -qF "pci: 06 devices enumerated" "$WORK/boot_hello.serial"; then
+    ok "pci-enum: i440FX table — host bridge, multifunction PIIX3, VGA, NIC"
+else
+    bad "pci-enum: table incomplete: $(grep -a '^pci:' "$WORK/boot_hello.serial" | tr '\n' '|')"
+fi
+
 # fb: the koruos/fb seam over a BGA-programmed linear framebuffer — QEMU's
 # built-in multiboot loader does not answer the mb2 fb request tag, so the
 # provider programs the std VGA's VBE_DISPI registers itself and takes the
@@ -286,6 +302,16 @@ else
         boot_check "$ROOT/koru/native/tests/boot_ext2.k" "EXT2N COMPLETE" \
             -drive "file=$IMG,format=raw,if=none,id=d0" \
             -device virtio-blk-pci,drive=d0,disable-modern=on
+        # virtio-blk's device now comes out of pci.zig's table — not a
+        # provider-rescanned bus. The row proves both halves: 1af4:1001
+        # enumerated with its INTx line, and the capability-list walk saw
+        # the MSI-X cap (0x11) the transitional device carries.
+        if grep -qE "pci: [0-9a-f:.]+ 1af4:1001 class=01/00" "$WORK/boot_ext2.serial" \
+           && grep -qE "pci: [0-9a-f:.]+ 1af4:1001 .*caps=[0-9a-f,]*11" "$WORK/boot_ext2.serial"; then
+            ok "pci-enum: virtio-blk resolved from the table; cap walk saw MSI-X"
+        else
+            bad "pci-enum: virtio row missing: $(grep -aE 'pci:.*1af4' "$WORK/boot_ext2.serial" | tr '\n' '|')"
+        fi
         # disk provenance: the spawned child must be the one read from ext2,
         # not the embedded image — different message, different exit code.
         if grep -qF "disk child says hi" "$WORK/boot_ext2.serial" && grep -qF "status=43" "$WORK/boot_ext2.serial"; then

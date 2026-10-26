@@ -4,10 +4,13 @@
 // unikraft/qemu these symbols come from libukblkdev+libvirtio; here
 // native-runtime serves them itself — the ext2 lift binds unchanged.
 //
-// Scope, honest: PCI type-1 config cycles on CF8/CFC, the legacy I/O
-// register window at BAR0, one virtqueue, synchronous requests (submit
-// then poll the used ring). Transitional devices only — modern
-// virtio-pci capability negotiation is a separate provider family.
+// Scope, honest: the device comes out of pci.zig's enumerated table —
+// config cycles belong to the substrate — then the legacy I/O register
+// window at BAR0, one virtqueue, synchronous requests (submit then
+// park on the used ring). Transitional devices only — modern virtio-pci
+// capability negotiation is a separate provider family.
+
+const pci = @import("pci");
 
 fn outb(port: u16, value: u8) void {
     asm volatile ("outb %[value], %[port]"
@@ -50,21 +53,6 @@ fn inl(port: u16) u32 {
 }
 fn mfence() void {
     asm volatile ("mfence" ::: .{ .memory = true });
-}
-
-// ---- PCI config space ---------------------------------------------------
-
-fn pciAddr(bus: u8, devno: u5, func: u3, off: u8) u32 {
-    return 0x80000000 | (@as(u32, bus) << 16) | (@as(u32, devno) << 11) |
-        (@as(u32, func) << 8) | (off & 0xFC);
-}
-fn pciRead32(bus: u8, devno: u5, func: u3, off: u8) u32 {
-    outl(0xCF8, pciAddr(bus, devno, func, off));
-    return inl(0xCFC);
-}
-fn pciWrite32(bus: u8, devno: u5, func: u3, off: u8, v: u32) void {
-    outl(0xCF8, pciAddr(bus, devno, func, off));
-    outl(0xCFC, v);
 }
 
 // ---- legacy virtio-blk --------------------------------------------------
@@ -149,29 +137,16 @@ fn alignUp(x: usize, a: usize) usize {
 }
 
 fn findDevice() void {
-    var bus: u16 = 0;
-    while (bus < 256) : (bus += 1) {
-        var devnum: u5 = 0;
-        while (true) : (devnum += 1) {
-            const id = pciRead32(@intCast(bus), devnum, 0, 0x00);
-            if ((id & 0xFFFF) == VENDOR and (id >> 16) == DEV_BLK) {
-                const bar0 = pciRead32(@intCast(bus), devnum, 0, 0x10);
-                if ((bar0 & 1) != 0) { // I/O-space BAR → legacy port window
-                    iobase = @intCast(bar0 & ~@as(u32, 3));
-                    // enable I/O space + bus mastering; clear INTx-disable
-                    // (PCI command bit 10) so the line actually asserts
-                    const cmd = pciRead32(@intCast(bus), devnum, 0, 0x04);
-                    pciWrite32(@intCast(bus), devnum, 0, 0x04, (cmd & ~@as(u32, 0x400)) | 0x5);
-                    const intr = pciRead32(@intCast(bus), devnum, 0, 0x3C);
-                    virtio_irq_line = @intCast(intr & 0xFF);
-                    irq_pin = @intCast((intr >> 8) & 0xFF);
-                    device_found = true;
-                    return;
-                }
-            }
-            if (devnum == 31) break;
-        }
-    }
+    const d = pci.find(VENDOR, DEV_BLK) orelse return;
+    const bar0 = d.bars[0];
+    if ((bar0 & 1) == 0) return; // memory BAR → modern-only shape, not ours
+    iobase = @intCast(bar0 & ~@as(u32, 3));
+    // enable I/O space + bus mastering; clear INTx-disable (command bit
+    // 10) so the line actually asserts
+    pci.setCommand(d, (pci.command(d) & ~@as(u16, 0x400)) | 0x5);
+    virtio_irq_line = d.irq_line;
+    irq_pin = d.irq_pin;
+    device_found = true;
 }
 
 // carve the ring out of a static arena — physically contiguous and below

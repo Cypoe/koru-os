@@ -511,7 +511,9 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
         obj-write + nr514 openobj dispatch by pin key; the iface lift
         factors when a second fs provider lands); indirect writes
         LANDED (blkAtAlloc: single+double, triple ENOSPC); dirs open
-        → input + display (virtio-gpu | GOP), PCI enum + MSI-X, ACPI
+        → input + display (virtio-gpu | GOP), MSI-X, ACPI — PCI enum
+          LANDED (pci.zig: enumerate-once table, multifunction + bridge
+          recursion, cap walk; fb + virtio-blk attach by lookup)
           → init/shell/process userland (fork/exec, pipes/IPC)
             → nativeCompositor + Hyprland/Noctalia oracle harness
 ```

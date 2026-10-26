@@ -22,6 +22,7 @@ const user = @import("user");
 const fb = @import("fb.zig");
 const pmm = @import("pmm");
 const kbd = @import("kbd");
+const pci = @import("pci");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -166,6 +167,9 @@ comptime {
 // multiboot2 info block's physical address (EBX at _start).
 export fn kmain(mbi: u32) callconv(.c) noreturn {
     pmm.init(mbi); // frames live before anything allocates
+    pci.init();  // config-space scan while IF=0 — the dump can't
+                 // interleave with IRQ prints; providers look up, never
+                 // rescan
     user.init(); // IDT + PIC + sti — interrupts live before the program
     kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
     fb.init(mbi);
