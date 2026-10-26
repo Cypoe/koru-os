@@ -649,8 +649,11 @@ Also open, smaller:
 - ~~bootable media: GRUB multiboot2 image~~ — landed: `build-iso.sh`
   emits an El Torito ISO, SeaBIOS → GRUB → mb2 measured end-to-end
   (loader answers the fb request tag — `backend=mb2`; e820 off tag 6;
-  RSDP via tag at a different address than PVH's). Still open inside the
-  cell: init that doesn't halt-on-exit, install-to-disk
+  RSDP via tag at a different address than PVH's). ~~install-to-disk~~ —
+  landed: `build-disk.sh` emits a partitioned MBR image (ext2 root,
+  /boot/koru.elf + grub.cfg, grub-install's MBR+core); SeaBIOS →
+  boot.img → core.img → partition /boot/grub → mb2 measured. Still open
+  inside the cell: init that doesn't halt-on-exit
   ~~shutdown/reboot~~ — landed:
   `koruos_powerctl` door, S5 payload AML-decoded off FADT+DSDT, reboot
   via the 8042 pulse (`frag-power-door-decodes-firmware`)

@@ -201,6 +201,29 @@ else
     fi
 fi
 
+# disk: installable media — a partitioned MBR image whose ext2 root
+# holds /boot/koru.elf + grub.cfg, GRUB i386-pc written into the MBR
+# and post-MBR gap by grub-install. The chain SeaBIOS -> boot.img ->
+# core.img -> partition /boot/grub -> mb2 is what a real install runs:
+# the loader has to *find* the partition (msdos table + ext2 driver)
+# before it can read a config, which no -kernel or -cdrom path ever
+# demands.
+if bash "$ROOT/scripts/build-disk.sh" "$FIX/boot_hello.k" "$WORK/koru-disk.img" \
+    > "$WORK/disk.build" 2>&1; then
+    timeout 60 "$QEMU" -drive "file=$WORK/koru-disk.img,format=raw,if=ide" \
+        -boot c -serial stdio -display none -m 128M -no-reboot \
+        > "$WORK/boot_disk.serial" 2>&1 || true
+    if grep -qF "GRUB: multiboot2" "$WORK/boot_disk.serial" \
+       && grep -qF "fb: backend=mb2" "$WORK/boot_disk.serial" \
+       && grep -qF "KORU NATIVE BOOT OK" "$WORK/boot_disk.serial"; then
+        ok "disk: MBR+partition+ext2 install image — GRUB off the disk, kernel loaded, program ran"
+    else
+        bad "disk: evidence missing: $(grep -aE 'GRUB|pmm:|fb:|acpi|KORU|error' "$WORK/boot_disk.serial" | tail -8 | tr '\n' '|')"
+    fi
+else
+    bad "disk: build failed"; tail -6 "$WORK/disk.build"
+fi
+
 # fb: the koruos/fb seam over a BGA-programmed linear framebuffer — QEMU's
 # built-in multiboot loader does not answer the mb2 fb request tag, so the
 # provider programs the std VGA's VBE_DISPI registers itself and takes the
