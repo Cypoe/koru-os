@@ -23,6 +23,7 @@ const fb = @import("fb.zig");
 const pmm = @import("pmm");
 const kbd = @import("kbd");
 const pci = @import("pci");
+const gpu = @import("gpu.zig");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -48,6 +49,9 @@ comptime {
     _ = &virtio.uk_blkdev_stop;
     _ = &virtio.uk_blkdev_queue_unconfigure;
     _ = &virtio.uk_blkdev_unconfigure;
+    _ = &gpu.gpu_irq_ack;
+    _ = &gpu.gpu_msix_vec;
+    _ = &gpu.gpu_msix_seen;
 }
 
 // multiboot2 header — magic, architecture (i386), length, checksum, end tag.

@@ -14,12 +14,16 @@
 //
 // Externs are the `koruos.fb` iface's koru-native mechanism: info/fill/px.
 
-extern var pd: [512]u64; // boot.zig's 2 MiB-page table (identity map, GB 0)
-extern var pdpt: [512]u64; // boot.zig's pdpt — pd covers GB 0; pd_hi covers GB 3
-// One spare pd covers exactly one 1 GiB window above GB 0 — enough for the
-// fb, which is a single contiguous range. A second window needs the frame
-// allocator's page-table story; this is deliberately not it.
-var pd_hi: [512]u64 align(4096) = [_]u64{0} ** 512;
+const pci = @import("pci");
+const mmio = @import("mmio");
+const vgpu = @import("gpu.zig");
+
+// The seam is one framebuffer; the provider is whichever display device
+// enumeration found. Backend dispatch: mb2 tag (loader-programmed) →
+// virtio-gpu (a real driver) → BGA (std VGA's VBE_DISPI hack). LFB
+// sources share `fb_base`; the gpu keeps its own backing + present.
+const Backend = enum { none, lfb, vgpu };
+var backend: Backend = .none;
 
 var present: bool = false;
 var fb_base: [*]volatile u32 = undefined;
@@ -42,8 +46,6 @@ fn inw(port: u16) u16 {
         : [port] "{dx}" (port),
         : .{ .memory = true });
 }
-const pci = @import("pci");
-
 
 // --- source 1: multiboot2 tag 8 ----------------------------------------
 
@@ -127,45 +129,35 @@ fn fromBga() bool {
     return true;
 }
 
-// --- shared adopt/map ----------------------------------------------------
+// --- shared adopt --------------------------------------------------------
 
 fn adopt(phys: u64, pitch: u32, w: u32, h: u32) void {
-    map(phys, @as(u64, pitch) * h);
+    if (!mmio.map(phys, @as(u64, pitch) * h)) return;
     fb_base = @ptrFromInt(@as(usize, @intCast(phys))); // identity map
     fb_width = w;
     fb_height = h;
     fb_pitch = pitch;
     present = true;
-}
-
-// Identity-map [phys, phys+len) with 2 MiB pages in the boot pd. Entries are
-// cache-disabled (PCD) — fb memory wants write-combining at minimum; honest
-// uncached until PAT setup exists.
-fn map(phys: u64, len: u64) void {
-    const first = phys & ~@as(u64, 0x1FFFFF);
-    const last = (phys + len + 0x1FFFFF) & ~@as(u64, 0x1FFFFF);
-    var p = first;
-    while (p < last) : (p += 0x200000) {
-        const gb = p >> 30;
-        // One pd covers one 1 GiB window; pdpt[gb] gets pd_hi on demand.
-        const table: *[512]u64 = if (gb == 0) &pd else blk: {
-            pdpt[gb] = @intFromPtr(&pd_hi) | 0x3;
-            break :blk &pd_hi;
-        };
-        table[(p >> 21) & 0x1FF] = p | 0x93; // present | rw | PCD | 2MiB page
-    }
-    asm volatile ("mov %cr3, %rax\n\tmov %rax, %cr3"
-        :
-        :
-        : .{ .rax = true, .memory = true });
+    backend = .lfb;
 }
 
 // --- init + externs ------------------------------------------------------
 
 pub fn init(mbi_phys: u32) void {
-    if (fromMbi(mbi_phys)) return;
-    _ = fromBga();
+    if (fromMbi(mbi_phys)) {
+        koru_say("fb: backend=mb2\n");
+        return;
+    }
+    if (vgpu.init()) {
+        backend = .vgpu;
+        present = true;
+        koru_say("fb: backend=vgpu\n");
+        return;
+    }
+    if (fromBga()) koru_say("fb: backend=bga\n");
 }
+
+extern fn koru_say(s: [*:0]const u8) void;
 
 const Info = extern struct {
     width: u32,
@@ -175,18 +167,21 @@ const Info = extern struct {
 };
 
 pub export fn koruos_fb_info(out: *Info) callconv(.c) u8 {
+    if (backend == .vgpu) return vgpu.fbInfo(out);
     if (!present) return 0;
     out.* = .{ .width = fb_width, .height = fb_height, .pitch = fb_pitch, .bpp = 32 };
     return 1;
 }
 
 pub export fn koruos_fb_px(x: u32, y: u32, color: u32) callconv(.c) u8 {
+    if (backend == .vgpu) return vgpu.fbPx(x, y, color);
     if (!present or x >= fb_width or y >= fb_height) return 0;
     fb_base[y * (fb_pitch / 4) + x] = color;
     return 1;
 }
 
 pub export fn koruos_fb_fill(x: u32, y: u32, w: u32, h: u32, color: u32) callconv(.c) u8 {
+    if (backend == .vgpu) return vgpu.fbFill(x, y, w, h, color);
     if (!present) return 0;
     const row = fb_pitch / 4;
     const x1 = @min(x + w, fb_width);
@@ -197,6 +192,14 @@ pub export fn koruos_fb_fill(x: u32, y: u32, w: u32, h: u32, color: u32) callcon
         while (xx < x1) : (xx += 1) fb_base[yy * row + xx] = color;
     }
     return 1;
+}
+
+// present is the commit verb: an LFB is scanned out continuously so its
+// present is trivially satisfied — the device never needed the pixels
+// handed over. A gpu surface commits only when asked: TRANSFER + FLUSH.
+pub export fn koruos_fb_present(x: u32, y: u32, w: u32, h: u32) callconv(.c) u8 {
+    if (backend == .vgpu) return vgpu.fbPresent(x, y, w, h);
+    return if (present) 1 else 0;
 }
 
 const std = @import("std");

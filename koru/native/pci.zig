@@ -199,6 +199,74 @@ pub fn capFind(d: *const Device, id: u8) u8 {
     return 0;
 }
 
+// capNext: like capFind but resumes after `from` — same-id capability
+// lists exist (every virtio-pci window is a 0x09 vendor cap; iterating
+// them is how the modern register map gets discovered).
+pub fn capNext(d: *const Device, id: u8, from: u8) u8 {
+    var off: u8 = if (from == 0) d.cap else read8(d.bus, d.slot, d.func, from + 1) & 0xFC;
+    var hops: u8 = 0;
+    while (off != 0 and hops < 48) : (hops += 1) {
+        if (read8(d.bus, d.slot, d.func, off) == id) return off;
+        off = read8(d.bus, d.slot, d.func, off + 1) & 0xFC;
+    }
+    return 0;
+}
+
+// ---- MSI-X ---------------------------------------------------------------
+// Cap 0x11: ctrl@+2 (bit15 enable, bit14 function-mask), table@+4 as
+// {bir:3, off:29} locating the vector table inside one of the device's
+// BARs, pba@+8 likewise (pending bits — unneeded with one-shot messages).
+// Programming an entry is a BAR-relative write, so the table walks back
+// through the Device's own BAR record — the caller maps the window and
+// hands us the VA base.
+
+pub const MsixTable = struct { bar: u8, off: u32, pba_bar: u8, pba_off: u32 };
+
+pub fn msixTable(d: *const Device) ?MsixTable {
+    const cap = capFind(d, 0x11);
+    if (cap == 0) return null;
+    const t = read32(d.bus, d.slot, d.func, cap + 4);
+    const p = read32(d.bus, d.slot, d.func, cap + 8);
+    return .{
+        .bar = @intCast(t & 7),
+        .off = t & ~@as(u32, 7),
+        .pba_bar = @intCast(p & 7),
+        .pba_off = p & ~@as(u32, 7),
+    };
+}
+
+pub fn msixEnable(d: *const Device) bool {
+    const cap = capFind(d, 0x11);
+    if (cap == 0) return false;
+    const c = read16(d.bus, d.slot, d.func, cap + 2);
+    write16(d.bus, d.slot, d.func, cap + 2, (c | 0x8000) & ~@as(u16, 0x4000));
+    // INTx disable: once message-signaled interrupts are armed, the
+    // legacy line must not double-deliver
+    setCommand(d, command(d) | 0x400);
+    return true;
+}
+
+// msixSetEntry: table is the device-window VA the caller mapped; entry
+// n is 4 dwords {msg_addr lo/hi, msg_data, ctrl}. Message data carries
+// the IDT vector; the address targets LAPIC 0 physical-dest — one CPU.
+pub fn msixSetEntry(table: [*]volatile u32, idx: u16, vector: u8) void {
+    const e = table + @as(usize, idx) * 4;
+    e[0] = 0xFEE00000;
+    e[1] = 0;
+    e[2] = vector;
+    e[3] = 0; // unmasked
+}
+
+// barPhys: a BAR's physical base, 64-bit-aware — a mem64 BAR's high dword
+// rides the next table slot (record() stored both raw). I/O BARs return
+// their port base; callers check `bars[i] & 1` for the space themselves.
+pub fn barPhys(d: *const Device, i: usize) u64 {
+    const lo = d.bars[i] & ~@as(u32, 0xF);
+    if ((d.bars[i] & 1) == 0 and (d.bars[i] & 6) == 4 and i + 1 < 6)
+        return (@as(u64, d.bars[i + 1]) << 32) | lo;
+    return lo;
+}
+
 // command register: the bits providers actually flip — I/O space (0),
 // memory space (1), bus master (2), INTx disable (10).
 pub fn command(d: *const Device) u16 {

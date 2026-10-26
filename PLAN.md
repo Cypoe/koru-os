@@ -432,7 +432,7 @@ addresses regardless, defer or spec-driven), **virtio-gpu** (absent;
 first pixels come cheaper from a multiboot/GOP linear framebuffer —
 the `cyberboot` path — with virtio-gpu later for damage/3D).
 
-## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 21/21)
+## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 43/43)
 
 - **pmm — the frame allocator + reclaim.** `koru/native/pmm.zig`:
   loader memory map (PVH `hvm_start_info` under QEMU `-kernel` —
@@ -448,22 +448,28 @@ the `cyberboot` path — with virtio-gpu later for damage/3D).
   (0x20200000) and eats 2 MiB-aligned blocks — lesson recorded: a large
   PDE needs a 2 MiB-aligned base or the walk faults RSVD. The 4 MiB bump
   heap still serves koru-level malloc — program data, not page tables.
-- **`koruos/fb` — first visual output.** `koru/fb/index.kz` lift
-  (info/fill/px over a linear framebuffer, `absent` refusal) +
-  `koru/native/fb.zig` provider. Two honest sources, tried in order:
-  mb2 mbi tag 8 (GRUB programs the mode), else **BGA** — QEMU's
-  `-kernel` multiboot loader does not answer the fb request tag, so
-  the provider programs the std VGA's `VBE_DISPI` registers
-  (0x1CE/0x1CF) itself and takes the LFB phys from PCI BAR0 (class-03
-  scan). The fb range is identity-mapped on demand in a second pd
-  (`pd_hi`, one 1 GiB window — a second window needs the frame
-  allocator's page-table story; deliberately not it). Verified by
-  QEMU screendump: `boot_fb` paints red/green/blue bands and the
-  gate asserts geometry on serial (17/17). This is the substrate
+- **`koruos/fb` — display output through a dispatched backend.**
+  `koru/fb/index.kz` lift (info/fill/px/**present** — draw and commit
+  are distinct verbs; `absent` refusal) + `koru/native/fb.zig`
+  dispatcher over three providers, ranked: mb2 mbi tag 8 (GRUB
+  programs the mode), **virtio-gpu** (`gpu.zig` over `virtiopci.zig`
+  — modern vendor-cap windows walked for common/notify/isr,
+  VERSION_1 negotiate, split queue armed on MSI-X vector 48,
+  GET_DISPLAY_INFO/CREATE_2D/ATTACH_BACKING/SET_SCANOUT; `present` =
+  TRANSFER_TO_HOST_2D + RESOURCE_FLUSH), else **BGA** (std VGA
+  VBE_DISPI + BAR0 LFB — QEMU's `-kernel` loader never answers the
+  mb2 fb tag). Device windows and the GPU's backing frames map
+  through `mmio.zig` — one identity-map owner, not a private `pd`
+  per provider. Gate evidence is the QEMU-monitor screendump:
+  `boot_fb`'s bands read ff0000/00ff00/0000ff off the scanout —
+  pixels verified by bytes, not self-report. This is the substrate
   `nativeCompositor` and the Hyprland-oracle path both need.
 - multiboot2/PVH boot, 32→64 trampoline, COM1 serial, TSC clock
 - 8259 PIC + IDT + exception delivery; interrupt-driven virtio-blk
-  completion (`hlt` parks on vectors, no burn loops)
+  completion (`hlt` parks on vectors, no burn loops); LAPIC + MSI-X
+  for modern devices (vectors 0x30+, EOI to 0xFEE000B0, never the
+  PIC; `koru_dev_sleep(kind)` parks a wait on its WaitKind — gpu
+  rides the same seam blk does, one extern not N)
 - PIT tick preemption: per-child frames + CR3, round-robin roster of ≤4
   ring-3 ELF64 children, in-place ISR-frame rewrite
 - `SYSCALL`/`SYSRET` seam with rights bags (NR bitmask today)
@@ -511,9 +517,10 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
         obj-write + nr514 openobj dispatch by pin key; the iface lift
         factors when a second fs provider lands); indirect writes
         LANDED (blkAtAlloc: single+double, triple ENOSPC); dirs open
-        → input + display (virtio-gpu | GOP), MSI-X, ACPI — PCI enum
-          LANDED (pci.zig: enumerate-once table, multifunction + bridge
-          recursion, cap walk; fb + virtio-blk attach by lookup)
+        → input + display, MSI-X, ACPI — PCI enum + virtio-gpu LANDED
+          (pci.zig enumerate-once table; virtiopci.zig modern
+          transport + VERSION_1 + MSI-X; gpu.zig 2D chain, screendump-
+          verified pixels; GOP/ACPI still open)
           → init/shell/process userland (fork/exec, pipes/IPC)
             → nativeCompositor + Hyprland/Noctalia oracle harness
 ```

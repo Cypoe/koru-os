@@ -288,6 +288,13 @@ var virtio_seen: u64 = 0;
 extern var virtio_irq_line: u8;
 extern fn virtio_irq_ack() void;
 
+// gpu.zig exports these once MSI-X is armed; 0xFF = unconfigured. The
+// device's used-ring retirements arrive as the LAPIC vector, not a
+// PIC line — the arm below EOI's the LAPIC and wakes the .gpu park.
+extern var gpu_msix_vec: u8;
+extern var gpu_msix_seen: u64;
+extern fn gpu_irq_ack() void;
+
 const ExcFrame = extern struct {
     rax: u64,
     rbx: u64,
@@ -369,6 +376,23 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
         picEoi(f.vec);
         return;
     }
+    if (f.vec >= 0x30) {
+        // message-signaled: the device wrote the vector; the LAPIC gets
+        // the EOI, not the PIC. Routing is the same shape as INTx — a
+        // provider-exported vector matched against the delivery.
+        if (gpu_msix_vec != 0xFF and f.vec == gpu_msix_vec) {
+            gpu_irq_ack();
+            gpu_msix_seen += 1;
+            if (gpu_msix_seen == 1) say("irq: vgpu msix delivered\n");
+            wakeKind(.gpu); // a retired command resumes its parked trap
+        } else {
+            say("irq: stray msi vec=");
+            puthex(f.vec);
+            say("\n");
+        }
+        lapicEoi();
+        return;
+    }
     say("EXC v=");
     puthex(f.vec);
     say(" rip=");
@@ -424,15 +448,18 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
 
 // Stub table: vectors 0-31 are exceptions (8,10-14,17,21,29,30 carry a
 // hardware error code — for those the stub pushes only the vector; the
-// rest push a dummy err first), 0x20-0x2F are IRQ lines. All land on one
-// common entry. The rsp parity at stub entry is NOT fixed (CPL0 vs CPL3
-// sources push different frame sizes), so the common entry force-aligns
-// with AND before calling into Zig — a fixed sub would be wrong half the
-// time (the lesson of three movaps GPFs).
+// rest push a dummy err first), 0x20-0x2F are IRQ lines, 0x30-0x3F are
+// reserved for message-signaled interrupts (MSI/MSI-X — the device
+// writes its own vector, no PIC involved). All land on one common entry.
+// The rsp parity at stub entry is NOT fixed (CPL0 vs CPL3 sources push
+// different frame sizes), so the common entry force-aligns with AND
+// before calling into Zig — a fixed sub would be wrong half the time
+// (the lesson of three movaps GPFs).
 comptime {
+    @setEvalBranchQuota(400000);
     var src: []const u8 = ".section .text\n";
     const errv = [_]u8{ 8, 10, 11, 12, 13, 14, 17, 21, 29, 30 };
-    for (0..48) |v| {
+    for (0..64) |v| {
         var has_err = false;
         for (errv) |e| has_err = has_err or e == v;
         src = src ++ std.fmt.comptimePrint("irqstub_{d}:\n", .{v});
@@ -441,7 +468,7 @@ comptime {
     }
     // a link-time address table — stub encodings stay free to vary
     src = src ++ ".section .rodata\n.globl irqstub_table\n.align 8\nirqstub_table:\n";
-    for (0..48) |v| src = src ++ std.fmt.comptimePrint("  .quad irqstub_{d}\n", .{v});
+    for (0..64) |v| src = src ++ std.fmt.comptimePrint("  .quad irqstub_{d}\n", .{v});
     src = src ++ ".section .text\n";
     src = src ++
         \\ irq_exc_common:
@@ -487,15 +514,33 @@ comptime {
     asm (src);
 }
 
-extern var irqstub_table: [48]u64;
+extern var irqstub_table: [64]u64;
+
+// ---- LAPIC: the MSI/MSI-X target -----------------------------------------
+// Message-signaled interrupts bypass the PIC entirely — the device writes
+// a message to 0xFEE00000 naming the IDT vector, and the EOI goes to the
+// LAPIC's own EOI register (0xFEE000B0), never to the 8259. One page of
+// MMIO, identity-mapped; software-enabled via the spurious vector reg.
+const mmio = @import("mmio");
+var lapic: [*]volatile u32 = undefined;
+
+fn lapicInit() void {
+    if (!mmio.map(0xFEE00000, 0x1000)) return;
+    lapic = @ptrFromInt(0xFEE00000);
+    lapic[0xF0 / 4] = lapic[0xF0 / 4] | 0x1FF; // software enable + spurious 0xFF
+}
+fn lapicEoi() void {
+    lapic[0xB0 / 4] = 0;
+}
 
 // Called once from kmain, before the program runs: PIC remapped, every
 // gate populated, interrupts on.
 pub fn init() void {
     picInit();
+    lapicInit();
     // v3 must be DPL=3 — #BP is raised by int3 from user code and the
     // DPL check applies
-    for (0..48) |v| setIdtGate(v, irqstub_table[v], v == 3);
+    for (0..64) |v| setIdtGate(v, irqstub_table[v], v == 3);
     loadTables();
     koru_irq_unmask(0); // PIT tick — the standing delivery proof
     asm volatile ("sti");
@@ -623,7 +668,7 @@ const ChildFsOps = extern struct {
     open_key: *const fn (ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64,
 };
 
-const WaitKind = enum { none, conin, blk, exit, pipe };
+const WaitKind = enum { none, conin, blk, exit, pipe, gpu };
 
 // fd slots are projections over typed seam endpoints, not bare provider
 // handles: stdio are real entries (conin/conout), fs a view handle,
@@ -2745,9 +2790,16 @@ fn wakeKind(kind: WaitKind) void {
 // live epoch the wait is a real block (yield to the roster); outside one
 // there is no schedulable context and the caller keeps its hlt path.
 // Returns nonzero if it blocked-and-woke. Called with IF=0; returns IF=1.
-export fn koru_blk_sleep() callconv(.c) c_int {
+// kind selects the WaitKind — one seam, not an extern per device:
+// 0=blk, 1=gpu (mirror of WaitKind's device arms).
+export fn koru_dev_sleep(kind: u8) callconv(.c) c_int {
     if (!sched_active or nchildren == 0) return 0;
-    kblock(.blk);
+    const k: WaitKind = switch (kind) {
+        0 => .blk,
+        1 => .gpu,
+        else => return 0,
+    };
+    kblock(k);
     return 1;
 }
 

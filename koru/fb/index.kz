@@ -1,10 +1,14 @@
 // koruos/fb — the linear-framebuffer lift.
 //
 // The smallest honest display seam: info/fill/px over a memory-mapped linear
-// framebuffer. On koru-native the provider is koru/native/fb.zig, which gets
-// the fb from the multiboot2 loader (boot.zig requests it, mbi tag 8 answers)
-// and identity-maps it. Anything outside bpp-32 direct-color is `absent` —
-// loud refusal, never a half-decoded pixel.
+// framebuffer, plus `present` — the commit verb. A VGA LFB is scanned out
+// continuously so its present is trivially satisfied; a gpu-backed surface
+// keeps its own backing store and commits only when asked (virtio-gpu's
+// TRANSFER_TO_HOST_2D + RESOURCE_FLUSH are the real device verbs behind it).
+// On koru-native the provider is koru/native/fb.zig dispatching over the
+// enumerated table: mb2 tag-8 → virtio-gpu → BGA, in that order. Anything
+// outside bpp-32 direct-color is `absent` — loud refusal, never a
+// half-decoded pixel.
 //
 // No resource token yet: v0 is a single global surface like the console.
 // The typed surface object (*Surface<open!>) that flows through bridge
@@ -14,10 +18,10 @@
 ~import koruos/realize
 
 ~std/realize:row(iface: koruos/fb) {
-    "resources": "fb: mb2 tag-8 linear framebuffer, identity-mapped, bpp-32 direct color; no GPU",
-    "evidence": "V: koru/native/fb.zig externs koruos_fb_*; boot.zig mb2 framebuffer request tag",
+    "resources": "fb: linear framebuffer — mb2 tag-8 | virtio-gpu 2D (backing + flush) | BGA LFB; bpp-32 direct color",
+    "evidence": "V: koru/native/fb.zig externs koruos_fb_*; gpu.zig virtio-pci+MSI-X path; boot.zig mb2 framebuffer request tag",
     "binds": [
-        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/fb.zig", "mb2 fb request + mbi tag-8 parse; 2MiB identity map, cache-disabled until PAT"] }
+        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/fb.zig", "src:koru/native/gpu.zig", "mb2 tag-8 | vgpu scanout | BGA LFB; 2MiB identity map, cache-disabled until PAT"] }
     ]
 }
 
@@ -25,6 +29,7 @@ const Info = extern struct { width: u32, height: u32, pitch: u32, bpp: u32 };
 extern fn koruos_fb_info(out: *Info) u8;
 extern fn koruos_fb_px(x: u32, y: u32, color: u32) u8;
 extern fn koruos_fb_fill(x: u32, y: u32, w: u32, h: u32, color: u32) u8;
+extern fn koruos_fb_present(x: u32, y: u32, w: u32, h: u32) u8;
 
 ~pub tor info {}
 | ok { width: u32, height: u32, pitch: u32, bpp: u32 }
@@ -51,5 +56,17 @@ extern fn koruos_fb_fill(x: u32, y: u32, w: u32, h: u32, color: u32) u8;
 
 ~proc px|zig {
     if (koruos_fb_px(x, y, color) == 0) return .{ .absent = "no framebuffer or out of bounds" };
+    return .{ .ok = .{} };
+}
+
+// present commits a damaged rect to the display — on an LFB this is a
+// no-op the hardware already performs; on a gpu surface it is the pair
+// of device verbs that move pixels from backing to scanout.
+~pub tor present { x: u32, y: u32, w: u32, h: u32 }
+| ok
+| absent string
+
+~proc present|zig {
+    if (koruos_fb_present(x, y, w, h) == 0) return .{ .absent = "no framebuffer" };
     return .{ .ok = .{} };
 }

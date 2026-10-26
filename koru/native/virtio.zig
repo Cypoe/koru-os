@@ -350,13 +350,14 @@ pub export fn uk_blkdev_queue_submit_one(d: ?*anyopaque, queue_id: u16, req: ?*B
 // Park until the next interrupt. Two waits exist: inside a live epoch
 // (syscall context — syscall's SFMASK already masked IF, which is why
 // this runs cli'd by default there) the wait is a real kernel-context
-// block via koru_blk_sleep — the roster schedules through the DMA window
+// block via koru_dev_sleep — the roster schedules through the DMA window
 // and the completion's IRQ resumes us mid-call. Outside an epoch (kmain
 // mount) cli, re-read the used index under the mask, then sti;hlt —
 // sti and hlt execute as one atomic enable-and-sleep, so a completion
 // landing between the caller's check and here cannot be slept past. A
 // caller with IF=0 and no epoch cannot wake — it polls.
-extern fn koru_blk_sleep() callconv(.c) c_int;
+// kind 0 = .blk (the WaitKind device arms are mirrored there).
+extern fn koru_dev_sleep(kind: u8) callconv(.c) c_int;
 
 fn parkOnce() void {
     const flags = asm volatile ("pushfq\n\tpop %[f]"
@@ -365,7 +366,7 @@ fn parkOnce() void {
         : .{ .memory = true });
     asm volatile ("cli" ::: .{ .memory = true });
     if (used.idx == last_used_idx) {
-        if (koru_blk_sleep() != 0) { // mid-call block — resumed with IF=1
+        if (koru_dev_sleep(0) != 0) { // mid-call block — resumed with IF=1
             blk_yields += 1;
             return;
         }

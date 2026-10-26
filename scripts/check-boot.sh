@@ -81,6 +81,76 @@ fi
 # device, so no display is needed.
 boot_check "$ROOT/koru/fb/tests/boot_fb.k" "FB COMPLETE" -vga std
 
+# vgpu: the same fb fixture over virtio-gpu — modern virtio-pci vendor
+# caps walked for the common/notify/isr windows, VERSION_1 negotiated,
+# a split virtqueue armed on MSI-X (vector 48, LAPIC EOI), then the 2D
+# command chain: GET_DISPLAY_INFO/CREATE_2D/ATTACH_BACKING/SET_SCANOUT,
+# and TRANSFER_TO_HOST_2D + RESOURCE_FLUSH behind fb:present. `-vga none`
+# removes the std VGA so the gpu is the ONLY display — the dispatcher's
+# order and BGA's loud refusal are exercised by the same run. The monitor
+# screendump makes the pixels machine evidence: the fixture's three
+# bands must read ff0000/00ff00/0000ff off the scanout surface itself.
+if [ ! -f "$WORK/boot_fb.elf" ]; then
+    bad "boot_vgpu: fb fixture ELF missing (the BGA row's build failed)"
+else
+    gpuport=$((5200 + $$ % 400))
+    gpuppm="$WORK/vgpu.ppm"
+    gpuppmw="$(cygpath -m "$gpuppm" 2>/dev/null || echo "$gpuppm")"
+    timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_fb.elf" -serial stdio \
+        -display none -m 64M -no-reboot -vga none -device virtio-gpu-pci \
+        -monitor "tcp:127.0.0.1:$gpuport,server,nowait" \
+        > "$WORK/boot_vgpu.serial" 2>&1 &
+    vgq=$!
+    for _ in $(seq 1 20); do
+        exec 3<>"/dev/tcp/127.0.0.1/$gpuport" 2>/dev/null && break
+        sleep 0.5
+    done
+    dumped=0
+    if [ -e /dev/fd/3 ]; then
+        for _ in $(seq 1 30); do
+            if grep -qF "FB COMPLETE" "$WORK/boot_vgpu.serial" 2>/dev/null; then
+                printf 'screendump %s\n' "$gpuppmw" >&3 2>/dev/null && dumped=1
+                break
+            fi
+            sleep 0.5
+        done
+        sleep 0.5
+        exec 3>&-
+    fi
+    kill $vgq 2>/dev/null
+    wait $vgq 2>/dev/null || true
+    if grep -qF "fb: backend=vgpu" "$WORK/boot_vgpu.serial" \
+       && grep -qF "vgpu: features negotiated (VERSION_1)" "$WORK/boot_vgpu.serial" \
+       && grep -qF "vgpu: resource + scanout live" "$WORK/boot_vgpu.serial" \
+       && grep -qF "FB COMPLETE" "$WORK/boot_vgpu.serial"; then
+        ok "vgpu: fb seam rode virtio-gpu — vendor caps, VERSION_1, scanout, FB COMPLETE"
+    else
+        bad "vgpu: backend evidence missing: $(grep -aE 'vgpu|fb:|EXC' "$WORK/boot_vgpu.serial" | tail -6 | tr '\n' '|')"
+    fi
+    if grep -qF "irq: vgpu msix delivered" "$WORK/boot_vgpu.serial" \
+       && grep -qE "vgpu: cmds=[0-9]+ msix=[1-9]" "$WORK/boot_vgpu.serial"; then
+        ok "vgpu-msix: MSI-X vector dispatched through LAPIC EOI (measured count)"
+    else
+        bad "vgpu-msix: interrupt evidence missing: $(grep -aE 'msix|irq:' "$WORK/boot_vgpu.serial" | tail -4 | tr '\n' '|')"
+    fi
+    if [ "$dumped" -eq 1 ] && [ -s "$gpuppm" ]; then
+        if command -v python >/dev/null 2>&1 && python -c "
+import sys,re
+d=open(sys.argv[1],'rb').read()
+m=re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s', d)
+w,h,_=map(int,m.groups()); o=m.end()
+px=lambda x,y: d[o+(y*w+x)*3:o+(y*w+x)*3+3]
+sys.exit(0 if px(w//2,h//6)==b'\xff\x00\x00' and px(w//2,h//2)==b'\x00\xff\x00' and px(w//2,5*h//6)==b'\x00\x00\xff' else 1)
+" "$(cygpath -w "$gpuppm")"; then
+            ok "vgpu-pixels: screendump bands read ff0000/00ff00/0000ff off the scanout"
+        else
+            bad "vgpu-pixels: dump present but bands wrong (or python missing) — pixels never reached the surface"
+        fi
+    else
+        bad "vgpu-pixels: screendump failed — dumped=$dumped ppm=$([ -s "$gpuppm" ] && echo written || echo missing)"
+    fi
+fi
+
 # input: the koruos/input seam over the 8042 — a QEMU `sendkey a` drives a
 # real scancode through IRQ1 into the provider ring; the .kz fixture polls
 # the lift in a bounded spin and prints the raw event (make 'a' = 0x1E).
