@@ -13,6 +13,7 @@
 // faked blocking call here.
 
 const mouse = @import("mouse");
+const comp = @import("comp");
 
 extern fn koru_irq_unmask(irq: u8) void;
 extern var stdout: ?*anyopaque;
@@ -145,6 +146,13 @@ pub export fn koruos_input_poll(out: *InEv) callconv(.c) u8 {
         if ((st & 0x20) != 0) mouse.feedByte(b) else feedByte(b);
     }
     if (mouse.pop()) |ev| {
+        // motion fan-out: the compositor owns pointer position and sees
+        // every delta; the client still gets the raw event (v0 — focus
+        // delivery to surfaces is a later rung, named not faked).
+        if (ev.kind == 3) {
+            comp.feedMotion(ev.dx, ev.dy);
+            comp.flush();
+        }
         out.* = ev;
         return 1;
     }

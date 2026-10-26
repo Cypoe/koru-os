@@ -151,21 +151,30 @@ sys.exit(0 if px(w//2,h//6)==b'\xff\x00\x00' and px(w//2,h//2)==b'\x00\xff\x00' 
     fi
 fi
 
-# surf: koruos/surface on the native arm — surf.zig pools provider-owned
-# backing (contiguous pmm frames), cascades placement like a dumb WM,
-# blits damage through fb and commits through fb:present. Serial proves
-# the seam (open/fill/present/close + the empty-damage refusal); the
-# screendump proves the pixels — surf0's magenta rect, surf1's cyan ON
-# TOP (present order is the z-rule), background untouched. This row's
-# whole point: serial self-report alone passed while the TRANSFER offset
-# bug misplaced every sub-rect — pixels or it didn't happen.
-surf_src="$WORK/boot_surf.k"
-sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/surface/tests/boot_surf.k" > "$surf_src"
+# surf: koruos/surface on the native arm — surf.zig owns custody (pool +
+# provider backings) and comp.zig owns the scene: open maps at the
+# compositor's fixed anchor on top of the z-stack, present() is damage
+# composited through the stack, close() detaches and repaints the
+# vacated rect from retained backings. The fixture prints SURF SCENE
+# while the two-color composite is stable (an hlt spin holds it for the
+# dump), closes both, then SURF IDLE holds the post-detach frame — the
+# second dump must read the root color: reveal-on-close is compositor
+# work, not client work.
+# Pixel evidence is the dump, not serial — the TRANSFER-offset oracle
+# lesson stands.
+surf_src="$WORK/boot_surf.kz"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/surface/tests/boot_surf.kz" > "$surf_src"
 if bash "$ROOT/scripts/build-native.sh" "$surf_src" "$WORK/boot_surf.elf" > "$WORK/boot_surf.build" 2>&1; then
     surfport=$((5600 + $$ % 400))
-    surfppm="$WORK/surf.ppm"
-    surfppmw="$(cygpath -m "$surfppm" 2>/dev/null || echo "$surfppm")"
-    timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_surf.elf" -serial stdio \
+    surfs="$WORK/surfscene.ppm"
+    surff="$WORK/surffinal.ppm"
+    surfsw="$(cygpath -m "$surfs" 2>/dev/null || echo "$surfs")"
+    surffw="$(cygpath -m "$surff" 2>/dev/null || echo "$surff")"
+    # the fixture holds each named state in an hlt-paced spin — a busy
+    # loop would starve TCG's main loop and every dump would read the
+    # post-detach black frame (the chardev/serial lag lesson). SURF IDLE
+    # marks the post-detach frame, held stable for the second dump.
+    timeout 40 "$QEMU" -kernel "$WORK/boot_surf.elf" -serial stdio \
         -display none -m 64M -no-reboot -vga none -device virtio-gpu-pci \
         -monitor "tcp:127.0.0.1:$surfport,server,nowait" \
         > "$WORK/boot_surf.serial" 2>&1 &
@@ -174,48 +183,211 @@ if bash "$ROOT/scripts/build-native.sh" "$surf_src" "$WORK/boot_surf.elf" > "$WO
         exec 3<>"/dev/tcp/127.0.0.1/$surfport" 2>/dev/null && break
         sleep 0.5
     done
-    sdumped=0
+    sds=0; sdf=0
     if [ -e /dev/fd/3 ]; then
-        for _ in $(seq 1 30); do
-            if grep -qF "SURF COMPLETE" "$WORK/boot_surf.serial" 2>/dev/null; then
-                printf 'screendump %s\n' "$surfppmw" >&3 2>/dev/null && sdumped=1
+        for _ in $(seq 1 80); do
+            if grep -qF "SURF SCENE" "$WORK/boot_surf.serial" 2>/dev/null; then
+                printf 'screendump %s\n' "$surfsw" >&3 2>/dev/null && sds=1
                 break
             fi
-            sleep 0.5
+            sleep 0.25
+        done
+        for _ in $(seq 1 80); do
+            if grep -qF "SURF IDLE" "$WORK/boot_surf.serial" 2>/dev/null; then
+                sleep 0.3
+                printf 'screendump %s\n' "$surffw" >&3 2>/dev/null && sdf=1
+                break
+            fi
+            sleep 0.25
+        done
+        for _ in $(seq 1 60); do
+            grep -qF "SURF COMPLETE" "$WORK/boot_surf.serial" 2>/dev/null && break
+            sleep 0.25
         done
         sleep 0.5
         exec 3>&-
     fi
     kill $sq 2>/dev/null
     wait $sq 2>/dev/null || true
-    if grep -qF "surf: open 320x200 at 24,24" "$WORK/boot_surf.serial" \
-       && grep -qF "surf: open 160x100 at 80,64" "$WORK/boot_surf.serial" \
+    if grep -qF "comp: attach 320x200 at 40,40 z=0" "$WORK/boot_surf.serial" \
+       && grep -qF "surf: open 320x200 at 40,40" "$WORK/boot_surf.serial" \
+       && grep -qF "surf: open 160x100 at 40,40" "$WORK/boot_surf.serial" \
        && grep -qF "empty damage refused" "$WORK/boot_surf.serial" \
        && grep -qF "SURF COMPLETE" "$WORK/boot_surf.serial"; then
         ok "surf-native: *Surf<open!> minted/filled/presented/closed; empty damage refused"
     else
-        bad "surf-native: seam evidence missing: $(grep -aE 'surf|FAIL|EXC' "$WORK/boot_surf.serial" | tail -6 | tr '\n' '|')"
+        bad "surf-native: seam evidence missing: $(grep -aE 'surf|comp|FAIL|EXC' "$WORK/boot_surf.serial" | tail -6 | tr '\n' '|')"
     fi
-    if [ "$sdumped" -eq 1 ] && [ -s "$surfppm" ]; then
+    if [ "$sds" -eq 1 ] && [ -s "$surfs" ]; then
         if command -v python >/dev/null 2>&1 && python -c "
 import sys,re
 d=open(sys.argv[1],'rb').read()
 m=re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s', d)
 w,h,_=map(int,m.groups()); o=m.end()
 px=lambda x,y: d[o+(y*w+x)*3:o+(y*w+x)*3+3]
-# surf0 magenta at (24,24)+320x200; surf1 cyan at (80,64)+160x100 on top
-sys.exit(0 if px(30,30)==b'\xff\x00\xff' and px(300,200)==b'\xff\x00\xff'
-         and px(160,114)==b'\x00\xff\xff' and px(8,8)==b'\x00\x00\x00' else 1)
-" "$(cygpath -w "$surfppm")"; then
-            ok "surf-pixels: screendump shows magenta + cyan rects at their cascaded slots"
+# both surfaces anchored (40,40): surf1 cyan ON TOP (45,45 inside it),
+# surf0 magenta shows where surf1 doesn't cover, bg elsewhere
+sys.exit(0 if px(45,45)==b'\x00\xff\xff' and px(300,200)==b'\xff\x00\xff'
+         and px(8,8)==b'\x00\x00\x00' else 1)
+" "$(cygpath -w "$surfs")"; then
+            ok "surf-pixels: z-composite — cyan on top at the shared anchor, magenta beneath, bg outside"
         else
             bad "surf-pixels: dump present but pixels wrong (or python missing)"
         fi
     else
-        bad "surf-pixels: screendump failed — dumped=$sdumped ppm=$([ -s "$surfppm" ] && echo written || echo missing)"
+        bad "surf-pixels: screendump failed — dumped=$sds ppm=$([ -s "$surfs" ] && echo written || echo missing)"
+    fi
+    if [ "$sdf" -eq 1 ] && [ -s "$surff" ]; then
+        if command -v python >/dev/null 2>&1 && python -c "
+import sys,re
+d=open(sys.argv[1],'rb').read()
+m=re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s', d)
+w,h,_=map(int,m.groups()); o=m.end()
+px=lambda x,y: d[o+(y*w+x)*3:o+(y*w+x)*3+3]
+sys.exit(0 if px(45,45)==b'\x00\x00\x00' and px(300,200)==b'\x00\x00\x00' else 1)
+" "$(cygpath -w "$surff")"; then
+            ok "surf-reveal: closes repainted the vacated rects back to the root scene"
+        else
+            bad "surf-reveal: post-close dump still shows stale pixels"
+        fi
+    else
+        bad "surf-reveal: final screendump failed — dumped=$sdf"
     fi
 else
     bad "boot_surf: build failed"; tail -6 "$WORK/boot_surf.build"
+fi
+
+# comp: nativeCompositor itself — the discriminating run. The fixture
+# presents the LOWER surface after the upper is already mapped AND filled,
+# so at COMP UNDER the upper's cyan rect must sit on TOP — painter's-
+# order-at-present would blit the lower surface's magenta over it. Then
+# the presented top (SCENE), the close's retained-backing reveal (REVEAL),
+# and monitor mouse_moves driving the compositor-owned cursor while the
+# client still sees raw deltas (fan-out). Four dumps, one per state —
+# z-order, retained repaint, and the pointer are all pixel-evidenced.
+# The holds are hlt-paced: a busy spin starves TCG's main loop and dumps
+# land on the post-detach frame instead of the state they name.
+comp_src="$WORK/boot_comp.kz"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/surface/tests/boot_comp.kz" > "$comp_src"
+if bash "$ROOT/scripts/build-native.sh" "$comp_src" "$WORK/boot_comp.elf" > "$WORK/boot_comp.build" 2>&1; then
+    compport=$((6000 + $$ % 400))
+    cu="$WORK/compunder.ppm"; cs="$WORK/compscene.ppm"
+    cr="$WORK/compreveal.ppm"; cf="$WORK/compfinal.ppm"
+    cuw="$(cygpath -m "$cu")"; csw="$(cygpath -m "$cs")"
+    crw="$(cygpath -m "$cr")"; cfw="$(cygpath -m "$cf")"
+    timeout 60 "$QEMU" -kernel "$WORK/boot_comp.elf" -serial stdio \
+        -display none -m 64M -no-reboot -vga none -device virtio-gpu-pci \
+        -monitor "tcp:127.0.0.1:$compport,server,nowait" \
+        > "$WORK/boot_comp.serial" 2>&1 &
+    cq=$!
+    for _ in $(seq 1 20); do
+        exec 3<>"/dev/tcp/127.0.0.1/$compport" 2>/dev/null && break
+        sleep 0.5
+    done
+    dU=0; dS=0; dR=0; dF=0
+    if [ -e /dev/fd/3 ]; then
+        # inject from the start — aux packets queue in the PS/2 ring and
+        # waitptr drains them whenever it runs; waiting for its window
+        # misses it (the window is hlt-paced, IRQ12 itself is the wake).
+        ( inj=0; while [ $inj -lt 120 ]; do
+            grep -qF "COMP COMPLETE" "$WORK/boot_comp.serial" 2>/dev/null && break
+            printf 'mouse_move 40 30\nmouse_button 1\nmouse_button 0\n' >&3 2>/dev/null || break
+            inj=$((inj+1)); sleep 0.5
+          done ) &
+        injpid=$!
+        for _ in $(seq 1 80); do
+            if grep -qF "COMP UNDER" "$WORK/boot_comp.serial" 2>/dev/null; then
+                printf 'screendump %s\n' "$cuw" >&3 2>/dev/null && dU=1; break
+            fi
+            sleep 0.25
+        done
+        for _ in $(seq 1 80); do
+            if grep -qF "COMP SCENE" "$WORK/boot_comp.serial" 2>/dev/null; then
+                printf 'screendump %s\n' "$csw" >&3 2>/dev/null && dS=1; break
+            fi
+            sleep 0.25
+        done
+        for _ in $(seq 1 80); do
+            if grep -qF "COMP REVEAL" "$WORK/boot_comp.serial" 2>/dev/null; then
+                printf 'screendump %s\n' "$crw" >&3 2>/dev/null && dR=1; break
+            fi
+            sleep 0.25
+        done
+        for _ in $(seq 1 80); do
+            if grep -qF "COMP IDLE" "$WORK/boot_comp.serial" 2>/dev/null; then
+                sleep 0.3
+                printf 'screendump %s\n' "$cfw" >&3 2>/dev/null && dF=1; break
+            fi
+            sleep 0.25
+        done
+        for _ in $(seq 1 60); do
+            grep -qF "COMP COMPLETE" "$WORK/boot_comp.serial" 2>/dev/null && break
+            sleep 0.25
+        done
+        wait $injpid 2>/dev/null
+        exec 3>&-
+    fi
+    kill $cq 2>/dev/null
+    wait $cq 2>/dev/null || true
+    if grep -qF "comp: attach 320x200 at 40,40 z=0" "$WORK/boot_comp.serial" \
+       && grep -qF "comp: attach 160x100 at 40,40 z=1" "$WORK/boot_comp.serial" \
+       && grep -qF "comp: detach z=1" "$WORK/boot_comp.serial" \
+       && grep -qE "COMP PTR dx=[1-9]" "$WORK/boot_comp.serial" \
+       && grep -qF "COMP COMPLETE" "$WORK/boot_comp.serial"; then
+        ok "comp-scene: surfaces enter the z-stack at open; motion+button rode the seam"
+    else
+        bad "comp-scene: evidence missing: $(grep -aE 'comp|COMP|FAIL|EXC' "$WORK/boot_comp.serial" | tail -8 | tr '\n' '|')"
+    fi
+    if [ "$dU" -eq 1 ] && [ "$dS" -eq 1 ] && [ "$dR" -eq 1 ] \
+       && [ -s "$cu" ] && [ -s "$cs" ] && [ -s "$cr" ]; then
+        if command -v python >/dev/null 2>&1 && python -c "
+import sys,re
+def rd(p):
+    d=open(p,'rb').read()
+    m=re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s',d)
+    w,h,_=map(int,m.groups()); o=m.end()
+    return lambda x,y: d[o+(y*w+x)*3:o+(y*w+x)*3+3]
+u,s,r=rd(sys.argv[1]),rd(sys.argv[2]),rd(sys.argv[3])
+# UNDER: s0 (z=0) presented AFTER s1 (z=1) was already mapped and filled —
+# painter's-order-at-present would blit s0's magenta over s1's rect and
+# read ff00ff at (45,45); the z-walk leaves s1's cyan on top. SCENE:
+# same stack with s1 presented. REVEAL: s1 closed, s0's magenta repaints
+# from its retained backing — no client involved.
+ok = u(45,45)==b'\x00\xff\xff' and u(300,200)==b'\xff\x00\xff' \
+     and s(45,45)==b'\x00\xff\xff' and s(300,200)==b'\xff\x00\xff' \
+     and r(45,45)==b'\xff\x00\xff' and r(300,200)==b'\xff\x00\xff'
+sys.exit(0 if ok else 1)
+" "$(cygpath -w "$cu")" "$(cygpath -w "$cs")" "$(cygpath -w "$cr")"; then
+            ok "comp-zorder: UNDER/SCENE/REVEAL — z decides pixels, close repaints retained backing"
+        else
+            bad "comp-zorder: dumps present but pixels wrong (or python missing)"
+        fi
+    else
+        bad "comp-zorder: marker dumps failed — U=$dU S=$dS R=$dR"
+    fi
+    if [ "$dF" -eq 1 ] && [ -s "$cf" ]; then
+        if command -v python >/dev/null 2>&1 && python -c "
+import sys,re
+d=open(sys.argv[1],'rb').read()
+m=re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s',d)
+w,h,_=map(int,m.groups()); o=m.end()
+px=lambda x,y: d[o+(y*w+x)*3:o+(y*w+x)*3+3]
+# the arrow is ~67 non-bg pixels; its position is wherever the drained
+# deltas accumulated (clamped at the frame edge possibly crops it), and
+# with every surface closed the root is pure black — any non-black
+# cluster IS the compositor-rendered cursor.
+nb=sum(1 for y in range(h) for x in range(w) if px(x,y)!=b'\x00\x00\x00')
+sys.exit(0 if 20<=nb<=200 and px(45,45)==b'\x00\x00\x00' else 1)
+" "$(cygpath -w "$cf")"; then
+            ok "comp-pointer: compositor-owned cursor tracked the injected deltas (clamped corner)"
+        else
+            bad "comp-pointer: final dump has no cursor evidence (or python missing)"
+        fi
+    else
+        bad "comp-pointer: final screendump failed — dumped=$dF"
+    fi
+else
+    bad "boot_comp: build failed"; tail -6 "$WORK/boot_comp.build"
 fi
 
 # input: the koruos/input seam over the 8042 — a QEMU `sendkey a` drives a

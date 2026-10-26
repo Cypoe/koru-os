@@ -7,20 +7,21 @@
 // and eventually nativeCompositor all agree on.
 //
 // Realized on `hosted` by koru/hosted/x11.zig (WSLg through libX11) and
-// on `koru-native` by koru/native/surf.zig — a pool of provider-owned
-// backing stores composited onto the fb seam at present time. The native
-// provider is its own placement authority (a cascade, like a dumb WM);
-// real stacking is nativeCompositor's problem, named there not here.
+// on `koru-native` by koru/native/surf.zig + comp.zig — provider-owned
+// backings composited onto the fb seam through a z-ordered scene. The
+// native provider is its own placement authority (a fixed anchor —
+// there is no move verb yet); stacking is real: index order in comp's
+// layer stack decides pixels, never present order.
 
 ~import std/realize
 ~import koruos/realize
 
 ~std/realize:row(iface: koruos/surface) {
     "resources": "surface: provider-owned pixel buffer + window object + commit",
-    "evidence": "V: koru/hosted/x11.zig externs koruos_surface_* over libX11; no GPU, no event loop; native: surf.zig pool over fb backend, screendump-verified",
+    "evidence": "V: koru/hosted/x11.zig externs koruos_surface_* over libX11; no GPU, no event loop; native: surf.zig + comp.zig z-composite over fb backend, screendump-verified",
     "binds": [
         { "arm": "hosted", "mechanism": "host-libc", "deltas": ["src:koru/hosted/x11.zig", "libX11.so.6; ZPixmap XImage per surface, XPutImage+flush on present"] },
-        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/surf.zig", "pmm-contiguous backing, cascade placement, present = blit + fb commit"] }
+        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/surf.zig", "pmm-contiguous backing custody", "src:koru/native/comp.zig", "nativeCompositor: z-stack scene, damage->composite->present, compositor-owned pointer"] }
     ]
 }
 

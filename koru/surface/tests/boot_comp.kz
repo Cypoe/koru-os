@@ -1,0 +1,113 @@
+// boot_comp — nativeCompositor through the real seam: two surfaces at
+// the compositor's fixed anchor (z = creation order), a present order
+// that painter's-order-at-present would clobber but z survives, a close
+// that reveals the retained backing beneath, then pointer deltas driving
+// the compositor-owned cursor.
+//
+// Marker prints time the gate's screendumps; each is followed by a
+// hold-stable spin so the dump reads the composite it names:
+//   UNDER  — s1 mapped AND filled, s0 presented after: s1's cyan rect
+//            sits on TOP of s0's magenta. Painter's-order-at-present
+//            would blit the late lower present over it and read magenta;
+//            the z-walk reads cyan.
+//   SCENE  — s1 presented: cyan on top of magenta.
+//   REVEAL — s1 closed: s0's magenta repaints from its retained backing
+//            with no client repaint — damage is server-driven.
+//   COMPLETE — s0 closed too: root color + the cursor wherever the
+//            monitor's mouse_moves clamped it (top-right corner).
+// Serial self-report alone passed the TRANSFER-offset bug; pixels or it
+// didn't happen.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/native
+~import koruos/surface
+~import koruos/input
+~import std/io
+
+const std = @import("std");
+
+extern var stdout: ?*anyopaque;
+extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+fn say(s: [*:0]const u8) void {
+    _ = fputs(s, stdout);
+}
+
+var obuf: [256]u8 = undefined;
+
+// hlt-paced holds, not busy spins: on TCG a tight guest loop starves the
+// QEMU main loop and monitor commands (screendump, mouse_move) queue until
+// the program exits — every dump then reads the post-detach black frame.
+// hlt parks the VCPU until the next IRQ (PIT ~18Hz, or an injected aux
+// byte); the monitor stays live and each dump reads the state it names.
+fn spin(n: usize) void {
+    var i: usize = 0;
+    while (i < n) : (i += 1) asm volatile ("hlt");
+}
+
+// poll the input seam between halts — IRQ12 itself wakes the loop on a
+// real packet, so injected deltas land the moment they arrive.
+fn waitptr() [:0]const u8 {
+    const h = koru_koruos.koru_input.poll_event.handler;
+    var tdx: i32 = 0;
+    var tdy: i32 = 0;
+    var btn: u32 = 0;
+    var i: usize = 0;
+    while (i < 150) : (i += 1) {
+        switch (h(.{})) {
+            .motion => |m| { tdx += m.dx; tdy += m.dy; },
+            .button => |b| { if (b.pressed == 1) btn = b.code; },
+            else => {},
+        }
+        if (btn != 0 and (tdx != 0 or tdy != 0))
+            return std.fmt.bufPrintZ(&obuf,
+                "PTR dx={d} dy={d} btn={d}", .{ tdx, tdy, btn }) catch "ptr\x00";
+        asm volatile ("hlt");
+    }
+    return std.fmt.bufPrintZ(&obuf,
+        "timeout dx={d} dy={d} btn={d}", .{ tdx, tdy, btn }) catch "timeout\x00";
+}
+
+~pub tor run {} -> string
+
+~proc run|zig {
+    const S = koru_koruos.koru_surface;
+    const s0 = switch (S.open_event.handler(.{ .width = 320, .height = 200 })) {
+        .ok => |r| r.surface,
+        .refused => |e| return e,
+    };
+    _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 320, .h = 200, .color = 0x00FF00FF });
+    const s1 = switch (S.open_event.handler(.{ .width = 160, .height = 100 })) {
+        .ok => |r| r.surface,
+        .refused => |e| return e,
+    };
+    _ = S.fill_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 100, .color = 0x0000FFFF });
+
+    // present the LOWER surface after the upper is already mapped —
+    // painter's-order would blit magenta over s1's rect; the z-walk
+    // leaves s1's (unpresented, black) pixels on top.
+    _ = S.present_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 320, .h = 200 });
+    say("COMP UNDER\n");
+    spin(80);
+
+    _ = S.present_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 100 });
+    say("COMP SCENE\n");
+    spin(80);
+
+    _ = S.close_event.handler(.{ .surface = s1 });
+    say("COMP REVEAL\n");
+    spin(80);
+
+    const msg = waitptr();
+    say("COMP ");
+    say(msg.ptr);
+    say("\n");
+    _ = S.close_event.handler(.{ .surface = s0 });
+    say("COMP IDLE\n");
+    spin(80);
+    return "COMP COMPLETE";
+}
+
+~run(): r |> std/io:print.ln("{{ r:s }}")

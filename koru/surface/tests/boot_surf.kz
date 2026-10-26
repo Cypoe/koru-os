@@ -1,0 +1,73 @@
+// boot_surf — koruos/surface on the native arm through nativeCompositor.
+// Two surfaces minted, filled in provider backing, committed by
+// present(damage), pair-released by close — driven through the emitted
+// event handlers directly (the .kz driver pattern), because the gate
+// needs marker prints and a hold-stable spin between them that pure .k
+// has no syntax for.
+//
+// "SURF SCENE" marks the composite the gate's screendump must catch:
+// surf1's cyan on top of surf0's magenta at the compositor's fixed
+// anchor — index order is z. "SURF COMPLETE" follows both closes: the
+// vacated scene repaints to the root color from retained backings, no
+// client involved. The empty-damage refusal is still exercised on the
+// wire; the pixel evidence is the screendump, not serial self-report.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/native
+~import koruos/surface
+~import std/io
+
+const std = @import("std");
+
+extern var stdout: ?*anyopaque;
+extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+fn say(s: [*:0]const u8) void {
+    _ = fputs(s, stdout);
+}
+
+// hold a composite stable long enough for the monitor's screendump —
+// hlt-paced, not busy: a tight guest loop starves QEMU's main loop and
+// the dump queues until the post-detach black frame. Each hlt wakes on
+// the next PIT tick (~18Hz), keeping the monitor responsive.
+fn spin(n: usize) void {
+    var i: usize = 0;
+    while (i < n) : (i += 1) asm volatile ("hlt");
+}
+
+~pub tor run {} -> string
+
+~proc run|zig {
+    const S = koru_koruos.koru_surface;
+    const s0 = switch (S.open_event.handler(.{ .width = 320, .height = 200 })) {
+        .ok => |r| r.surface,
+        .refused => |e| return e,
+    };
+    _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 320, .h = 200, .color = 0x00FF00FF });
+    _ = S.present_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 320, .h = 200 });
+    const s1 = switch (S.open_event.handler(.{ .width = 160, .height = 100 })) {
+        .ok => |r| r.surface,
+        .refused => |e| return e,
+    };
+    _ = S.fill_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 100, .color = 0x0000FFFF });
+    _ = S.present_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 100 });
+
+    say("SURF SCENE\n");
+    spin(80);
+
+    // the empty-damage refusal, exercised on the wire as before
+    switch (S.present_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 0, .h = 0 })) {
+        .ok => return "FAIL empty damage committed",
+        .refused => say("empty damage refused\n"),
+    }
+
+    _ = S.close_event.handler(.{ .surface = s1 });
+    _ = S.close_event.handler(.{ .surface = s0 });
+    say("SURF IDLE\n");
+    spin(80);
+    return "SURF COMPLETE";
+}
+
+~run(): r |> std/io:print.ln("{{ r:s }}")

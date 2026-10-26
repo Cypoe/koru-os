@@ -26,6 +26,7 @@ const pci = @import("pci");
 const gpu = @import("gpu.zig");
 const surf = @import("surf.zig");
 const mouse = @import("mouse");
+const comp = @import("comp");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -186,6 +187,7 @@ export fn kmain(mbi: u32) callconv(.c) noreturn {
     kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
     mouse.init(); // 8042 aux channel — PS/2 mouse, IRQ12
     fb.init(mbi);
+    comp.init(); // nativeCompositor — owns the scanout's scene from here
     aspace.selftest();
     prog.main();
     user.run();

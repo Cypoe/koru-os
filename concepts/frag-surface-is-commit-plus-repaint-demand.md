@@ -35,12 +35,16 @@ commands retire through MSI-X, and the monitor screendump reads
 ff0000/00ff00/0000ff off the scanout — pixels as machine evidence, not
 self-report.
 
-`koruos/surface` now binds `koru-native` (surf.zig): a pool of
-provider-owned contiguous-frame backings, open mints `*Surf<open!>`,
-close pair-releases buffer + handle through pmm.freeBlock. The provider
-is its own placement authority — there is no WM, so slots cascade like
-a dumb one, and painter's-order-at-present is the only z-rule. Real
-stacking is nativeCompositor's cell, named here rather than implied.
+`koruos/surface` now binds `koru-native` (surf.zig + comp.zig): a pool
+of provider-owned contiguous-frame backings, open mints `*Surf<open!>`
+and attaches the cleared backing into the compositor's layer stack,
+present(damage) forwards to `comp.damage`, close detaches (the vacated
+rect repaints from the retained backings beneath) then pair-releases
+buffer + handle through pmm.freeBlock. Placement is still provider
+policy — a fixed anchor, no move verb yet — but the cascade and
+painter's-order bounds this paragraph once named are discharged:
+`nativeCompositor` landed and the z-rule now lives in
+frag-scene-owns-stacking.
 
 The oracle lesson this rung paid for: **serial self-report passed while
 the pixels were wrong.** boot_surf printed SURF COMPLETE with every

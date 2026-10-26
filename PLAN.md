@@ -302,20 +302,42 @@ released at bridge `close` through the real provider verb; and
 compositor's own account, not ours.
 
 **`koruos/surface` on koru-native (gated)** — `koru/native/surf.zig`
-is the surface-over-fb provider family the paragraph above was
-waiting on: a pool of provider-owned backings (contiguous pmm
-frames), open mints `*Surf<open!>` into the pool, fill/px touch the
-backing only, present(damage) blits through the fb seam and commits
-through `fb:present` (TRANSFER+FLUSH on vgpu). Placement is the
-provider's own cascade — the dumb-WM authority; painter's order at
-present is the only z-rule, real stacking is `nativeCompositor`'s
-cell. The fixture's phantom types do their own work: every arm of
-`boot_surf.k` must discharge its live `*Surf<open!>` via `close` —
++ `koru/native/comp.zig` are the surface-over-fb provider family the
+paragraph above was waiting on: a pool of provider-owned backings
+(contiguous pmm frames), open mints `*Surf<open!>` into the pool AND
+attaches the backing into the compositor's z-stack, fill/px touch
+the backing only, present(damage) is forwarded to `comp.damage` —
+composite through the stack, then `fb:present` (TRANSFER+FLUSH on
+vgpu). Placement is still provider policy (a fixed anchor — there
+is no move verb yet) but stacking is real: layer index is z, present
+order is not. close detaches and the vacated rect repaints from the
+retained backings beneath — reveal is server-driven, no client
+repaint. The fixture's phantom types do their own work: every arm of
+`boot_surf.kz` must discharge its live `*Surf<open!>` via `close` —
 linearity is the leak check. Evidence is the screendump, which is
 the row's actual point: serial printed `SURF COMPLETE` while an
 offset-semantics bug (TRANSFER's `offset` is the rect's byte offset
 in the *strided* backing, not a packed buffer start) doubled every
 sub-rect — the pixel readback caught what self-report could not.
+
+**`nativeCompositor` (gated)** — `koru/native/comp.zig` owns the
+scene: a fixed-size z-ordered layer stack over surface backings,
+`damage(x,y,w,h)` recomposites the region bottom-to-top and commits
+through the fb seam. Painter's-order-at-present is dead as the
+stacking rule — `boot_comp.kz` presents the LOWER surface after the
+upper is already mapped and the dumps prove z wins: cyan over
+magenta at UNDER/SCENE, the full magenta underlay repainted at
+REVEAL with no client verb involved. The pointer is compositor
+state: `koruos_input_poll` fans raw motion deltas to
+`comp.feedMotion` (the client still sees the deltas — fan-out, not
+capture), position clamps to the frame, and the cursor is a
+topmost composite-time layer revealed on first motion — 67
+non-background pixels off the scanout, exactly the counted
+`paint 51x48 nb=67` damage. And the new oracle lesson sits here
+too: on TCG a busy-spin guest starves QEMU's main loop and every
+screendump queues until the post-detach frame — the gate's holds
+are `hlt`-paced now (PIT ~18Hz wakes them), which is also the
+first place the kernel's idle posture showed up in a test.
 
 **What the X11 oracle just taught the kernel ladder** (why this
 came before the frame allocator): a surface is *a persistent
@@ -540,14 +562,15 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
           (pci.zig enumerate-once table; virtiopci.zig modern
           transport + VERSION_1 + MSI-X; gpu.zig 2D chain, screendump-
           verified pixels; GOP/ACPI still open); surfaces-over-fb
-          LANDED (surf.zig pool, *Surf<open!>, present = blit +
-          commit, screendump-verified rects; cascade placement is
-          the named bound — real stacking is the compositor's);
-          PS/2 mouse LANDED (mouse.zig aux channel, IRQ12, flag-routed
-          bytes, monitor-driven motion+button evidence) — compositor
-          deps done: display + surfaces + pointer input; ACPI open
+          LANDED (surf.zig pool, *Surf<open!>, present = damage →
+          comp); PS/2 mouse LANDED (mouse.zig aux channel, IRQ12,
+          flag-routed bytes, monitor-driven motion+button evidence);
+          nativeCompositor LANDED (comp.zig z-stack scene, damage →
+          composite → fb:present, detach reveal repaint, compositor-
+          owned cursor over the delta stream — four screendump-verified
+          states: UNDER/SCENE/REVEAL/IDLE+cursor); ACPI open
           → init/shell/process userland (fork/exec, pipes/IPC)
-            → nativeCompositor + Hyprland/Noctalia oracle harness
+            → Hyprland/Noctalia oracle harness over the real scene
 ```
 
 Also open, smaller:
