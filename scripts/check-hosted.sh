@@ -473,16 +473,21 @@ if [ "$KVOK" -eq 1 ]; then
     if ! MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e test -e /dev/dri/card0; then
         bad "vroot-hypr-oracle: no /dev/dri/card0 and vgem would not load (host kernel state)"
     else
+        # stage the koru linux-wayland surface client — the second host
+        # realization path runs it against Hyprland's own socket.
+        if [ -s "$WORK/repl-wl.bin" ]; then
+            MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
+                "mkdir -p ~/kvroot/opt/kv && cp '$WORKWSL/repl-wl.bin' ~/kvroot/opt/kv/repl-wl.bin" \
+                > /dev/null 2>&1 || true
+        fi
         MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
-            "cd '$REPWSL' && timeout 180 bash hosted/vroot/hypr-oracle.sh" \
+            "cd '$REPWSL' && timeout 240 bash hosted/vroot/hypr-oracle.sh" \
             > "$WORK/hypr-oracle.out" 2>&1
         if grep -qF "ORACLE-PASS" "$WORK/hypr-oracle.out" \
            && grep -qF "QS-UP" "$WORK/hypr-oracle.out"; then
-            if grep -qF "NOC-UP" "$WORK/hypr-oracle.out"; then
-                stages="foot+quickshell+noctalia"
-            else
-                stages="foot+quickshell (noctalia skipped — not staged)"
-            fi
+            stages="foot+quickshell"
+            grep -qF "NOC-UP" "$WORK/hypr-oracle.out" && stages="$stages+noctalia"
+            grep -qF "KORU-SURF-UP" "$WORK/hypr-oracle.out" && stages="$stages+koru-surface"
             ok "vroot-hypr-oracle: $stages — real dmabuf commits + pixel evidence ($(grep -oE 'nonbg=[0-9]+' "$WORK/hypr-oracle.out" | tail -1))"
         else
             bad "vroot-hypr-oracle: $(grep -aE 'ORACLE-FAIL|NOC-FAIL|PXEVID' "$WORK/hypr-oracle.out" | tail -3 | tr '\n' '|')"

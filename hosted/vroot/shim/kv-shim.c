@@ -169,7 +169,11 @@ static void readback(struct kv_surface *s, struct kv_buffer *b) {
         s->title[0] ? " title=" : "");
     if (s->title[0]) fprintf(stderr, "SHIM TITLE %s\n", s->title);
     if (dump_path && s->commits % dump_every == 0) {
-        FILE *f = fopen(dump_path, "wb");
+        /* atomic dump: write a sibling then rename — a reader polling
+           the path never sees a torn 3MB frame mid-write */
+        char tmp[512];
+        snprintf(tmp, sizeof(tmp), "%s.tmp", dump_path);
+        FILE *f = fopen(tmp, "wb");
         if (f) {
             fprintf(f, "P6\n%d %d\n255\n", b->w, b->h);
             for (int y = 0; y < b->h; y++)
@@ -178,6 +182,7 @@ static void readback(struct kv_surface *s, struct kv_buffer *b) {
                     fputc(px[2], f); fputc(px[1], f); fputc(px[0], f);
                 }
             fclose(f);
+            rename(tmp, dump_path);
             LOG("DUMP %s %dx%d", dump_path, b->w, b->h);
         }
     }

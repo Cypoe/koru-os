@@ -127,6 +127,44 @@ else
     echo "NOC-SKIP no /opt/kv/noctalia binary — build-release not staged"
 fi
 
+# second host realization path: the koru linux-wayland surface provider
+# — a musl-static binary with zero deps — runs inside the jail and
+# connects to THIS Hyprland (wayland-1), so surf/fill/present are
+# realized by the real compositor, not WSLg. Staged by check-hosted.
+if [ -x /opt/kv/repl-wl.bin ]; then
+    dd if=/dev/zero of=/tmp/blk0.img bs=1M count=8 2>/dev/null
+    mke2fs -q -F -t ext2 -b 1024 -I 128 /tmp/blk0.img 8192 >/dev/null 2>&1
+    { printf 'surf(width: 320, height: 240) | ok o |> bind(name: "s", value: o.surface)\n'
+      printf 'fill(surface: s, x: 0, y: 0, w: 320, h: 240, color: 16711680)\n'
+      printf 'present(surface: s, x: 0, y: 0, w: 320, h: 240)\n'
+      sleep 8
+      printf 'quit()\n'; } | \
+      WAYLAND_DISPLAY=wayland-1 KORU_BLK0=/tmp/blk0.img KORU_NID_STORE=/tmp/nid.store \
+      /opt/kv/repl-wl.bin >/tmp/koru-surf.log 2>&1 &
+    SURFPID=$!
+    sleep 5
+    HYPRLAND_INSTANCE_SIGNATURE=$(basename $(dirname $HYPR_SOCK)) \
+      hyprctl clients > /tmp/clients2.txt 2>&1 || true
+    grep -q "koru-os" /tmp/clients2.txt || {
+        cat /tmp/clients2.txt; tail -10 /tmp/koru-surf.log
+        fail "koru surface not in hyprctl clients"; }
+    sleep 3
+    python3 - <<'PY'
+d = open('/tmp/kv-frame.ppm','rb').read()
+tok = d.split(b'\n',3)
+w,h = map(int, tok[1].split())
+px = tok[3]
+red = sum(1 for i in range(0,len(px)-3,3) if px[i]>200 and px[i+1]<60 and px[i+2]<60)
+print(f"KORU-SURF-PXEVID {w}x{h} red={red}")
+assert red > 30000, "koru surface pixels not composited"
+PY
+    [ $? -eq 0 ] || fail "koru surface pixel evidence"
+    echo "KORU-SURF-UP"
+    wait $SURFPID 2>/dev/null || true
+else
+    echo "KORU-SURF-SKIP no /opt/kv/repl-wl.bin staged"
+fi
+
 echo "ORACLE-PASS"
 kill $HYPRPID $SHIMPID $QSPID 2>/dev/null
 exit 0
