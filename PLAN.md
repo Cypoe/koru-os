@@ -299,8 +299,23 @@ bind(name: "s", value: o.surface)` mints `h:Surf:…` into the pool;
 discharges; re-use refuses *by name*; an unclosed surface is
 released at bridge `close` through the real provider verb; and
 `xwininfo` reports the mapped 640×480 "koru-os" window — the
-compositor's own account, not ours. `koru-native` refuses by name
-until `nativeCompositor` or a surface-over-fb family exists.
+compositor's own account, not ours.
+
+**`koruos/surface` on koru-native (gated)** — `koru/native/surf.zig`
+is the surface-over-fb provider family the paragraph above was
+waiting on: a pool of provider-owned backings (contiguous pmm
+frames), open mints `*Surf<open!>` into the pool, fill/px touch the
+backing only, present(damage) blits through the fb seam and commits
+through `fb:present` (TRANSFER+FLUSH on vgpu). Placement is the
+provider's own cascade — the dumb-WM authority; painter's order at
+present is the only z-rule, real stacking is `nativeCompositor`'s
+cell. The fixture's phantom types do their own work: every arm of
+`boot_surf.k` must discharge its live `*Surf<open!>` via `close` —
+linearity is the leak check. Evidence is the screendump, which is
+the row's actual point: serial printed `SURF COMPLETE` while an
+offset-semantics bug (TRANSFER's `offset` is the rect's byte offset
+in the *strided* backing, not a packed buffer start) doubled every
+sub-rect — the pixel readback caught what self-report could not.
 
 **What the X11 oracle just taught the kernel ladder** (why this
 came before the frame allocator): a surface is *a persistent
@@ -520,7 +535,10 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
         → input + display, MSI-X, ACPI — PCI enum + virtio-gpu LANDED
           (pci.zig enumerate-once table; virtiopci.zig modern
           transport + VERSION_1 + MSI-X; gpu.zig 2D chain, screendump-
-          verified pixels; GOP/ACPI still open)
+          verified pixels; GOP/ACPI still open); surfaces-over-fb
+          LANDED (surf.zig pool, *Surf<open!>, present = blit +
+          commit, screendump-verified rects; cascade placement is
+          the named bound — real stacking is the compositor's)
           → init/shell/process userland (fork/exec, pipes/IPC)
             → nativeCompositor + Hyprland/Noctalia oracle harness
 ```

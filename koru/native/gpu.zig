@@ -263,8 +263,13 @@ var reported = false;
 pub fn fbPresent(x: u32, y: u32, pw: u32, ph: u32) u8 {
     if (!present_dev) return 0;
     const r: Rect = .{ .x = x, .y = y, .width = @min(pw, w - x), .height = @min(ph, h - y) };
+    // offset is a BYTE offset into the strided backing where the rect's
+    // top-left pixel lives — QEMU reads `offset + stride*h` per row, so
+    // 0 means "rect (0,0,w,h)", not "this rect". A full-frame transfer is
+    // coincidentally right at 0; any sub-rect needs the real offset.
+    const off = (@as(u64, r.y) * w + r.x) * 4;
     const t: *Transfer = @ptrCast(@alignCast(&cmdbuf[0]));
-    t.* = .{ .hdr = hdr(T_TRANSFER_TO_HOST_2D), .r = r, .offset = 0, .resource_id = RES_ID, .padding = 0 };
+    t.* = .{ .hdr = hdr(T_TRANSFER_TO_HOST_2D), .r = r, .offset = off, .resource_id = RES_ID, .padding = 0 };
     if (!cmd(@sizeOf(Transfer), @sizeOf(Hdr), R_OK_NODATA)) return 0;
     const f: *Flush = @ptrCast(@alignCast(&cmdbuf[0]));
     f.* = .{ .hdr = hdr(T_RESOURCE_FLUSH), .r = r, .resource_id = RES_ID, .padding = 0 };

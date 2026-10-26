@@ -6,18 +6,21 @@
 // a buffer object + a commit point, which is what wayland-shm, XPutImage,
 // and eventually nativeCompositor all agree on.
 //
-// Realized today on the `hosted` arm by koru/hosted/x11.zig (WSLg through
-// libX11). koru-native refuses by name until a compositor or a
-// surface-over-fb provider family exists — that refusal is the work order.
+// Realized on `hosted` by koru/hosted/x11.zig (WSLg through libX11) and
+// on `koru-native` by koru/native/surf.zig — a pool of provider-owned
+// backing stores composited onto the fb seam at present time. The native
+// provider is its own placement authority (a cascade, like a dumb WM);
+// real stacking is nativeCompositor's problem, named there not here.
 
 ~import std/realize
 ~import koruos/realize
 
 ~std/realize:row(iface: koruos/surface) {
     "resources": "surface: provider-owned pixel buffer + window object + commit",
-    "evidence": "V: koru/hosted/x11.zig externs koruos_surface_* over libX11; no GPU, no event loop",
+    "evidence": "V: koru/hosted/x11.zig externs koruos_surface_* over libX11; no GPU, no event loop; native: surf.zig pool over fb backend, screendump-verified",
     "binds": [
-        { "arm": "hosted", "mechanism": "host-libc", "deltas": ["src:koru/hosted/x11.zig", "libX11.so.6; ZPixmap XImage per surface, XPutImage+flush on present"] }
+        { "arm": "hosted", "mechanism": "host-libc", "deltas": ["src:koru/hosted/x11.zig", "libX11.so.6; ZPixmap XImage per surface, XPutImage+flush on present"] },
+        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/surf.zig", "pmm-contiguous backing, cascade placement, present = blit + fb commit"] }
     ]
 }
 

@@ -151,6 +151,73 @@ sys.exit(0 if px(w//2,h//6)==b'\xff\x00\x00' and px(w//2,h//2)==b'\x00\xff\x00' 
     fi
 fi
 
+# surf: koruos/surface on the native arm — surf.zig pools provider-owned
+# backing (contiguous pmm frames), cascades placement like a dumb WM,
+# blits damage through fb and commits through fb:present. Serial proves
+# the seam (open/fill/present/close + the empty-damage refusal); the
+# screendump proves the pixels — surf0's magenta rect, surf1's cyan ON
+# TOP (present order is the z-rule), background untouched. This row's
+# whole point: serial self-report alone passed while the TRANSFER offset
+# bug misplaced every sub-rect — pixels or it didn't happen.
+surf_src="$WORK/boot_surf.k"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/surface/tests/boot_surf.k" > "$surf_src"
+if bash "$ROOT/scripts/build-native.sh" "$surf_src" "$WORK/boot_surf.elf" > "$WORK/boot_surf.build" 2>&1; then
+    surfport=$((5600 + $$ % 400))
+    surfppm="$WORK/surf.ppm"
+    surfppmw="$(cygpath -m "$surfppm" 2>/dev/null || echo "$surfppm")"
+    timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_surf.elf" -serial stdio \
+        -display none -m 64M -no-reboot -vga none -device virtio-gpu-pci \
+        -monitor "tcp:127.0.0.1:$surfport,server,nowait" \
+        > "$WORK/boot_surf.serial" 2>&1 &
+    sq=$!
+    for _ in $(seq 1 20); do
+        exec 3<>"/dev/tcp/127.0.0.1/$surfport" 2>/dev/null && break
+        sleep 0.5
+    done
+    sdumped=0
+    if [ -e /dev/fd/3 ]; then
+        for _ in $(seq 1 30); do
+            if grep -qF "SURF COMPLETE" "$WORK/boot_surf.serial" 2>/dev/null; then
+                printf 'screendump %s\n' "$surfppmw" >&3 2>/dev/null && sdumped=1
+                break
+            fi
+            sleep 0.5
+        done
+        sleep 0.5
+        exec 3>&-
+    fi
+    kill $sq 2>/dev/null
+    wait $sq 2>/dev/null || true
+    if grep -qF "surf: open 320x200 at 24,24" "$WORK/boot_surf.serial" \
+       && grep -qF "surf: open 160x100 at 80,64" "$WORK/boot_surf.serial" \
+       && grep -qF "empty damage refused" "$WORK/boot_surf.serial" \
+       && grep -qF "SURF COMPLETE" "$WORK/boot_surf.serial"; then
+        ok "surf-native: *Surf<open!> minted/filled/presented/closed; empty damage refused"
+    else
+        bad "surf-native: seam evidence missing: $(grep -aE 'surf|FAIL|EXC' "$WORK/boot_surf.serial" | tail -6 | tr '\n' '|')"
+    fi
+    if [ "$sdumped" -eq 1 ] && [ -s "$surfppm" ]; then
+        if command -v python >/dev/null 2>&1 && python -c "
+import sys,re
+d=open(sys.argv[1],'rb').read()
+m=re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s', d)
+w,h,_=map(int,m.groups()); o=m.end()
+px=lambda x,y: d[o+(y*w+x)*3:o+(y*w+x)*3+3]
+# surf0 magenta at (24,24)+320x200; surf1 cyan at (80,64)+160x100 on top
+sys.exit(0 if px(30,30)==b'\xff\x00\xff' and px(300,200)==b'\xff\x00\xff'
+         and px(160,114)==b'\x00\xff\xff' and px(8,8)==b'\x00\x00\x00' else 1)
+" "$(cygpath -w "$surfppm")"; then
+            ok "surf-pixels: screendump shows magenta + cyan rects at their cascaded slots"
+        else
+            bad "surf-pixels: dump present but pixels wrong (or python missing)"
+        fi
+    else
+        bad "surf-pixels: screendump failed — dumped=$sdumped ppm=$([ -s "$surfppm" ] && echo written || echo missing)"
+    fi
+else
+    bad "boot_surf: build failed"; tail -6 "$WORK/boot_surf.build"
+fi
+
 # input: the koruos/input seam over the 8042 — a QEMU `sendkey a` drives a
 # real scancode through IRQ1 into the provider ring; the .kz fixture polls
 # the lift in a bounded spin and prints the raw event (make 'a' = 0x1E).

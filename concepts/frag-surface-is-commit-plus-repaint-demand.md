@@ -34,3 +34,21 @@ Measured: `-vga none -device virtio-gpu-pci` boots `backend=vgpu`, six
 commands retire through MSI-X, and the monitor screendump reads
 ff0000/00ff00/0000ff off the scanout — pixels as machine evidence, not
 self-report.
+
+`koruos/surface` now binds `koru-native` (surf.zig): a pool of
+provider-owned contiguous-frame backings, open mints `*Surf<open!>`,
+close pair-releases buffer + handle through pmm.freeBlock. The provider
+is its own placement authority — there is no WM, so slots cascade like
+a dumb one, and painter's-order-at-present is the only z-rule. Real
+stacking is nativeCompositor's cell, named here rather than implied.
+
+The oracle lesson this rung paid for: **serial self-report passed while
+the pixels were wrong.** boot_surf printed SURF COMPLETE with every
+sub-rect doubled-offset on the scanout — the device obeyed the command,
+the command carried the wrong offset (virtio TRANSFER_TO_HOST_2D's
+`offset` is the byte offset of the rect's top-left *in the strided
+backing* — `y*stride + x*bpp` — not "this rect's data start"; a
+full-frame transfer hides the bug at offset 0). The screendump caught
+what eight green serial lines could not. Gate rule that follows:
+for anything that paints, the row is the pixel readback — the seam's
+own "ok" is not evidence of where the pixels went.

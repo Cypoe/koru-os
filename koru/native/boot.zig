@@ -24,6 +24,7 @@ const pmm = @import("pmm");
 const kbd = @import("kbd");
 const pci = @import("pci");
 const gpu = @import("gpu.zig");
+const surf = @import("surf.zig");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -52,6 +53,11 @@ comptime {
     _ = &gpu.gpu_irq_ack;
     _ = &gpu.gpu_msix_vec;
     _ = &gpu.gpu_msix_seen;
+    _ = &surf.koruos_surface_open;
+    _ = &surf.koruos_surface_fill;
+    _ = &surf.koruos_surface_px;
+    _ = &surf.koruos_surface_present;
+    _ = &surf.koruos_surface_close;
 }
 
 // multiboot2 header — magic, architecture (i386), length, checksum, end tag.

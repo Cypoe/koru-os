@@ -159,7 +159,7 @@ pub fn init(mbi_phys: u32) void {
 
 extern fn koru_say(s: [*:0]const u8) void;
 
-const Info = extern struct {
+pub const Info = extern struct {
     width: u32,
     height: u32,
     pitch: u32,
