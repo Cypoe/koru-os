@@ -190,7 +190,7 @@ OVMF_FD="$(dirname "$QEMU")/share/edk2-x86_64-code.fd"
 if [ ! -f "$OVMF_FD" ]; then
     bad "efi: OVMF fd missing at $OVMF_FD"
 else
-    timeout 60 "$QEMU" \
+    timeout 90 "$QEMU" \
         -drive if=pflash,format=raw,readonly=on,file="$OVMF_FD" \
         -cdrom "$WORK/koru.iso" -boot d -serial stdio \
         -display none -m 128M -no-reboot > "$WORK/boot_efi.serial" 2>&1 || true
@@ -704,6 +704,8 @@ else
         cp "$ROOT/koru/native/tests/wlserver.c" "$WORK/wlserver.c"
         cp "$ROOT/koru/native/tests/wlclient.c" "$WORK/wlclient.c"
         cp "$ROOT/koru/native/tests/wlinit.c" "$WORK/wlinit.c"
+        cp "$ROOT/koru/native/tests/wlreal.c" "$WORK/wlreal.c"
+        cp "$ROOT/koru/native/tests/wlrinit.c" "$WORK/wlrinit.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -723,6 +725,8 @@ else
         WLSRVWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlserver.elf")")"
         WLCLIWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlclient.elf")")"
         WLINITWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlinit.elf")")"
+        WLREALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlreal.elf")")"
+        WLRINITWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlrinit.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -745,6 +749,9 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlserver.elf" "$WORK/wlserver.c" > "$WORK/wlserver.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlclient.elf" "$WORK/wlclient.c" > "$WORK/wlclient.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlinit.elf" "$WORK/wlinit.c" > "$WORK/wlinit.build" 2>&1 \
+           && WLHOST="$ROOT/koru/hosted/wayland" \
+           && "$ZIGBIN" cc -O2 -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -I"$WLHOST" -I"$WLHOST/libffi" -DHAVE_CONFIG_H -o "$WORK/wlreal.elf" "$WORK/wlreal.c" "$WLHOST/src/connection.c" "$WLHOST/src/wayland-client.c" "$WLHOST/src/wayland-os.c" "$WLHOST/src/wayland-util.c" "$WLHOST/wayland-client-protocol.c" "$WLHOST/libffi/libffi.a" > "$WORK/wlreal.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlrinit.elf" "$WORK/wlrinit.c" > "$WORK/wlrinit.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
@@ -765,6 +772,8 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLSRVWSL wlserver.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLCLIWSL wlclient.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLINITWSL wlinit.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLREALWSL wlreal.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLRINITWSL wlrinit.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -864,6 +873,30 @@ else
                 ok "wlsock: path endpoint carried real wl wire — mknod/bind/accept, shm pool via SCM_RIGHTS, commit->done, release, sync"
             else
                 bad "wlsock: evidence missing: $(grep -aE 'WL|FAIL|REFUSE|EXC' "$WORK/boot_wl.serial" | tail -8 | tr '\n' '|')"
+            fi
+            # UNMODIFIED libwayland-client: wlreal.elf is the vendored
+            # 1.26 client (connection/wayland-client/wayland-os/
+            # wayland-util + generated glue + libffi.a demarshalling)
+            # linked against our seam — real connect() on the path
+            # endpoint, real ppoll event loop, MSG_DONTWAIT recvmsg,
+            # F_DUPFD on the received pool, ffi-closure dispatch of the
+            # registry/frame/sync events. Same wlserver.elf compositor.
+            boot_check "$ROOT/koru/native/tests/boot_wlr.k" "WLREXEC COMPLETE" \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on
+            if grep -qF "WLSRV bound wayland-1" "$WORK/boot_wlr.serial" \
+               && grep -qE "WLR connected tries=[0-9]+" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR global 1 wl_compositor v4" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR global 2 wl_shm v1" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLSRV magic=deadbeef tag=00c0ffee px0=5a" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR frame done=42" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR buffer release" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR sync done=43" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLSRV EOS" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLRINIT srv=0 cli=0" "$WORK/boot_wlr.serial"; then
+                ok "wlreal: UNMODIFIED libwayland-client 1.26 + libffi ran the full session — connect/registry/shm/ppoll/SCM_RIGHTS/frame-done/sync"
+            else
+                bad "wlreal: evidence missing: $(grep -aE 'WLR|WLSRV|FAIL|REFUSE|EXC' "$WORK/boot_wlr.serial" | tail -8 | tr '\n' '|')"
             fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null

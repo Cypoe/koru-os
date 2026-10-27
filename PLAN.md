@@ -660,7 +660,18 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
             rung also landed the virtqueue's submit mutex (blk_mu +
             .blkq waiters): a kblocked .blk waiter drops bkl, so the
             single-slot request path serializes itself or pending_req
-            gets stomped — still open: libwayland itself, a
+            gets stomped; UNMODIFIED libwayland LANDED — wlreal.elf
+            is the vendored 1.26 client (connection/wayland-client/
+            wayland-os/wayland-util + generated glue + libffi.a
+            demarshalling) against the seam: real connect on the path
+            endpoint, MSG_DONTWAIT on send/recvmsg, nr7/nr271 poll/
+            ppoll event loop (readiness over .poll waiters + tick
+            deadline + broadcast wake), fcntl F_DUPFD/_CLOEXEC +
+            dup/dup2/dup3 for the received pool, nr228 clock_gettime
+            via monotonic clock, nr186 gettid for wl_log — registry
+            globals + shm formats demarshalled through ffi closures,
+            pool fd over SCM_RIGHTS, commit → done=42 + release,
+            sync=43, server reads client pixels — still open: a
             compositor driving comp.zig's scene)
             → Hyprland/Noctalia oracle harness over the real scene
 ```

@@ -1,11 +1,12 @@
-// NATIVE, wl protocol pair rung: wlinit.elf socketpairs and spawns two
-// SEPARATE binaries — wlserver.elf (compositor endpoint) and
-// wlclient.elf — each holding one socket end as fd0. They speak real
-// libwayland wire format: registry globals, shm formats, surface +
+// NATIVE, wl protocol pair rung: wlinit.elf spawns two SEPARATE
+// binaries — wlserver.elf (compositor endpoint) and wlclient.elf —
+// that rendezvous through the filesystem socket "wayland-1": mknod +
+// bind + listen on one side, socket + connect on the other. They speak
+// real libwayland wire format: registry globals, shm formats, surface +
 // shm_pool + buffer objects, the pool fd crossing SCM_RIGHTS, attach/
 // damage/frame/commit answered by callback.done + buffer.release, and
 // a display sync — the honest intermediate toward libwayland
-// unmodified on this transport.
+// unmodified on this transport (proven by boot_wlr's wlreal.elf).
 std/compiler:paths {
     koruos: {{ ENTRY }}/../..
 }

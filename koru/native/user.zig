@@ -38,6 +38,7 @@ extern fn free(ptr: ?*anyopaque) void;
 const pmm = @import("pmm");
 const kbd = @import("kbd");
 extern fn serPut(c: u8) callconv(.c) void;
+extern fn ukplat_monotonic_clock() callconv(.c) u64;
 
 const ENT: u64 = 0x3; // present | writable
 const US: u64 = 0x4; // user-accessible
@@ -431,6 +432,7 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
         if (f.vec == 0x20) {
             irq_ticks += 1;
             if (irq_ticks == 1) say("irq: timer delivered\n");
+            wakeKind(.poll); // deadline re-check — the tick is poll's clock
             schedPreempt(f);
         } else if (f.vec == 0x21) {
             kbd.irq(); // 8042 scancode → input ring
@@ -820,7 +822,7 @@ const ChildFsOps = extern struct {
     mknod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
 };
 
-const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq };
+const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll };
 
 // fd slots are projections over typed seam endpoints, not bare provider
 // handles: stdio are real entries (conin/conout), fs a view handle,
@@ -1514,6 +1516,9 @@ fn canonNr(nr: u64) u64 {
         158, 218, 273, 302 => 62,
         14 => 62, // rt_sigprocmask — proc-self metadata, no signals exist
         72 => 62, // fcntl folds to the proc-self group — our handles carry no flag state
+        32, 33, 292 => 62, // dup family — fd-table ops on own handles
+        228 => 62, // clock_gettime — a self-time query, same describe class
+        186 => 39, // gettid folds to getpid — one thread per child exists
         // koru's own ABI lives at 512+, out of musl's namespace — nr57 is
         // REAL fork now (musl _Fork sends it with zero args); clone(56)
         // folds to the same "create a child" cap — the flag-shape refusal
@@ -1529,8 +1534,9 @@ fn canonNr(nr: u64) u64 {
         // channel carries — same family. The endpoint verbs — socket,
         // bind, listen, accept(+4), connect — are the channel's
         // namespace half: same class, the name is an fs object the arm
-        // resolves.
-        41, 42, 43, 288, 46, 47, 49, 50, 53, 319 => 22,
+        // resolves. poll/ppoll multiplex those same channels — the
+        // class question is "may this child wait on channels".
+        41, 42, 43, 288, 46, 47, 49, 50, 53, 319, 7, 271 => 22,
         else => nr,
     };
 }
@@ -2271,7 +2277,7 @@ fn fdFreeRef(r: FdRef) void {
     }
 }
 
-fn sockWrite(c: *Child, pair: usize, dir: usize, bva: u64, want: u64) i64 {
+fn sockWrite(c: *Child, pair: usize, dir: usize, bva: u64, want: u64, nb: bool) i64 {
     if (want == 0) return 0;
     if (!socks[pair].conn) return -107; // ENOTCONN — socket() before connect
     const d = &socks[pair].dir[dir];
@@ -2292,12 +2298,13 @@ fn sockWrite(c: *Child, pair: usize, dir: usize, bva: u64, want: u64) i64 {
             return @intCast(n);
         }
         if (userEntry(c, @intCast(bva)) & 1 == 0) return -14;
+        if (nb) return -11; // MSG_DONTWAIT — EAGAIN, unix's flush answer
         c.wait_pipe = pair * 2 + dir;
         kblock(.sock); // wake = space or the reader leaving
     }
 }
 
-fn sockRead(c: *Child, pair: usize, dir: usize, bva: u64, want: u64) i64 {
+fn sockRead(c: *Child, pair: usize, dir: usize, bva: u64, want: u64, nb: bool) i64 {
     if (want == 0) return 0;
     if (!socks[pair].conn) return -107; // ENOTCONN
     const d = &socks[pair].dir[dir];
@@ -2321,6 +2328,7 @@ fn sockRead(c: *Child, pair: usize, dir: usize, bva: u64, want: u64) i64 {
         } else if (socks[pair].refs[dir ^ 1] == 0) {
             return 0; // peer gone and drained — this read IS the EOS
         } else {
+            if (nb) return -11; // MSG_DONTWAIT — EAGAIN, dispatch's empty check
             c.wait_pipe = pair * 2 + dir;
             kblock(.sock); // wake = a byte or the peer leaving
         }
@@ -2404,23 +2412,25 @@ fn pipeCloseEnd(idx: usize, kind: FdKind) void {
 // Dying child's discharge: the exit arm's page reclaim can't see the fd
 // table, so endpoint release lives here — called once, at death, before
 // the slot becomes a zombie/dead.
-fn releaseFds(c: *Child) void {
-    for (0..c.fds.len) |i| {
-        switch (c.fdkinds[i]) {
-            .none => {},
-            .fs => {
-                if (c.fsv) |ops| _ = ops.close(ops.ctx, c.fds[i]);
-            },
-            .pipe_r, .pipe_w => pipeCloseEnd(@intCast(c.fds[i]), c.fdkinds[i]),
-            .sock => sockCloseEnd(@intCast((c.fds[i] - 1) >> 1), @intCast((c.fds[i] - 1) & 1)),
-            .slisten => listenerRelease(@intCast(c.fds[i] - 1)),
-            .shm => shmRelease(@intCast(c.fds[i] - 1)),
-            .conin, .conout => {},
-        }
-        c.fds[i] = 0;
-        c.fdkinds[i] = .none;
-        c.fdverbs[i] = 0;
+fn releaseFd(c: *Child, i: usize) void {
+    switch (c.fdkinds[i]) {
+        .none => {},
+        .fs => {
+            if (c.fsv) |ops| _ = ops.close(ops.ctx, c.fds[i]);
+        },
+        .pipe_r, .pipe_w => pipeCloseEnd(@intCast(c.fds[i]), c.fdkinds[i]),
+        .sock => sockCloseEnd(@intCast((c.fds[i] - 1) >> 1), @intCast((c.fds[i] - 1) & 1)),
+        .slisten => listenerRelease(@intCast(c.fds[i] - 1)),
+        .shm => shmRelease(@intCast(c.fds[i] - 1)),
+        .conin, .conout => {},
     }
+    c.fds[i] = 0;
+    c.fdkinds[i] = .none;
+    c.fdverbs[i] = 0;
+}
+
+fn releaseFds(c: *Child) void {
+    for (0..c.fds.len) |i| releaseFd(c, i);
 }
 
 // Spawn wiring and fork share this: project one of the SOURCE's fd
@@ -2690,11 +2700,119 @@ fn childAccept(c: *Child, f: *TrapFrame) i64 {
     }
 }
 
+// nr 7 poll / nr 271 ppoll — readiness multiplexing, not a new wait:
+// the parked side is a .poll continuation re-deciding on every wake.
+// pollfd: {i32 fd; i16 events; i16 revents} — 8 bytes, nfds capped at
+// the table's own bound. Readiness is per-kind truth, not a flag cache:
+// a .sock is readable when bytes sit or the peer left (read=EOS), a
+// .slisten when the backlog is non-empty, regular objects always.
+const POLLIN: u16 = 0x1;
+const POLLOUT: u16 = 0x4;
+const POLLERR: u16 = 0x8;
+const POLLHUP: u16 = 0x10;
+const POLLNVAL: u16 = 0x20;
+const POLLRDHUP: u16 = 0x2000;
+const MAXPOLLFDS = 32;
+
+fn fdPollRev(c: *Child, fdi: usize, ev: u16) u16 {
+    if (fdi >= c.fds.len) return POLLNVAL;
+    var r: u16 = 0;
+    switch (c.fdkinds[fdi]) {
+        .conin => {
+            if (ev & POLLIN != 0 and kbd.conPending()) r |= POLLIN;
+        },
+        .conout => {
+            if (ev & POLLOUT != 0) r |= POLLOUT;
+        },
+        // regular objects are always read/write-ready — linux's answer
+        // for files; seeking/EOF is the read's own business.
+        .fs, .shm => r |= ev & (POLLIN | POLLOUT),
+        .pipe_r => {
+            const p = &pipes[@intCast(c.fds[fdi])];
+            if (ev & POLLIN != 0 and (p.count > 0 or p.wrefs == 0)) r |= POLLIN;
+            if (p.wrefs == 0) r |= POLLHUP;
+        },
+        .pipe_w => {
+            const p = &pipes[@intCast(c.fds[fdi])];
+            if (ev & POLLOUT != 0 and p.count < p.buf.len) r |= POLLOUT;
+            if (p.rrefs == 0) r |= POLLERR;
+        },
+        .sock => {
+            const v = c.fds[fdi] - 1;
+            const pair: usize = @intCast(v >> 1);
+            const side: usize = @intCast(v & 1);
+            const s = &socks[pair];
+            const d = &s.dir[side];
+            if (s.conn) {
+                if (ev & POLLIN != 0 and
+                    (d.count > 0 or s.refs[side ^ 1] == 0)) r |= POLLIN;
+                if (ev & POLLOUT != 0 and
+                    (d.count < d.buf.len or s.refs[side ^ 1] == 0)) r |= POLLOUT;
+                if (s.refs[side ^ 1] == 0) r |= POLLRDHUP | POLLERR;
+            }
+        },
+        .slisten => {
+            const l = &listeners[@intCast(c.fds[fdi] - 1)];
+            if (ev & POLLIN != 0 and l.npend > 0) r |= POLLIN;
+        },
+        .none => return POLLNVAL,
+    }
+    return r;
+}
+
+// One readiness pass: fills revents, returns the count of ready fds.
+fn pollScan(c: *Child, fdsva: u64, nfds: u64) i64 {
+    var nready: i64 = 0;
+    var i: usize = 0;
+    while (i < nfds) : (i += 1) {
+        var pfd: [8]u8 = undefined;
+        if (copyFromUser(c, @intCast(fdsva + i * 8), &pfd) < 8) return -14;
+        const fdn = std.mem.readInt(i32, pfd[0..4], .little);
+        const ev = std.mem.readInt(u16, pfd[4..6], .little);
+        var rev: u16 = 0;
+        if (fdn >= 0) rev = fdPollRev(c, @intCast(fdn), ev);
+        std.mem.writeInt(u16, pfd[6..8], rev, .little);
+        if (copyToUser(c, @intCast(fdsva + i * 8), &pfd) < 8) return -14;
+        if (rev != 0) nready += 1;
+    }
+    return nready;
+}
+
+// Tick deadline: irq_ticks is the only wall clock the roster shares —
+// ~18.2 Hz PIT on the BSP, the LAPIC's calibrated sibling on APs.
+// Millisecond timeouts quantize to ~55 ms: honest granularity, stated.
+fn pollDeadlineTicks(ms: i64) u64 {
+    if (ms <= 0) return 0;
+    const t: u64 = @intCast(ms);
+    return (t * 100 + 5499) / 5500; // ceil(ms / 55) — PIT quantum
+}
+
+fn childPoll(c: *Child, fdsva: u64, nfds: u64, tmo_ms: i64) i64 {
+    if (nfds > MAXPOLLFDS) return -22;
+    const deadline: u64 = if (tmo_ms < 0) std.math.maxInt(u64)
+        else irq_ticks + pollDeadlineTicks(tmo_ms);
+    while (true) {
+        const n = pollScan(c, fdsva, nfds);
+        if (n != 0) return n;
+        if (irq_ticks >= deadline) return 0;
+        kblock(.poll); // wake = any readiness change or the tick
+    }
+}
+
 // msghdr on x86_64: {name 8, namelen 4+4, iov 8, iovlen 8, control 8,
 // controllen 8, flags 4+4} = 56 bytes. cmsghdr: {len 8, level 4, type 4}.
 // We only speak SOL_SOCKET/SCM_RIGHTS ancillary — anything else is
 // ignored like a kernel that doesn't know the level.
-fn childSendmsg(c: *Child, fdu: u64, mhva: u64) i64 {
+// msg flags: MSG_DONTWAIT (0x40) makes the byte phase nonblocking —
+// libwayland flushes and reads with it — MSG_NOSIGNAL (0x4000) is a
+// no-op where SIGPIPE does not exist, MSG_CMSG_CLOEXEC (0x40000000)
+// marks received fds exec-close — no exec exists yet, the mark is
+// free. Anything else is a flag we don't model: EOPNOTSUPP, loudly.
+const MSG_KNOWN: u64 = 0x40 | 0x4000 | 0x40000000;
+
+fn childSendmsg(c: *Child, fdu: u64, mhva: u64, flags: u64) i64 {
+    if (flags & ~MSG_KNOWN != 0) return -95;
+    const nb = flags & 0x40 != 0;
     if (fdu >= c.fds.len) return -9;
     const fd: usize = @intCast(fdu);
     if (c.fdkinds[fd] != .sock) return -88; // ENOTSOCK
@@ -2717,7 +2835,7 @@ fn childSendmsg(c: *Child, fdu: u64, mhva: u64) i64 {
         const base = std.mem.readInt(u64, iov[0..8], .little);
         const len = std.mem.readInt(u64, iov[8..16], .little);
         if (len == 0) continue;
-        const n = sockWrite(c, pair, dir, base, len);
+        const n = sockWrite(c, pair, dir, base, len, nb);
         if (n < 0) return if (total > 0) total else n;
         total += n;
         if (n < len) break;
@@ -2754,7 +2872,9 @@ fn childSendmsg(c: *Child, fdu: u64, mhva: u64) i64 {
     return total;
 }
 
-fn childRecvmsg(c: *Child, fdu: u64, mhva: u64) i64 {
+fn childRecvmsg(c: *Child, fdu: u64, mhva: u64, flags: u64) i64 {
+    if (flags & ~MSG_KNOWN != 0) return -95;
+    const nb = flags & 0x40 != 0;
     if (fdu >= c.fds.len) return -9;
     const fd: usize = @intCast(fdu);
     if (c.fdkinds[fd] != .sock) return -88;
@@ -2776,7 +2896,7 @@ fn childRecvmsg(c: *Child, fdu: u64, mhva: u64) i64 {
         const base = std.mem.readInt(u64, iov[0..8], .little);
         const len = std.mem.readInt(u64, iov[8..16], .little);
         if (len == 0) continue;
-        const n = sockRead(c, pair, side, base, len);
+        const n = sockRead(c, pair, side, base, len, nb);
         if (n < 0) return if (total > 0) total else n;
         total += n;
         if (n < len or n == 0) break; // short read or EOS
@@ -3271,7 +3391,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         f.rax = f.rdx;
                     },
                     .pipe_w => f.rax = @bitCast(pipeWriteEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
-                    .sock => f.rax = @bitCast(sockWrite(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast(((c.fds[fdi] - 1) & 1) ^ 1), f.rsi, f.rdx)),
+                    .sock => f.rax = @bitCast(sockWrite(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast(((c.fds[fdi] - 1) & 1) ^ 1), f.rsi, f.rdx, false)),
                     // The fd is the grant: a write verb was minted at
                     // open or this projection never carried one — EBADF,
                     // the POSIX refusal for a bad-mode write.
@@ -3321,7 +3441,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         },
                         .sock => {
                             const v = c.fds[fdi] - 1;
-                            const n = sockWrite(c, @intCast(v >> 1), @intCast((v & 1) ^ 1), @intCast(base), @intCast(len));
+                            const n = sockWrite(c, @intCast(v >> 1), @intCast((v & 1) ^ 1), @intCast(base), @intCast(len), false);
                             if (n < 0) { fail = n; break; }
                             total += n;
                             if (n < len) break;
@@ -3419,7 +3539,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     .fs => if (c.fdverbs[fdi] & V_READ != 0)
                         childRead(c, f.rdi, f.rsi, f.rdx) else -9,
                     .pipe_r => pipeReadEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
-                    .sock => sockRead(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast((c.fds[fdi] - 1) & 1), f.rsi, f.rdx),
+                    .sock => sockRead(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast((c.fds[fdi] - 1) & 1), f.rsi, f.rdx, false),
                     else => @as(i64, -9),
                 });
             }
@@ -3456,15 +3576,48 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                      // the fcntl no-ops
             f.rax = @bitCast(childAccept(c, f));
         },
-        46 => { // sendmsg(fd, msghdr, flags) — iov bytes + SCM_RIGHTS
-            f.rax = @bitCast(childSendmsg(c, f.rdi, f.rsi));
+        46 => { // sendmsg(fd, msghdr, flags) — iov bytes + SCM_RIGHTS;
+                // MSG_DONTWAIT flushes EAGAIN rather than parking.
+            f.rax = @bitCast(childSendmsg(c, f.rdi, f.rsi, f.rdx));
         },
-        47 => { // recvmsg(fd, msghdr, flags) — bytes + queued fd install
-            f.rax = @bitCast(childRecvmsg(c, f.rdi, f.rsi));
+        47 => { // recvmsg(fd, msghdr, flags) — bytes + queued fd install;
+                // MSG_DONTWAIT reads EAGAIN rather than parking.
+            f.rax = @bitCast(childRecvmsg(c, f.rdi, f.rsi, f.rdx));
         },
         319 => { // memfd_create(name, flags) — an anonymous shm object;
                  // the pool fd wl_shm sends. name is diagnostic only.
             f.rax = @bitCast(childMemfd(c));
+        },
+        7 => { // poll(fds, nfds, timeout_ms) — readiness multiplex over
+               // the typed projection; .poll continuation, tick deadlines.
+            const ms: i64 = @as(i32, @bitCast(@as(u32, @truncate(f.rdx))));
+            f.rax = @bitCast(childPoll(c, f.rdi, f.rsi, ms));
+        },
+        271 => { // ppoll(fds, nfds, ts, mask) — mask swapping needs
+                 // signals that don't exist; NULL mask is the only
+                 // honest shape, which is the only shape libwayland sends.
+            if (f.r10 != 0) {
+                f.rax = @bitCast(@as(i64, -38)); // ENOSYS — sigmask swap
+            } else {
+                var ms: i64 = -1;
+                var bad: i64 = 0;
+                if (f.rdx != 0) {
+                    var ts: [16]u8 = undefined;
+                    if (copyFromUser(c, @intCast(f.rdx), &ts) < 16) {
+                        bad = -14;
+                    } else {
+                        const sec = std.mem.readInt(i64, ts[0..8], .little);
+                        const nsec = std.mem.readInt(i64, ts[8..16], .little);
+                        if (sec < 0 or nsec < 0 or nsec >= 1_000_000_000) {
+                            bad = -22;
+                        } else {
+                            ms = std.math.mul(i64, sec, 1000) catch std.math.maxInt(i64);
+                            ms = std.math.add(i64, ms, @divTrunc(nsec + 999_999, 1_000_000)) catch std.math.maxInt(i64);
+                        }
+                    }
+                }
+                f.rax = @bitCast(if (bad != 0) bad else childPoll(c, f.rdi, f.rsi, ms));
+            }
         },
         77 => { // ftruncate(fd, len) — sizes shm objects (grow, zero)
             f.rax = @bitCast(childFtruncate(c, f.rdi, f.rsi));
@@ -3548,14 +3701,95 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 // class as fcntl's flagless handles.
             f.rax = 0;
         },
-        39 => { // getpid — the pid domain is slot+1 (0 can never answer
-                // "am I the child" ambiguously)
+        39, 186 => { // getpid / gettid — the pid domain is slot+1; one
+                     // thread per child exists, so tid IS pid here.
             f.rax = @intCast(cur_child + 1);
         },
-        72 => { // fcntl(fd, cmd, arg) — our fds are opaque handles with no
-            // flag state; the flags a libc sets (CLOEXEC, NONBLOCK) have no
-            // consumer in this child, so the honest answer is success.
-            f.rax = 0;
+        72 => { // fcntl(fd, cmd, arg) — flag ops are honest no-ops (no
+                // exec exists for CLOEXEC to matter, O_NONBLOCK rides
+                // per-call flags instead of fd state), but F_DUPFD is a
+                // REAL dup: libwayland undup()s SCM_RIGHTS arrivals
+                // through it and a stub would hand back fd 0.
+            if (f.rdi >= c.fds.len or c.fdkinds[@intCast(f.rdi)] == .none) {
+                f.rax = @bitCast(@as(i64, -9));
+            } else if (f.rsi == 6 or f.rsi == 1030) { // F_DUPFD[/_CLOEXEC]
+                if (f.rdx >= c.fds.len) {
+                    f.rax = @bitCast(@as(i64, -22)); // EINVAL past the ceiling
+                } else {
+                    var slot: ?usize = null;
+                    for (@intCast(f.rdx)..c.fds.len) |si| {
+                        if (c.fdkinds[si] == .none) { slot = si; break; }
+                    }
+                    if (slot) |si| {
+                        _ = cloneFd(c, si, c, @intCast(f.rdi));
+                        f.rax = @intCast(si);
+                    } else {
+                        f.rax = @bitCast(@as(i64, -24)); // EMFILE
+                    }
+                }
+            } else if (f.rsi == 3) { // F_GETFL — access mode from the
+                // projection's verbs; status flags don't exist here.
+                const v = c.fdverbs[@intCast(f.rdi)];
+                f.rax = @bitCast(@as(i64, if (v & V_READ != 0 and v & V_WRITE != 0) 2
+                    else if (v & V_WRITE != 0) 1 else 0));
+            } else if (f.rsi <= 4) { // F_GETFD/F_SETFD/F_SETFL — success
+                f.rax = 0;
+            } else {
+                f.rax = @bitCast(@as(i64, -22)); // EINVAL — unknown cmd
+            }
+        },
+        32 => { // dup(fd) — lowest free slot, same projection
+            if (f.rdi >= c.fds.len or c.fdkinds[@intCast(f.rdi)] == .none) {
+                f.rax = @bitCast(@as(i64, -9));
+            } else {
+                var slot: ?usize = null;
+                for (0..c.fds.len) |si| {
+                    if (c.fdkinds[si] == .none) { slot = si; break; }
+                }
+                if (slot) |si| {
+                    _ = cloneFd(c, si, c, @intCast(f.rdi));
+                    f.rax = @intCast(si);
+                } else {
+                    f.rax = @bitCast(@as(i64, -24));
+                }
+            }
+        },
+        33, 292 => { // dup2(fd,newfd) / dup3(fd,newfd,flags) — exact slot:
+                     // close what sat there, project the source onto it.
+            const oldfd = f.rdi;
+            const newfd = f.rsi;
+            if (oldfd >= c.fds.len or c.fdkinds[@intCast(oldfd)] == .none or
+                newfd >= c.fds.len)
+            {
+                f.rax = @bitCast(@as(i64, -9));
+            } else if (f.rax == 292 and oldfd == newfd) {
+                f.rax = @bitCast(@as(i64, -22)); // dup3 forbids same fd
+            } else {
+                if (oldfd == newfd) {
+                    f.rax = @intCast(newfd); // dup2's no-op answer
+                } else {
+                    if (c.fdkinds[@intCast(newfd)] != .none)
+                        releaseFd(c, @intCast(newfd));
+                    _ = cloneFd(c, @intCast(newfd), c, @intCast(oldfd));
+                    f.rax = @intCast(newfd);
+                }
+            }
+        },
+        228 => { // clock_gettime(id, ts) — the calibrated TSC is the only
+                 // clock we hold: MONOTONIC is its native reading;
+                 // REALTIME gets the same count (no RTC epoch exists —
+                 // time-since-boot is honest where a wall clock isn't).
+            const tsva = f.rsi;
+            if (f.rdi > 7 or tsva == 0) {
+                f.rax = @bitCast(@as(i64, -22));
+            } else {
+                const ns = ukplat_monotonic_clock();
+                var tsb: [16]u8 = undefined;
+                std.mem.writeInt(i64, tsb[0..8], @intCast(ns / 1_000_000_000), .little);
+                std.mem.writeInt(i64, tsb[8..16], @intCast(ns % 1_000_000_000), .little);
+                f.rax = @bitCast(if (copyToUser(c, @intCast(tsva), &tsb) < 16)
+                    @as(i64, -14) else 0);
+            }
         },
         63 => { // uname(buf) — the kernel's own identity, honestly named:
             // a real GNU uname prints what we are, not a Linux costume.
@@ -3933,7 +4167,12 @@ fn wakeKind(kind: WaitKind) void {
     var marked = false;
     for (0..nchildren) |i| {
         const c = &children[i];
-        if (c.state == .blocked and c.wait_kind == kind) {
+        // .poll waiters re-decide on EVERY wake — a multiplexed wait
+        // names no single key, so any readiness change is potentially
+        // theirs. Spurious resume is legal: the loop re-evaluates.
+        if (c.state == .blocked and
+            (c.wait_kind == kind or c.wait_kind == .poll))
+        {
             c.state = .runnable;
             marked = true;
         }
