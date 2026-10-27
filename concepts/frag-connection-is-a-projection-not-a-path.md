@@ -16,19 +16,26 @@ attach/damage/frame/commit answered by callback.done + release, and
 a display.sync roundtrip). Wire correctness never required
 `$XDG_RUNTIME_DIR/wayland-N`.
 
-Held consequence for the next rung: **pathname endpoints —
+Held consequence — realized: **pathname endpoints —
 bind/listen/accept on `wayland-N` — are a discovery layer over this
-primitive, not the primitive itself.** A socket node in the fs view
-resolves to an endpoint mint the same way `openobj` resolves a key to
-a handle; the listen backlog is a pending-projection queue. Do not
-build ad-hoc "socket handoff" verbs: the projection mechanism already
-carries any fd a spawner can name, and the EOS semantics measured here
-(server exits on last-far-end-close) are exactly what a real session
-relies on.
+primitive, not the primitive itself.** Landed exactly as ruled:
+`bind` mints a real `S_IFSOCK` inode through the provider's `mknod`
+verb (debugfs sees `wayland-1` on disk) and registers a
+`(view-ctx, object-key)` listener — the same identity pair `openobj`
+resolves; `listen` opens the backlog; `connect` resolves the path
+through the caller's fs view (ENOENT for no name, ECONNREFUSED for a
+name with no live listener — the unix distinction) and mints a session
+pair whose server end queues as a pending projection; `accept` pops it
+into a fresh fd table slot. No handoff verbs were built — the backlog
+is literally a queue of fd values awaiting projection. The socketpair
+fixture's EOS semantics carried over unchanged: the server exits on
+last-far-end-close over a session it never inherited.
 
-Evidence: `WLSRV magic=deadbeef tag=00c0ffee px0=5a` — the server
-reads the client's pixels through the SCM_RIGHTS'd pool it mmap'd
-MAP_SHARED; `WLCLI frame done=42` / `sync done=43` / `buffer release`
-/ `WLSRV EOS` / `WLINIT srv=0 cli=0`. Measured uniprocessor and under
-`-smp 4` with both children rotating claims across APs. Boot gate
-63/63 (`boot_wl` + `wlpair` rows).
+Evidence: `WLSRV bound wayland-1` / `WLCLI connected tries=0` /
+`WLSRV accepted fd=4` — the rendezvous ran through the path, not a
+spawn-wired fd — then `WLSRV magic=deadbeef tag=00c0ffee px0=5a`
+(pixels through the SCM_RIGHTS'd MAP_SHARED pool), `WLCLI frame
+done=42` / `sync done=43` / `buffer release` / `WLSRV EOS` /
+`WLINIT srv=0 cli=0`. Measured uniprocessor and under `-smp 4` with
+server and client claimed on different APs. Boot gate 63/63 (`wlsock`
+row).

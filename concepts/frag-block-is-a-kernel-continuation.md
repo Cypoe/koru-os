@@ -43,6 +43,18 @@ The discipline that makes it correct:
   reusable the moment it's `.dead`; the exit arm writes the status into
   the *waiter's* `spawn_ret` before marking it runnable, so slot reuse
   can never clobber the payload.
+- **A parked continuation is a concurrency release.** `kblock` drops
+  bkl — whatever single-slot state the suspended call was holding is
+  now reachable by every other context, even though the CPU-claim is
+  still single-runner. The virtqueue taught this the hard way:
+  `pending_req`/`req_hdr`/`req_status` are one-request slots, a
+  second context's `submit_one` (reached because the first parked on
+  `.blk` mid-syscall) overwrote them, and the first request retired
+  uncredited — its waiter parked forever. The ruling: **device state
+  that outlives a block serializes at its own layer** — `blk_mu`
+  acquired at submit, released at retire, contenders queueing on a
+  real wait kind (`.blkq`), not on bkl re-entry. "One request in
+  flight" is a provider property the provider must enforce.
 
 The tick is a full scheduling point. `schedPreempt` keeps only its
 frame-capture step (a CPL3 `ExcFrame` copied into `c.frame`), early-EOIs

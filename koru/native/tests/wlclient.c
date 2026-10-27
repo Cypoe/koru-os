@@ -1,14 +1,19 @@
-// wlclient.elf — a minimal wl client speaking real wire bytes. The
-// socketpair end is fd0 (spawn_start wiring); stdout is fd1. Plays the
-// canonical session: get_registry → bind compositor+shm → create a
-// surface, back it with a memfd shm pool (the fd crosses SCM_RIGHTS),
-// write pixels through its own MAP_SHARED mapping, attach+commit, wait
-// the frame callback, then sync.
+// wlclient.elf — a minimal wl client speaking real wire bytes over a
+// REAL pathname endpoint: socket()+connect("wayland-1") — the connect
+// resolves the S_IFSOCK node in the shared fs view and queues a session
+// on the server's backlog. Connect retries are the unix idiom: the
+// server races us to bind+listen, ENOENT/ECONNREFUSED until it's up.
+// stdout is fd1. Plays the canonical session: get_registry → bind
+// compositor+shm → create a surface, back it with a memfd shm pool
+// (the fd crosses SCM_RIGHTS), write pixels through its own
+// MAP_SHARED mapping, attach+commit, wait the frame callback, then sync.
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include "wlwire.h"
 
@@ -17,8 +22,27 @@ static int memfd_create(const char *name, unsigned flags) {
 }
 
 int main(void) {
+    int sfd = -1;
+    struct sockaddr_un sa; memset(&sa, 0, sizeof sa);
+    sa.sun_family = AF_UNIX;
+    strcpy(sa.sun_path, "wayland-1");
+    int tries = 0;
+    for (;;) {
+        sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (sfd < 0) { printf("WLCLI FAIL socket\n"); return 1; }
+        int cr = connect(sfd, (struct sockaddr *)&sa,
+                    sizeof(sa.sun_family) + strlen("wayland-1") + 1);
+        if (cr == 0) break;
+        if (tries < 5 || tries % 20000 == 0)
+            printf("WLCLI try%d cr=%d\n", tries, cr);
+        close(sfd);
+        sfd = -1;
+        if (++tries > 100000) { printf("WLCLI FAIL connect\n"); return 1; }
+    }
+    printf("WLCLI connected tries=%d\n", tries);
+
     struct wlconn cn; memset(&cn, 0, sizeof cn);
-    cn.fd = 0;
+    cn.fd = sfd;
     unsigned char msg[1024], out[1024];
     struct wlw w;
 

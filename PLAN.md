@@ -649,9 +649,19 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
             globals → binds → formats → surface/pool/buffer →
             attach/damage/frame/commit → callback.done + release +
             sync roundtrip; server reads client pixels through the
-            passed pool — still open: pathname socket endpoints
-            (wayland-N bind/listen/accept) so clients CONNECT rather
-            than inherit, then libwayland itself)
+            passed pool; pathname endpoints LANDED — nr41 socket,
+            nr49 bind mints a real S_IFSOCK inode via ops.mknod and
+            registers a (view, key) listener, nr50 listen opens the
+            backlog, nr42 connect resolves the path through the fs
+            view (ENOENT/ECONNREFUSED kept distinct) and queues the
+            server end as a pending projection, nr43/288 accept pops
+            it into a fresh fd; wlserver/wlclient rendezvous on
+            "wayland-1" — no inherited fd, the client CONNECTS; the
+            rung also landed the virtqueue's submit mutex (blk_mu +
+            .blkq waiters): a kblocked .blk waiter drops bkl, so the
+            single-slot request path serializes itself or pending_req
+            gets stomped — still open: libwayland itself, a
+            compositor driving comp.zig's scene)
             → Hyprland/Noctalia oracle harness over the real scene
 ```
 

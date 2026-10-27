@@ -1,20 +1,43 @@
 // wlserver.elf — a minimal wl compositor endpoint speaking real wire
-// bytes. spawn_start wires the socketpair end in as fd0; stdout is fd1.
+// bytes over a REAL pathname endpoint: socket()+bind("wayland-1") mints
+// the S_IFSOCK node in the shared fs view, listen() opens the backlog,
+// accept() pops the client's queued session end. stdout is fd1.
 // Serves: registry globals, shm formats, surface/shm_pool/buffer
 // objects, one attach+damage+frame+commit cycle answered by
 // callback.done + buffer.release, and a display sync. The shm pool fd
 // arrives over SCM_RIGHTS and is mmap'd MAP_SHARED — the pixels it
-// reads are the client's writes to the same frame set.
+// reads are the client's writes to the same frame set. The node is
+// left on disk: it's the gate's fs-visibility evidence (a real
+// compositor would unlink it on shutdown).
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include "wlwire.h"
 
+#define WL_SOCK_NAME "wayland-1"
+
 int main(void) {
+    int lfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (lfd < 0) { printf("WLSRV FAIL socket e=%d\n", lfd); return 1; }
+    struct sockaddr_un sa; memset(&sa, 0, sizeof sa);
+    sa.sun_family = AF_UNIX;
+    strcpy(sa.sun_path, WL_SOCK_NAME);
+    unlink(WL_SOCK_NAME); // re-bind over a stale node — real servers do this
+    if (bind(lfd, (struct sockaddr *)&sa, sizeof(sa.sun_family) + strlen(WL_SOCK_NAME) + 1) < 0) {
+        printf("WLSRV FAIL bind\n"); return 1;
+    }
+    if (listen(lfd, 4) < 0) { printf("WLSRV FAIL listen\n"); return 1; }
+    printf("WLSRV bound %s\n", WL_SOCK_NAME);
+    int cfd = accept(lfd, 0, 0);
+    if (cfd < 0) { printf("WLSRV FAIL accept\n"); return 1; }
+    printf("WLSRV accepted fd=%d\n", cfd);
+
     struct wlconn cn; memset(&cn, 0, sizeof cn);
-    cn.fd = 0; // socket end rides in as fd0
+    cn.fd = cfd;
     unsigned char msg[1024], out[1024];
     struct wlw w;
     uint32_t reg = 0, comp = 0, shm = 0, surf = 0, pool = 0, buf = 0, cb = 0;

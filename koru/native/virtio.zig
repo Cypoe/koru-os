@@ -337,11 +337,47 @@ fn pushReq(req: *BlkReq) c_int {
     return 0;
 }
 
+// The queue carries ONE outstanding request (pending_req/req_hdr/
+// req_status are single slots), so submission itself must serialize:
+// a bkl-held context that kblocks on .blk drops the lock, and a second
+// context's submit would overwrite pending_req — the first request then
+// retires uncredited and its waiter parks forever. blk_mu is the silo's
+// own lock; waiters queue on .blkq (kind 2) so they yield like any other
+// device wait instead of spinning.
+var blk_mu: u8 = 0;
+
+extern fn koru_dev_wake(kind: u8) callconv(.c) void;
+
+fn waitBlkMu() void {
+    while (@atomicLoad(u8, &blk_mu, .acquire) != 0) {
+        const flags = asm volatile ("pushfq\n\tpop %[f]"
+            : [f] "=r" (-> u64)
+            :
+            : .{ .memory = true });
+        asm volatile ("cli" ::: .{ .memory = true });
+        if (@atomicLoad(u8, &blk_mu, .acquire) != 0) {
+            if (koru_dev_sleep(2) != 0) {
+                blk_yields += 1;
+                continue;
+            }
+            blk_parks += 1;
+            asm volatile ("sti\n\thlt" ::: .{ .memory = true });
+        }
+        if (flags & 0x200 == 0) asm volatile ("cli" ::: .{ .memory = true });
+    }
+    @atomicStore(u8, &blk_mu, 1, .release);
+}
+
 pub export fn uk_blkdev_queue_submit_one(d: ?*anyopaque, queue_id: u16, req: ?*BlkReq) callconv(.c) c_int {
     _ = d;
     if (queue_id != 0 or req == null) return -22;
+    waitBlkMu();
     const r = pushReq(req.?);
-    if (r != 0) return r;
+    if (r != 0) {
+        @atomicStore(u8, &blk_mu, 0, .release);
+        koru_dev_wake(2);
+        return r;
+    }
     pending_req = req;
     blk_reqs += 1;
     return 1; // STATUS_SUCCESS bit, as the lift checks it
@@ -403,6 +439,8 @@ pub export fn uk_blkdev_queue_finish_reqs(d: ?*anyopaque, queue_id: u16) callcon
         req.state = 0; // REQ_FINISHED
         req.result = if (req_status == 0) 0 else -5;
         pending_req = null;
+        @atomicStore(u8, &blk_mu, 0, .release);
+        koru_dev_wake(2); // a submitter queued behind us can enter now
         if (req.cb) |cb| cb(req, req.cb_cookie);
     }
     return 0;

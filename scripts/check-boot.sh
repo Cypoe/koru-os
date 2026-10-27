@@ -837,16 +837,23 @@ else
             else
                 bad "sockpair: evidence missing: $(grep -aE 'WL|FAIL|REFUSE|EXC' "$WORK/boot_sock.serial" | tail -6 | tr '\n' '|')"
             fi
-            # wl protocol pair: wlinit socketpairs + spawn_starts two
-            # SEPARATE binaries (server end fd0, client end fd0); they
-            # speak real libwayland wire format — registry globals, shm
-            # formats, surface/pool/buffer objects, the pool fd over
-            # SCM_RIGHTS, attach/damage/frame/commit answered by
-            # callback.done + buffer.release, display.sync roundtrip.
+            # wl protocol pair over a REAL pathname endpoint: wlinit
+            # spawn_starts two SEPARATE binaries that rendezvous through
+            # the shared fs view — wlserver mknods an S_IFSOCK inode,
+            # binds+listens "wayland-1", wlclient resolves the path and
+            # queues a session on the backlog; accept hands the server a
+            # fresh stream projection. Over it they speak real libwayland
+            # wire format — registry globals, shm formats, surface/pool/
+            # buffer objects, the pool fd over SCM_RIGHTS, attach/damage/
+            # frame/commit answered by callback.done + buffer.release,
+            # display.sync roundtrip, EOS on last close.
             boot_check "$ROOT/koru/native/tests/boot_wl.k" "WLEXEC COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on
-            if grep -qF "WLCLI global 1 wl_compositor v4" "$WORK/boot_wl.serial" \
+            if grep -qF "WLSRV bound wayland-1" "$WORK/boot_wl.serial" \
+               && grep -qE "WLCLI connected tries=[0-9]+" "$WORK/boot_wl.serial" \
+               && grep -qE "WLSRV accepted fd=[0-9]+" "$WORK/boot_wl.serial" \
+               && grep -qF "WLCLI global 1 wl_compositor v4" "$WORK/boot_wl.serial" \
                && grep -qF "WLCLI global 2 wl_shm v1" "$WORK/boot_wl.serial" \
                && grep -qF "WLSRV magic=deadbeef tag=00c0ffee px0=5a" "$WORK/boot_wl.serial" \
                && grep -qF "WLCLI frame done=42" "$WORK/boot_wl.serial" \
@@ -854,9 +861,9 @@ else
                && grep -qF "WLCLI sync done=43 framed=1 rel=1" "$WORK/boot_wl.serial" \
                && grep -qF "WLSRV EOS" "$WORK/boot_wl.serial" \
                && grep -qF "WLINIT srv=0 cli=0" "$WORK/boot_wl.serial"; then
-                ok "wlpair: two binaries spoke real wl wire — globals, shm pool via SCM_RIGHTS, commit->done, release, sync"
+                ok "wlsock: path endpoint carried real wl wire — mknod/bind/accept, shm pool via SCM_RIGHTS, commit->done, release, sync"
             else
-                bad "wlpair: evidence missing: $(grep -aE 'WL|FAIL|REFUSE|EXC' "$WORK/boot_wl.serial" | tail -8 | tr '\n' '|')"
+                bad "wlsock: evidence missing: $(grep -aE 'WL|FAIL|REFUSE|EXC' "$WORK/boot_wl.serial" | tail -8 | tr '\n' '|')"
             fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null

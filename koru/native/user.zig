@@ -814,15 +814,19 @@ const ChildFsOps = extern struct {
     // link(old, new): a second name on the SAME inode — nlink counts
     // the names; the object dies when the count reaches zero.
     link: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
+    // mknod(path): mint a special inode — this rung only S_IFSOCK —
+    // and return its object key. A unix socket's name IS the node;
+    // connect resolves the same key through key().
+    mknod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
 };
 
-const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock };
+const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq };
 
 // fd slots are projections over typed seam endpoints, not bare provider
 // handles: stdio are real entries (conin/conout), fs a view handle,
 // pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
 // kind, never on the number — closing fd0 detaches like any discharge.
-const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm };
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten };
 
 // ---- the bag: class grants + nid-scoped object grants ------------------
 // DESIGN-0001 §8.6's grant {handle, verbs, as} distilled to the syscall
@@ -1522,8 +1526,11 @@ fn canonNr(nr: u64) u64 {
         77 => 2,  // ftruncate mutates an object's shape — same class
         // IPC-channel class: socketpair and the message verbs ride the
         // pipe cap (a channel is a channel); memfd mints the object the
-        // channel carries — same family.
-        46, 47, 53, 319 => 22,
+        // channel carries — same family. The endpoint verbs — socket,
+        // bind, listen, accept(+4), connect — are the channel's
+        // namespace half: same class, the name is an fs object the arm
+        // resolves.
+        41, 42, 43, 288, 46, 47, 49, 50, 53, 319 => 22,
         else => nr,
     };
 }
@@ -1976,7 +1983,7 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             stw(&st, 24, 0o10600);
             stw(&st, 16, 1);
         },
-        .sock => {
+        .sock, .slisten => {
             // S_IFSOCK|0600 — musl's socket probing names it correctly
             stw(&st, 24, 0o140600);
             stw(&st, 16, 1);
@@ -2154,8 +2161,53 @@ const SockPair = struct {
     used: bool = false,
     dir: [2]SockDir = .{ .{}, .{} }, // dir[s]: readable on side s
     refs: [2]u8 = .{ 0, 0 },
+    conn: bool = false, // socket() mints unconnected — I/O is ENOTCONN
 };
 var socks: [NSOCKS]SockPair = .{SockPair{}} ** NSOCKS;
+
+// A listening unix socket: the NAME lives in the fs view (a real
+// S_IFSOCK inode minted by ops.mknod — connect resolves it through
+// key()), the registry maps (view, object key) → this entry, and the
+// backlog is a pending-projection queue: pair ends minted by connect,
+// waiting for accept to install them into an fd table.
+const NLISTEN = 4;
+const SOKPEND = 8;
+const ACCEPT_KEY = 0x100; // wait_pipe subkey base — past pair*2+dir space
+const SockListener = struct {
+    used: bool = false,
+    live: bool = false,     // listen() ran — connect refuses before it
+    fsv_ctx: usize = 0,     // ops.ctx — the view identity half of the key
+    key: u64 = 0,           // dev<<32|ino — the socket node's object key
+    refs: u8 = 0,
+    pend: [SOKPEND]u8 = .{0} ** SOKPEND, // pair*2+side+1 of queued ends
+    npend: u8 = 0,
+};
+var listeners: [NLISTEN]SockListener = .{SockListener{}} ** NLISTEN;
+
+fn wakeListen(lidx: usize) void {
+    for (0..nchildren) |i| {
+        const p = &children[i];
+        if (p.state == .blocked and p.wait_kind == .sock and
+            p.wait_pipe == ACCEPT_KEY + lidx) p.state = .runnable;
+    }
+}
+
+// Drop an fd/queue-held projection of the listener. At refs==0 the
+// registry entry dies with it: pending session ends close (their
+// clients see the peer leave) and any parked connect/accept wakes to
+// re-check — a dead listener is ECONNREFUSED/EINVAL, not a hang.
+fn listenerRelease(lidx: usize) void {
+    const l = &listeners[lidx];
+    if (l.refs > 0) l.refs -= 1;
+    if (l.refs != 0) return;
+    while (l.npend > 0) {
+        l.npend -= 1;
+        const v = l.pend[l.npend] - 1;
+        sockCloseEnd(v >> 1, v & 1);
+    }
+    l.* = .{};
+    wakeListen(lidx);
+}
 pub export var sock_sends: u64 = 0;
 pub export var sock_recvs: u64 = 0;
 pub export var sock_fdpass: u64 = 0;
@@ -2169,10 +2221,10 @@ fn wakeSock(pair: usize, dir: usize) void {
     }
 }
 
-fn sockPairCreate() ?usize {
+fn sockPairCreate(conn: bool) ?usize {
     for (0..NSOCKS) |i| {
         if (!socks[i].used) {
-            socks[i] = .{ .used = true, .refs = .{ 1, 1 } };
+            socks[i] = .{ .used = true, .refs = .{ 1, 1 }, .conn = conn };
             return i;
         }
     }
@@ -2191,6 +2243,7 @@ fn fdDupRef(c: *Child, fd: usize, out: *FdRef) bool {
             const v = c.fds[fd] - 1;
             socks[@intCast(v >> 1)].refs[@intCast(v & 1)] += 1;
         },
+        .slisten => listeners[@intCast(c.fds[fd] - 1)].refs += 1,
         .shm => shms[@intCast(c.fds[fd] - 1)].refs += 1,
         .fs => {
             const ops = c.fsv orelse return false;
@@ -2212,6 +2265,7 @@ fn fdFreeRef(r: FdRef) void {
         .pipe_r => pipeCloseEnd(@intCast(r.h), .pipe_r),
         .pipe_w => pipeCloseEnd(@intCast(r.h), .pipe_w),
         .sock => sockCloseEnd(@intCast((r.h - 1) >> 1), @intCast((r.h - 1) & 1)),
+        .slisten => listenerRelease(@intCast(r.h - 1)),
         .shm => shmRelease(@intCast(r.h - 1)),
         else => {},
     }
@@ -2219,6 +2273,7 @@ fn fdFreeRef(r: FdRef) void {
 
 fn sockWrite(c: *Child, pair: usize, dir: usize, bva: u64, want: u64) i64 {
     if (want == 0) return 0;
+    if (!socks[pair].conn) return -107; // ENOTCONN — socket() before connect
     const d = &socks[pair].dir[dir];
     while (true) {
         if (socks[pair].refs[dir] == 0) return -32; // EPIPE — reader side gone
@@ -2244,6 +2299,7 @@ fn sockWrite(c: *Child, pair: usize, dir: usize, bva: u64, want: u64) i64 {
 
 fn sockRead(c: *Child, pair: usize, dir: usize, bva: u64, want: u64) i64 {
     if (want == 0) return 0;
+    if (!socks[pair].conn) return -107; // ENOTCONN
     const d = &socks[pair].dir[dir];
     while (true) {
         if (d.count > 0) {
@@ -2357,6 +2413,7 @@ fn releaseFds(c: *Child) void {
             },
             .pipe_r, .pipe_w => pipeCloseEnd(@intCast(c.fds[i]), c.fdkinds[i]),
             .sock => sockCloseEnd(@intCast((c.fds[i] - 1) >> 1), @intCast((c.fds[i] - 1) & 1)),
+            .slisten => listenerRelease(@intCast(c.fds[i] - 1)),
             .shm => shmRelease(@intCast(c.fds[i] - 1)),
             .conin, .conout => {},
         }
@@ -2381,6 +2438,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
             const v = src.fds[sfd] - 1;
             socks[@intCast(v >> 1)].refs[@intCast(v & 1)] += 1;
         },
+        .slisten => listeners[@intCast(src.fds[sfd] - 1)].refs += 1,
         .shm => shms[@intCast(src.fds[sfd] - 1)].refs += 1,
         .fs => {
             const ops = src.fsv orelse return false;
@@ -2445,7 +2503,7 @@ fn childSocketpair(c: *Child, svva: u64) i64 {
         }
     }
     if (sn < 2) return -24; // EMFILE
-    const pi = sockPairCreate() orelse return -24;
+    const pi = sockPairCreate(true) orelse return -24;
     var out: [8]u8 = undefined;
     for (0..2) |i| std.mem.writeInt(u32, out[i * 4 ..][0..4], @intCast(slots[i]), .little);
     if (copyToUser(c, @intCast(svva), &out) < 8) {
@@ -2458,6 +2516,178 @@ fn childSocketpair(c: *Child, svva: u64) i64 {
         c.fdverbs[slots[i]] = V_READ | V_WRITE;
     }
     return 0;
+}
+
+fn sockSlot(c: *Child) ?usize {
+    for (0..c.fds.len) |i| {
+        if (c.fdkinds[i] == .none) return i;
+    }
+    return null;
+}
+
+// sockaddr_un: {u16 family=AF_UNIX, char path[108]} — NUL-terminated
+// or exactly 108 bytes (abstract '\0'-first names are a linux
+// namespace this rung does not serve — refused, not mangled).
+fn sockPath(c: *Child, ava: u64, alen: u64, out: []u8) ?[]const u8 {
+    if (alen < 3 or alen > 110) return null;
+    var ab: [110]u8 = undefined;
+    if (copyFromUser(c, @intCast(ava), ab[0..@intCast(alen)]) < alen) return null;
+    if (std.mem.readInt(u16, ab[0..2], .little) != 1) return null; // AF_UNIX
+    const plen: usize = @intCast(alen - 2);
+    if (ab[2] == 0) return null; // abstract namespace — not this rung
+    const n = std.mem.indexOfScalar(u8, ab[2 .. 2 + plen], 0) orelse plen;
+    if (n == 0 or n >= out.len) return null;
+    @memcpy(out[0..n], ab[2 .. 2 + n]);
+    out[n] = 0;
+    return out[0 .. n + 1];
+}
+
+// nr 41 — socket(AF_UNIX, SOCK_STREAM, proto): an unconnected end —
+// bind makes it a name, connect makes it a session, until then I/O is
+// ENOTCONN. SOCK_CLOEXEC/SOCK_NONBLOCK ride the upper type bits and
+// are masked like socketpair's (flags are fcntl no-ops here).
+fn childSocket(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdi != 1 or (f.rsi & 0xF) != 1) return -97; // EAFNOSUPPORT
+    const slot = sockSlot(c) orelse return -24; // EMFILE
+    const pi = sockPairCreate(false) orelse return -24;
+    socks[pi].refs[1] = 0; // no peer until connect grafts a session
+    c.fdkinds[slot] = .sock;
+    c.fds[slot] = pi * 2 + 1;
+    c.fdverbs[slot] = V_READ | V_WRITE;
+    return @intCast(slot);
+}
+
+// nr 49 — bind(fd, sockaddr_un, len): give the unconnected socket a
+// NAME — a real S_IFSOCK inode in the caller's fs view (ops.mknod),
+// then the (view, object key) registry entry. The fd becomes the
+// listener: it never carries bytes, it hands out sessions.
+fn childBind(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdi >= c.fds.len) return -9;
+    const fd: usize = @intCast(f.rdi);
+    if (c.fdkinds[fd] != .sock) return -88; // ENOTSOCK
+    const v = c.fds[fd] - 1;
+    if (socks[@intCast(v >> 1)].conn) return -22; // EINVAL — already connected
+    const ops = c.fsv orelse return -38; // ENOSYS — no view, no name
+    var pb: [112]u8 = undefined;
+    const path = sockPath(c, f.rsi, f.rdx, &pb) orelse return -22;
+    var lidx: ?usize = null;
+    for (0..NLISTEN) |i| {
+        if (!listeners[i].used) { lidx = i; break; }
+    }
+    const li = lidx orelse return -24;
+    const key = ops.mknod(ops.ctx, @ptrCast(path.ptr));
+    if (key < 0) {
+        return if (key == -17) -98 // EEXIST → EADDRINUSE, unix's word
+        else key;
+    }
+    // The name took — the unconnected pair's ring was never a session;
+    // release it and let the fd project the listener instead.
+    sockCloseEnd(@intCast(v >> 1), @intCast(v & 1));
+    listeners[li] = .{ .used = true, .fsv_ctx = @intFromPtr(ops.ctx),
+                       .key = @bitCast(key), .refs = 1 };
+    c.fdkinds[fd] = .slisten;
+    c.fds[fd] = li + 1;
+    return 0;
+}
+
+// nr 50 — listen(fd, backlog): the node's queue opens. connect
+// refuses until this runs — a bound-not-listening name is
+// ECONNREFUSED, same as unix.
+fn childListen(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdi >= c.fds.len) return -9;
+    const fd: usize = @intCast(f.rdi);
+    if (c.fdkinds[fd] != .slisten) return -95; // EOPNOTSUPP
+    listeners[@intCast(c.fds[fd] - 1)].live = true;
+    return 0;
+}
+
+// nr 42 — connect(fd, sockaddr_un, len): resolve the node's object key
+// through the REAL fs view (ENOENT for no name, ECONNREFUSED for a
+// name with no live listener — the unix distinction), mint the
+// session pair, queue the server end on the listener's backlog, and
+// re-point this fd at the client end. Blocking backlog: a full queue
+// parks on the listener; accept frees a slot and wakes.
+fn childConnect(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdi >= c.fds.len) return -9;
+    const fd: usize = @intCast(f.rdi);
+    if (c.fdkinds[fd] != .sock) return -88;
+    const v = c.fds[fd] - 1;
+    const op: usize = @intCast(v >> 1);
+    if (socks[op].conn) return -106; // EISCONN
+    const ops = c.fsv orelse return -38;
+    var pb: [112]u8 = undefined;
+    const path = sockPath(c, f.rsi, f.rdx, &pb) orelse return -22;
+    const key = ops.key(ops.ctx, @ptrCast(path.ptr));
+    if (key < 0) return if (key == -2) -2 else key; // ENOENT — no name
+    var li: ?usize = null;
+    for (0..NLISTEN) |i| {
+        const l = &listeners[i];
+        if (l.used and l.fsv_ctx == @intFromPtr(ops.ctx) and
+            l.key == @as(u64, @bitCast(key))) {
+            li = i;
+            break;
+        }
+    }
+    while (true) {
+        const l = li orelse return -111; // ECONNREFUSED — name, no listener
+        if (!listeners[l].live) return -111; // bound but not listening
+        if (listeners[l].npend < SOKPEND) {
+            const npi = sockPairCreate(true) orelse return -24;
+            listeners[l].pend[listeners[l].npend] = @intCast(npi * 2 + 1 + 1);
+            listeners[l].npend += 1;
+            wakeListen(l); // a session waits on accept
+            // The unconnected placeholder pair dies; this fd now
+            // projects the client end of the queued session.
+            sockCloseEnd(op, @intCast(v & 1));
+            c.fds[fd] = npi * 2 + 1;
+            return 0;
+        }
+        c.wait_pipe = ACCEPT_KEY + l;
+        kblock(.sock); // backlog full — accept frees a slot and wakes
+        li = null; // re-resolve: the listener may have died while parked
+        for (0..NLISTEN) |i| {
+            const l2 = &listeners[i];
+            if (l2.used and l2.fsv_ctx == @intFromPtr(ops.ctx) and
+                l2.key == @as(u64, @bitCast(key))) {
+                li = i;
+                break;
+            }
+        }
+    }
+}
+
+// nr 43/288 — accept(fd, addr, addrlen[, flags]): pop the oldest
+// pending session end into a NEW fd — the socket that actually
+// carries the client's bytes. Empty queue parks on the listener;
+// a connect queues and wakes.
+fn childAccept(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdi >= c.fds.len) return -9;
+    const fd: usize = @intCast(f.rdi);
+    if (c.fdkinds[fd] != .slisten) return -95; // EOPNOTSUPP
+    const li: usize = @intCast(c.fds[fd] - 1);
+    while (true) {
+        const l = &listeners[li];
+        if (l.npend > 0) {
+            const pv = l.pend[0];
+            for (1..l.npend) |i| l.pend[i - 1] = l.pend[i];
+            l.npend -= 1;
+            wakeListen(li); // a backlog-parked connect retries
+            const slot = sockSlot(c) orelse {
+                // No table room — re-queue the end, the caller can
+                // close something and retry (EMFILE is unix's answer).
+                l.pend[l.npend] = pv;
+                l.npend += 1;
+                return -24;
+            };
+            const v = pv - 1;
+            c.fdkinds[slot] = .sock;
+            c.fds[slot] = v + 1;
+            c.fdverbs[slot] = V_READ | V_WRITE;
+            return @intCast(slot);
+        }
+        c.wait_pipe = ACCEPT_KEY + li;
+        kblock(.sock); // wake = a queued session or the listener dying
+    }
 }
 
 // msghdr on x86_64: {name 8, namelen 4+4, iov 8, iovlen 8, control 8,
@@ -3207,6 +3437,25 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @bitCast(childSocketpair(c, f.r10));
             }
         },
+        41 => { // socket(domain, type, protocol) — an unconnected end
+            f.rax = @bitCast(childSocket(c, f));
+        },
+        49 => { // bind(fd, sockaddr_un, len) — name the end in the fs view
+            f.rax = @bitCast(childBind(c, f));
+        },
+        50 => { // listen(fd, backlog) — open the node's session queue
+            f.rax = @bitCast(childListen(c, f));
+        },
+        42 => { // connect(fd, sockaddr_un, len) — resolve the name, queue
+                // a session end on its listener, take the client end
+            f.rax = @bitCast(childConnect(c, f));
+        },
+        43, 288 => { // accept/accept4(fd, addr, addrlen[, flags]) — pop a
+                     // pending session end into a new projection; the
+                     // addr out-params are caller's choice, flags are
+                     // the fcntl no-ops
+            f.rax = @bitCast(childAccept(c, f));
+        },
         46 => { // sendmsg(fd, msghdr, flags) — iov bytes + SCM_RIGHTS
             f.rax = @bitCast(childSendmsg(c, f.rdi, f.rsi));
         },
@@ -3264,6 +3513,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     },
                     .sock => {
                         sockCloseEnd(@intCast((c.fds[fd] - 1) >> 1), @intCast((c.fds[fd] - 1) & 1));
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .slisten => {
+                        listenerRelease(@intCast(c.fds[fd] - 1));
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
                         f.rax = 0;
@@ -3692,16 +3947,29 @@ fn wakeKind(kind: WaitKind) void {
 // there is no schedulable context and the caller keeps its hlt path.
 // Returns nonzero if it blocked-and-woke. Called with IF=0; returns IF=1.
 // kind selects the WaitKind — one seam, not an extern per device:
-// 0=blk, 1=gpu (mirror of WaitKind's device arms).
+// 0=blk, 1=gpu, 2=blkq (mirror of WaitKind's device arms).
 export fn koru_dev_sleep(kind: u8) callconv(.c) c_int {
     if (!sched_active or nchildren == 0) return 0;
     const k: WaitKind = switch (kind) {
         0 => .blk,
         1 => .gpu,
+        2 => .blkq,
         else => return 0,
     };
     kblock(k);
     return 1;
+}
+
+// virtio releases its submit mutex by waking whoever queued on .blkq —
+// same seam as the sleep side so devices never reach into wakeKind.
+export fn koru_dev_wake(kind: u8) callconv(.c) void {
+    const k: WaitKind = switch (kind) {
+        0 => .blk,
+        1 => .gpu,
+        2 => .blkq,
+        else => return,
+    };
+    wakeKind(k);
 }
 
 // Kernel-context switch: kblock() calls here like a function; we push

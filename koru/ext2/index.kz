@@ -1002,6 +1002,12 @@ const ChildFsOps = extern struct {
     // link(old, new): a second name on the SAME inode — no copy, no
     // move; nlink counts the names and the object dies at zero.
     link: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
+    // mknod(path): mint a special inode — this rung only S_IFSOCK
+    // (unix socket nodes are real fs objects: the name IS the
+    // endpoint's address and the inode's key IS the registry lookup).
+    // Returns the object key (dev<<32|ino) so the caller can name the
+    // node it just made.
+    mknod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
 };
 
 // readAt: inode + byte-range → bytes, reading only the blocks covered —
@@ -1286,6 +1292,37 @@ fn cfMkdir(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     return doMkdir(fs, std.mem.span(path));
 }
 
+// doMknod: a fresh S_IFSOCK inode — the unix-socket endpoint's
+// filesystem name. No data blocks ever (the socket's transport is the
+// kernel's pair machinery; the inode is the address). Returns the
+// object key — connect resolves the same key through key().
+fn doMknod(fs: *Fs, path: []const u8) i64 {
+    var dir: [BS]u8 = undefined;
+    const sp = splitPath(path);
+    if (sp.leaf.len == 0) return -22; // EINVAL — no leaf to mint
+    const dino = lookupPath(fs, sp.dir, &dir) orelse return -2;
+    if (dirFind(fs, dino, sp.leaf, &dir) != null) return -17; // EEXIST
+    const ino = allocInode(fs) orelse return -28; // ENOSPC
+    const loc = inodeLoc(fs, ino) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    @memset(it[loc.off .. loc.off + 128], 0);
+    wr16(&it, loc.off + 0, 0o140644); // S_IFSOCK|0644
+    wr16(&it, loc.off + 26, 1);       // links
+    if (!writeBlock(fs, loc.block, &it)) return -5;
+    if (!dirAdd(fs, dino, sp.leaf, ino, 7)) { // EXT2_FT_SOCK
+        _ = freeInode(fs, ino);
+        return -12;
+    }
+    if (xfer(fs, OP_FFLUSH, 0, 0) != 0) return -5;
+    return @bitCast((@as(u64, fs.dev_id) << 32) | ino);
+}
+
+fn cfMknod(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    return doMknod(fs, std.mem.span(path));
+}
+
 // cfRmdir: the dir must be a dir and must be empty — "." and ".." are
 // the only tolerated entries; the parent's nlink drops because the
 // victim's ".." reference dies with it.
@@ -1399,7 +1436,8 @@ fn childFs(fs: *Fs) ChildFsOps {
               .read_at = cfReadAt, .seek = cfSeek, .stat = cfStat, .close = cfClose,
               .dup = cfDup, .key = cfKey, .write = cfWrite,
               .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey,
-              .mkdir = cfMkdir, .rmdir = cfRmdir, .link = cfLink };
+              .mkdir = cfMkdir, .rmdir = cfRmdir, .link = cfLink,
+              .mknod = cfMknod };
 }
 
 ~proc fetch|zig {
