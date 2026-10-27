@@ -641,7 +641,17 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
             client exchange wl-go/ok over the stream, the memfd
             crosses as ancillary, the server maps it and reads the
             client's magic back through the shared pool — the wire
-            shape libwayland needs, in real unix semantics
+            shape libwayland needs, in real unix semantics; wl
+            protocol pair LANDED (wlwire.h speaks real libwayland
+            message format — {oid,op,size} + string/new_id slots,
+            fd args on SCM_RIGHTS; wlinit socketpairs and
+            spawn_starts two SEPARATE binaries, socket as fd0:
+            globals → binds → formats → surface/pool/buffer →
+            attach/damage/frame/commit → callback.done + release +
+            sync roundtrip; server reads client pixels through the
+            passed pool — still open: pathname socket endpoints
+            (wayland-N bind/listen/accept) so clients CONNECT rather
+            than inherit, then libwayland itself)
             → Hyprland/Noctalia oracle harness over the real scene
 ```
 

@@ -700,6 +700,10 @@ else
         cp "$ROOT/koru/native/tests/objt.c" "$WORK/objt.c"
         cp "$ROOT/koru/native/tests/wtest.c" "$WORK/wtest.c"
         cp "$ROOT/koru/native/tests/wlpair.c" "$WORK/wlpair.c"
+        cp "$ROOT/koru/native/tests/wlwire.h" "$WORK/wlwire.h"
+        cp "$ROOT/koru/native/tests/wlserver.c" "$WORK/wlserver.c"
+        cp "$ROOT/koru/native/tests/wlclient.c" "$WORK/wlclient.c"
+        cp "$ROOT/koru/native/tests/wlinit.c" "$WORK/wlinit.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -716,6 +720,9 @@ else
         OBJTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/objt.elf")")"
         WTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wtest.elf")")"
         WLPAIRWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlpair.elf")")"
+        WLSRVWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlserver.elf")")"
+        WLCLIWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlclient.elf")")"
+        WLINITWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlinit.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -735,6 +742,9 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/objt.elf" "$WORK/objt.c" > "$WORK/objt.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wtest.elf" "$WORK/wtest.c" > "$WORK/wtest.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlpair.elf" "$WORK/wlpair.c" > "$WORK/wlpair.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlserver.elf" "$WORK/wlserver.c" > "$WORK/wlserver.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlclient.elf" "$WORK/wlclient.c" > "$WORK/wlclient.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlinit.elf" "$WORK/wlinit.c" > "$WORK/wlinit.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
@@ -752,6 +762,9 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $OBJTWSL objt.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WTESTWSL wtest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLPAIRWSL wlpair.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLSRVWSL wlserver.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLCLIWSL wlclient.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLINITWSL wlinit.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -823,6 +836,27 @@ else
                 ok "sockpair: SCM_RIGHTS fd crossed the socket; MAP_SHARED pool read back through it"
             else
                 bad "sockpair: evidence missing: $(grep -aE 'WL|FAIL|REFUSE|EXC' "$WORK/boot_sock.serial" | tail -6 | tr '\n' '|')"
+            fi
+            # wl protocol pair: wlinit socketpairs + spawn_starts two
+            # SEPARATE binaries (server end fd0, client end fd0); they
+            # speak real libwayland wire format — registry globals, shm
+            # formats, surface/pool/buffer objects, the pool fd over
+            # SCM_RIGHTS, attach/damage/frame/commit answered by
+            # callback.done + buffer.release, display.sync roundtrip.
+            boot_check "$ROOT/koru/native/tests/boot_wl.k" "WLEXEC COMPLETE" \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on
+            if grep -qF "WLCLI global 1 wl_compositor v4" "$WORK/boot_wl.serial" \
+               && grep -qF "WLCLI global 2 wl_shm v1" "$WORK/boot_wl.serial" \
+               && grep -qF "WLSRV magic=deadbeef tag=00c0ffee px0=5a" "$WORK/boot_wl.serial" \
+               && grep -qF "WLCLI frame done=42" "$WORK/boot_wl.serial" \
+               && grep -qF "WLCLI buffer release" "$WORK/boot_wl.serial" \
+               && grep -qF "WLCLI sync done=43 framed=1 rel=1" "$WORK/boot_wl.serial" \
+               && grep -qF "WLSRV EOS" "$WORK/boot_wl.serial" \
+               && grep -qF "WLINIT srv=0 cli=0" "$WORK/boot_wl.serial"; then
+                ok "wlpair: two binaries spoke real wl wire — globals, shm pool via SCM_RIGHTS, commit->done, release, sync"
+            else
+                bad "wlpair: evidence missing: $(grep -aE 'WL|FAIL|REFUSE|EXC' "$WORK/boot_wl.serial" | tail -8 | tr '\n' '|')"
             fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null
