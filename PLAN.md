@@ -631,7 +631,17 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
           children share the kernel-half pdpt so IRQs landing on a
           child CR3 find every mmio window — frag-kernel-half-is-
           shared-not-copied)
-          → init/shell/process userland (fork/exec, pipes/IPC)
+          → init/shell/process userland (fork/exec, pipes/IPC);
+            unix-socket transport LANDED — nr288 socketpair mints a
+            refcounted duplex ring pair, nr46/47 sendmsg/recvmsg
+            carry SCM_RIGHTS fd passing (the received endpoint is
+            minted as a new fd-table projection, not a number),
+            nr319 memfd_create + MAP_SHARED mmap pins one frame set
+            into two CR3s; wlpair.elf evidence: fork'd server and
+            client exchange wl-go/ok over the stream, the memfd
+            crosses as ancillary, the server maps it and reads the
+            client's magic back through the shared pool — the wire
+            shape libwayland needs, in real unix semantics
             → Hyprland/Noctalia oracle harness over the real scene
 ```
 

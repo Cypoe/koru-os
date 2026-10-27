@@ -816,13 +816,13 @@ const ChildFsOps = extern struct {
     link: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
 };
 
-const WaitKind = enum { none, conin, blk, exit, pipe, gpu };
+const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock };
 
 // fd slots are projections over typed seam endpoints, not bare provider
 // handles: stdio are real entries (conin/conout), fs a view handle,
 // pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
 // kind, never on the number — closing fd0 detaches like any discharge.
-const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w };
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm };
 
 // ---- the bag: class grants + nid-scoped object grants ------------------
 // DESIGN-0001 §8.6's grant {handle, verbs, as} distilled to the syscall
@@ -1025,6 +1025,29 @@ fn mapUserPage(c: *Child, vaddr: usize) ?*align(4096) [4096]u8 {
     const page = allocPage() orelse return null;
     pt[idx] = @intFromPtr(page) | US | ENT;
     return page;
+}
+
+// Map an EXISTING frame into a child PT — the shared-map path. pmm.pin
+// makes the page co-owned: the child's munmap/exit frees decrement, the
+// owner object's ref keeps it alive until the last unmap.
+fn mapUserPhys(c: *Child, vaddr: usize, phys: u64) bool {
+    if (vaddr < USER_VA_BASE or vaddr >= USER_VA_END) return false;
+    const upd: *[512]u64 = @ptrFromInt(c.upd);
+    const pd_i = (vaddr - USER_VA_BASE) >> 21;
+    if (upd[pd_i] & 1 == 0) {
+        const npt = allocPage() orelse return false;
+        upd[pd_i] = @intFromPtr(npt) | US | ENT;
+    }
+    const pt: *[512]u64 = @ptrFromInt(@as(usize, @intCast(upd[pd_i] & ~@as(u64, 0xFFF))));
+    const idx = (vaddr >> 12) & 0x1FF;
+    if (pt[idx] & 1 != 0) {
+        // Replacing a live mapping: drop the old frame's ref first —
+        // MAP_FIXED over a populated page is legal and must not leak.
+        _ = pmm.free(pt[idx] & ~@as(u64, 0xFFF));
+    }
+    if (!pmm.pin(phys)) return false;
+    pt[idx] = phys | US | ENT;
+    return true;
 }
 
 // raw pte value for a mapped user va (0 if unmapped)
@@ -1496,6 +1519,11 @@ fn canonNr(nr: u64) u64 {
         513 => 58,
         514 => 2, // openobj — the object axis' open; folds to the fs-object
                   // class and the key argument IS the object it names
+        77 => 2,  // ftruncate mutates an object's shape — same class
+        // IPC-channel class: socketpair and the message verbs ride the
+        // pipe cap (a channel is a channel); memfd mints the object the
+        // channel carries — same family.
+        46, 47, 53, 319 => 22,
         else => nr,
     };
 }
@@ -1873,12 +1901,14 @@ fn childSeek(c: *Child, fdu: u64, off: i64, whence: u32) i64 {
 // identity VA). MAP_FIXED honors the address inside the user window when
 // the range is free; an already-mapped page is reused, not remapped.
 fn childMmapFile(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fdu: u64, off: u64) i64 {
-    const ops = c.fsv orelse return -38;
-    if (flags & 0x01 != 0) return -95; // EOPNOTSUPP — shared maps need write-through
     if (off & 0xFFF != 0) return -22; // EINVAL — file offset must be page-aligned
     if (fdu >= c.fds.len) return -9;
     const fd: usize = @intCast(fdu);
     if (fd < 3 or c.fds[fd] == 0) return -9; // EBADF
+    if (c.fdkinds[fd] == .shm) return childMmapShm(c, addru, len, prot, flags, fd, off);
+    if (c.fdkinds[fd] != .fs) return -9; // sockets/pipes have no mapping
+    const ops = c.fsv orelse return -38;
+    if (flags & 0x01 != 0) return -95; // EOPNOTSUPP — shared maps need write-through
     var base: usize = 0;
     if (flags & 0x10 != 0 and addru != 0) { // MAP_FIXED
         base = @intCast(addru);
@@ -1904,6 +1934,32 @@ fn childMmapFile(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fdu: 
     return @intCast(base);
 }
 
+// mmap a memfd: MAP_SHARED maps the object's frames into this child's
+// PT — the same physical pages every other mapper sees, which IS the
+// wl_shm contract. MAP_PRIVATE on shm is CoW we don't implement —
+// refused loudly, not silently private.
+fn childMmapShm(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fd: usize, off: u64) i64 {
+    const s = &shms[@intCast(c.fds[fd] - 1)];
+    if (flags & 0x01 == 0) return -95; // EOPNOTSUPP — private maps need CoW
+    var base: usize = 0;
+    if (flags & 0x10 != 0 and addru != 0) {
+        base = @intCast(addru);
+        if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
+    } else {
+        base = c.mmap_top;
+        c.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
+    }
+    var p: usize = 0;
+    while (p < len) : (p += 0x1000) {
+        const pi = (off + p) >> 12;
+        if (pi >= s.npages) return -22; // past the object — honest EINVAL
+        if (!mapUserPhys(c, base + p, s.frames[pi])) return -12;
+    }
+    setUserWritable(c, base, len, prot & 2 != 0);
+    shm_maps += 1;
+    return @intCast(base);
+}
+
 fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
     if (fdu >= c.fds.len) return -9;
     var st: [144]u8 = std.mem.zeroes([144]u8);
@@ -1919,6 +1975,17 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             // a fifo, honestly named — musl isatty/fstat probing sees S_IFIFO
             stw(&st, 24, 0o10600);
             stw(&st, 16, 1);
+        },
+        .sock => {
+            // S_IFSOCK|0600 — musl's socket probing names it correctly
+            stw(&st, 24, 0o140600);
+            stw(&st, 16, 1);
+        },
+        .shm => {
+            // S_IFREG|0600 — a memfd is a file-shaped anonymous object
+            stw(&st, 24, 0o100600);
+            stw(&st, 16, 1);
+            stw(&st, 48, shms[@intCast(c.fds[fd] - 1)].size); // st_size
         },
         .fs => {
             const ops = c.fsv orelse return -38;
@@ -2063,6 +2130,206 @@ fn pipeWriteEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
     }
 }
 
+// ---- unix sockets: two rings + an fd-ref queue per direction ----------
+// A SOCK_STREAM pair is a pair of kernel rings (bytes each way) PLUS the
+// ancillary channel real unix semantics demand: SCM_RIGHTS fd passing —
+// sendmsg dups the sender's fd into the direction's queue NOW (the fd
+// survives the sender closing it), recvmsg installs queued refs into the
+// receiver's table under a real cmsghdr. Wayland's wl_shm protocol is
+// the load-bearing consumer: a pool fd crosses the socket, the server
+// mmaps it, and the buffer's frames are genuinely shared. The wait key
+// is .sock + wait_pipe = pair*2+dir — mark-only wakes like every kind.
+const NSOCKS = 4;
+const SOCKQ = 8; // queued fd refs per direction — a bound, like the ring
+const FdRef = struct { kind: FdKind = .none, h: u64 = 0, verbs: u8 = 0 };
+const SockDir = struct {
+    head: usize = 0,
+    tail: usize = 0,
+    count: usize = 0,
+    buf: [2048]u8 = undefined,
+    q: [SOCKQ]FdRef = .{FdRef{}} ** SOCKQ,
+    qn: u8 = 0,
+};
+const SockPair = struct {
+    used: bool = false,
+    dir: [2]SockDir = .{ .{}, .{} }, // dir[s]: readable on side s
+    refs: [2]u8 = .{ 0, 0 },
+};
+var socks: [NSOCKS]SockPair = .{SockPair{}} ** NSOCKS;
+pub export var sock_sends: u64 = 0;
+pub export var sock_recvs: u64 = 0;
+pub export var sock_fdpass: u64 = 0;
+
+fn wakeSock(pair: usize, dir: usize) void {
+    const key = pair * 2 + dir;
+    for (0..nchildren) |i| {
+        const p = &children[i];
+        if (p.state == .blocked and p.wait_kind == .sock and
+            p.wait_pipe == key) p.state = .runnable;
+    }
+}
+
+fn sockPairCreate() ?usize {
+    for (0..NSOCKS) |i| {
+        if (!socks[i].used) {
+            socks[i] = .{ .used = true, .refs = .{ 1, 1 } };
+            return i;
+        }
+    }
+    return null;
+}
+
+// Dup a live fd entry for transfer: bump the endpoint's refs and return
+// the queued-ref record. fs goes through the provider dup (shared-offset
+// POSIX semantics, same as cloneFd). false = undupable kind.
+fn fdDupRef(c: *Child, fd: usize, out: *FdRef) bool {
+    const kind = c.fdkinds[fd];
+    switch (kind) {
+        .pipe_r => pipes[@intCast(c.fds[fd])].rrefs += 1,
+        .pipe_w => pipes[@intCast(c.fds[fd])].wrefs += 1,
+        .sock => {
+            const v = c.fds[fd] - 1;
+            socks[@intCast(v >> 1)].refs[@intCast(v & 1)] += 1;
+        },
+        .shm => shms[@intCast(c.fds[fd] - 1)].refs += 1,
+        .fs => {
+            const ops = c.fsv orelse return false;
+            const nh = ops.dup(ops.ctx, c.fds[fd]);
+            if (nh < 0) return false;
+            out.* = .{ .kind = kind, .h = @intCast(nh), .verbs = c.fdverbs[fd] };
+            return true;
+        },
+        else => return false,
+    }
+    out.* = .{ .kind = kind, .h = c.fds[fd], .verbs = c.fdverbs[fd] };
+    return true;
+}
+
+// Release one queued/held ref — used when a queued ref dies with the
+// pair or a truncated cmsg. The mirror of fdDupRef's arm list.
+fn fdFreeRef(r: FdRef) void {
+    switch (r.kind) {
+        .pipe_r => pipeCloseEnd(@intCast(r.h), .pipe_r),
+        .pipe_w => pipeCloseEnd(@intCast(r.h), .pipe_w),
+        .sock => sockCloseEnd(@intCast((r.h - 1) >> 1), @intCast((r.h - 1) & 1)),
+        .shm => shmRelease(@intCast(r.h - 1)),
+        else => {},
+    }
+}
+
+fn sockWrite(c: *Child, pair: usize, dir: usize, bva: u64, want: u64) i64 {
+    if (want == 0) return 0;
+    const d = &socks[pair].dir[dir];
+    while (true) {
+        if (socks[pair].refs[dir] == 0) return -32; // EPIPE — reader side gone
+        var n: usize = 0;
+        while (n < want and d.count < d.buf.len) : (n += 1) {
+            const va: usize = @intCast(bva + n);
+            if (userEntry(c, va) & 1 == 0) break;
+            const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
+            d.buf[d.head] = ub[0];
+            d.head = (d.head + 1) % d.buf.len;
+            d.count += 1;
+        }
+        if (n != 0) {
+            sock_sends += 1;
+            wakeSock(pair, dir); // bytes landed — prod the parked reader
+            return @intCast(n);
+        }
+        if (userEntry(c, @intCast(bva)) & 1 == 0) return -14;
+        c.wait_pipe = pair * 2 + dir;
+        kblock(.sock); // wake = space or the reader leaving
+    }
+}
+
+fn sockRead(c: *Child, pair: usize, dir: usize, bva: u64, want: u64) i64 {
+    if (want == 0) return 0;
+    const d = &socks[pair].dir[dir];
+    while (true) {
+        if (d.count > 0) {
+            var n: usize = 0;
+            while (n < want and d.count > 0) : (n += 1) {
+                const va: usize = @intCast(bva + n);
+                if (userEntry(c, va) & 1 == 0) break;
+                const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
+                ub[0] = d.buf[d.tail];
+                d.tail = (d.tail + 1) % d.buf.len;
+                d.count -= 1;
+            }
+            if (n != 0) {
+                sock_recvs += 1;
+                wakeSock(pair, dir); // space opened — prod the writer
+                return @intCast(n);
+            }
+            if (userEntry(c, @intCast(bva)) & 1 == 0) return -14;
+        } else if (socks[pair].refs[dir ^ 1] == 0) {
+            return 0; // peer gone and drained — this read IS the EOS
+        } else {
+            c.wait_pipe = pair * 2 + dir;
+            kblock(.sock); // wake = a byte or the peer leaving
+        }
+    }
+}
+
+fn sockCloseEnd(pair: usize, side: usize) void {
+    const s = &socks[pair];
+    if (s.refs[side] > 0) s.refs[side] -= 1;
+    wakeSock(pair, side ^ 1); // the peer's waiters re-check the refs
+    wakeSock(pair, side);
+    if (s.refs[0] == 0 and s.refs[1] == 0) {
+        // Both ends gone — queued refs die with the pair.
+        for (0..2) |d| {
+            while (s.dir[d].qn > 0) {
+                s.dir[d].qn -= 1;
+                fdFreeRef(s.dir[d].q[s.dir[d].qn]);
+            }
+        }
+        s.* = .{};
+    }
+}
+
+// ---- memfd shm objects: anonymous shared memory that survives close ---
+// The object pins its frames; a MAP_SHARED mapper pins each frame again
+// into its PT, so the pages outlive every fd and die with the last
+// unmap — memfd's real lifetime, which wl_shm's "close the fd after
+// sendmsg" idiom depends on.
+const NSHM = 4;
+const SHM_MAXPAGES = 64;
+const ShmObj = struct {
+    used: bool = false,
+    refs: u8 = 0, // live fd handles (each SCM_QUEUED ref counts too)
+    npages: u8 = 0,
+    size: u64 = 0,
+    frames: [SHM_MAXPAGES]u64 = .{0} ** SHM_MAXPAGES,
+};
+var shms: [NSHM]ShmObj = .{ShmObj{}} ** NSHM;
+pub export var shm_maps: u64 = 0;
+
+fn shmRelease(idx: usize) void {
+    const s = &shms[idx];
+    if (s.refs > 0) s.refs -= 1;
+    if (s.refs == 0) {
+        for (0..s.npages) |i| {
+            if (s.frames[i] != 0) _ = pmm.free(s.frames[i]);
+        }
+        s.* = .{};
+    }
+}
+
+fn shmTrunc(idx: usize, len: u64) i64 {
+    const s = &shms[idx];
+    const np: usize = @intCast((len + 0xFFF) >> 12);
+    if (np > SHM_MAXPAGES) return -12;
+    while (s.npages < np) : (s.npages += 1) {
+        const page = allocPage() orelse return -12;
+        s.frames[s.npages] = @intFromPtr(page);
+    }
+    // shrink keeps the pages — mmap may still point in (real memfd
+    // semantics: a truncated-away tail SIGBUSes, we keep it simple)
+    s.size = len;
+    return 0;
+}
+
 // Close one fd entry's endpoint. Ring outlives either end; both gone
 // releases the slot. The surviving side wakes on its NEXT endpoint op —
 // a parked peer is marked now and rechecks the new refcount itself.
@@ -2089,6 +2356,8 @@ fn releaseFds(c: *Child) void {
                 if (c.fsv) |ops| _ = ops.close(ops.ctx, c.fds[i]);
             },
             .pipe_r, .pipe_w => pipeCloseEnd(@intCast(c.fds[i]), c.fdkinds[i]),
+            .sock => sockCloseEnd(@intCast((c.fds[i] - 1) >> 1), @intCast((c.fds[i] - 1) & 1)),
+            .shm => shmRelease(@intCast(c.fds[i] - 1)),
             .conin, .conout => {},
         }
         c.fds[i] = 0;
@@ -2108,6 +2377,11 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
     switch (kind) {
         .pipe_r => pipes[@intCast(src.fds[sfd])].rrefs += 1,
         .pipe_w => pipes[@intCast(src.fds[sfd])].wrefs += 1,
+        .sock => {
+            const v = src.fds[sfd] - 1;
+            socks[@intCast(v >> 1)].refs[@intCast(v & 1)] += 1;
+        },
+        .shm => shms[@intCast(src.fds[sfd] - 1)].refs += 1,
         .fs => {
             const ops = src.fsv orelse return false;
             const nh = ops.dup(ops.ctx, src.fds[sfd]);
@@ -2155,6 +2429,202 @@ fn childPipe(c: *Child, pva: u64) i64 {
     c.fds[slots[1]] = pi;
     c.fdverbs[slots[1]] = V_WRITE;
     return 0;
+}
+
+// nr 53 — socketpair(AF_UNIX, SOCK_STREAM, 0, sv[2]): mint the pair and
+// land both ends in the caller's table. An fd entry's value is
+// pair*2+side — side s reads dir[s] and writes dir[1-s].
+fn childSocketpair(c: *Child, svva: u64) i64 {
+    var slots: [2]usize = undefined;
+    var sn: usize = 0;
+    for (0..c.fds.len) |i| {
+        if (c.fdkinds[i] == .none) {
+            slots[sn] = i;
+            sn += 1;
+            if (sn == 2) break;
+        }
+    }
+    if (sn < 2) return -24; // EMFILE
+    const pi = sockPairCreate() orelse return -24;
+    var out: [8]u8 = undefined;
+    for (0..2) |i| std.mem.writeInt(u32, out[i * 4 ..][0..4], @intCast(slots[i]), .little);
+    if (copyToUser(c, @intCast(svva), &out) < 8) {
+        socks[pi] = .{};
+        return -14;
+    }
+    for (0..2) |i| {
+        c.fdkinds[slots[i]] = .sock;
+        c.fds[slots[i]] = pi * 2 + i + 1;
+        c.fdverbs[slots[i]] = V_READ | V_WRITE;
+    }
+    return 0;
+}
+
+// msghdr on x86_64: {name 8, namelen 4+4, iov 8, iovlen 8, control 8,
+// controllen 8, flags 4+4} = 56 bytes. cmsghdr: {len 8, level 4, type 4}.
+// We only speak SOL_SOCKET/SCM_RIGHTS ancillary — anything else is
+// ignored like a kernel that doesn't know the level.
+fn childSendmsg(c: *Child, fdu: u64, mhva: u64) i64 {
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    if (c.fdkinds[fd] != .sock) return -88; // ENOTSOCK
+    const pair: usize = @intCast((c.fds[fd] - 1) >> 1);
+    const dir: usize = @intCast(((c.fds[fd] - 1) & 1) ^ 1); // write dir
+    var mh: [56]u8 = undefined;
+    if (copyFromUser(c, @intCast(mhva), &mh) < 56) return -14;
+    const iovp = std.mem.readInt(u64, mh[16..24], .little);
+    const iovn = std.mem.readInt(u64, mh[24..32], .little);
+    const ctlp = std.mem.readInt(u64, mh[32..40], .little);
+    const ctln = std.mem.readInt(u64, mh[40..48], .little);
+    // Bytes first — stream iovs through the peer ring (blocks on full).
+    var total: i64 = 0;
+    var i: usize = 0;
+    while (i < iovn and i < 64) : (i += 1) {
+        var iov: [16]u8 = undefined;
+        if (copyFromUser(c, @intCast(iovp + i * 16), &iov) < 16) {
+            return if (total > 0) total else -14;
+        }
+        const base = std.mem.readInt(u64, iov[0..8], .little);
+        const len = std.mem.readInt(u64, iov[8..16], .little);
+        if (len == 0) continue;
+        const n = sockWrite(c, pair, dir, base, len);
+        if (n < 0) return if (total > 0) total else n;
+        total += n;
+        if (n < len) break;
+    }
+    // Then ancillary: each SCM_RIGHTS cmsg dups its fds into the peer's
+    // receive queue — dup-at-send, so the sender closing later changes
+    // nothing. Queue full refuses loudly (ENOBUFS).
+    var off: usize = 0;
+    while (off + 16 <= ctln) {
+        var ch: [16]u8 = undefined;
+        if (copyFromUser(c, @intCast(ctlp + off), &ch) < 16) break;
+        const clen = std.mem.readInt(u64, ch[0..8], .little);
+        const level = std.mem.readInt(i32, ch[8..12], .little);
+        const ctype = std.mem.readInt(i32, ch[12..16], .little);
+        if (clen < 16 or off + clen > ctln) break;
+        if (level == 1 and ctype == 1) { // SOL_SOCKET/SCM_RIGHTS
+            var p: usize = 16;
+            while (p + 4 <= clen) : (p += 4) {
+                var ib: [4]u8 = undefined;
+                if (copyFromUser(c, @intCast(ctlp + off + p), &ib) < 4) break;
+                const sfd: usize = @intCast(std.mem.readInt(i32, ib[0..4], .little));
+                if (sfd >= c.fds.len or c.fdkinds[sfd] == .none) return -9;
+                const d = &socks[pair].dir[dir];
+                if (d.qn >= SOCKQ) return -105; // ENOBUFS — bound is loud
+                var ref: FdRef = .{};
+                if (!fdDupRef(c, sfd, &ref)) return -9;
+                d.q[d.qn] = ref;
+                d.qn += 1;
+                sock_fdpass += 1;
+            }
+        }
+        off += (clen + 7) & ~@as(usize, 7); // CMSG_ALIGN
+    }
+    return total;
+}
+
+fn childRecvmsg(c: *Child, fdu: u64, mhva: u64) i64 {
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    if (c.fdkinds[fd] != .sock) return -88;
+    const pair: usize = @intCast((c.fds[fd] - 1) >> 1);
+    const side: usize = @intCast((c.fds[fd] - 1) & 1);
+    var mh: [56]u8 = undefined;
+    if (copyFromUser(c, @intCast(mhva), &mh) < 56) return -14;
+    const iovp = std.mem.readInt(u64, mh[16..24], .little);
+    const iovn = std.mem.readInt(u64, mh[24..32], .little);
+    const ctlp = std.mem.readInt(u64, mh[32..40], .little);
+    const ctln = std.mem.readInt(u64, mh[40..48], .little);
+    var total: i64 = 0;
+    var i: usize = 0;
+    while (i < iovn and i < 64) : (i += 1) {
+        var iov: [16]u8 = undefined;
+        if (copyFromUser(c, @intCast(iovp + i * 16), &iov) < 16) {
+            return if (total > 0) total else -14;
+        }
+        const base = std.mem.readInt(u64, iov[0..8], .little);
+        const len = std.mem.readInt(u64, iov[8..16], .little);
+        if (len == 0) continue;
+        const n = sockRead(c, pair, side, base, len);
+        if (n < 0) return if (total > 0) total else n;
+        total += n;
+        if (n < len or n == 0) break; // short read or EOS
+    }
+    // Ancillary: install queued refs into THIS table under a real
+    // cmsghdr — only when the caller offered control space (a plain
+    // read() leaves them queued for the next recvmsg). Table-full
+    // truncates like linux: fit what fits, close the rest, CTRUNC.
+    var ctlout: u64 = 0;
+    var msgflags: u64 = 0;
+    const d = &socks[pair].dir[side];
+    if (ctlp != 0 and ctln >= 16 and d.qn > 0) {
+        var fds: [SOCKQ]u32 = .{0} ** SOCKQ;
+        var got: usize = 0;
+        while (d.qn > 0) {
+            d.qn -= 1;
+            const ref = d.q[d.qn];
+            var slot: ?usize = null;
+            for (0..c.fds.len) |si| {
+                if (c.fdkinds[si] == .none) { slot = si; break; }
+            }
+            if (slot) |si| {
+                c.fdkinds[si] = ref.kind;
+                c.fds[si] = ref.h;
+                c.fdverbs[si] = ref.verbs;
+                fds[got] = @intCast(si);
+                got += 1;
+            } else {
+                fdFreeRef(ref); // nowhere to land — close like linux
+                msgflags |= 8; // MSG_CTRUNC
+            }
+        }
+        var ch: [16]u8 = undefined;
+        std.mem.writeInt(u64, ch[0..8], 16 + @as(u64, @intCast(got * 4)), .little);
+        std.mem.writeInt(i32, ch[8..12], 1, .little); // SOL_SOCKET
+        std.mem.writeInt(i32, ch[12..16], 1, .little); // SCM_RIGHTS
+        _ = copyToUser(c, @intCast(ctlp), &ch);
+        var fb: [SOCKQ * 4]u8 = undefined;
+        for (0..got) |gi| std.mem.writeInt(u32, fb[gi * 4 ..][0..4], fds[gi], .little);
+        _ = copyToUser(c, @intCast(ctlp + 16), fb[0 .. got * 4]);
+        ctlout = (16 + @as(u64, @intCast(got * 4)) + 7) & ~@as(u64, 7); // CMSG_SPACE
+    }
+    // Report the real controllen/flags back into the caller's msghdr.
+    // controllen is size_t at +40; flags is int at +48 — 4 bytes only.
+    var ob: [8]u8 = undefined;
+    std.mem.writeInt(u64, ob[0..8], ctlout, .little);
+    _ = copyToUser(c, @intCast(mhva + 40), &ob);
+    std.mem.writeInt(i32, ob[0..4], @intCast(msgflags), .little);
+    _ = copyToUser(c, @intCast(mhva + 48), ob[0..4]);
+    return total;
+}
+
+// nr 319 — memfd_create(name, flags): mint an anonymous shm object.
+// Size starts 0; ftruncate gives it shape.
+fn childMemfd(c: *Child) i64 {
+    var idx: ?usize = null;
+    for (0..NSHM) |i| {
+        if (!shms[i].used) { idx = i; break; }
+    }
+    const si = idx orelse return -24;
+    var slot: ?usize = null;
+    for (0..c.fds.len) |i| {
+        if (c.fdkinds[i] == .none) { slot = i; break; }
+    }
+    const s = slot orelse return -24;
+    shms[si] = .{ .used = true, .refs = 1 };
+    c.fdkinds[s] = .shm;
+    c.fds[s] = si + 1;
+    c.fdverbs[s] = V_READ | V_WRITE;
+    return @intCast(s);
+}
+
+// nr 77 — ftruncate(fd, len): only shm objects take a size.
+fn childFtruncate(c: *Child, fdu: u64, len: u64) i64 {
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    if (c.fdkinds[fd] != .shm) return -22;
+    return shmTrunc(@intCast(c.fds[fd] - 1), len);
 }
 
 // nr 61 — wait(pid, status): pid is the pid-domain id spawn_start/fork
@@ -2571,6 +3041,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         f.rax = f.rdx;
                     },
                     .pipe_w => f.rax = @bitCast(pipeWriteEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
+                    .sock => f.rax = @bitCast(sockWrite(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast(((c.fds[fdi] - 1) & 1) ^ 1), f.rsi, f.rdx)),
                     // The fd is the grant: a write verb was minted at
                     // open or this projection never carried one — EBADF,
                     // the POSIX refusal for a bad-mode write.
@@ -2614,6 +3085,13 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         },
                         .pipe_w => {
                             const n = pipeWriteEnd(c, @intCast(c.fds[fdi]), @intCast(base), @intCast(len));
+                            if (n < 0) { fail = n; break; }
+                            total += n;
+                            if (n < len) break;
+                        },
+                        .sock => {
+                            const v = c.fds[fdi] - 1;
+                            const n = sockWrite(c, @intCast(v >> 1), @intCast((v & 1) ^ 1), @intCast(base), @intCast(len));
                             if (n < 0) { fail = n; break; }
                             total += n;
                             if (n < len) break;
@@ -2711,6 +3189,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     .fs => if (c.fdverbs[fdi] & V_READ != 0)
                         childRead(c, f.rdi, f.rsi, f.rdx) else -9,
                     .pipe_r => pipeReadEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
+                    .sock => sockRead(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast((c.fds[fdi] - 1) & 1), f.rsi, f.rdx),
                     else => @as(i64, -9),
                 });
             }
@@ -2718,6 +3197,28 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         22 => { // pipe(fds[2]) — mints a ring; endpoints land as pipe_r/
                 // pipe_w entries in the caller's projection.
             f.rax = @bitCast(childPipe(c, f.rdi));
+        },
+        53 => { // socketpair(domain, type, protocol, sv[2]) — AF_UNIX
+                // SOCK_STREAM only: the stream shape wayland's wire needs.
+                // Other domains/types refuse by class, not by silence.
+            if (f.rdi != 1 or (f.rsi & 0xF) != 1) {
+                f.rax = @bitCast(@as(i64, -97)); // EAFNOSUPPORT
+            } else {
+                f.rax = @bitCast(childSocketpair(c, f.r10));
+            }
+        },
+        46 => { // sendmsg(fd, msghdr, flags) — iov bytes + SCM_RIGHTS
+            f.rax = @bitCast(childSendmsg(c, f.rdi, f.rsi));
+        },
+        47 => { // recvmsg(fd, msghdr, flags) — bytes + queued fd install
+            f.rax = @bitCast(childRecvmsg(c, f.rdi, f.rsi));
+        },
+        319 => { // memfd_create(name, flags) — an anonymous shm object;
+                 // the pool fd wl_shm sends. name is diagnostic only.
+            f.rax = @bitCast(childMemfd(c));
+        },
+        77 => { // ftruncate(fd, len) — sizes shm objects (grow, zero)
+            f.rax = @bitCast(childFtruncate(c, f.rdi, f.rsi));
         },
         56 => { // clone(flags,...) — only the fork shape (SIGCHLD) this rung
             f.rax = @bitCast(childClone(c, f));
@@ -2757,6 +3258,18 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     },
                     .pipe_r, .pipe_w => {
                         pipeCloseEnd(@intCast(c.fds[fd]), had);
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .sock => {
+                        sockCloseEnd(@intCast((c.fds[fd] - 1) >> 1), @intCast((c.fds[fd] - 1) & 1));
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .shm => {
+                        shmRelease(@intCast(c.fds[fd] - 1));
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
                         f.rax = 0;

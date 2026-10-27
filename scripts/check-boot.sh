@@ -699,6 +699,7 @@ else
         cp "$ROOT/koru/native/tests/grantc.c" "$WORK/grantc.c"
         cp "$ROOT/koru/native/tests/objt.c" "$WORK/objt.c"
         cp "$ROOT/koru/native/tests/wtest.c" "$WORK/wtest.c"
+        cp "$ROOT/koru/native/tests/wlpair.c" "$WORK/wlpair.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -714,6 +715,7 @@ else
         GRANTCWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/grantc.elf")")"
         OBJTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/objt.elf")")"
         WTESTWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wtest.elf")")"
+        WLPAIRWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlpair.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -732,6 +734,7 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/grantc.elf" "$WORK/grantc.c" > "$WORK/grantc.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/objt.elf" "$WORK/objt.c" > "$WORK/objt.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wtest.elf" "$WORK/wtest.c" > "$WORK/wtest.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlpair.elf" "$WORK/wlpair.c" > "$WORK/wlpair.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
@@ -748,6 +751,7 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $GRANTCWSL grantc.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $OBJTWSL objt.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WTESTWSL wtest.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLPAIRWSL wlpair.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -803,6 +807,22 @@ else
                 ok "dynamic-gnu: coreutils uname ran its 5-lib closure and reported the kernel's own name"
             else
                 bad "dynamic-gnu: uname evidence missing: $(grep -aE 'ENOSYS|REFUSE|EXC|uname|koru' "$WORK/boot_real.serial" | tail -6 | tr '\n' '|')"
+            fi
+            # unix-socket transport: wlpair socketpair+forks, passes a
+            # memfd over real SCM_RIGHTS ancillary, and the server mmaps
+            # it MAP_SHARED — the same frames in two address spaces. This
+            # is the wire wayland is built on; asserted here so the wl
+            # server/client pair lands on a measured transport.
+            boot_check "$ROOT/koru/native/tests/boot_sock.k" "WLBOOT COMPLETE" \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on
+            if grep -qE "WLSERV bytes=[0-9]+:wl-go rfd=[0-9]+" "$WORK/boot_sock.serial" \
+               && grep -qE "WLCLNT sent=[0-9]+ reply=[0-9]+:ok" "$WORK/boot_sock.serial" \
+               && grep -qF "WLSERV magic=deadbeef tag=00c0ffee" "$WORK/boot_sock.serial" \
+               && grep -qF "exec wlpair status=0" "$WORK/boot_sock.serial"; then
+                ok "sockpair: SCM_RIGHTS fd crossed the socket; MAP_SHARED pool read back through it"
+            else
+                bad "sockpair: evidence missing: $(grep -aE 'WL|FAIL|REFUSE|EXC' "$WORK/boot_sock.serial" | tail -6 | tr '\n' '|')"
             fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null
