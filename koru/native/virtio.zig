@@ -370,10 +370,15 @@ fn parkOnce() void {
             blk_yields += 1;
             return;
         }
-        if (flags & 0x200 == 0) return; // no epoch, can't wake — poll
         blk_parks += 1;
+        // sti;hlt under a bkl hold is legal via the dispatch's nested arm:
+        // the completion IRQ runs on the holder's stack without re-locking,
+        // and the hlt gives the cpu a real idle exit — the IF=0 poll that
+        // used to live here starved TCG's completion path (no exits meant
+        // the used-ring update never got serviced).
         asm volatile ("sti\n\thlt" ::: .{ .memory = true });
-    } else {
+        if (flags & 0x200 == 0) asm volatile ("cli" ::: .{ .memory = true });
+    } else if (flags & 0x200 != 0) {
         asm volatile ("sti" ::: .{ .memory = true });
     }
 }

@@ -129,23 +129,28 @@ fn cmd(out_len: usize, in_len: usize, want: u32) bool {
     ctlq.free_head = (d0 + 2) % @as(u16, @intCast(n));
     gpu_cmd_n += 1;
 
-    // park until the used ring retires — the MSI-X delivery wakes us,
-    // sti;hlt when there's no epoch to yield to.
+    // park until the used ring retires — the MSI-X delivery wakes us.
+    // sti;hlt is legal even under a bkl hold (the dispatch's nested arm
+    // runs the IRQ without re-locking), and the hlt is what lets the
+    // device's completion path run — a masked poll starves it.
+    const flags = asm volatile ("pushfq\n\tpop %[f]"
+        : [f] "=r" (-> u64)
+        :
+        : .{ .memory = true });
     var guard: u32 = 0;
-    while (ctlq.used_idx.* == ctlq.last_used) {
+    while (true) {
         asm volatile ("cli" ::: .{ .memory = true });
-        if (ctlq.used_idx.* != ctlq.last_used) {
-            asm volatile ("sti" ::: .{ .memory = true });
-            break;
-        }
-        if (koru_dev_sleep(1) != 0) continue; // blocked-and-woke, IF=1
+        if (ctlq.used_idx.* != ctlq.last_used) break;
+        if (koru_dev_sleep(1) != 0) continue; // blocked-and-woke under bkl
         asm volatile ("sti\n\thlt" ::: .{ .memory = true });
         guard += 1;
         if (guard > 4_000_000) {
+            if (flags & 0x200 == 0) asm volatile ("cli" ::: .{ .memory = true });
             koru_say("vgpu: command timeout\n");
             return false;
         }
     }
+    if (flags & 0x200 != 0) asm volatile ("sti" ::: .{ .memory = true });
     ctlq.last_used = ctlq.used_idx.*;
     const r: *volatile Hdr = @ptrCast(@alignCast(&respbuf[0]));
     return r.type_ == want;

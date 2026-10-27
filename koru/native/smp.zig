@@ -135,11 +135,17 @@ fn waitTicks(n: u64) void {
 // CPUs agree on this early) and each AP programs its own LVT — local
 // timers are per-CPU hardware, there is no shared tick to steal.
 pub const TIMER_VEC: u8 = 0x3E;
+// The claim kick — a fixed-mode IPI to the designated next claimant. A
+// hlt'd cpu exits hlt on ANY vector; the handler is just a counted LAPIC
+// EOI — the schedLoop iteration after it does the real work.
+pub const RESCHED_VEC: u8 = 0x3D;
+pub var reschedSeen: u64 = 0;
 var lapicPeriod: u32 = 0;
 pub var apTicks: [16]u64 = .{0} ** 16;
 pub var cpuRoster: u32 = 0; // bitmask of online apic ids — the roster datum
 
-extern fn koru_ap_arm_idt() void; // user.zig — shared IDT under kernel segs
+extern fn koru_ap_arm() void; // user.zig — per-CPU gdt/tss/idt/syscall arm
+extern fn koru_sched_idle() noreturn; // user.zig — the AP's idle IS schedLoop
 
 // Per-CPU tick handler — called from the dispatch's LAPIC arm. Counts
 // by *local* apic id: the register reads the running CPU's LAPIC, not
@@ -147,6 +153,32 @@ extern fn koru_ap_arm_idt() void; // user.zig — shared IDT under kernel segs
 pub fn lapicTick() void {
     const id: usize = @intCast(lapic(0x20).* >> 24);
     if (id < apTicks.len) apTicks[id] += 1;
+}
+
+// Roster queries for the claim rotation. An empty mask (uniprocessor,
+// or pre-init) degenerates honestly: only cpu 0 exists.
+pub fn rosterHas(id: u32) bool {
+    if (cpuRoster == 0) return id == 0;
+    return id < 32 and (cpuRoster >> @intCast(id)) & 1 == 1;
+}
+
+// The online apic id after `me`, wrapping — schedLoop's exec_hint is
+// this value, so claims rotate through the roster instead of racing.
+pub fn nextOnlineAfter(me: u32) u32 {
+    if (cpuRoster == 0) return 0;
+    var i: u32 = 1;
+    while (i < 32) : (i += 1) {
+        const c = (me + i) & 31;
+        if (rosterHas(c)) return c;
+    }
+    return me;
+}
+
+// resched-IPI one cpu out of its schedLoop hlt — called by whoever just
+// released the claim or marked a runnable child under the lock.
+pub fn kickCpu(id: u32) void {
+    if (cpuRoster == 0 or id > 0xFF) return; // uniprocessor: nobody to kick
+    ipiSend(@intCast(id), RESCHED_VEC);
 }
 
 // One-shot LAPIC timer paced against two PIT ticks → the count for an
@@ -166,26 +198,28 @@ pub var apAcked: u32 = 0;
 pub var apSeenId: u32 = 0;
 
 // The AP's first kernel code — reads its id from the params block,
-// acks, arms the shared IDT and its own LVT timer, claims a roster
-// bit, then sched-idles. Prints stay BSP-side (no serial lock on this
-// arm yet); the tick counters and roster mask are the AP's voice.
+// acks, arms its full per-CPU state (shared gdt2, its own TSS slot,
+// shared IDT, SYSCALL MSRs), starts its own LVT timer, claims a roster
+// bit, then enters schedLoop — the roster's idle IS the scheduler:
+// from here the AP can claim, run, trap, preempt, and resume children
+// end-to-end. Prints stay BSP-side; the claim lines are the AP's voice.
 export fn apMain() callconv(.c) noreturn {
     const id = @as(*volatile u32, @ptrFromInt(TRAMP + O_APICID)).*;
     apSeenId = id;
     @atomicStore(u32, &apAcked, 1, .seq_cst);
 
-    koru_ap_arm_idt();
+    koru_ap_arm();
     lapic(0xF0).* = lapic(0xF0).* | 0x13F; // SVR: enable + spurious vec 0x3F
     lapic(0x3E0).* = 0x3; // DCR: divide by 16
     lapic(0x320).* = @as(u32, TIMER_VEC) | (1 << 17); // LVT timer: periodic
     lapic(0x380).* = lapicPeriod;
     if (id < 32) _ = @atomicRmw(u32, &cpuRoster, .Or, @as(u32, 1) << @intCast(id), .seq_cst);
-    asm volatile ("sti");
-    while (true) asm volatile ("hlt");
+    koru_sched_idle();
 }
 
 pub fn init() void {
     if (acpi.ncpusEnabled <= 1) {
+        cpuRoster = 1; // the roster is still honest: {bsp}
         say("smp: uniprocessor — no AP bringup\n");
         return;
     }

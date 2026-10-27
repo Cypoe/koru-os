@@ -178,17 +178,20 @@ fn u16wr(b: []u8, off: usize, v: u16) void {
 }
 
 // ---- GDT/TSS/IDT ----------------------------------------------------------
-// gdt2 mirrors the boot GDT then adds user data/code + a 128-bit TSS
-// descriptor patched in at runtime (its base is a runtime address).
-var gdt2: [8]u64 align(8) = .{
+// gdt2 mirrors the boot GDT then adds user data/code + one 128-bit TSS
+// descriptor PER CPU (slot 5+2*cpu, selector 0x28+16*cpu) — a ring
+// transition reads the *running* CPU's task register, so each roster
+// member needs its own rsp0 home. The table is shared: every CPU
+// lgdt's it; each ltr's only its own slot.
+const MAXCPU: usize = 8;
+var gdt2: [5 + 2 * MAXCPU + 1]u64 align(8) = .{
     0x0000000000000000,
     0x00AF9A000000FFFF, // 0x08 kernel code64
     0x00CF92000000FFFF, // 0x10 kernel data
     0x00CFF2000000FFFF, // 0x18 user data   (DPL=3)
     0x00AFFA000000FFFF, // 0x20 user code64 (DPL=3, L)
-    0, 0, 0, // 0x28 TSS descriptor (two quads) + pad
-};
-var tss: [104]u8 align(16) = [_]u8{0} ** 104;
+} ++ .{0} ** (2 * MAXCPU + 1); // per-CPU TSS descriptor pairs + pad
+var tss: [MAXCPU][104]u8 align(16) = [_][104]u8{[_]u8{0} ** 104} ** MAXCPU;
 var idt: [512]u64 align(16) = [_]u64{0} ** 512;
 // Kernel stacks are per-child: every live child owns a bounded trap
 // context, so a trap path that calls provider depth (fs+ELF load) can
@@ -211,12 +214,52 @@ fn kstackTop(n: usize) u64 {
 // the current child's own stack — resumeChild repoints both.
 var kstack: [8192]u8 align(16) = [_]u8{0} ** 8192;
 
-fn patchTssDesc() void {
-    const base: u64 = @intFromPtr(&tss);
+// Per-CPU scheduler stacks: schedLoop is reached standing on a RESUMABLE
+// stack — ksched and the tick arrive on a child's kstack, exit on a dead
+// one — and the roster may hand that same child to ANOTHER cpu while the
+// first is still parked in schedLoop's hlt below its saved block; the
+// resumed continuation then writes over the idle cpu's live frames (a
+// real ret-into-stack-bytes fault). Hop to the cpu's own stack at entry;
+// the residue left on the borrowed stack is dead scratch — rsp0 pushes
+// overwrite it top-down on the next trap.
+const SSTACK: usize = 16 * 1024;
+var sstacks: [MAXCPU][SSTACK]u8 align(16) = undefined;
+
+fn sstackTop() u64 {
+    return @intFromPtr(&sstacks[cpuSelf()]) + SSTACK;
+}
+
+// Hop to this cpu's sched stack and tail-enter cont (noreturn). Every
+// scheduler entry that still stands on a borrowed stack goes through
+// here; the hop is idempotent — re-entering resets rsp to the top.
+fn schedEnter(cont: *const fn () noreturn) noreturn {
+    // Entry ABI parity: a `call`ed body expects rsp ≡ 8 (mod 16) — the
+    // top slot doubles as the fake return address.
+    const top = sstackTop() - 8;
+    asm volatile (
+        \\ mov %[top], %%rsp
+        \\ jmp *%[cont]
+        :
+        : [top] "r" (top),
+          [cont] "r" (cont)
+        : .{ .memory = true });
+    unreachable;
+}
+
+fn patchTssDesc(cpu: usize) void {
+    const base: u64 = @intFromPtr(&tss[cpu]);
     const limit: u64 = 103;
-    gdt2[5] = (limit & 0xFFFF) | ((base & 0xFFFFFF) << 16) |
+    gdt2[5 + 2 * cpu] = (limit & 0xFFFF) | ((base & 0xFFFFFF) << 16) |
         (0x89 << 40) | (((base >> 24) & 0xFF) << 56);
-    gdt2[6] = base >> 32;
+    gdt2[6 + 2 * cpu] = base >> 32;
+}
+
+// The running CPU's identity — its local APIC id. Before the LAPIC is
+// mapped (early boot) there is only the BSP: 0.
+fn cpuSelf() usize {
+    if (!lapicArmed) return 0;
+    const id = lapic[0x20 / 4] >> 24;
+    return if (id < MAXCPU) id else 0;
 }
 
 fn setIdtGate(idx: usize, handler: usize, dpl3: bool) void {
@@ -291,6 +334,10 @@ pub export fn koru_irq_unmask(irq: u8) callconv(.c) void {
 // PIC lines keep the 8259 pair. Both arms call this — schedPreempt's
 // early EOI included — so the choice can't drift.
 fn eoiVec(vec: u64) void {
+    if (vec >= 0x30) { // LAPIC-local / MSI door — the LAPIC EOI is the door
+        lapicEoi();
+        return;
+    }
     const l = vec - 0x20;
     if (l < 16 and ioapic.isLapic(@intCast(l))) {
         lapicEoi();
@@ -361,12 +408,25 @@ fn schedPreempt(f: *ExcFrame) void {
     c.frame.rflags = st[19];
     c.frame.rsp = st[20];
     c.frame.ss = st[21];
-    eoiVec(0x20);
+    eoiVec(f.vec);
     tick_armed = true;
+    // Hop off the ticked child's kstack BEFORE releasing the claim: the
+    // kick wakes a designee that may immediately resume this very slot.
+    schedEnter(&schedPreemptTail);
+}
+
+fn schedPreemptTail() noreturn {
+    releaseExec(); // the stolen frame is a free claim now — kick the field
     schedLoop();
 }
 
 export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
+    // Nested arm: the interrupt landed on a cpu that already holds bkl — a
+    // device wait inside a body briefly re-enabled IF. The arm's work is
+    // bounded (ack, mark, EOI) and safe on the holder's stack; re-locking
+    // would spin on the holder's own lock and deadlock the cpu.
+    const nested = bklMine();
+    if (!nested) lockBkl();
     if (f.vec >= 0x20 and f.vec < 0x30) {
         if (f.vec == 0x20) {
             irq_ticks += 1;
@@ -401,16 +461,20 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             }
         }
         eoiVec(f.vec);
+        kickHolder();
+        if (!nested) unlockBkl();
         return;
     }
     if (f.vec >= 0x30) {
         // LAPIC-local + message-signaled: the timer LVT is per-CPU
-        // hardware (each AP's own tick — roster substrate), MSI is the
-        // device writing the vector. Both take the LAPIC EOI.
+        // hardware (each AP's own tick — roster substrate), RESCHED is
+        // the claim kick, MSI is the device writing the vector. All
+        // take the LAPIC EOI.
         if (f.vec == smp.TIMER_VEC) {
             smp.lapicTick();
-            // per-CPU preemption lands with the roster claim — for now
-            // the tick is evidence the AP runs kernel interrupt context.
+            schedPreempt(f); // a tick on an AP holding user code rotates too
+        } else if (f.vec == smp.RESCHED_VEC) {
+            smp.reschedSeen += 1; // pure wake — schedLoop's next poll is the work
         } else if (gpu_msix_vec != 0xFF and f.vec == gpu_msix_vec) {
             gpu_irq_ack();
             gpu_msix_seen += 1;
@@ -422,6 +486,8 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             say("\n");
         }
         lapicEoi();
+        kickHolder();
+        if (!nested) unlockBkl();
         return;
     }
     say("EXC v=");
@@ -436,6 +502,7 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
     puthex(rdcr2());
     if (f.vec == 3) {
         say(" (continued)\n");
+        if (!nested) unlockBkl();
         return;
     }
     if (f.rip >= USER_VA_BASE) { // user fault — dump the child's stack: the
@@ -554,11 +621,13 @@ extern var irqstub_table: [64]u64;
 // MMIO, identity-mapped; software-enabled via the spurious vector reg.
 const mmio = @import("mmio");
 var lapic: [*]volatile u32 = undefined;
+var lapicArmed = false;
 
 fn lapicInit() void {
     if (!mmio.map(0xFEE00000, 0x1000)) return;
     lapic = @ptrFromInt(0xFEE00000);
     lapic[0xF0 / 4] = lapic[0xF0 / 4] | 0x1FF; // software enable + spurious 0xFF
+    lapicArmed = true;
 }
 fn lapicEoi() void {
     lapic[0xB0 / 4] = 0;
@@ -613,10 +682,9 @@ fn enableSyscall() void {
         : .{ .memory = true, .rax = true, .rcx = true, .rdx = true });
 }
 
-fn loadTables() void {
-    patchTssDesc();
+fn loadGdt2() void {
     var gdt_ptr: [10]u8 align(2) = undefined;
-    gdt_ptr[0] = 8 * 8 - 1;
+    gdt_ptr[0] = gdt2.len * 8 - 1;
     gdt_ptr[1] = 0;
     const gbase: u64 = @intFromPtr(&gdt2);
     inline for (0..8) |i| gdt_ptr[2 + i] = @intCast((gbase >> (8 * i)) & 0xFF);
@@ -624,27 +692,55 @@ fn loadTables() void {
         :
         : [p] "r" (&gdt_ptr),
         : .{ .memory = true });
-    asm volatile (
-        \\ movw $0x10, %ax
-        \\ movw %ax, %ds
-        \\ movw %ax, %es
+}
+
+fn loadTables() void {
+    loadGdt2();
+    const cpu = cpuSelf();
+    patchTssDesc(cpu);
+    const sel: u16 = @intCast(0x28 + 16 * cpu); // ltr the RUNNING cpu's
+    asm volatile (                             // slot — a spawn caller that
+        \\ movw $0x10, %ax                    // migrated here on a drain
+        \\ movw %ax, %ds                      // escape owns its own TSS,
+        \\ movw %ax, %es                      // not cpu0's
         \\ movw %ax, %ss
-        \\ movw $0x28, %ax
-        \\ ltr %ax
-        ::: .{ .memory = true });
+        \\ ltr %[s]
+        :
+        : [s] "r" (sel)
+        : .{ .memory = true });
     const rsp0: u64 = @intFromPtr(&kstack) + kstack.len;
-    @as(*u64, @ptrCast(@alignCast(&tss[4]))).* = rsp0;
+    @memcpy(tss[cpu][4..12], std.mem.asBytes(&rsp0)); // TSS.rsp0 — byte
+                                                    // offset 4, no align trick
 
     loadIdt();
     enableSyscall();
 }
 
-// Shared IDT arming — every CPU lidt's the same table before it can
-// take interrupts. The AP's GDT is the boot gdt64 (kernel segs only);
-// user segs + TSS stay BSP-side until per-CPU TSS lands, so an AP
-// makes no ring transitions yet — its ticks are CPL0 work.
-export fn koru_ap_arm_idt() callconv(.c) void {
+// Full per-CPU arming — an AP lgdt's the shared gdt2 (user segs + every
+// CPU's TSS), ltr's only ITS OWN TSS slot (a ring transition reads the
+// running CPU's task register — per-CPU rsp0 lives there), lidt's the
+// shared IDT, and programs the SYSCALL MSRs (per-CPU state). After this
+// the AP can run a child end-to-end: trap, syscall, preempt, resume.
+export fn koru_ap_arm() callconv(.c) void {
+    const cpu = cpuSelf();
+    patchTssDesc(cpu);
+    loadGdt2();
+    const sel: u16 = @intCast(0x28 + 16 * cpu);
+    asm volatile (
+        \\ movw $0x10, %ax
+        \\ movw %ax, %ds
+        \\ movw %ax, %es
+        \\ movw %ax, %ss
+        \\ ltr %[s]
+        :
+        : [s] "r" (sel)
+        : .{ .memory = true });
+    {
+        const rsp0: u64 = @intFromPtr(&kstack) + kstack.len;
+        @memcpy(tss[cpu][4..12], std.mem.asBytes(&rsp0));
+    }
     loadIdt();
+    enableSyscall();
 }
 
 fn loadIdt() void {
@@ -794,7 +890,9 @@ const Child = struct {
 var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{} };
 var nchildren: usize = 0;
 var cur_child: usize = 0;
-var sched_active = false;
+// Exported: the spawn save-asm opens the epoch with `movb $1` only after
+// saved_rip exists — the flag is the claim gate, so it must be a symbol.
+pub export var sched_active: bool = false;
 pub export var sched_switches: u64 = 0;
 pub export var kctx_resumes: u64 = 0;
 pub export var tick_kctx: u64 = 0;
@@ -803,6 +901,71 @@ pub export var fork_pages: u64 = 0; // user pages the copies moved
 // schedPreempt arms this before entering schedLoop; switchInto consumes
 // it — the first dispatch after a tick is tick-driven by construction.
 var tick_armed: bool = false;
+
+// ---- roster lock + the running CPU ----------------------------------------
+// bkl: every kernel body (ISR dispatch, syscall gate) runs under it — the
+// children/pipe/roster state has exactly one writer at a time on ANY cpu.
+// Holding it implies IF=0 (lockBkl clis) — a nested IRQ on the holder's own
+// cpu must never spin on the lock it already owns. Release points: the
+// body's return edge, the exec hand-off (releaseExec), and the user-resume
+// arm of switchInto — user code holds NO lock; the kctx-resume arm keeps
+// it, since the popped continuation returns INTO a body that expects it.
+// bkl holds owner+1 (0 = free) — the owner id is what lets a nested IRQ on
+// the holder's own cpu run WITHOUT re-locking: holding bkl implies IF=0 at
+// the body level, but a wait inside the body (virtio's sti;hlt) re-enables
+// delivery briefly, and the dispatch MUST recognize "I already hold it"
+// rather than spin on its own hold. CAS-expecting-0, never Xchg — an Xchg
+// clobbers the owner id while spinning, which would make the true holder's
+// nested IRQ fail the owner check and deadlock on itself.
+var bkl: u32 = 0;
+
+fn lockBkl() void {
+    asm volatile ("cli" ::: .{ .memory = true });
+    const me: u32 = @intCast(cpuSelf() + 1);
+    while (@cmpxchgStrong(u32, &bkl, 0, me, .seq_cst, .seq_cst) != null) {
+        asm volatile ("pause");
+    }
+}
+fn unlockBkl() void {
+    @atomicStore(u32, &bkl, 0, .seq_cst);
+}
+// Is the running cpu the bkl holder? The IRQ dispatch's nested arm — the
+// interrupt lands while the body holds the lock (a wait briefly re-enabled
+// IF); its work is a bounded mark + EOI on the holder's own stack.
+fn bklMine() bool {
+    const me: u32 = @intCast(cpuSelf() + 1);
+    return @atomicLoad(u32, &bkl, .seq_cst) == me;
+}
+
+// A device IRQ landed on THIS cpu while another cpu holds bkl — the
+// holder may be hlt-parked mid device wait (parkOnce) where only its
+// own LAPIC tick would wake it. A resched IPI is a pure wake: the
+// holder's hlt exits, its poll re-reads the now-advanced used ring.
+fn kickHolder() void {
+    const v = @atomicLoad(u32, &bkl, .seq_cst);
+    if (v != 0 and v - 1 != cpuSelf()) smp.kickCpu(v - 1);
+}
+
+// exec_cpu: the ONE cpu licensed to hold a child in user space (-1 = free).
+// Single-runner is the honest roster contract of this rung: the seam's
+// ring-transition globals (rsp0_val, child_ursp) name THE running child,
+// so at most one exists at a time — claimed under bkl in schedLoop,
+// released when it blocks/exits/preempts. A child migrates between cpus
+// only across those boundaries. exec_hint is the designated NEXT claimant
+// (rotation, not a race — the releasing cpu kicks it by resched-IPI);
+// dissolving the singleton needs per-CPU user state (swapgs) — later cell.
+var exec_cpu: i32 = -1;
+var exec_hint: u32 = 0;
+
+// The running CPU's license to hold a child in user space lapses — it
+// blocked, exited, or got ticked. Free the claim, IPI the designated next
+// claimant out of its hlt, and drop the lock; the caller then enters
+// schedLoop or escapes the drained epoch.
+fn releaseExec() void {
+    exec_cpu = -1;
+    unlockBkl();
+    if (smp.rosterHas(exec_hint)) smp.kickCpu(exec_hint);
+}
 
 // Child memory comes from the frame allocator, not the bump heap: every
 // table and user page is a refcounted frame that freeChild returns on
@@ -1788,13 +1951,11 @@ fn coninRead(c: *Child, f: *TrapFrame) i64 {
         }
         if (n != 0) return @intCast(n);
         if (userEntry(c, bva) & 1 == 0) return -14; // EFAULT — no page for a byte
-        // Check-under-mask then park: the byte must not land between the
+        // Check-under-lock then park: the byte must not land between the
         // drain's empty verdict and the blocked mark, or nobody wakes us.
-        asm volatile ("cli" ::: .{ .memory = true });
+        // bkl IS the mask — the whole trap body holds it.
         if (!kbd.conPending()) {
-            kblock(.conin); // returns with IF=1 — a wake happened
-        } else {
-            asm volatile ("sti" ::: .{ .memory = true });
+            kblock(.conin); // returns re-holding bkl — a wake happened
         }
     }
 }
@@ -1846,7 +2007,6 @@ fn pipeReadEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
     if (want == 0) return 0;
     const p = &pipes[idx];
     while (true) {
-        asm volatile ("cli" ::: .{ .memory = true });
         if (p.count > 0) {
             var n: usize = 0;
             while (n < want and p.count > 0) : (n += 1) {
@@ -1857,7 +2017,6 @@ fn pipeReadEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
                 p.tail = (p.tail + 1) % p.buf.len;
                 p.count -= 1;
             }
-            asm volatile ("sti" ::: .{ .memory = true });
             if (n != 0) {
                 pipe_reads += 1;
                 wakePipe(idx); // space opened — prod any parked writer
@@ -1865,7 +2024,6 @@ fn pipeReadEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
             }
             if (userEntry(c, @intCast(buva)) & 1 == 0) return -14;
         } else if (p.wrefs == 0) {
-            asm volatile ("sti" ::: .{ .memory = true });
             return 0; // last writer gone and drained — this read IS the EOS
         } else {
             c.wait_pipe = idx;
@@ -1879,9 +2037,7 @@ fn pipeWriteEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
     if (want == 0) return 0;
     const p = &pipes[idx];
     while (true) {
-        asm volatile ("cli" ::: .{ .memory = true });
         if (p.rrefs == 0) {
-            asm volatile ("sti" ::: .{ .memory = true });
             return -32; // EPIPE — no reader can ever drain this
         }
         if (p.count < p.buf.len) {
@@ -1893,7 +2049,6 @@ fn pipeWriteEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
                 p.head = (p.head + 1) % p.buf.len;
                 p.count += 1;
             }
-            asm volatile ("sti" ::: .{ .memory = true });
             if (n != 0) {
                 pipe_writes += 1;
                 wakePipe(idx); // bytes landed — prod any parked reader
@@ -2009,7 +2164,6 @@ fn childPipe(c: *Child, pva: u64) i64 {
 const ANY_PID: usize = ~@as(usize, 0);
 fn childWait(c: *Child, pid: i64, stva: u64) i64 {
     while (true) {
-        asm volatile ("cli" ::: .{ .memory = true });
         var slot: ?usize = null;
         var live = false;
         if (pid == -1) {
@@ -2020,7 +2174,6 @@ fn childWait(c: *Child, pid: i64, stva: u64) i64 {
             }
         } else {
             if (pid < 1 or pid > MAXCHILDREN) {
-                asm volatile ("sti" ::: .{ .memory = true });
                 return -10; // ECHILD — no such pid
             }
             const s: usize = @intCast(pid - 1);
@@ -2032,7 +2185,6 @@ fn childWait(c: *Child, pid: i64, stva: u64) i64 {
             const status = children[g].exit_status;
             children[g].state = .dead;
             children[g].waitable = false;
-            asm volatile ("sti" ::: .{ .memory = true });
             if (stva != 0) {
                 // the wait4 status word is ENCODED — exit code in the
                 // high byte (WIFEXITED tests the low 7 bits for signals,
@@ -2049,7 +2201,6 @@ fn childWait(c: *Child, pid: i64, stva: u64) i64 {
             return @intCast(g + 1); // pid domain — slots are internal
         }
         if (!live) {
-            asm volatile ("sti" ::: .{ .memory = true });
             return -10; // ECHILD — nobody left that could still die
         }
         c.wait_pid = if (pid == -1) ANY_PID else @intCast(pid - 1); // slot
@@ -2257,12 +2408,8 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     // the child's exit code — the syscall completes itself.
     c.wait_pid = g;
     while (true) {
-        asm volatile ("cli" ::: .{ .memory = true });
         const st = children[g].state;
-        if (st == .dead or st == .zombie) {
-            asm volatile ("sti" ::: .{ .memory = true });
-            break;
-        }
+        if (st == .dead or st == .zombie) break;
         kblock(.exit);
     }
     c.wait_pid = 0;
@@ -2377,6 +2524,8 @@ fn childClone(c: *Child, f: *TrapFrame) i64 {
 }
 
 export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
+    lockBkl(); // the body owns the roster lock; escapes release it by name
+    defer unlockBkl();
     // child_ursp is written per-ENTRY by the syscall gate — a trap that
     // parks mid-call outlives it (other children's syscalls clobber it),
     // so the running child's rsp lives in its slot. The defer publishes
@@ -2789,15 +2938,14 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             say("pmm: reap freed=");
             puthex(nf);
             say("\n");
-            if (anyLive()) schedLoop(); // runnable or parked — keep the epoch
-            asm volatile (
-                \\ mov %[cr3], %%rax
-                \\ mov %%rax, %%cr3
-                \\ mov saved_rsp(%%rip), %%rsp
-                \\ jmp *saved_rip(%%rip)
-                :
-                : [cr3] "r" (@intFromPtr(&pml4)),
-                : .{ .memory = true });
+            // The dead child's claim lapses — whichever cpu's schedLoop
+            // the rotation names next picks up the roster; if the roster
+            // drained, THIS cpu escapes back into the spawn caller (the
+            // saved stack is shared memory — the continuation is
+            // cpu-agnostic, so last-exit-on-AP is a lawful migration).
+            // Hop off the dead child's kstack first — releaseExec's kick
+            // wakes a designee that may reuse this slot's stack.
+            schedEnter(&exitTail);
             unreachable;
         },
         else => {
@@ -2846,7 +2994,7 @@ fn armChild(n: usize) void {
     cur_child = n;
     const ktop = kstackTop(n);
     rsp0_val = ktop;
-    @as(*u64, @ptrCast(@alignCast(&tss[4]))).* = ktop;
+    @memcpy(tss[cpuSelf()][4..12], std.mem.asBytes(&ktop));
     wrmsr(0xC0000100, c.fsbase); // FS_BASE — the child's TLS home
 }
 
@@ -2871,7 +3019,10 @@ fn resumeChild(nxt: usize) noreturn {
 
 // Run child `n` however it waits to be run: a live kernel continuation
 // (kctx != 0 — it blocked mid-call) gets its pushed block popped and
-// returned into; anything else is a saved user frame.
+// returned into; anything else is a saved user frame. The caller holds
+// bkl + exec_cpu: the kctx arm KEEPS the lock (the popped continuation
+// returns into a syscall body that expects it); the user-resume arm
+// drops it — user code runs under the claim alone.
 fn switchInto(n: usize) noreturn {
     const c = &children[n];
     sched_switches += 1;
@@ -2900,36 +3051,104 @@ fn switchInto(n: usize) noreturn {
             : .{ .memory = true });
         unreachable;
     }
+    unlockBkl();
     resumeChild(n);
 }
 
-// The scheduler loop on whatever kernel stack it was entered on: pick a
-// runnable child and switchInto it, or hlt (IF already 1) to the next
-// IRQ. Reached from ksched (a child just blocked) and from the exit
-// arm's not-drained tail. A roster with nothing runnable but blocked
-// children halts here — that is the epoch holding open, correctly.
+// The scheduler loop on whatever kernel stack it was entered on — and it
+// is EVERY roster member's idle: APs enter it from apMain, the BSP from
+// spawn/ksched/exit. One iteration under bkl: if the user claim is free
+// and this cpu is the designated claimant (or the designee is gone),
+// claim + switchInto; else drop the lock and sti;hlt — the resched IPI
+// or the local tick re-polls. grace is the starvation bound: a hinted
+// cpu that never converges is bypassed after ~40 local wakes (bounded,
+// only reachable if an online cpu wedges — the roster can't express one).
 fn schedLoop() noreturn {
     asm volatile ("sti" ::: .{ .memory = true });
+    var grace: u64 = 0;
     while (true) {
-        if (nextRunnable()) |n| switchInto(n);
-        asm volatile ("hlt" ::: .{ .memory = true });
+        lockBkl();
+        if (nextRunnable()) |n| {
+            if (!sched_active) {
+                // Epoch closed: a runnable slot with a live kctx is a
+                // parked SPAWN CALLER (mid-prime device wait hitchhikes
+                // on a child slot) — resume it in place, no claim: it
+                // returns into kernel code, not user space. A real child
+                // (kctx==0) waits for the epoch to open.
+                if (children[n].kctx != 0) switchInto(n);
+            } else if (exec_cpu == -1) {
+                const me = cpuSelf();
+                const hinted = exec_hint == me or !smp.rosterHas(exec_hint);
+                grace +%= 1;
+                if (hinted or grace > 40) {
+                    exec_cpu = @intCast(me);
+                    exec_hint = smp.nextOnlineAfter(@intCast(me));
+                    if (me != 0) {
+                        say("sched: slot");
+                        koru_putdec(n);
+                        say(" claimed by cpu");
+                        koru_putdec(me);
+                        say("\n");
+                    }
+                    switchInto(n); // noreturn — user arm drops bkl itself
+                }
+            }
+        } else grace = 0;
+        unlockBkl();
+        asm volatile (
+            \\ sti
+            \\ hlt
+            ::: .{ .memory = true });
     }
+}
+
+// The AP's idle — smp.zig's apMain ends here. Same loop as the BSP's:
+// poll the claim, run children when the rotation names this cpu.
+export fn koru_sched_idle() callconv(.c) noreturn {
+    schedEnter(&schedLoop);
 }
 
 // kblock's continuation point: koru_kblock (asm) pushed the callee-saved
 // block on this child's kstack and handed us its rsp; record it and
-// enter the scheduler. The mark (state/wait_kind) happened under cli in
-// the caller — schedLoop's sti publishes both atomically wrt wakes.
+// enter the scheduler — via the sched stack FIRST: releaseExec's kick
+// wakes the designee, which may resume THIS kstack while we'd still be
+// standing on it. The mark (state/wait_kind) happened under bkl in the
+// caller; releaseExec publishes it once we're off the borrowed stack.
 export fn ksched(saved: u64) callconv(.c) noreturn {
     children[cur_child].kctx = saved;
+    schedEnter(&kschedTail);
+}
+
+fn kschedTail() noreturn {
+    releaseExec();
     schedLoop();
 }
 
+// Exit's sched-stack tail: leave the dead child's address space BEFORE
+// the claim frees — the freed pml4 frame can be reallocated as soon as
+// another cpu allocates, and the drain/kick window mustn't run on it.
+fn exitTail() noreturn {
+    asm volatile (
+        \\ mov %[cr3], %%rax
+        \\ mov %%rax, %%cr3
+        :
+        : [cr3] "r" (@intFromPtr(&pml4))
+        : .{ .memory = true });
+    releaseExec();
+    if (anyLive()) schedLoop(); // runnable or parked — keep the epoch
+    asm volatile (
+        \\ mov saved_rsp(%%rip), %%rsp
+        \\ jmp *saved_rip(%%rip)
+        ::: .{ .memory = true });
+    unreachable;
+}
+
 // Park the running child mid-call on `kind`: the caller has already
-// rechecked its wait condition under cli; we mark, save kernel context,
+// rechecked its wait condition under bkl; we mark, save kernel context,
 // and schedule. Returns on this same stack when a waker flips us
-// runnable — with IF=1 and the caller-saved set dead, like any call.
-// Contract: call with IF=0 so the mark can't race the wait condition.
+// runnable — the resumed continuation re-holds bkl (the kctx arm keeps
+// it) and caller-saved is dead, like any call. Contract: hold bkl so the
+// mark can't race the wait condition on ANY cpu.
 fn kblock(kind: WaitKind) void {
     const c = &children[cur_child];
     c.wait_kind = kind;
@@ -2939,13 +3158,20 @@ fn kblock(kind: WaitKind) void {
 }
 
 // Wake every child blocked on `kind` — the resumed continuation
-// re-decides, so waking is always just a mark, never surgery.
+// re-decides, so waking is always just a mark, never surgery. If no cpu
+// holds the user claim, the field is parked in hlt — kick the designee.
 fn wakeKind(kind: WaitKind) void {
     if (!sched_active) return;
+    var marked = false;
     for (0..nchildren) |i| {
         const c = &children[i];
-        if (c.state == .blocked and c.wait_kind == kind) c.state = .runnable;
+        if (c.state == .blocked and c.wait_kind == kind) {
+            c.state = .runnable;
+            marked = true;
+        }
     }
+    if (marked and exec_cpu == -1 and smp.rosterHas(exec_hint))
+        smp.kickCpu(exec_hint);
 }
 
 // virtio's parkOnce calls here when a request can't complete yet: in a
@@ -2989,17 +3215,27 @@ comptime {
 extern fn koru_kblock() void;
 
 // The epoch's entry: called (via `call sched_launch` inside koru_spawn_run's
-// save block) once all children are primed — resumes the first runnable.
+// save block) once all children are primed — STILL UNDER the caller's bkl,
+// so schedLoop's lock would self-deadlock. Instead take the BSP's own
+// claim here (exec_hint starts at the BSP by construction), hand the lock
+// off through the normal release, and run the first runnable. The lock
+// ownership transfers — spawn_run's tail after `1:` runs unlocked.
 export fn sched_launch() callconv(.c) noreturn {
-    resumeChild(nextRunnable() orelse {
+    const me = cpuSelf();
+    exec_cpu = @intCast(me);
+    exec_hint = smp.nextOnlineAfter(@intCast(me));
+    const n = nextRunnable() orelse {
         // an all-dead roster must never reach here — fall back to the
         // blocked caller rather than hang
+        unlockBkl();
         asm volatile (
             \\ mov saved_rsp(%%rip), %%rsp
             \\ jmp *saved_rip(%%rip)
             ::: .{ .memory = true });
         unreachable;
-    });
+    };
+    unlockBkl(); // user code holds no lock — the claim carries it
+    resumeChild(n);
 }
 
 comptime {
@@ -3128,9 +3364,18 @@ comptime {
 // CPL0 work (the ISR/syscall path itself) see cs&3==0 and do not rotate.
 // < 0 on setup refusal: -1 tables, -2 image, -3 over MAXCHILDREN.
 pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, rights: [*]const u64, n: usize, fsv: ?*const ChildFsOps) callconv(.c) c_int {
-    if (n == 0) return 0;
+    // The roster mutates while other cpus' schedLoops read it — the whole
+    // prime is a locked stretch (a mid-prime park releases and resumes
+    // it). No defer: sched_launch CONSUMES the lock, and the drained-epoch
+    // tail after `1:` correctly runs without it.
+    lockBkl();
+    if (n == 0) {
+        unlockBkl();
+        return 0;
+    }
     if (n > MAXCHILDREN) {
         say("RING3 FAIL: roster over MAXCHILDREN\n");
+        unlockBkl();
         return -3;
     }
     nchildren = 0;
@@ -3138,6 +3383,7 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         const c = &children[i];
         if (!buildTables(c)) {
             say("RING3 FAIL: page alloc\n");
+            unlockBkl();
             return -1;
         }
         c.fsv = fsv;
@@ -3150,6 +3396,7 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         var ilen: usize = 0;
         const info = loadElf(c, imgs[i][0..sizes[i]], USER_VA_BASE, &ipath, &ilen) orelse {
             say("ELF LOAD FAIL\n");
+            unlockBkl();
             return -2;
         };
         var entry = info.entry;
@@ -3157,11 +3404,13 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         if (ilen > 0) { // PT_INTERP — resolve the loader through the fs view
             if (c.fsv == null) {
                 say("ELF REFUSE: PT_INTERP needs an fs view\n");
+                unlockBkl();
                 return -2;
             }
             const iname = std.mem.sliceTo(ipath[0..ilen], 0);
             const iinfo = loadElfViaFs(c, iname, INTERP_BASE, null, null) orelse {
                 say("ELF REFUSE: PT_INTERP loader unreadable\n");
+                unlockBkl();
                 return -2;
             };
             at_base = INTERP_BASE;
@@ -3172,7 +3421,10 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         c.frame.rip = entry;
         c.frame.cs = 0x23; // user code64
         c.frame.rflags = 0x202; // IF=1 — the child may be ticked mid-flight
-        c.frame.rsp = buildStack(c, info, at_base, std.mem.sliceTo(child_arg0[0..], 0)) orelse return -1;
+        c.frame.rsp = buildStack(c, info, at_base, std.mem.sliceTo(child_arg0[0..], 0)) orelse {
+            unlockBkl();
+            return -1;
+        };
         c.brk_base = info.brk_base;
         c.brk = info.brk_base;
         c.mmap_top = MMAP_BASE;
@@ -3183,7 +3435,6 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
     }
     loadTables();
     cur_child = 0;
-    sched_active = true;
     asm volatile (
         \\ push %rbx
         \\ push %rbp
@@ -3194,6 +3445,10 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         \\ mov %%rsp, saved_rsp(%%rip)
         \\ lea 1f(%%rip), %%rax
         \\ mov %%rax, saved_rip(%%rip)
+        // The epoch opens only once the drain-escape exists — an exit on
+        // ANY cpu may run the saved_rsp jump, so the hatch must precede
+        // the open flag.
+        \\ movb $1, sched_active(%%rip)
         // call, not fallthrough — sched_launch is noreturn; the pad keeps
         // its entry 16-conformant. saved_rsp predates both, so the exit
         // jmp back to 1: walks only the pushed regs.
@@ -3243,9 +3498,14 @@ pub export fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64, fsv: 
     return koru_spawn_run(&imgs, &szs, &rts, 1, fsv);
 }
 
-// No-disk evidence path: spawn the embedded child once.
+// No-disk evidence path: spawn the embedded child once per roster slot —
+// four copies on one epoch. Under -smp 4 the designated claim rotation
+// hands each cpu a child in turn; on uniprocessor the BSP runs all four.
 pub fn run() void {
-    const st = koru_spawn_elf(&child_elf, child_elf.len, (1 << 1) | (1 << 60), null);
+    var imgs = [_][*]const u8{ &child_elf, &child_elf, &child_elf, &child_elf };
+    var szs = [_]usize{ child_elf.len, child_elf.len, child_elf.len, child_elf.len };
+    var rts = [_]u64{ (1 << 1) | (1 << 60), (1 << 1) | (1 << 60), (1 << 1) | (1 << 60), (1 << 1) | (1 << 60) };
+    const st = koru_spawn_run(&imgs, &szs, &rts, 4, null);
     say("EMBED SPAWN exit=");
     puthex(@intCast(@as(u32, @bitCast(st))));
     say("\n");

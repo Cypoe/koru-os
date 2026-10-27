@@ -622,8 +622,9 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
           owned cursor over the delta stream — four screendump-verified
           states: UNDER/SCENE/REVEAL/IDLE+cursor); ACPI LANDED
           (RSDP + table directory + MADT/FADT payload + powerctl
-          door); SMP bringup LANDED (smp.zig INIT-SIPI-SIPI,
-          trampoline page, AP ack — sched roster is the open cell);
+          door); SMP claim-and-run LANDED (smp.zig INIT-SIPI-SIPI
+          + exec_cpu claim: per-CPU TSS/MSRs, owner-id BKL, per-CPU
+          sched stacks — each AP runs children end-to-end);
           IOAPIC routing LANDED (ioapic.zig: IOREDTBL routes legacy
           lines to the LAPIC, MADT ISOs honored — IRQ0 arrives via
           GSI2, PCI INTx level-low — PIC masked off, LAPIC EOI;
@@ -664,9 +665,13 @@ Also open, smaller:
   IRQ rows green through the second door). AP roster substrate
   landed: each AP arms the shared IDT + its own LVT timer (PIT-
   calibrated), takes per-CPU ticks in kernel context, claims a
-  roster bit (mask=f under -smp 4). Still open: claim-and-run —
-  children scheduled onto APs (per-CPU current/TSS/rsp0 + the
-  big-lock seam), per-CPU IOREDTBL dests — before real hardware
+  roster bit (mask=f under -smp 4). ~~claim-and-run~~ — landed:
+  single-runner exec_cpu claim + per-CPU TSS/GDT/syscall MSRs +
+  owner-id BKL (nested IRQ arm for device waits under the lock) +
+  per-CPU sched stacks (schedLoop never parks on a resumable
+  kstack); each AP claims and runs a child end-to-end, measured
+  rotation slot→cpu1/2/3 under -smp 4. Still open: per-CPU
+  IOREDTBL dests, multi-runner user claims — before real hardware
 - KolibriOS study: first pass done —
   `notes/kolibrios-donor-read.md` (syscall table, VFS seam, devman
   driver model, v86, **GUI/windowing incl. win_map + damage

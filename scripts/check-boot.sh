@@ -148,10 +148,14 @@ if grep -qF "smp: bsp id=0" "$WORK/boot_smp.serial" \
    && grep -qE "smp: ap id=1 ticks=[1-9][0-9]*" "$WORK/boot_smp.serial" \
    && grep -qE "smp: ap id=2 ticks=[1-9][0-9]*" "$WORK/boot_smp.serial" \
    && grep -qE "smp: ap id=3 ticks=[1-9][0-9]*" "$WORK/boot_smp.serial" \
-   && grep -qF "smp: cpu roster mask=f" "$WORK/boot_smp.serial"; then
-    ok "smp: 3 APs online + each takes its own LAPIC-timer ticks (roster mask=f)"
+   && grep -qF "smp: cpu roster mask=f" "$WORK/boot_smp.serial" \
+   && grep -qE "sched: slot[0-9]+ claimed by cpu1" "$WORK/boot_smp.serial" \
+   && grep -qE "sched: slot[0-9]+ claimed by cpu2" "$WORK/boot_smp.serial" \
+   && grep -qE "sched: slot[0-9]+ claimed by cpu3" "$WORK/boot_smp.serial" \
+   && grep -qF "EMBED SPAWN exit=000000000000002a" "$WORK/boot_smp.serial"; then
+    ok "smp: 3 APs tick + roster mask=f + each claims and runs a child end-to-end"
 else
-    bad "smp: $(grep -aE 'madt|smp' "$WORK/boot_smp.serial" | tr '\n' '|')"
+    bad "smp: $(grep -aE 'madt|smp|sched: slot|EMBED' "$WORK/boot_smp.serial" | tr '\n' '|')"
 fi
 
 # iso: SeaBIOS -> GRUB -> multiboot2 — the real-loader path -kernel/PVH
