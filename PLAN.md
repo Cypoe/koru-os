@@ -708,8 +708,25 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
             app_id parsed, xdg_toplevel.move binds the drag grab to
             the requesting surface — the client-initiated form of the
             same compositor-owned placement — still open: popups,
-            window states, decor, clipboard
-            → Hyprland/Noctalia oracle harness over the real scene
+            window states, decor, clipboard;
+            LIBWAYLAND-SERVER LANDED — wlserver.elf is now a real
+            protocol-stack compositor: vendored libwayland-server
+            1.26 (wayland-server.c/event-loop.c/wayland-shm.c +
+            generated server glue) does object tables, dispatch,
+            demarshal, SCM_RIGHTS fd receive, and wl_shm pool/buffer
+            lifecycle; the file only writes resource impls — the
+            wlroots/swayweston shape. Kernel grew the stack's real
+            appetite: epoll trio + epoll_pwait (nr 213/233/232/281/291,
+            class-22 "wait on channels"), eventfd(2) (the display's
+            terminate_efd, nr 284/290), getsockopt(SO_PEERCRED) (per
+            wl_client_create, nr 55 — SockPair sides carry their
+            minter's roster id). wl_shm is the LIBRARY's own global
+            (wl_display_init_shm) — buffer access via wl_shm_buffer_*,
+            no compositor-side pool code at all. Every prior row
+            stands: registry/shm fmt/seat caps/keymap-fd/xdg role
+            handshake/blit/present/frame/release/drag/pixels
+            → Hyprland/Noctalia oracle harness over the real scene —
+            wlroots-minimal is the next binary to link
 ```
 
 Also open, smaller:

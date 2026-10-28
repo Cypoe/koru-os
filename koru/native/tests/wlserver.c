@@ -1,51 +1,45 @@
-// wlserver.elf — a real wl compositor endpoint, multi-client edition:
-// socket()+bind("wayland-1") mints the S_IFSOCK node, listen() opens
-// the backlog, accept() pops queued session ends — then a poll loop
-// multiplexes {listener, input fd, every client conn}. stdout is fd1.
+// wlserver.elf — a REAL compositor on REAL libwayland-server: the
+// vendored 1.26 server sources (wayland-server.c + event-loop.c +
+// wayland-shm.c) drive dispatch and demarshalling — this file only
+// implements the resource callbacks, which is exactly the shape a
+// wlroots/swayweston compositor has (libwayland + a policy body).
+// The wire, the registry, wl_shm pool/buffer lifecycle, SCM_RIGHTS
+// fd receive and client teardown are all the library's, not ours.
 //
-// Serves: registry globals (wl_compositor v4, wl_shm v1, wl_seat v7,
-// xdg_wm_base v1 — ping/pong liveness, get_xdg_surface, the toplevel
-// role handshake: initial empty commit -> toplevel.configure +
-// xsurface.configure(serial) -> ack required before a buffer commit
-// presents; unacked buffer commits are loud protocol violations and
-// do not ride the scene; xdg_toplevel.move binds the grab to that
-// surface until release — the client-initiated form of the drag),
-// shm formats, surface/shm_pool/buffer objects, attach+damage+frame+
-// commit answered by callback.done + buffer.release, display sync,
-// and a SEAT: capabilities on bind, wl_pointer enter/leave/motion/
-// button/frame routed by the compositor's own hit-test over the scene
-// surface list, wl_keyboard keymap + key to the pointer-focused
-// client. The shm pool fd arrives over SCM_RIGHTS and is mmap'd
-// MAP_SHARED; commit mints a real *Surf through the scene seam, blits
-// the client's shm bytes, presents damage through the z-stack.
+// The event loop is libwayland's epoll loop over {our listen fd,
+// our input fd, every client conn}: nr518's evdev-shaped InEv
+// records, hit-tested against the z-ordered scene list WE minted,
+// become wl_pointer/wl_keyboard protocol. Placement is compositor
+// policy — button-held or xdg_toplevel.move-requested drags ride
+// nr519; the kernel routes nothing.
 //
-// Input is the compositor's second capability: nr518 mints an
-// evdev-shaped fd over the machine's merged input rings — this child
-// reads InEv records a client never sees, tracks the pointer position
-// itself (the kernel cursor already follows the same deltas), and
-// turns hits into protocol. Button-held motion drags the focused
-// surface through nr519 — placement is compositor policy, exercised
-// for real. The node is left on disk: fs-visibility evidence.
+// Session shape: socket()+bind("wayland-1") mints S_IFSOCK through
+// the fs view, listen()+accept() feed wl_client_create; globals are
+// wl_global_create'd (wl_compositor v4, wl_shm via wl_display_init_shm,
+// wl_seat v7, xdg_wm_base v1). The toplevel role handshake is real:
+// an empty commit is answered by toplevel.configure +
+// xsurface.configure(serial); a buffer commit before the ack is a
+// loud violation whose pixels never ride the scene.
 #include <errno.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
-#include "wlwire.h"
+#include "wayland-server.h"
+#include "wayland-server-protocol.h"
+#include "xdg-shell-server-protocol.h"
 
 #define WL_SOCK_NAME "wayland-1"
 
-// koru scene seam: 515 mints a *Surf as an fd-table projection, 516
-// blits a rect of client pixels into the provider backing (stride in
-// bytes; rect rides memory like iovec), 517 commits damage through
-// the z-stack, 518 mints the input reader, 519 moves a surface (the
-// provider damages old+new), 520 reads back rect+scene extent.
+// koru scene seam — unchanged: 515 mints a *Surf as an fd projection,
+// 516 blits client pixels into provider backing, 517 commits damage,
+// 518 the input reader, 519 placement, 520 rect+extent readback.
 // close(surffd) detaches — compositor lifetime, not a verb.
 #define K_SURF_OPEN    515
 #define K_SURF_BLIT    516
@@ -54,56 +48,53 @@
 #define K_SURF_MOVE    519
 #define K_SURF_INFO    520
 
-#define NCLI 4   // live sessions, accepted via the listen backlog
-#define NSURF 8  // scene surfaces across all clients
+#define NSES 4   // live sessions
+#define NSURF 8  // scene surfaces across all sessions
 
-// one provider event record — identical layout to kbd.InEv: kind 1 =
-// key (evdev code, set-1 numerology), 2 = button (X code 1L/2M/3R),
-// 3 = motion (raw deltas). The wire never sees the ring.
+// one provider event record — identical layout to kbd.InEv
 struct inev { uint32_t kind, code, pressed; int32_t dx, dy; };
 
 struct scene_geom { uint32_t x, y, w, h, sw, sh; };
 
-// a placed scene surface — minted on its wl_surface's first commit
+// a placed scene surface — minted on its wl_surface's first lawful
+// buffer commit
 struct scsurf {
     int live;
-    int cli;          // owning session
-    uint32_t wloid;   // the client's wl_surface id
-    int fd;           // the *Surf projection
+    struct sess *ses;            // owning session
+    struct wl_resource *sres;    // the client's wl_surface
+    int fd;                      // the *Surf projection
     uint32_t x, y, w, h;
 };
 
-// a client's surface slot: wire objects + the pool it commits from.
-// xsurf/top are the xdg_shell role objects — the role contract: an
-// initial empty commit after get_toplevel is answered by a configure
-// pair; the client must ack_configure before its buffer commit is
-// lawful to present. attached marks a real buffer landed via
-// surface.attach (a bare role-commit carries none).
-struct csurf {
-    uint32_t surf, buf, pool, cb;
-    uint32_t xsurf, top, confser, acked;
+// a client's surface record — hangs off the wl_surface resource
+// (user_data); the xdg role objects + the ack contract live here.
+struct rsurf {
+    struct wl_resource *sres;        // the wl_surface itself
+    struct wl_resource *xsurf, *top; // xdg role resources, if any
+    struct wl_resource *buf, *cb;    // attached buffer + frame cb
+    uint32_t confser, acked;
     int attached;
-    int poolfd, poolsize, surfix;   // surfix: index into scs[], -1 none
-    unsigned char *map;
-    uint32_t boff, bw, bh, bstride;
+    int surfix;                      // scs[] index or -1
+    struct scsurf *sc;
 };
 
-struct cl {
-    struct wlconn cn;
-    int dead;
-    uint32_t reg, comp, shm, seat, ptr, kbd, wmb;
-    struct csurf S;
+// a session — one wl_client, our side-table of its routed objects
+struct sess {
+    int live;
+    struct wl_client *cl;
+    struct wl_listener dlistener;    // client-destroy hook
+    struct wl_resource *seat, *ptr, *kbd, *wmb;
 };
 
-static struct cl cls[NCLI];
+static struct sess ses[NSES];
 static struct scsurf scs[NSURF];
 static struct inev evs[16];
-static unsigned char msg[1024], out[1024];
 static uint32_t serial = 1;
-static uint32_t px, py;            // compositor-tracked pointer pos
-static uint32_t sw, sh;            // scene extent (learned lazily)
-static int focus = -1;             // scs[] index under the pointer
-static int drag = -1;              // scs[] index being drag-moved
+static uint32_t px, py;
+static uint32_t sw, sh;
+static int focus = -1;
+static int drag = -1;
+static int ever_accepted;
 
 static uint32_t msec(void) {
     struct timespec ts;
@@ -111,49 +102,36 @@ static uint32_t msec(void) {
     return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
-static void wsend(struct cl *c, struct wlw *w) {
-    wl_send(c->cn.fd, out, wlw_len(w));
+static struct sess *ses_of(struct wl_client *cl) {
+    for (int i = 0; i < NSES; i++)
+        if (ses[i].live && ses[i].cl == cl) return &ses[i];
+    return NULL;
 }
 
-static void ptr_leave(struct cl *c, struct scsurf *s) {
+// ---- pointer/keyboard routing --------------------------------------
+static void ptr_leave(struct sess *c, struct scsurf *s) {
     if (!c->ptr) return;
-    struct wlw w;
-    wlw_init(&w, out, c->ptr, 1);      // leave(serial, surface)
-    wlw_u32(&w, serial++); wlw_u32(&w, s->wloid);
-    wsend(c, &w);
+    wl_pointer_send_leave(c->ptr, serial++, s->sres);
+    wl_pointer_send_frame(c->ptr);
 }
-static void ptr_enter(struct cl *c, struct scsurf *s) {
+static void ptr_enter(struct sess *c, struct scsurf *s) {
     if (!c->ptr) return;
-    struct wlw w;
-    wlw_init(&w, out, c->ptr, 0);      // enter(serial, surface, sx, sy)
-    wlw_u32(&w, serial++); wlw_u32(&w, s->wloid);
-    wlw_i32(&w, (int32_t)(px - s->x) << 8);
-    wlw_i32(&w, (int32_t)(py - s->y) << 8);
-    wsend(c, &w);
+    wl_pointer_send_enter(c->ptr, serial++, s->sres,
+        wl_fixed_from_int((int32_t)(px - s->x)),
+        wl_fixed_from_int((int32_t)(py - s->y)));
+    wl_pointer_send_frame(c->ptr);
 }
-static void ptr_frame(struct cl *c) {
-    if (!c->ptr) return;
-    struct wlw w;
-    wlw_init(&w, out, c->ptr, 5);      // frame()
-    wsend(c, &w);
-}
-static void kbd_enter(struct cl *c, struct scsurf *s) {
+static void kbd_enter(struct sess *c, struct scsurf *s) {
     if (!c->kbd) return;
-    struct wlw w;
-    wlw_init(&w, out, c->kbd, 1);      // enter(serial, surface, keys[])
-    wlw_u32(&w, serial++); wlw_u32(&w, s->wloid); wlw_u32(&w, 0);
-    wsend(c, &w);
+    struct wl_array keys;
+    wl_array_init(&keys);
+    wl_keyboard_send_enter(c->kbd, serial++, s->sres, &keys);
 }
-static void kbd_leave(struct cl *c, struct scsurf *s) {
+static void kbd_leave(struct sess *c, struct scsurf *s) {
     if (!c->kbd) return;
-    struct wlw w;
-    wlw_init(&w, out, c->kbd, 2);      // leave(serial, surface)
-    wlw_u32(&w, serial++); wlw_u32(&w, s->wloid);
-    wsend(c, &w);
+    wl_keyboard_send_leave(c->kbd, serial++, s->sres);
 }
 
-// topmost surface under (px,py) — scs[] order IS z order (attach
-// appends), so scan high slots first.
 static int hit(void) {
     for (int i = NSURF - 1; i >= 0; i--) {
         struct scsurf *s = &scs[i];
@@ -168,20 +146,20 @@ static void refocus(void) {
     if (n == focus) return;
     if (focus >= 0) {
         struct scsurf *o = &scs[focus];
-        ptr_leave(&cls[o->cli], o);
-        kbd_leave(&cls[o->cli], o);
+        ptr_leave(o->ses, o);
+        kbd_leave(o->ses, o);
     }
     focus = n;
     if (focus >= 0) {
         struct scsurf *s = &scs[focus];
-        ptr_enter(&cls[s->cli], s);
-        kbd_enter(&cls[s->cli], s);
+        ptr_enter(s->ses, s);
+        kbd_enter(s->ses, s);
     }
 }
 
-static void on_input(int ifd) {
-    long n = read(ifd, evs, sizeof evs);
-    if (n < (long)sizeof evs[0]) return;
+static int on_input(int fd, uint32_t mask, void *data) {
+    long n = read(fd, evs, sizeof evs);
+    if (n < (long)sizeof evs[0]) return 0;
     for (int i = 0; i < n / (long)sizeof evs[0]; i++) {
         struct inev *e = &evs[i];
         printf("WLSRV ev k=%u c=%u p=%u dx=%d dy=%d\n",
@@ -192,9 +170,8 @@ static void on_input(int ifd) {
             if (sw && nx >= (int)sw) nx = (int)sw - 1;
             if (sh && ny >= (int)sh) ny = (int)sh - 1;
             px = (uint32_t)nx; py = (uint32_t)ny;
-            // drag wins over focus: a held button moves the grabbed
-            // surface — placement is the compositor's call, not the
-            // client's. The scene is re-hit-tested on release.
+            // drag wins over focus — a held or client-requested grab
+            // moves the surface; the scene re-hit-tests on release.
             if (drag >= 0) {
                 struct scsurf *s = &scs[drag];
                 if (s->live) {
@@ -209,53 +186,217 @@ static void on_input(int ifd) {
             }
             if (focus >= 0) {
                 struct scsurf *s = &scs[focus];
-                struct cl *c = &cls[s->cli];
-                if (c->ptr) {
-                    struct wlw w;
-                    wlw_init(&w, out, c->ptr, 2);  // motion(time, sx, sy)
-                    wlw_u32(&w, msec());
-                    wlw_i32(&w, (int32_t)(px - s->x) << 8);
-                    wlw_i32(&w, (int32_t)(py - s->y) << 8);
-                    wsend(c, &w);
-                    ptr_frame(c);
+                if (s->ses->ptr) {
+                    wl_pointer_send_motion(s->ses->ptr, msec(),
+                        wl_fixed_from_int((int32_t)(px - s->x)),
+                        wl_fixed_from_int((int32_t)(py - s->y)));
+                    wl_pointer_send_frame(s->ses->ptr);
                 }
             }
         } else if (e->kind == 2) {             // button
-            // X code 1L/2M/3R -> evdev BTN_LEFT/MIDDLE/RIGHT
             uint32_t btn = e->code == 1 ? 0x110 :
                            e->code == 3 ? 0x111 : 0x112;
             if (e->pressed && focus >= 0) drag = focus;
-            if (!e->pressed) { drag = -1; refocus(); } // grab ends — re-hit
+            if (!e->pressed) { drag = -1; refocus(); }
             if (focus >= 0) {
-                struct cl *c = &cls[scs[focus].cli];
-                if (c->ptr) {
-                    struct wlw w;
-                    wlw_init(&w, out, c->ptr, 3);  // button(ser, t, btn, st)
-                    wlw_u32(&w, serial++); wlw_u32(&w, msec());
-                    wlw_u32(&w, btn); wlw_u32(&w, e->pressed);
-                    wsend(c, &w);
-                    ptr_frame(c);
+                struct scsurf *s = &scs[focus];
+                if (s->ses->ptr) {
+                    wl_pointer_send_button(s->ses->ptr, serial++, msec(),
+                                           btn, e->pressed);
+                    wl_pointer_send_frame(s->ses->ptr);
                 }
             }
         } else if (e->kind == 1) {             // key
             if (focus >= 0) {
-                struct cl *c = &cls[scs[focus].cli];
-                if (c->kbd) {
-                    struct wlw w;
-                    wlw_init(&w, out, c->kbd, 3);  // key(ser, t, key, st)
-                    wlw_u32(&w, serial++); wlw_u32(&w, msec());
-                    wlw_u32(&w, e->code);          // set-1 == evdev on
-                    wlw_u32(&w, e->pressed);       // the common range
-                    wsend(c, &w);
+                struct scsurf *s = &scs[focus];
+                if (s->ses->kbd) {
+                    wl_keyboard_send_key(s->ses->kbd, serial++, msec(),
+                                         e->code, e->pressed);
                 }
             }
         }
     }
+    return 0;
 }
 
-// minimal XKB keymap text — a real keymap fd is protocol-required
-// before key events; a tiny valid-shaped map rides a memfd (parsing
-// is the client's xkbcommon, not our contract).
+// ---- wl_surface impl -------------------------------------------------
+static void surf_destroy(struct wl_client *cl, struct wl_resource *res) {
+    wl_resource_destroy(res);
+}
+static void surf_attach(struct wl_client *cl, struct wl_resource *res,
+                        struct wl_resource *buffer, int32_t x, int32_t y) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    S->buf = buffer;                 // NULL buffer = unmap — attached
+    S->attached = buffer != NULL;    // stays honest either way
+}
+static void surf_damage(struct wl_client *cl, struct wl_resource *res,
+                        int32_t x, int32_t y, int32_t w, int32_t h) {}
+static void surf_frame(struct wl_client *cl, struct wl_resource *res,
+                       uint32_t cbid) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    S->cb = wl_resource_create(cl, &wl_callback_interface, 1, cbid);
+}
+static void surf_region(struct wl_client *cl, struct wl_resource *res,
+                        struct wl_resource *region) {}
+static void surf_scale(struct wl_client *cl, struct wl_resource *res,
+                       int32_t scale) {}
+static void surf_xform(struct wl_client *cl, struct wl_resource *res,
+                       int32_t transform) {}
+static void surf_commit(struct wl_client *cl, struct wl_resource *res) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+
+    if (S->xsurf && S->top && !S->confser) {
+        // the role handshake: an xdg client performs an initial
+        // buffer-less commit after get_toplevel; the compositor's
+        // answer is toplevel.configure (0,0 = client's call) followed
+        // by xsurface.configure(serial). The buffer commit after it
+        // MUST carry the ack.
+        struct wl_array st;
+        wl_array_init(&st);
+        xdg_toplevel_send_configure(S->top, 0, 0, &st);
+        xdg_surface_send_configure(S->xsurf, serial);
+        printf("WLSRV toplevel configure ser=%u\n", serial);
+        S->confser = serial++;
+    }
+    if (S->xsurf && S->confser && S->attached &&
+        S->acked != S->confser) {
+        printf("WLSRV unacked commit (ack=%u want=%u)\n",
+               S->acked, S->confser);
+    }
+
+    struct wl_shm_buffer *shb =
+        S->buf ? wl_shm_buffer_get(S->buf) : NULL;
+    if (S->attached && shb &&
+        !(S->xsurf && S->acked != S->confser)) {
+        uint32_t bw = (uint32_t)wl_shm_buffer_get_width(shb);
+        uint32_t bh = (uint32_t)wl_shm_buffer_get_height(shb);
+        uint32_t bstride = (uint32_t)wl_shm_buffer_get_stride(shb);
+        wl_shm_buffer_begin_access(shb);
+        uint32_t magic = wl_shm_buffer_get_data(shb)
+                       ? *(uint32_t *)wl_shm_buffer_get_data(shb) : 0;
+        uint32_t tag = *(uint32_t *)((char *)wl_shm_buffer_get_data(shb) + 4);
+        unsigned px0 = ((unsigned char *)wl_shm_buffer_get_data(shb))[256];
+        printf("WLSRV magic=%08x tag=%08x px0=%02x\n", magic, tag, px0);
+        if (S->surfix < 0) {
+            for (int i = 0; i < NSURF && S->surfix < 0; i++)
+                if (!scs[i].live) S->surfix = i;
+            if (S->surfix >= 0) {
+                struct scsurf *t = &scs[S->surfix];
+                int f = (int)syscall(K_SURF_OPEN, bw, bh);
+                if (f >= 0) {
+                    t->live = 1; t->ses = ses_of(cl);
+                    t->sres = res; t->fd = f;
+                    t->w = bw; t->h = bh;
+                    S->sc = t;
+                    t->x = 40 + 100 * (uint32_t)S->surfix;
+                    t->y = 40 + 100 * (uint32_t)S->surfix;
+                    syscall(K_SURF_MOVE, t->fd, t->x, t->y);
+                    struct scene_geom g;
+                    if (syscall(K_SURF_INFO, t->fd, &g) == 0) {
+                        sw = g.sw; sh = g.sh;
+                        t->x = g.x; t->y = g.y;
+                    }
+                    printf("WLSRV surf slot=%d magic=%08x\n",
+                           S->surfix, magic);
+                } else {
+                    printf("WLSRV surf refused e=%d\n", errno);
+                    S->surfix = -1;
+                }
+            }
+        }
+        if (S->surfix >= 0) {
+            uint32_t rect[4] = { 0, 0, bw, bh };
+            long br = syscall(K_SURF_BLIT, scs[S->surfix].fd,
+                              wl_shm_buffer_get_data(shb), bstride, rect);
+            int be = br < 0 ? errno : 0;
+            long pr = br < 0 ? br
+                : syscall(K_SURF_PRESENT, scs[S->surfix].fd, 0, 0, bw, bh);
+            int pe = pr < 0 ? errno : 0;
+            printf("WLSRV surf %ux%u blit=%ld/%d present=%ld/%d\n",
+                   bw, bh, br, be, pr, pe);
+        }
+        wl_shm_buffer_end_access(shb);
+    }
+    if (S->cb) {
+        wl_callback_send_done(S->cb, 42);
+        wl_resource_destroy(S->cb);
+        S->cb = NULL;
+    }
+    if (S->buf && S->attached) {
+        wl_buffer_send_release(S->buf);
+    }
+}
+static const struct wl_surface_interface surf_impl = {
+    surf_destroy, surf_attach, surf_damage, surf_frame,
+    surf_region, surf_region, surf_commit, surf_xform,
+    surf_scale, surf_damage,   // damage_buffer shares the shape
+};
+
+static void surf_res_destroy(struct wl_resource *res) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (!S) return;
+    if (S->surfix >= 0) {
+        struct scsurf *s = &scs[S->surfix];
+        if (s->live) {
+            if (focus == (int)(s - scs)) focus = -1;
+            if (drag == (int)(s - scs)) drag = -1;
+            close(s->fd);
+            s->live = 0;
+            printf("WLSRV surf released slot=%d\n", (int)(s - scs));
+        }
+        S->surfix = -1;
+    }
+    free(S);
+}
+
+// ---- wl_compositor impl ----------------------------------------------
+static void comp_create_surface(struct wl_client *cl,
+                                struct wl_resource *res, uint32_t id) {
+    struct rsurf *S = calloc(1, sizeof *S);
+    S->surfix = -1;
+    struct wl_resource *sres =
+        wl_resource_create(cl, &wl_surface_interface,
+                           wl_resource_get_version(res), id);
+    S->sres = sres;
+    wl_resource_set_implementation(sres, &surf_impl, S,
+                                 surf_res_destroy);
+}
+static void comp_create_region(struct wl_client *cl,
+                               struct wl_resource *res, uint32_t id) {
+    // regions carry no behavior here — mint a valid resource so the
+    // client's bookkeeping stays real.
+    wl_resource_create(cl, &wl_region_interface, 1, id);
+}
+static const struct wl_compositor_interface comp_impl = {
+    comp_create_surface, comp_create_region,
+};
+static void comp_bind(struct wl_client *cl, void *data,
+                      uint32_t version, uint32_t id) {
+    struct wl_resource *res =
+        wl_resource_create(cl, &wl_compositor_interface,
+                           version > 4 ? 4 : version, id);
+    wl_resource_set_implementation(res, &comp_impl, NULL, NULL);
+}
+
+// ---- wl_seat impl ------------------------------------------------------
+static void ptr_set_cursor(struct wl_client *cl, struct wl_resource *res,
+                           uint32_t serial, struct wl_resource *surface,
+                           int32_t hx, int32_t hy) {}
+static void ptr_release(struct wl_client *cl, struct wl_resource *res) {
+    struct sess *c = ses_of(cl);
+    if (c) c->ptr = NULL;
+    wl_resource_destroy(res);
+}
+static const struct wl_pointer_interface ptr_impl = {
+    ptr_set_cursor, ptr_release,
+};
+static void kbd_release(struct wl_client *cl, struct wl_resource *res) {
+    struct sess *c = ses_of(cl);
+    if (c) c->kbd = NULL;
+    wl_resource_destroy(res);
+}
+static const struct wl_keyboard_interface kbd_impl = { kbd_release };
+
 static const char KEYMAP[] =
     "xkb_keymap {\n"
     "  xkb_keycodes \"evdev\" { minimum = 8; maximum = 255; };\n"
@@ -264,253 +405,220 @@ static const char KEYMAP[] =
     "  xkb_symbols \"default\" { };\n"
     "};\n";
 
-static void kbd_keymap(struct cl *c) {
-    int mfd = (int)syscall(319, "xkb", 0);   // memfd_create
-    if (mfd < 0) return;
-    int sz = (int)sizeof(KEYMAP) - 1;
-    write(mfd, KEYMAP, sz);
-    struct wlw w;
-    wlw_init(&w, out, c->kbd, 0);            // keymap(format, fd, size)
-    wlw_u32(&w, 1);                          // WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1
-    wlw_u32(&w, (uint32_t)sz);
-    wl_sendfd(c->cn.fd, out, wlw_len(&w), mfd);
-    close(mfd);
+static void seat_get_pointer(struct wl_client *cl, struct wl_resource *res,
+                             uint32_t id) {
+    struct sess *c = ses_of(cl);
+    struct wl_resource *p =
+        wl_resource_create(cl, &wl_pointer_interface,
+                           wl_resource_get_version(res), id);
+    wl_resource_set_implementation(p, &ptr_impl, NULL, NULL);
+    if (c) c->ptr = p;
 }
-
-static void dispatch(struct cl *c) {
-    uint32_t oid = wl_u32(msg);
-    uint16_t op = wl_u16(msg + 4);
-    struct csurf *S = &c->S;
-    struct wlw w;
-
-    if (oid == 1 && op == 1) {              // display.get_registry(new_id)
-        c->reg = wl_arg(msg, 0);
-        static const char *const gname[] = {
-            "wl_compositor", "wl_shm", "wl_seat", "xdg_wm_base" };
-        static const uint32_t gver[] = { 4, 1, 7, 1 };
-        for (uint32_t i = 0; i < 4; i++) {
-            wlw_init(&w, out, c->reg, 0);    // registry.global
-            wlw_u32(&w, i + 1); wlw_str(&w, gname[i]); wlw_u32(&w, gver[i]);
-            wsend(c, &w);
-        }
-    } else if (oid == c->reg && op == 0) {  // registry.bind(name, iface, ver, id)
-        uint32_t name = wl_arg(msg, 0);
-        int nx; const char *ifn = wl_sarg(msg, 12, &nx);
-        uint32_t newid = wl_u32(msg + nx + 4); // +4 skips version
-        if (!strcmp(ifn, "wl_shm")) {
-            c->shm = newid;
-            wlw_init(&w, out, c->shm, 0); wlw_u32(&w, 0);
-            wsend(c, &w);
-            wlw_init(&w, out, c->shm, 0); wlw_u32(&w, 1);
-            wsend(c, &w);
-        } else if (!strcmp(ifn, "wl_compositor")) {
-            c->comp = newid;
-        } else if (!strcmp(ifn, "wl_seat")) {
-            c->seat = newid;
-            wlw_init(&w, out, c->seat, 0);   // seat.capabilities
-            wlw_u32(&w, 3);                  // pointer | keyboard
-            wsend(c, &w);
-            printf("WLSRV seat caps\n");
-        } else if (!strcmp(ifn, "xdg_wm_base")) {
-            c->wmb = newid;
-            // liveness is a real channel: ping once at bind; a dead
-            // client never pongs and a real compositor would time it
-            // out. The gate just wants the pong on serial.
-            wlw_init(&w, out, c->wmb, 0);    // wm_base.ping(serial)
-            wlw_u32(&w, serial);
-            printf("WLSRV ping %u\n", serial);
-            serial++;
-            wsend(c, &w);
-        } else {
-            printf("WLSRV ?bind %s\n", ifn);
-        }
-    } else if (oid == c->wmb && op == 2) {  // wm_base.get_xdg_surface(new, surf)
-        uint32_t sid = wl_arg(msg, 1);
-        if (sid != S->surf) {
-            // role objects bound to a foreign surface are a loud
-            // refusal, same class as a bag breach — not silent.
-            printf("WLSRV xsurf bad-surface %u (surf=%u)\n", sid, S->surf);
-        } else {
-            S->xsurf = wl_arg(msg, 0);
-            printf("WLSRV xsurf oid=%u\n", S->xsurf);
-        }
-    } else if (oid == c->wmb && op == 3) {  // wm_base.pong(serial)
-        printf("WLSRV pong %u\n", wl_arg(msg, 0));
-    } else if (oid == c->wmb && op == 0) {  // wm_base.destroy
-        c->wmb = 0;
-    } else if (oid == c->wmb && op == 1) {  // wm_base.create_positioner
-        // popups are unimplemented; the object id still lands in the
-        // client's table — accept, don't dispatch.
-    } else if (oid == S->xsurf && op == 0) {// xsurface.destroy
-        S->xsurf = 0;
-    } else if (oid == S->xsurf && op == 1) {// xsurface.get_toplevel(new)
-        S->top = wl_arg(msg, 0);
-    } else if (oid == S->xsurf && op == 3) {// xsurface.set_window_geometry
-    } else if (oid == S->xsurf && op == 4) {// xsurface.ack_configure(ser)
-        S->acked = wl_arg(msg, 0);
-        printf("WLSRV ack %u\n", S->acked);
-    } else if (oid == S->top && op == 0) {  // toplevel.destroy
-        S->top = 0;
-    } else if (oid == S->top && op == 2) {  // toplevel.set_title(str)
-        int nx; const char *t = wl_sarg(msg, 8, &nx);
-        printf("WLSRV title %s\n", t ? t : "?");
-    } else if (oid == S->top && op == 3) {  // toplevel.set_app_id(str)
-        int nx; const char *a = wl_sarg(msg, 8, &nx);
-        printf("WLSRV appid %s\n", a ? a : "?");
-    } else if (oid == S->top && op == 5) {  // toplevel.move(seat, serial)
-        // the REAL interactive-move request: a toplevel asks the
-        // compositor to start a pointer-driven move — ours binds the
-        // grab to this surface until the next button release. This
-        // is the client-initiated form of the same drag policy.
-        if (S->surfix >= 0) {
-            drag = S->surfix;
-            printf("WLSRV tl-move slot=%d\n", drag);
-        }
-    } else if (oid == S->top && op <= 13) { // set_parent/max/min/etc
-        // lawful v1 requests with no window-management meaning here —
-        // accept by silence, same as upstream compositors do for
-        // states they don't advertise.
-    } else if (oid == c->seat && op == 0) { // seat.get_pointer(new_id)
-        c->ptr = wl_arg(msg, 0);
-    } else if (oid == c->seat && op == 1) { // seat.get_keyboard(new_id)
-        c->kbd = wl_arg(msg, 0);
-        kbd_keymap(c);                       // keymap precedes keys
-    } else if (oid == c->ptr && op == 0) {  // pointer.set_cursor — image
-    } else if (oid == c->ptr && op == 1) {  // pointer.release
-        c->ptr = 0;
-    } else if (oid == c->comp && op == 0) { // compositor.create_surface
-        S->surf = wl_arg(msg, 0);
-    } else if (oid == c->shm && op == 0) {  // shm.create_pool(new, fd, size)
-        S->pool = wl_arg(msg, 0);
-        S->poolsize = (int)wl_arg(msg, 1);
-        S->poolfd = wl_popfd(&c->cn);
-        if (S->poolfd < 0) { printf("WLSRV FAIL nofd\n"); c->dead = 1; return; }
-        S->map = mmap(0, S->poolsize, PROT_READ | PROT_WRITE,
-                      MAP_SHARED, S->poolfd, 0);
-        if (S->map == MAP_FAILED) { printf("WLSRV FAIL mmap\n"); c->dead = 1; return; }
-    } else if (oid == S->pool && op == 0) { // pool.create_buffer(...)
-        S->buf = wl_arg(msg, 0);
-        S->boff = wl_arg(msg, 1); S->bw = wl_arg(msg, 2);
-        S->bh = wl_arg(msg, 3); S->bstride = wl_arg(msg, 4);
-    } else if (oid == S->pool && op == 1) { // pool.destroy
-        S->pool = 0;
-    } else if (oid == S->buf && op == 0) {  // buffer.destroy
-        S->buf = 0;
-    } else if (oid == S->surf && op == 0) { // surface.destroy
-        S->surf = 0;
-    } else if (oid == S->surf && op == 1) { // surface.attach(buf, x, y)
-        S->attached = 1;
-    } else if (oid == S->surf && op == 2) { // surface.damage(x, y, w, h)
-    } else if (oid == S->surf && op == 3) { // surface.frame(new callback)
-        S->cb = wl_arg(msg, 0);
-    } else if (oid == S->surf && op == 6) { // surface.commit — frame lands
-        if (S->xsurf && S->top && !S->confser) {
-            // the role handshake: an xdg client performs an initial
-            // buffer-less commit after get_toplevel; the compositor's
-            // answer is toplevel.configure (our sizing offer — 0,0 =
-            // client's call) followed by xsurface.configure(serial).
-            // The buffer commit that follows MUST carry the ack.
-            wlw_init(&w, out, S->top, 0);    // toplevel.configure
-            wlw_i32(&w, 0); wlw_i32(&w, 0); wlw_u32(&w, 0); // w,h,states[]
-            wsend(c, &w);
-            wlw_init(&w, out, S->xsurf, 0);  // xsurface.configure(ser)
-            wlw_u32(&w, serial);
-            printf("WLSRV toplevel configure ser=%u\n", serial);
-            S->confser = serial++;
-            wsend(c, &w);
-        }
-        if (S->xsurf && S->confser && S->attached &&
-            S->acked != S->confser) {
-            // presenting an unacked buffer is the exact protocol
-            // violation real compositors raise as a client error —
-            // loud, and the pixels do not ride the scene.
-            printf("WLSRV unacked commit (ack=%u want=%u)\n",
-                   S->acked, S->confser);
-        }
-        if (S->attached && S->bw && S->bh && S->map &&
-            !(S->xsurf && S->acked != S->confser)) {
-            uint32_t magic = wl_u32(S->map + S->boff);
-            uint32_t tag = wl_u32(S->map + S->boff + 4);
-            unsigned px0 = S->boff + 256 < (uint32_t)S->poolsize
-                         ? S->map[S->boff + 256] : 0;
-            printf("WLSRV magic=%08x tag=%08x px0=%02x\n", magic, tag, px0);
-            if (S->surfix < 0) {
-                // commit IS the scene door: mint a *Surf at the next
-                // tile slot; headless boot refuses the mint and the
-                // wire session still completes.
-                for (int i = 0; i < NSURF && S->surfix < 0; i++)
-                    if (!scs[i].live) S->surfix = i;
-                if (S->surfix >= 0) {
-                    struct scsurf *t = &scs[S->surfix];
-                    int f = (int)syscall(K_SURF_OPEN, S->bw, S->bh);
-                    if (f >= 0) {
-                        t->live = 1; t->cli = (int)(c - cls);
-                        t->wloid = S->surf; t->fd = f;
-                        t->w = S->bw; t->h = S->bh;
-                        t->x = 40 + 100 * (uint32_t)S->surfix;
-                        t->y = 40 + 100 * (uint32_t)S->surfix;
-                        syscall(K_SURF_MOVE, t->fd, t->x, t->y);
-                        struct scene_geom g;
-                        if (syscall(K_SURF_INFO, t->fd, &g) == 0) {
-                            sw = g.sw; sh = g.sh;
-                            t->x = g.x; t->y = g.y;
-                        }
-                        printf("WLSRV surf slot=%d magic=%08x\n",
-                               S->surfix, magic);
-                    } else {
-                        printf("WLSRV surf refused e=%d\n", errno);
-                        S->surfix = -1;
-                    }
-                }
-            }
-            if (S->surfix >= 0) {
-                uint32_t rect[4] = { 0, 0, S->bw, S->bh };
-                long br = syscall(K_SURF_BLIT, scs[S->surfix].fd,
-                                  S->map + S->boff, S->bstride, rect);
-                int be = br < 0 ? errno : 0;
-                long pr = br < 0 ? br
-                    : syscall(K_SURF_PRESENT, scs[S->surfix].fd,
-                              0, 0, S->bw, S->bh);
-                int pe = pr < 0 ? errno : 0;
-                printf("WLSRV surf %ux%u blit=%ld/%d present=%ld/%d\n",
-                       S->bw, S->bh, br, be, pr, pe);
-            }
-        }
-        if (S->cb) {
-            wlw_init(&w, out, S->cb, 0); wlw_u32(&w, 42);
-            wsend(c, &w);
-            S->cb = 0;
-        }
-        if (S->buf && S->attached) {
-            wlw_init(&w, out, S->buf, 0);    // buffer.release — only
-            wsend(c, &w);                    // for a buffer we held
-        }
-    } else if (oid == 1 && op == 0) {       // display.sync(new callback)
-        uint32_t scb = wl_arg(msg, 0);
-        wlw_init(&w, out, scb, 0); wlw_u32(&w, 43);
-        wsend(c, &w);
-        wlw_init(&w, out, 1, 1); wlw_u32(&w, scb);
-        wsend(c, &w);
-    } else {
-        printf("WLSRV ?msg oid=%u op=%u\n", oid, op);
+static void seat_get_keyboard(struct wl_client *cl, struct wl_resource *res,
+                              uint32_t id) {
+    struct sess *c = ses_of(cl);
+    struct wl_resource *k =
+        wl_resource_create(cl, &wl_keyboard_interface,
+                           wl_resource_get_version(res), id);
+    wl_resource_set_implementation(k, &kbd_impl, NULL, NULL);
+    if (c) c->kbd = k;
+    // the keymap is protocol-required before keys — a real memfd
+    // rides the wire like it does under every real compositor.
+    int mfd = (int)syscall(319, "xkb", 0);
+    if (mfd >= 0) {
+        int sz = (int)sizeof(KEYMAP) - 1;
+        write(mfd, KEYMAP, sz);
+        wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
+                                mfd, (uint32_t)sz);
+        close(mfd);
     }
 }
+static void seat_get_touch(struct wl_client *cl, struct wl_resource *res,
+                           uint32_t id) {
+    wl_resource_create(cl, &wl_touch_interface,
+                       wl_resource_get_version(res), id);
+}
+static void seat_release(struct wl_client *cl, struct wl_resource *res) {
+    struct sess *c = ses_of(cl);
+    if (c && c->seat == res) c->seat = NULL;
+    wl_resource_destroy(res);
+}
+static const struct wl_seat_interface seat_impl = {
+    seat_get_pointer, seat_get_keyboard, seat_get_touch, seat_release,
+};
+static void seat_bind(struct wl_client *cl, void *data,
+                      uint32_t version, uint32_t id) {
+    struct sess *c = ses_of(cl);
+    struct wl_resource *res =
+        wl_resource_create(cl, &wl_seat_interface,
+                           version > 7 ? 7 : version, id);
+    wl_resource_set_implementation(res, &seat_impl, NULL, NULL);
+    if (c) c->seat = res;
+    wl_seat_send_capabilities(res, WL_SEAT_CAPABILITY_POINTER |
+                                   WL_SEAT_CAPABILITY_KEYBOARD);
+    printf("WLSRV seat caps\n");
+}
 
-static void teardown(struct cl *c) {
-    if (c->S.surfix >= 0) {
-        struct scsurf *s = &scs[c->S.surfix];
-        if (s->live) {
-            if (focus == (int)(s - scs)) { focus = -1; }
-            if (drag == (int)(s - scs)) { drag = -1; }
-            close(s->fd);           // detach — comp repaints the rect
+// ---- xdg_shell impl ----------------------------------------------------
+static void wmb_destroy(struct wl_client *cl, struct wl_resource *res) {
+    struct sess *c = ses_of(cl);
+    if (c && c->wmb == res) c->wmb = NULL;
+    wl_resource_destroy(res);
+}
+static void wmb_positioner(struct wl_client *cl, struct wl_resource *res,
+                           uint32_t id) {
+    // popups unimplemented — a valid resource keeps the client's
+    // object table real without dispatch.
+    wl_resource_create(cl, &xdg_positioner_interface, 1, id);
+}
+static void wmb_pong(struct wl_client *cl, struct wl_resource *res,
+                     uint32_t ser) {
+    printf("WLSRV pong %u\n", ser);
+}
+
+static void xsurf_destroy(struct wl_client *cl, struct wl_resource *res) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (S) S->xsurf = NULL;
+    wl_resource_destroy(res);
+}
+static void xsurf_ack(struct wl_client *cl, struct wl_resource *res,
+                    uint32_t ser) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    S->acked = ser;
+    printf("WLSRV ack %u\n", ser);
+}
+static void xsurf_geom(struct wl_client *cl, struct wl_resource *res,
+                       int32_t x, int32_t y, int32_t w, int32_t h) {}
+
+static void top_destroy(struct wl_client *cl, struct wl_resource *res) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (S) S->top = NULL;
+    wl_resource_destroy(res);
+}
+static void top_noop(struct wl_client *cl, struct wl_resource *res) {}
+static void top_parent(struct wl_client *cl, struct wl_resource *res,
+                       struct wl_resource *parent) {}
+static void top_title(struct wl_client *cl, struct wl_resource *res,
+                      const char *title) {
+    printf("WLSRV title %s\n", title);
+}
+static void top_appid(struct wl_client *cl, struct wl_resource *res,
+                      const char *app_id) {
+    printf("WLSRV appid %s\n", app_id);
+}
+static void top_menu(struct wl_client *cl, struct wl_resource *res,
+                     struct wl_resource *seat, uint32_t ser,
+                     int32_t x, int32_t y) {}
+static void top_move(struct wl_client *cl, struct wl_resource *res,
+                     struct wl_resource *seat, uint32_t ser) {
+    // the REAL interactive-move request: the toplevel asks the
+    // compositor to start a pointer grab — ours binds the grab to
+    // this surface until the next release.
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (S && S->surfix >= 0) {
+        drag = S->surfix;
+        printf("WLSRV tl-move slot=%d\n", drag);
+    }
+}
+static void top_resize(struct wl_client *cl, struct wl_resource *res,
+                       struct wl_resource *seat, uint32_t ser,
+                       uint32_t edges) {}
+static void top_size(struct wl_client *cl, struct wl_resource *res,
+                     int32_t w, int32_t h) {}
+static void top_full(struct wl_client *cl, struct wl_resource *res,
+                     struct wl_resource *output) {}
+static const struct xdg_toplevel_interface top_impl = {
+    top_destroy, top_parent, top_title, top_appid, top_menu,
+    top_move, top_resize, top_size, top_size, top_noop, top_noop,
+    top_full, top_noop, top_noop,
+};
+
+static void xsurf_get_toplevel(struct wl_client *cl,
+                               struct wl_resource *res, uint32_t id) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    struct wl_resource *t =
+        wl_resource_create(cl, &xdg_toplevel_interface, 1, id);
+    wl_resource_set_implementation(t, &top_impl, S, NULL);
+    S->top = t;
+}
+static void xsurf_get_popup(struct wl_client *cl, struct wl_resource *res,
+                            uint32_t id, struct wl_resource *parent,
+                            struct wl_resource *pos) {
+    wl_resource_create(cl, &xdg_popup_interface, 1, id);
+}
+static const struct xdg_surface_interface xsurf_impl = {
+    xsurf_destroy, xsurf_get_toplevel, xsurf_get_popup,
+    xsurf_geom, xsurf_ack,
+};
+
+static void wmb_get_xsurf(struct wl_client *cl, struct wl_resource *res,
+                          uint32_t id, struct wl_resource *surface) {
+    struct rsurf *S = wl_resource_get_user_data(surface);
+    if (!S) {
+        // a foreign object can't take a role — loud, like the
+        // protocol's role error, not silent.
+        printf("WLSRV xsurf bad-surface\n");
+        return;
+    }
+    struct wl_resource *x =
+        wl_resource_create(cl, &xdg_surface_interface, 1, id);
+    wl_resource_set_implementation(x, &xsurf_impl, S, NULL);
+    S->xsurf = x;
+    printf("WLSRV xsurf oid=%u\n", id);
+}
+static const struct xdg_wm_base_interface wmb_impl = {
+    wmb_destroy, wmb_positioner, wmb_get_xsurf, wmb_pong,
+};
+static void wmb_bind(struct wl_client *cl, void *data,
+                     uint32_t version, uint32_t id) {
+    struct sess *c = ses_of(cl);
+    struct wl_resource *res =
+        wl_resource_create(cl, &xdg_wm_base_interface, 1, id);
+    wl_resource_set_implementation(res, &wmb_impl, NULL, NULL);
+    if (c) c->wmb = res;
+    // liveness is a channel: ping at bind; a dead client never pongs.
+    xdg_wm_base_send_ping(res, serial);
+    printf("WLSRV ping %u\n", serial);
+    serial++;
+}
+
+// ---- session lifecycle -------------------------------------------------
+static void client_gone(struct wl_listener *l, void *data) {
+    struct sess *c = wl_container_of(l, c, dlistener);
+    for (int i = 0; i < NSURF; i++) {
+        struct scsurf *s = &scs[i];
+        if (s->live && s->ses == c) {
+            if (focus == i) focus = -1;
+            if (drag == i) drag = -1;
+            close(s->fd);        // detach — comp repaints the rect
             s->live = 0;
-            printf("WLSRV surf released slot=%d\n", (int)(s - scs));
+            printf("WLSRV surf released slot=%d\n", i);
         }
-        c->S.surfix = -1;
     }
-    if (c->S.poolfd >= 0) close(c->S.poolfd);
-    c->dead = 1;
+    c->live = 0;
     printf("WLSRV EOS\n");
+}
+
+static int on_accept(int fd, uint32_t mask, void *data) {
+    struct wl_display *dpy = data;
+    int cfd = accept(fd, NULL, NULL);
+    if (cfd < 0) return 0;
+    for (int i = 0; i < NSES; i++) {
+        if (!ses[i].live) {
+            struct wl_client *cl = wl_client_create(dpy, cfd);
+            if (!cl) { close(cfd); return 0; }
+            memset(&ses[i], 0, sizeof ses[i]);
+            ses[i].live = 1;
+            ses[i].cl = cl;
+            ses[i].dlistener.notify = client_gone;
+            wl_client_add_destroy_listener(cl, &ses[i].dlistener);
+            ever_accepted = 1;
+            printf("WLSRV accepted fd=%d\n", cfd);
+            return 0;
+        }
+    }
+    close(cfd);
+    return 0;
 }
 
 int main(void) {
@@ -523,84 +631,56 @@ int main(void) {
     struct sockaddr_un sa; memset(&sa, 0, sizeof sa);
     sa.sun_family = AF_UNIX;
     strcpy(sa.sun_path, WL_SOCK_NAME);
-    unlink(WL_SOCK_NAME); // re-bind over a stale node — real servers do this
+    unlink(WL_SOCK_NAME);
     if (bind(lfd, (struct sockaddr *)&sa, sizeof(sa.sun_family) + strlen(WL_SOCK_NAME) + 1) < 0) {
         printf("WLSRV FAIL bind\n"); return 1;
     }
     if (listen(lfd, 4) < 0) { printf("WLSRV FAIL listen\n"); return 1; }
     printf("WLSRV bound %s\n", WL_SOCK_NAME);
 
-    // the compositor's second cap: an evdev-shaped reader over the
-    // machine's input rings. Refused (no bag bit) means the session
-    // still runs — input routing just has no source.
     int ifd = (int)syscall(K_INPUT_OPEN);
     int iopen = errno;
     printf("WLSRV input %s e=%d\n", ifd >= 0 ? "open" : "refused",
            ifd >= 0 ? 0 : iopen);
     px = py = 0;
 
-    memset(cls, 0, sizeof cls);
-    for (int i = 0; i < NCLI; i++) { cls[i].cn.fd = -1; cls[i].dead = 1; cls[i].S.surfix = -1; cls[i].S.poolfd = -1; }
+    // the real display: libwayland-server's object table, registry,
+    // wire codec and event loop — the same code every compositor links.
+    struct wl_display *dpy = wl_display_create();
+    if (!dpy) { printf("WLSRV FAIL display\n"); return 1; }
+    // registry ORDER is the gate's contract: names mint in create
+    // order — comp, shm, seat, xdg.
+    wl_global_create(dpy, &wl_compositor_interface, 4, NULL, comp_bind);
+    wl_display_init_shm(dpy);               // the library's own wl_shm
+    wl_global_create(dpy, &wl_seat_interface, 7, NULL, seat_bind);
+    wl_global_create(dpy, &xdg_wm_base_interface, 1, NULL, wmb_bind);
 
-    struct pollfd pf[2 + NCLI];
-    int ever = 0;
+    struct wl_event_loop *loop = wl_display_get_event_loop(dpy);
+    wl_event_loop_add_fd(loop, lfd, WL_EVENT_READABLE, on_accept, dpy);
+    if (ifd >= 0)
+        wl_event_loop_add_fd(loop, ifd, WL_EVENT_READABLE, on_input, NULL);
+
+    // quiescence policy: before any client the wait is unbounded (a
+    // compositor does not exit because nobody arrived yet); once
+    // clients have come and ALL have gone, a beat of silence ends it —
+    // the gate needs a reachable exit.
     for (;;) {
-        int nf = 0;
-        pf[nf].fd = lfd; pf[nf].events = POLLIN; nf++;
-        if (ifd >= 0) { pf[nf].fd = ifd; pf[nf].events = POLLIN; nf++; }
         int live = 0;
-        for (int i = 0; i < NCLI; i++) {
-            if (!cls[i].dead) {
-                pf[nf].fd = cls[i].cn.fd; pf[nf].events = POLLIN; nf++;
-                live++;
-            }
-        }
-        // quiescence policy: once clients have come and ALL have gone,
-        // a beat of silence ends the compositor — a real one idles
-        // forever; the gate needs a reachable exit.
-        int pr = poll(pf, nf, ever && live == 0 ? 1500 : -1);
-        if (pr == 0) break;                    // quiet deadline — done
-        if (pr < 0) { printf("WLSRV FAIL poll e=%d\n", errno); return 1; }
-        int pos = 0;
-        if (pf[pos].revents & POLLIN) {        // accept
-            int cfd = accept(lfd, 0, 0);
-            if (cfd >= 0) {
-                for (int i = 0; i < NCLI; i++) {
-                    if (cls[i].dead) {
-                        memset(&cls[i], 0, sizeof cls[i]);
-                        cls[i].cn.fd = cfd; cls[i].dead = 0;
-                        cls[i].S.surfix = -1; cls[i].S.poolfd = -1;
-                        ever++;
-                        printf("WLSRV accepted fd=%d\n", cfd);
-                        break;
-                    }
-                }
-            }
-        }
-        pos++;
-        if (ifd >= 0) {
-            if (pf[pos].revents & POLLIN) on_input(ifd);
-            pos++;
-        }
-        for (int i = 0; i < NCLI; i++) {
-            if (cls[i].dead) continue;
-            if (!(pf[pos].revents & (POLLIN | POLLHUP))) { pos++; continue; }
-            pos++;
-            int n = wl_fill(&cls[i].cn);
-            if (n <= 0) { teardown(&cls[i]); continue; }
-            int m;
-            while ((m = wl_peel(&cls[i].cn, msg, sizeof msg)) > 0)
-                dispatch(&cls[i]);
-            if (m < 0) { printf("WLSRV FAIL wire\n"); return 1; }
-            if (cls[i].dead) teardown(&cls[i]);
-        }
+        for (int i = 0; i < NSES; i++) if (ses[i].live) live++;
+        int pr = wl_event_loop_dispatch(loop,
+                    (ever_accepted && live == 0) ? 1500 : -1);
+        wl_display_flush_clients(dpy);
+        // ses[] mutates INSIDE dispatch (accept mints, EOS frees) —
+        // recount after it or the first client reads as never-here.
+        live = 0;
+        for (int i = 0; i < NSES; i++) if (ses[i].live) live++;
+        if (ever_accepted && live == 0 && pr == 0) break;
+        if (pr < 0 && errno != EINTR) break;
     }
-    // last-frame linger is gone with the clients — release whatever
-    // scene surface state is still ours, then the node stays as
-    // fs-visibility evidence.
-    for (int i = 0; i < NCLI; i++) if (!cls[i].dead) teardown(&cls[i]);
     for (int i = 0; i < NSURF; i++)
         if (scs[i].live) { close(scs[i].fd); scs[i].live = 0; }
+    wl_display_destroy_clients(dpy);
+    wl_display_destroy(dpy);
     printf("WLSRV done\n");
     return 0;
 }

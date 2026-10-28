@@ -90,7 +90,7 @@ static const struct wl_buffer_listener buf_l = { .release = buf_rel };
 static int frame_done;
 static void cb_done(void *d, struct wl_callback *c, uint32_t data) {
     if (data == 42) { frame_done = 1; printf("WLR frame done=%u\n", data); }
-    if (data == 43) printf("WLR sync done=%u\n", data);
+    else printf("WLR sync done=%u\n", data);
 }
 static const struct wl_callback_listener cb_l = { .done = cb_done };
 

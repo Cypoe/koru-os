@@ -840,13 +840,13 @@ const ChildFsOps = extern struct {
     mknod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
 };
 
-const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input };
+const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd };
 
 // fd slots are projections over typed seam endpoints, not bare provider
 // handles: stdio are real entries (conin/conout), fs a view handle,
 // pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
 // kind, never on the number — closing fd0 detaches like any discharge.
-const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input };
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input, epoll, efd };
 
 // ---- the bag: class grants + nid-scoped object grants ------------------
 // DESIGN-0001 §8.6's grant {handle, verbs, as} distilled to the syscall
@@ -1555,6 +1555,13 @@ fn canonNr(nr: u64) u64 {
         // resolves. poll/ppoll multiplex those same channels — the
         // class question is "may this child wait on channels".
         41, 42, 43, 288, 46, 47, 49, 50, 53, 319, 7, 271 => 22,
+        55 => 22, // getsockopt — a channel-fact query on the same class
+        // epoll is the same class: an interest list is another way to
+        // wait on channels — create/ctl/wait share the bit.
+        213, 232, 233, 281, 291 => 22,
+        // eventfd is a counted channel — same "wait on channels" class;
+        // libwayland-server's terminate semaphore is one.
+        284, 290 => 22,
         // scene class (bit 59): a child minting a display surface is a
         // compositor's cap, not a client's — mint/blit/present/move/info
         // ride one bag bit; close is ordinary fd lifetime.
@@ -2036,6 +2043,12 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             stw(&st, 24, 0o20600);
             stw(&st, 16, 1);
         },
+        .epoll, .efd => {
+            // interest list and counter are anonymous — linux fstat
+            // calls them S_IFIFO|0600 (anon_inode); same answer, honestly
+            stw(&st, 24, 0o10600);
+            stw(&st, 16, 1);
+        },
         .fs => {
             const ops = c.fsv orelse return -38;
             if (ops.stat(ops.ctx, c.fds[fd], &st) < 0) return -9;
@@ -2204,6 +2217,8 @@ const SockPair = struct {
     dir: [2]SockDir = .{ .{}, .{} }, // dir[s]: readable on side s
     refs: [2]u8 = .{ 0, 0 },
     conn: bool = false, // socket() mints unconnected — I/O is ENOTCONN
+    owner: [2]u32 = .{ 0, 0 }, // roster slot+1 of each side's minter —
+                             // SO_PEERCRED's honest answer
 };
 var socks: [NSOCKS]SockPair = .{SockPair{}} ** NSOCKS;
 
@@ -2289,6 +2304,8 @@ fn fdDupRef(c: *Child, fd: usize, out: *FdRef) bool {
         .shm => shms[@intCast(c.fds[fd] - 1)].refs += 1,
         .surf => surfs[@intCast(c.fds[fd] - 1)].refs += 1,
         .input => ins[@intCast(c.fds[fd] - 1)] += 1,
+        .epoll => epolls[@intCast(c.fds[fd] - 1)].refs += 1,
+        .efd => efds[@intCast(c.fds[fd] - 1)].refs += 1,
         .fs => {
             const ops = c.fsv orelse return false;
             const nh = ops.dup(ops.ctx, c.fds[fd]);
@@ -2313,6 +2330,8 @@ fn fdFreeRef(r: FdRef) void {
         .shm => shmRelease(@intCast(r.h - 1)),
         .surf => surfRefFree(@intCast(r.h - 1)),
         .input => inputFree(@intCast(r.h - 1)),
+        .epoll => epollFree(@intCast(r.h - 1)),
+        .efd => efdFree(@intCast(r.h - 1)),
         else => {},
     }
 }
@@ -2574,6 +2593,222 @@ fn childInputRead(c: *Child, f: *TrapFrame) i64 {
     }
 }
 
+// nr 213/291 epoll_create(1) / nr 233 epoll_ctl / nr 232 epoll_wait —
+// the interest-list shape of the same readiness truth: real event
+// loops (libwayland-server's among them) multiplex through epoll, not
+// poll. The interest list is kernel-side, per epoll OBJECT (dup and
+// SCM share it — an epoll fd is a projection of the list, like every
+// other kind); readiness is still fdPollRev evaluated at wait time —
+// no cached revents, so a wake is always a re-decision and the .poll
+// continuation carries epoll waiters for free.
+const NEPOLL = 8;
+const EPOLLIN: u16 = 0x1;
+const EpollEnt = struct { fdi: u8 = 0, ev: u16 = 0, data: u64 = 0 };
+const Epoll = struct {
+    refs: u32 = 0,
+    nent: u8 = 0,
+    ents: [MAXPOLLFDS]EpollEnt = .{EpollEnt{}} ** MAXPOLLFDS,
+};
+var epolls: [NEPOLL]Epoll = .{Epoll{}} ** NEPOLL;
+
+fn epollFree(idx: usize) void {
+    const e = &epolls[idx];
+    if (e.refs > 0) e.refs -= 1;
+    if (e.refs == 0) e.nent = 0;
+}
+
+fn childEpollCreate(c: *Child) i64 {
+    var fd: ?usize = null;
+    for (c.fds, 0..) |v, i| if (v == 0 and c.fdkinds[i] == .none) {
+        fd = i;
+        break;
+    };
+    const fdi = fd orelse return -24;
+    for (&epolls, 0..) |*e, i| if (e.refs == 0) {
+        e.* = .{ .refs = 1 };
+        c.fds[fdi] = i + 1;
+        c.fdkinds[fdi] = .epoll;
+        c.fdverbs[fdi] = V_READ;
+        return @intCast(fdi);
+    };
+    return -24;
+}
+
+// ctl(epfd, op, fd, event) — the interest list's own verbs: ADD(1)
+// registers (fd,events,data), MOD(2) rewrites, DEL(3) drops. The
+// event struct is linux's packed {u32 events, u64 data} = 12 bytes.
+// Self-add is EINVAL like linux; an .epoll TARGET is lawful nesting
+// (the readiness scan depth-caps, it does not loop).
+fn childEpollCtl(c: *Child, epfdu: u64, op: u64, fdu: u64, evva: u64) i64 {
+    if (epfdu >= c.fds.len or fdu >= c.fds.len) return -9;
+    const epidx: usize = @intCast(c.fds[@intCast(epfdu)] - 1);
+    if (c.fdkinds[@intCast(epfdu)] != .epoll) return -22;
+    const fdi: usize = @intCast(fdu);
+    if (c.fdkinds[fdi] == .none) return -9;
+    if (epfdu == fdu) return -22; // epfd in its own list — linux EINVAL
+    const e = &epolls[epidx];
+    if (op == 3) { // DEL — event ptr may be NULL
+        var i: usize = 0;
+        while (i < e.nent) : (i += 1) {
+            if (e.ents[i].fdi == fdi) {
+                e.nent -= 1;
+                e.ents[i] = e.ents[e.nent];
+                return 0;
+            }
+        }
+        return -2; // ENOENT
+    }
+    if (op != 1 and op != 2) return -22;
+    var evb: [12]u8 = undefined;
+    if (copyFromUser(c, @intCast(evva), &evb) < 12) return -14;
+    const ev = std.mem.readInt(u32, evb[0..4], .little);
+    const data = std.mem.readInt(u64, evb[4..12], .little);
+    if (op == 1) { // ADD
+        var i: usize = 0;
+        while (i < e.nent) : (i += 1)
+            if (e.ents[i].fdi == fdi) return -17; // EEXIST
+        if (e.nent >= MAXPOLLFDS) return -28; // ENOSPC
+        e.ents[e.nent] = .{ .fdi = @intCast(fdi), .ev = @intCast(ev), .data = data };
+        e.nent += 1;
+        return 0;
+    }
+    // MOD — must exist
+    var i: usize = 0;
+    while (i < e.nent) : (i += 1) {
+        if (e.ents[i].fdi == fdi) {
+            e.ents[i].ev = @intCast(ev);
+            e.ents[i].data = data;
+            return 0;
+        }
+    }
+    return -2;
+}
+
+// Readiness of an epoll object = any interest entry that would fire —
+// depth-capped because epoll may legally nest (ELOOP lives at depth).
+fn epollReady(c: *Child, idx: usize, depth: u4) bool {
+    if (depth >= 5) return false;
+    const e = &epolls[idx];
+    var i: usize = 0;
+    while (i < e.nent) : (i += 1) {
+        const t = e.ents[i].fdi;
+        if (c.fdkinds[t] == .epoll) {
+            if (epollReady(c, @intCast(c.fds[t] - 1), depth + 1)) return true;
+        } else if (fdPollRev(c, t, e.ents[i].ev) != 0) return true;
+    }
+    return false;
+}
+
+// epoll_wait(epfd, events, maxevents, timeout_ms) — same shape as
+// childPoll: a scan, a deadline, a .poll continuation between them.
+fn childEpollWait(c: *Child, epfdu: u64, evva: u64, maxev: u64, tmo: i64) i64 {
+    if (epfdu >= c.fds.len or c.fdkinds[@intCast(epfdu)] != .epoll) return -9;
+    if (maxev == 0 or maxev > MAXPOLLFDS) return -22;
+    const e = &epolls[@intCast(c.fds[@intCast(epfdu)] - 1)];
+    const deadline: u64 = if (tmo < 0) std.math.maxInt(u64)
+        else irq_ticks + pollDeadlineTicks(tmo);
+    while (true) {
+        var n: i64 = 0;
+        var i: usize = 0;
+        while (i < e.nent and n < @as(i64, @intCast(maxev))) : (i += 1) {
+            const rev = fdPollRev(c, e.ents[i].fdi, e.ents[i].ev);
+            if (rev != 0) {
+                var eb: [12]u8 = undefined;
+                std.mem.writeInt(u32, eb[0..4], rev, .little);
+                std.mem.writeInt(u64, eb[4..12], e.ents[i].data, .little);
+                if (copyToUser(c, @intCast(evva + @as(u64, @intCast(n)) * 12), &eb) < 12) return -14;
+                n += 1;
+            }
+        }
+        if (n != 0) return n;
+        if (irq_ticks >= deadline) return 0;
+        kblock(.poll);
+    }
+}
+
+// nr 284/290 eventfd(2) — a counted semaphore as an fd: read drains
+// (or decrements under EFD_SEMAPHORE), write accumulates; readiness
+// is counter!=0. libwayland-server's wl_display_create mints one as
+// its terminate_efd — the loop's wakeup channel for wl_display_terminate.
+const NEFD = 8;
+const EFD_MAX: u64 = 0xFFFFFFFFFFFFFFFE;
+const Efd = struct {
+    refs: u32 = 0,
+    val: u64 = 0,
+    nonblock: u8 = 0,
+    sem: u8 = 0,
+};
+var efds: [NEFD]Efd = .{Efd{}} ** NEFD;
+
+fn efdFree(idx: usize) void {
+    const e = &efds[idx];
+    if (e.refs > 0) e.refs -= 1;
+    if (e.refs == 0) e.* = .{};
+}
+
+fn childEventfd(c: *Child, initval: u64, flags: u64) i64 {
+    // EFD_SEMAPHORE=0x1, EFD_NONBLOCK=0x800, EFD_CLOEXEC=0x80000 —
+    // cloexec rides no flag state here (the fcntl fold's ruling); any
+    // other bit refuses by name.
+    if (flags & ~@as(u64, 0x80801) != 0) {
+        say("SEAM REFUSE eventfd flags=");
+        puthex(flags);
+        say(" (unknown bits)\n");
+        return -22;
+    }
+    var fd: ?usize = null;
+    for (c.fds, 0..) |v, i| if (v == 0 and c.fdkinds[i] == .none) {
+        fd = i;
+        break;
+    };
+    const fdi = fd orelse return -24;
+    for (&efds, 0..) |*e, i| if (e.refs == 0) {
+        e.* = .{ .refs = 1, .val = initval,
+                 .nonblock = @intFromBool(flags & 0x800 != 0),
+                 .sem = @intFromBool(flags & 1 != 0) };
+        c.fds[fdi] = i + 1;
+        c.fdkinds[fdi] = .efd;
+        c.fdverbs[fdi] = V_READ | V_WRITE;
+        return @intCast(fdi);
+    };
+    return -24;
+}
+
+fn childEfdRead(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdx < 8) return -22; // EINVAL — a counter read is one u64
+    const e = &efds[@intCast(c.fds[@intCast(f.rdi)] - 1)];
+    while (true) {
+        if (e.val != 0) {
+            var eb: [8]u8 = undefined;
+            std.mem.writeInt(u64, &eb, if (e.sem != 0) 1 else e.val, .little);
+            if (copyToUser(c, @intCast(f.rsi), &eb) < 8) return -14;
+            if (e.sem != 0) e.val -= 1 else e.val = 0;
+            return 8;
+        }
+        if (e.nonblock != 0) return -11; // EAGAIN
+        if (userEntry(c, @intCast(f.rsi)) & 1 == 0) return -14;
+        kblock(.efd);
+    }
+}
+
+fn childEfdWrite(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdx < 8) return -22;
+    var eb: [8]u8 = undefined;
+    if (copyFromUser(c, @intCast(f.rsi), &eb) < 8) return -14;
+    const add = std.mem.readInt(u64, &eb, .little);
+    if (add == 0xFFFFFFFFFFFFFFFF) return -22; // linux refuses the max
+    const e = &efds[@intCast(c.fds[@intCast(f.rdi)] - 1)];
+    while (true) {
+        if (add <= EFD_MAX - e.val) {
+            e.val += add;
+            wakeKind(.efd);
+            return 8;
+        }
+        if (e.nonblock != 0) return -11;
+        kblock(.efd);
+    }
+}
+
 fn shmRelease(idx: usize) void {
     const s = &shms[idx];
     if (s.refs > 0) s.refs -= 1;
@@ -2629,6 +2864,8 @@ fn releaseFd(c: *Child, i: usize) void {
         .shm => shmRelease(@intCast(c.fds[i] - 1)),
         .surf => surfRefFree(@intCast(c.fds[i] - 1)),
         .input => inputFree(@intCast(c.fds[i] - 1)),
+        .epoll => epollFree(@intCast(c.fds[i] - 1)),
+        .efd => efdFree(@intCast(c.fds[i] - 1)),
         .conin, .conout => {},
     }
     c.fds[i] = 0;
@@ -2659,6 +2896,8 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
         .shm => shms[@intCast(src.fds[sfd] - 1)].refs += 1,
         .surf => surfs[@intCast(src.fds[sfd] - 1)].refs += 1,
         .input => ins[@intCast(src.fds[sfd] - 1)] += 1,
+        .epoll => epolls[@intCast(src.fds[sfd] - 1)].refs += 1,
+        .efd => efds[@intCast(src.fds[sfd] - 1)].refs += 1,
         .fs => {
             const ops = src.fsv orelse return false;
             const nh = ops.dup(ops.ctx, src.fds[sfd]);
@@ -2723,6 +2962,7 @@ fn childSocketpair(c: *Child, svva: u64) i64 {
     }
     if (sn < 2) return -24; // EMFILE
     const pi = sockPairCreate(true) orelse return -24;
+    socks[pi].owner = .{ @intCast(cur_child + 1), @intCast(cur_child + 1) };
     var out: [8]u8 = undefined;
     for (0..2) |i| std.mem.writeInt(u32, out[i * 4 ..][0..4], @intCast(slots[i]), .little);
     if (copyToUser(c, @intCast(svva), &out) < 8) {
@@ -2770,6 +3010,7 @@ fn childSocket(c: *Child, f: *TrapFrame) i64 {
     const slot = sockSlot(c) orelse return -24; // EMFILE
     const pi = sockPairCreate(false) orelse return -24;
     socks[pi].refs[1] = 0; // no peer until connect grafts a session
+    socks[pi].owner[0] = @intCast(cur_child + 1);
     c.fdkinds[slot] = .sock;
     c.fds[slot] = pi * 2 + 1;
     c.fdverbs[slot] = V_READ | V_WRITE;
@@ -2858,6 +3099,7 @@ fn childConnect(c: *Child, f: *TrapFrame) i64 {
             // The unconnected placeholder pair dies; this fd now
             // projects the client end of the queued session.
             sockCloseEnd(op, @intCast(v & 1));
+            socks[npi].owner[0] = @intCast(cur_child + 1);
             c.fds[fd] = npi * 2 + 1;
             return 0;
         }
@@ -2899,6 +3141,8 @@ fn childAccept(c: *Child, f: *TrapFrame) i64 {
                 return -24;
             };
             const v = pv - 1;
+            socks[@intCast(v >> 1)].owner[@intCast(v & 1)] =
+                @intCast(cur_child + 1);
             c.fdkinds[slot] = .sock;
             c.fds[slot] = v + 1;
             c.fdverbs[slot] = V_READ | V_WRITE;
@@ -2907,6 +3151,33 @@ fn childAccept(c: *Child, f: *TrapFrame) i64 {
         c.wait_pipe = ACCEPT_KEY + li;
         kblock(.sock); // wake = a queued session or the listener dying
     }
+}
+
+// nr 55 — getsockopt(fd, level, optname, optval, optlen): one fact is
+// served — SOL_SOCKET/SO_PEERCRED, the peer identity libwayland-server
+// asks for at wl_client_create. ucred is {pid, uid, gid}: one identity
+// realm, uid=gid=0, pid is the peer side's minting child's roster id.
+// Every other option refuses ENOPROTOOPT — a socket fact we do not
+// name is a refusal, not a zero.
+fn childGetsockopt(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdi >= c.fds.len) return -9;
+    const fd: usize = @intCast(f.rdi);
+    if (c.fdkinds[fd] != .sock) return -88; // ENOTSOCK
+    if (f.rsi != 1 or f.rdx != 17) return -92; // SOL_SOCKET/SO_PEERCRED only
+    var lb: [4]u8 = undefined;
+    if (copyFromUser(c, @intCast(f.r8), &lb) < 4) return -14;
+    if (std.mem.readInt(u32, &lb, .little) < 12) return -22;
+    const v = c.fds[fd] - 1;
+    const owner = socks[@intCast(v >> 1)].owner[@intCast((v & 1) ^ 1)];
+    if (owner == 0) return -22; // no peer minted yet — EINVAL like linux
+    var ub: [12]u8 = undefined;
+    std.mem.writeInt(i32, ub[0..4], @intCast(owner), .little);
+    std.mem.writeInt(u32, ub[4..8], 0, .little);
+    std.mem.writeInt(u32, ub[8..12], 0, .little);
+    if (copyToUser(c, @intCast(f.r10), &ub) < 12) return -14;
+    std.mem.writeInt(u32, &lb, 12, .little);
+    if (copyToUser(c, @intCast(f.r8), &lb) < 4) return -14;
+    return 0;
 }
 
 // nr 7 poll / nr 271 ppoll — readiness multiplexing, not a new wait:
@@ -2969,6 +3240,15 @@ fn fdPollRev(c: *Child, fdi: usize, ev: u16) u16 {
         .surf => r |= ev & POLLOUT,
         .input => {
             if (ev & POLLIN != 0 and koruos_input_pending() != 0) r |= POLLIN;
+        },
+        .epoll => {
+            if (ev & POLLIN != 0 and
+                epollReady(c, @intCast(c.fds[fdi] - 1), 0)) r |= POLLIN;
+        },
+        .efd => {
+            const e = &efds[@intCast(c.fds[fdi] - 1)];
+            if (ev & POLLIN != 0 and e.val != 0) r |= POLLIN;
+            if (ev & POLLOUT != 0 and e.val < EFD_MAX) r |= POLLOUT;
         },
         .none => return POLLNVAL,
     }
@@ -3612,6 +3892,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     // the POSIX refusal for a bad-mode write.
                     .fs => f.rax = @bitCast(if (c.fdverbs[fdi] & V_WRITE != 0)
                         childWrite(c, fdi, f.rsi, f.rdx) else -9),
+                    .efd => f.rax = @bitCast(childEfdWrite(c, f)),
                     else => f.rax = @bitCast(@as(i64, -9)),
                 }
             }
@@ -3769,6 +4050,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 const fdi: usize = @intCast(f.rdi);
                 f.rax = @bitCast(switch (c.fdkinds[fdi]) {
                     .input => childInputRead(c, f),
+                    .efd => childEfdRead(c, f),
                     .conin => coninRead(c, f),
                     .fs => if (c.fdverbs[fdi] & V_READ != 0)
                         childRead(c, f.rdi, f.rsi, f.rdx) else -9,
@@ -3853,6 +4135,28 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @bitCast(if (bad != 0) bad else childPoll(c, f.rdi, f.rsi, ms));
             }
         },
+        213, 291 => { // epoll_create(size)/epoll_create1(flags) — the
+                      // interest-list object; flags carry CLOEXEC which
+                      // means nothing until an exec keeps the table
+            f.rax = @bitCast(childEpollCreate(c));
+        },
+        233 => { // epoll_ctl(epfd, op, fd, event) — interest-list verbs
+            f.rax = @bitCast(childEpollCtl(c, f.rdi, f.rsi, f.rdx, f.r10));
+        },
+        232, 281 => { // epoll_wait/epoll_pwait(epfd, events, maxevents,
+                      // timeout [, sigmask, sigsetsize]) — musl issues
+                      // the pwait nr for plain epoll_wait; the mask arg
+                      // is inert — no signals exist (arm-14's ruling)
+            const ms: i64 = @as(i32, @bitCast(@as(u32, @truncate(f.r10))));
+            f.rax = @bitCast(childEpollWait(c, f.rdi, f.rsi, f.rdx, ms));
+        },
+        284, 290 => { // eventfd(initval)/eventfd2(initval, flags) — a
+                      // counted semaphore as an fd; terminate_efd is one
+            f.rax = @bitCast(childEventfd(c, f.rdi, if (f.rax == 290) f.rsi else 0));
+        },
+        55 => { // getsockopt(fd, level, optname, optval, optlen)
+            f.rax = @bitCast(childGetsockopt(c, f));
+        },
         77 => { // ftruncate(fd, len) — sizes shm objects (grow, zero)
             f.rax = @bitCast(childFtruncate(c, f.rdi, f.rsi));
         },
@@ -3926,6 +4230,18 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     },
                     .input => {
                         inputFree(@intCast(c.fds[fd] - 1));
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .epoll => {
+                        epollFree(@intCast(c.fds[fd] - 1));
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .efd => {
+                        efdFree(@intCast(c.fds[fd] - 1));
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
                         f.rax = 0;

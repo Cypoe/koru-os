@@ -66,6 +66,28 @@ injector chasing serial evidence watched a fully-buffered stdout that
 only flushed at exit — `setvbuf(_IONBF)` is evidence hygiene, not
 cosmetics.
 
+Evolution (libwayland-server rung) — **the protocol stack is inert**:
+swapping the compositor's wire implementation for vendored upstream
+libwayland-server 1.26 (real `wl_display`/`wl_global`/`wl_resource`
+impls, real demarshal, real `wl_shm` via `wl_display_init_shm`)
+changed nothing about where the privilege lives. The library owns
+object tables, dispatch, and the shm pool lifecycle; the seam still
+owns the scene caps (59) and the input cap (55) — and the resource
+callbacks are the only place those caps get spent. A real compositor
+binary is a *capability-spending policy body over a shared protocol
+library*, which is exactly the wlroots/swayweston shape. What the
+stack actually cost the kernel was channel-layer, not
+compositor-layer: `epoll_*`+`epoll_pwait` and `eventfd(2)` fold into
+class 22 ("may wait on channels") — an interest list and a counted
+semaphore are channels a non-compositor may also hold — and
+`getsockopt(SO_PEERCRED)` answered by `SockPair` sides remembering
+their minter's roster id. Fixture lesson paid for: **a session count
+captured before `wl_event_loop_dispatch` is stale the moment the loop
+runs** — accept mints and EOS frees *inside* dispatch; a compositor
+that decides quiescence from the pre-dispatch count kills the client
+it just accepted (EOS with no log, since the only destroy paths that
+log are wire errors).
+
 Evolution (xdg_shell rung) — the privilege's third member is **role
 adjudication**: a bare `wl_surface` is not a lawful scene object.
 `xdg_wm_base` is the role factory a real client binds; a toplevel
@@ -100,3 +122,11 @@ client's `xdg_toplevel.move` (`WLSRV tl-move slot=N`) and the grab
 prints `WLSRV move 160,155`; the screendump reads `adbeef`/`c0ffee`
 at the MOVED rect with both original tiles black. Boot gate `wlscene`
 + `wlscene-pixels` rows — pixels, not serial, are the oracle.
+Post-swap evidence: the same `wlserver.elf` now drives sessions
+through real libwayland-server — `epoll_pwait`-paced dispatch fires
+`wl_client_create` (SO_PEERCRED answered) on the accepted fd, the
+library's own registry emits all four globals, `wl_shm` is the
+library's v2 global, and unmodified libwayland-client 1.26 fixtures
+complete registry→xdg→commit→frame→release→EOS unchanged; the
+injected-input → per-focus pointer/key → nr519-drag → moved-rect
+pixel chain survives the swap untouched.

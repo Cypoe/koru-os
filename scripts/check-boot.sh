@@ -750,7 +750,8 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/objt.elf" "$WORK/objt.c" > "$WORK/objt.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wtest.elf" "$WORK/wtest.c" > "$WORK/wtest.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlpair.elf" "$WORK/wlpair.c" > "$WORK/wlpair.build" 2>&1 \
-           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlserver.elf" "$WORK/wlserver.c" > "$WORK/wlserver.build" 2>&1 \
+           && WLHOST="$ROOT/koru/hosted/wayland" \
+           && "$ZIGBIN" cc -O2 -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -I"$WLHOST" -I"$WLHOST/libffi" -I"$WLHOST/src" -DHAVE_CONFIG_H -o "$WORK/wlserver.elf" "$WORK/wlserver.c" "$WLHOST/src/wayland-server.c" "$WLHOST/src/event-loop.c" "$WLHOST/src/wayland-shm.c" "$WLHOST/src/connection.c" "$WLHOST/src/wayland-os.c" "$WLHOST/src/wayland-util.c" "$WLHOST/wayland-protocol.c" "$WLHOST/xdg-shell-protocol.c" "$WLHOST/libffi/libffi.a" > "$WORK/wlserver.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlclient.elf" "$WORK/wlclient.c" > "$WORK/wlclient.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlinit.elf" "$WORK/wlinit.c" > "$WORK/wlinit.build" 2>&1 \
            && WLHOST="$ROOT/koru/hosted/wayland" \
@@ -867,11 +868,11 @@ else
                && grep -qE "WLCLI connected tries=[0-9]+" "$WORK/boot_wl.serial" \
                && grep -qE "WLSRV accepted fd=[0-9]+" "$WORK/boot_wl.serial" \
                && grep -qF "WLCLI global 1 wl_compositor v4" "$WORK/boot_wl.serial" \
-               && grep -qF "WLCLI global 2 wl_shm v1" "$WORK/boot_wl.serial" \
+               && grep -qF "WLCLI global 2 wl_shm v2" "$WORK/boot_wl.serial" \
                && grep -qF "WLSRV magic=deadbeef tag=00c0ffee px0=5a" "$WORK/boot_wl.serial" \
                && grep -qF "WLCLI frame done=42" "$WORK/boot_wl.serial" \
                && grep -qF "WLCLI buffer release" "$WORK/boot_wl.serial" \
-               && grep -qF "WLCLI sync done=43 framed=1 rel=1" "$WORK/boot_wl.serial" \
+               && grep -qF "WLCLI sync done=0 framed=1 rel=1" "$WORK/boot_wl.serial" \
                && grep -qF "WLSRV EOS" "$WORK/boot_wl.serial" \
                && grep -qF "WLINIT srv=0 cli=0" "$WORK/boot_wl.serial"; then
                 ok "wlsock: path endpoint carried real wl wire — mknod/bind/accept, shm pool via SCM_RIGHTS, commit->done, release, sync"
@@ -894,7 +895,7 @@ else
                && grep -qF "WLSRV input open" "$WORK/boot_wlr.serial" \
                && grep -qE "WLR connected tries=[0-9]+" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR global 1 wl_compositor v4" "$WORK/boot_wlr.serial" \
-               && grep -qF "WLR global 2 wl_shm v1" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR global 2 wl_shm v2" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR global 3 wl_seat v7" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR global 4 xdg_wm_base v1" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR seat caps 3" "$WORK/boot_wlr.serial" \
@@ -906,7 +907,7 @@ else
                && grep -qF "WLSRV magic=deadbeef tag=00c0ffee px0=5a" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR frame done=42" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR buffer release" "$WORK/boot_wlr.serial" \
-               && grep -qF "WLR sync done=43" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR sync done=0" "$WORK/boot_wlr.serial" \
                && grep -qF "WLSRV EOS" "$WORK/boot_wlr.serial" \
                && grep -qF "WLRINIT srv=0 cli=0,0" "$WORK/boot_wlr.serial"; then
                 ok "wlreal: 2x UNMODIFIED libwayland-client 1.26 + libffi — connect/registry/shm/seat caps/xdg_shell role-handshake (configure+ack+ping)/keymap-fd/ppoll/SCM_RIGHTS/frame-done/sync, headless-safe"
