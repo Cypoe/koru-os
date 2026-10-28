@@ -6,8 +6,11 @@
 // fs view, ppoll() in the dispatch loop, recvmsg MSG_DONTWAIT, real
 // SCM_RIGHTS fd passing, fcntl F_DUPFD on the incoming pool fd — the
 // same syscalls a linux client makes, answered by the koru seam.
-// The session is the canonical one, now WITH A SEAT: registry globals
-// → compositor+shm+seat binds → shm formats → surface → memfd pool
+// The session is the canonical one, WITH SEAT + XDG_SHELL: registry
+// globals → compositor+shm+seat+xdg_wm_base binds → ping/pong → shm
+// formats → surface → get_xdg_surface/get_toplevel + title/app_id →
+// EMPTY role commit → toplevel+xsurface configure → ack_configure →
+// memfd pool
 // (fd crosses ancillary) → buffer → attach/damage/frame/commit →
 // callback.done + release → display.sync roundtrip → then a bounded
 // dispatch loop collecting wl_pointer enter/motion/button and
@@ -24,6 +27,7 @@
 #include <unistd.h>
 #include "wayland-client.h"
 #include "wayland-client-protocol.h"
+#include "xdg-shell-client-protocol.h"
 
 static int memfd_create(const char *name, unsigned flags) {
     return (int)syscall(319, name, flags);
@@ -32,8 +36,12 @@ static int memfd_create(const char *name, unsigned flags) {
 static struct wl_compositor *comp;
 static struct wl_shm *shm;
 static struct wl_seat *seat;
+static struct xdg_wm_base *wmb;
 static int fmt_argb, fmt_xrgb;
+static struct xdg_toplevel *top;             // declared early — the
+                                             // pointer listener moves it
 static const struct wl_seat_listener seat_l; // tentative — defined below
+static const struct xdg_wm_base_listener wmb_l;
 
 static void reg_global(void *d, struct wl_registry *r, uint32_t name,
                        const char *iface, uint32_t ver) {
@@ -51,6 +59,13 @@ static void reg_global(void *d, struct wl_registry *r, uint32_t name,
         // the listener must be attached inside the callback or the
         // first caps event is dispatched listenerless and dropped.
         wl_seat_add_listener(seat, &seat_l, NULL);
+    }
+    else if (strcmp(iface, "xdg_wm_base") == 0) {
+        wmb = (struct xdg_wm_base *)wl_registry_bind(r, name,
+                &xdg_wm_base_interface, 1);
+        // ping can land on the same roundtrip as the bind — attach at
+        // bind like seat caps or the first ping dies listenerless.
+        xdg_wm_base_add_listener(wmb, &wmb_l, NULL);
     }
 }
 static void reg_remove(void *d, struct wl_registry *r, uint32_t name) {}
@@ -109,6 +124,11 @@ static void ptr_button(void *d, struct wl_pointer *p, uint32_t ser,
                        uint32_t t, uint32_t btn, uint32_t st) {
     got_button = 1;
     printf("WLR ptr button %u %u\n", btn, st);
+    // the client-initiated drag: a press ON our toplevel is what a
+    // real client answers with xdg_toplevel.move(seat, press-serial) —
+    // the compositor then owns the grab until release.
+    if (st == 1 && top)
+        xdg_toplevel_move(top, seat, ser);
 }
 static void ptr_frame(void *d, struct wl_pointer *p) {}
 static const struct wl_pointer_listener ptr_l = {
@@ -143,6 +163,36 @@ static const struct wl_keyboard_listener kbd_l = {
     .key = kbd_key, .modifiers = kbd_mods, .repeat_info = kbd_rep,
 };
 
+// ---- xdg_shell: the role contract real clients actually speak ------
+// wm_base ping -> pong (liveness), xsurface.configure -> ack + flag;
+// a buffer commit before the ack would be a protocol violation the
+// compositor names loudly — the ack rides inside the listener so it
+// always precedes our attach on the wire.
+static uint32_t confser;
+static void wmb_ping(void *d, struct xdg_wm_base *b, uint32_t ser) {
+    xdg_wm_base_pong(b, ser);
+    printf("WLR pong %u\n", ser);
+}
+static const struct xdg_wm_base_listener wmb_l = { .ping = wmb_ping };
+
+static void xsurf_conf(void *d, struct xdg_surface *s, uint32_t ser) {
+    confser = ser;
+    xdg_surface_ack_configure(s, ser);
+    printf("WLR xsurf conf ser=%u\n", ser);
+}
+static const struct xdg_surface_listener xsurf_l = {
+    .configure = xsurf_conf,
+};
+
+static void top_conf(void *d, struct xdg_toplevel *t, int32_t w,
+                     int32_t h, struct wl_array *states) {
+    printf("WLR toplevel conf %dx%d\n", w, h);
+}
+static void top_close(void *d, struct xdg_toplevel *t) {}
+static const struct xdg_toplevel_listener top_l = {
+    .configure = top_conf, .close = top_close,
+};
+
 int main(void) {
     setvbuf(stdout, 0, _IONBF, 0); // evidence in real time, not at exit
     // An absolute display name skips XDG_RUNTIME_DIR entirely (the lib
@@ -168,8 +218,11 @@ int main(void) {
     wl_registry_add_listener(reg, &reg_l, NULL);
     wl_display_roundtrip(dpy);            // globals arrive — ppoll +
                                           // recvmsg inside libwayland
-    if (!comp || !shm || !seat) { printf("WLR FAIL globals c=%p s=%p t=%p\n",
-                              (void *)comp, (void *)shm, (void *)seat); return 1; }
+    if (!comp || !shm || !seat || !wmb) {
+        printf("WLR FAIL globals c=%p s=%p t=%p x=%p\n",
+               (void *)comp, (void *)shm, (void *)seat, (void *)wmb);
+        return 1;
+    }
     wl_shm_add_listener(shm, &shm_l, NULL);
     wl_display_roundtrip(dpy);            // format events
     if (!fmt_argb || !fmt_xrgb) { printf("WLR FAIL fmt\n"); return 1; }
@@ -184,6 +237,19 @@ int main(void) {
     wl_display_roundtrip(dpy);            // caps + keymap fd land here
 
     struct wl_surface *surf = wl_compositor_create_surface(comp);
+    // the role: bare wl_surface is NOT how real clients exist — a
+    // toplevel must be negotiated before the first buffer lands.
+    // get_xdg_surface -> get_toplevel -> metadata -> an EMPTY commit
+    // (the role handshake) -> the compositor's configure pair -> ack.
+    struct xdg_surface *xsurf = xdg_wm_base_get_xdg_surface(wmb, surf);
+    xdg_surface_add_listener(xsurf, &xsurf_l, NULL);
+    top = xdg_surface_get_toplevel(xsurf);
+    xdg_toplevel_add_listener(top, &top_l, NULL);
+    xdg_toplevel_set_title(top, "wlreal");
+    xdg_toplevel_set_app_id(top, "wlreal");
+    wl_surface_commit(surf);              // role commit — no buffer
+    wl_display_roundtrip(dpy);            // toplevel+xsurf configure
+    if (!confser) { printf("WLR FAIL no-configure\n"); return 1; }
     // the pool must actually hold the buffer it backs: 64*64*4 ARGB —
     // a short pool is a mapping hole past page 0 (the commit-blit is
     // what first walks the full declared geometry).
@@ -246,6 +312,9 @@ int main(void) {
     }
     printf("WLR seen enter=%d btn=%d key=%d\n", got_enter, got_button, got_key);
     printf("WLR COMPLETE\n");
+    xdg_toplevel_destroy(top);            // role objects die in order —
+    xdg_surface_destroy(xsurf);           // toplevel, then xsurface,
+    wl_surface_destroy(surf);             // then the bare surface
     wl_display_disconnect(dpy);           // last close → server EOS
     return 0;
 }

@@ -66,15 +66,37 @@ injector chasing serial evidence watched a fully-buffered stdout that
 only flushed at exit — `setvbuf(_IONBF)` is evidence hygiene, not
 cosmetics.
 
+Evolution (xdg_shell rung) — the privilege's third member is **role
+adjudication**: a bare `wl_surface` is not a lawful scene object.
+`xdg_wm_base` is the role factory a real client binds; a toplevel
+exists only after the handshake — the client's initial buffer-less
+commit is answered by `toplevel.configure` + `xsurface.configure`
+(serial), and a buffer commit is lawful to present only after
+`ack_configure`. An unacked buffer commit is a protocol violation the
+compositor names and refuses to present — the seam's loud-refusal
+discipline now lives inside userland protocol, not just at syscalls.
+Placement gained its client-initiated form: `xdg_toplevel.move` is a
+request the compositor OWNS — it binds the grab to the requesting
+surface until release, the same drag the compositor can start on its
+own binding. And liveness is a channel, not a hope: `ping`/`pong` is
+the compositor's death clock for a session. The client side carries
+the mirror lesson: **wire truth lives in the generated tables, not
+memory** — an opcode remembered as 4 when the protocol says 5 is a
+request that parses as a different request entirely (`move` arriving
+as `show_window_menu` reads as silence, not an error).
+
 Evidence: `wlserver.elf`'s commit handler drives the real scene —
 `comp: attach 64x64 at 40,40`, `surf: open`, `paint nb=3` (the
 composited stack), `detach` + reveal on EOS-close — and the
 screendump at the serial-printed anchor reads the client's pixels off
 the virtio-gpu scanout: `adbeef` at (0,0), `c0ffee` at (1,0), `5a` in
 (0,1)'s blue, black root outside. Two libwayland clients, two
-*Surfs; injected `mouse_move`/`mouse_button`/`sendkey` land as
-`ptr enter/motion/button` and `kbd key` on the focused session only,
-a drag prints `WLSRV move 160,155`, and the screendump reads
-`adbeef`/`c0ffee` at the MOVED rect with both original tiles black.
-Boot gate `wlscene` + `wlscene-pixels` rows — pixels, not serial,
-are the oracle.
+*Surfs — each through the full xdg handshake: `ping`/`pong`,
+`toplevel configure ser=N` → `WLR xsurf conf` → `ack N` → buffer
+commit → slot mint → `blit=0/0 present=0/0`. Injected
+`mouse_move`/`mouse_button`/`sendkey` land as `ptr enter/motion/
+button` and `kbd key` on the focused session only; a press lands the
+client's `xdg_toplevel.move` (`WLSRV tl-move slot=N`) and the grab
+prints `WLSRV move 160,155`; the screendump reads `adbeef`/`c0ffee`
+at the MOVED rect with both original tiles black. Boot gate `wlscene`
++ `wlscene-pixels` rows — pixels, not serial, are the oracle.

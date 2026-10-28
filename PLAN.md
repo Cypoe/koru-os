@@ -699,9 +699,16 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
             wlreal binds the seat through UNMODIFIED libwayland —
             two clients, two *Surfs, injected pointer/key events reach
             the focused session only; screendump evidence: deadbeef at
-            the DRAGGED rect (160,155), vacated tiles black — still
-            open: xdg_shell+toplevel (real clients don't speak bare
-            wl_surface), decor, clipboard
+            the DRAGGED rect (160,155), vacated tiles black; XDG_SHELL
+            LANDED — xdg_wm_base v1 global (ping/pong liveness), the
+            toplevel role handshake: initial empty commit answered by
+            toplevel.configure + xsurface.configure(serial), buffer
+            commits lawful only after ack_configure (unacked = loud
+            protocol violation, pixels never ride the scene), title/
+            app_id parsed, xdg_toplevel.move binds the drag grab to
+            the requesting surface — the client-initiated form of the
+            same compositor-owned placement — still open: popups,
+            window states, decor, clipboard
             → Hyprland/Noctalia oracle harness over the real scene
 ```
 

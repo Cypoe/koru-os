@@ -754,7 +754,7 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlclient.elf" "$WORK/wlclient.c" > "$WORK/wlclient.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlinit.elf" "$WORK/wlinit.c" > "$WORK/wlinit.build" 2>&1 \
            && WLHOST="$ROOT/koru/hosted/wayland" \
-           && "$ZIGBIN" cc -O2 -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -I"$WLHOST" -I"$WLHOST/libffi" -DHAVE_CONFIG_H -o "$WORK/wlreal.elf" "$WORK/wlreal.c" "$WLHOST/src/connection.c" "$WLHOST/src/wayland-client.c" "$WLHOST/src/wayland-os.c" "$WLHOST/src/wayland-util.c" "$WLHOST/wayland-client-protocol.c" "$WLHOST/libffi/libffi.a" > "$WORK/wlreal.build" 2>&1 \
+           && "$ZIGBIN" cc -O2 -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -I"$WLHOST" -I"$WLHOST/libffi" -DHAVE_CONFIG_H -o "$WORK/wlreal.elf" "$WORK/wlreal.c" "$WLHOST/src/connection.c" "$WLHOST/src/wayland-client.c" "$WLHOST/src/wayland-os.c" "$WLHOST/src/wayland-util.c" "$WLHOST/wayland-client-protocol.c" "$WLHOST/xdg-shell-protocol.c" "$WLHOST/libffi/libffi.a" > "$WORK/wlreal.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlrinit.elf" "$WORK/wlrinit.c" > "$WORK/wlrinit.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
@@ -896,15 +896,20 @@ else
                && grep -qF "WLR global 1 wl_compositor v4" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR global 2 wl_shm v1" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR global 3 wl_seat v7" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR global 4 xdg_wm_base v1" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR seat caps 3" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR kbd keymap fmt=1" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLSRV toplevel configure ser=" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR xsurf conf ser=" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLSRV ack " "$WORK/boot_wlr.serial" \
+               && grep -qF "WLSRV pong " "$WORK/boot_wlr.serial" \
                && grep -qF "WLSRV magic=deadbeef tag=00c0ffee px0=5a" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR frame done=42" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR buffer release" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR sync done=43" "$WORK/boot_wlr.serial" \
                && grep -qF "WLSRV EOS" "$WORK/boot_wlr.serial" \
                && grep -qF "WLRINIT srv=0 cli=0,0" "$WORK/boot_wlr.serial"; then
-                ok "wlreal: 2x UNMODIFIED libwayland-client 1.26 + libffi — connect/registry/shm/seat caps/keymap-fd/ppoll/SCM_RIGHTS/frame-done/sync, headless-safe"
+                ok "wlreal: 2x UNMODIFIED libwayland-client 1.26 + libffi — connect/registry/shm/seat caps/xdg_shell role-handshake (configure+ack+ping)/keymap-fd/ppoll/SCM_RIGHTS/frame-done/sync, headless-safe"
             else
                 bad "wlreal: evidence missing: $(grep -aE 'WLR|WLSRV|FAIL|REFUSE|EXC' "$WORK/boot_wlr.serial" | tail -8 | tr '\n' '|')"
             fi
@@ -983,6 +988,7 @@ else
                && grep -qF "WLR ptr motion" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLR ptr button 272 1" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLR kbd key 30 1" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLSRV tl-move" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLSRV move 160,155" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLR kbd key 48 1" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLSRV surf released slot=0" "$WORK/boot_wlscene.serial" \

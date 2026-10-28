@@ -3,7 +3,13 @@
 // the backlog, accept() pops queued session ends — then a poll loop
 // multiplexes {listener, input fd, every client conn}. stdout is fd1.
 //
-// Serves: registry globals (wl_compositor v4, wl_shm v1, wl_seat v7),
+// Serves: registry globals (wl_compositor v4, wl_shm v1, wl_seat v7,
+// xdg_wm_base v1 — ping/pong liveness, get_xdg_surface, the toplevel
+// role handshake: initial empty commit -> toplevel.configure +
+// xsurface.configure(serial) -> ack required before a buffer commit
+// presents; unacked buffer commits are loud protocol violations and
+// do not ride the scene; xdg_toplevel.move binds the grab to that
+// surface until release — the client-initiated form of the drag),
 // shm formats, surface/shm_pool/buffer objects, attach+damage+frame+
 // commit answered by callback.done + buffer.release, display sync,
 // and a SEAT: capabilities on bind, wl_pointer enter/leave/motion/
@@ -67,9 +73,16 @@ struct scsurf {
     uint32_t x, y, w, h;
 };
 
-// a client's surface slot: wire objects + the pool it commits from
+// a client's surface slot: wire objects + the pool it commits from.
+// xsurf/top are the xdg_shell role objects — the role contract: an
+// initial empty commit after get_toplevel is answered by a configure
+// pair; the client must ack_configure before its buffer commit is
+// lawful to present. attached marks a real buffer landed via
+// surface.attach (a bare role-commit carries none).
 struct csurf {
     uint32_t surf, buf, pool, cb;
+    uint32_t xsurf, top, confser, acked;
+    int attached;
     int poolfd, poolsize, surfix;   // surfix: index into scs[], -1 none
     unsigned char *map;
     uint32_t boff, bw, bh, bstride;
@@ -78,7 +91,7 @@ struct csurf {
 struct cl {
     struct wlconn cn;
     int dead;
-    uint32_t reg, comp, shm, seat, ptr, kbd;
+    uint32_t reg, comp, shm, seat, ptr, kbd, wmb;
     struct csurf S;
 };
 
@@ -273,9 +286,9 @@ static void dispatch(struct cl *c) {
     if (oid == 1 && op == 1) {              // display.get_registry(new_id)
         c->reg = wl_arg(msg, 0);
         static const char *const gname[] = {
-            "wl_compositor", "wl_shm", "wl_seat" };
-        static const uint32_t gver[] = { 4, 1, 7 };
-        for (uint32_t i = 0; i < 3; i++) {
+            "wl_compositor", "wl_shm", "wl_seat", "xdg_wm_base" };
+        static const uint32_t gver[] = { 4, 1, 7, 1 };
+        for (uint32_t i = 0; i < 4; i++) {
             wlw_init(&w, out, c->reg, 0);    // registry.global
             wlw_u32(&w, i + 1); wlw_str(&w, gname[i]); wlw_u32(&w, gver[i]);
             wsend(c, &w);
@@ -298,9 +311,65 @@ static void dispatch(struct cl *c) {
             wlw_u32(&w, 3);                  // pointer | keyboard
             wsend(c, &w);
             printf("WLSRV seat caps\n");
+        } else if (!strcmp(ifn, "xdg_wm_base")) {
+            c->wmb = newid;
+            // liveness is a real channel: ping once at bind; a dead
+            // client never pongs and a real compositor would time it
+            // out. The gate just wants the pong on serial.
+            wlw_init(&w, out, c->wmb, 0);    // wm_base.ping(serial)
+            wlw_u32(&w, serial);
+            printf("WLSRV ping %u\n", serial);
+            serial++;
+            wsend(c, &w);
         } else {
             printf("WLSRV ?bind %s\n", ifn);
         }
+    } else if (oid == c->wmb && op == 2) {  // wm_base.get_xdg_surface(new, surf)
+        uint32_t sid = wl_arg(msg, 1);
+        if (sid != S->surf) {
+            // role objects bound to a foreign surface are a loud
+            // refusal, same class as a bag breach — not silent.
+            printf("WLSRV xsurf bad-surface %u (surf=%u)\n", sid, S->surf);
+        } else {
+            S->xsurf = wl_arg(msg, 0);
+            printf("WLSRV xsurf oid=%u\n", S->xsurf);
+        }
+    } else if (oid == c->wmb && op == 3) {  // wm_base.pong(serial)
+        printf("WLSRV pong %u\n", wl_arg(msg, 0));
+    } else if (oid == c->wmb && op == 0) {  // wm_base.destroy
+        c->wmb = 0;
+    } else if (oid == c->wmb && op == 1) {  // wm_base.create_positioner
+        // popups are unimplemented; the object id still lands in the
+        // client's table — accept, don't dispatch.
+    } else if (oid == S->xsurf && op == 0) {// xsurface.destroy
+        S->xsurf = 0;
+    } else if (oid == S->xsurf && op == 1) {// xsurface.get_toplevel(new)
+        S->top = wl_arg(msg, 0);
+    } else if (oid == S->xsurf && op == 3) {// xsurface.set_window_geometry
+    } else if (oid == S->xsurf && op == 4) {// xsurface.ack_configure(ser)
+        S->acked = wl_arg(msg, 0);
+        printf("WLSRV ack %u\n", S->acked);
+    } else if (oid == S->top && op == 0) {  // toplevel.destroy
+        S->top = 0;
+    } else if (oid == S->top && op == 2) {  // toplevel.set_title(str)
+        int nx; const char *t = wl_sarg(msg, 8, &nx);
+        printf("WLSRV title %s\n", t ? t : "?");
+    } else if (oid == S->top && op == 3) {  // toplevel.set_app_id(str)
+        int nx; const char *a = wl_sarg(msg, 8, &nx);
+        printf("WLSRV appid %s\n", a ? a : "?");
+    } else if (oid == S->top && op == 5) {  // toplevel.move(seat, serial)
+        // the REAL interactive-move request: a toplevel asks the
+        // compositor to start a pointer-driven move — ours binds the
+        // grab to this surface until the next button release. This
+        // is the client-initiated form of the same drag policy.
+        if (S->surfix >= 0) {
+            drag = S->surfix;
+            printf("WLSRV tl-move slot=%d\n", drag);
+        }
+    } else if (oid == S->top && op <= 13) { // set_parent/max/min/etc
+        // lawful v1 requests with no window-management meaning here —
+        // accept by silence, same as upstream compositors do for
+        // states they don't advertise.
     } else if (oid == c->seat && op == 0) { // seat.get_pointer(new_id)
         c->ptr = wl_arg(msg, 0);
     } else if (oid == c->seat && op == 1) { // seat.get_keyboard(new_id)
@@ -330,11 +399,36 @@ static void dispatch(struct cl *c) {
     } else if (oid == S->surf && op == 0) { // surface.destroy
         S->surf = 0;
     } else if (oid == S->surf && op == 1) { // surface.attach(buf, x, y)
+        S->attached = 1;
     } else if (oid == S->surf && op == 2) { // surface.damage(x, y, w, h)
     } else if (oid == S->surf && op == 3) { // surface.frame(new callback)
         S->cb = wl_arg(msg, 0);
     } else if (oid == S->surf && op == 6) { // surface.commit — frame lands
-        if (S->bw && S->bh && S->map) {
+        if (S->xsurf && S->top && !S->confser) {
+            // the role handshake: an xdg client performs an initial
+            // buffer-less commit after get_toplevel; the compositor's
+            // answer is toplevel.configure (our sizing offer — 0,0 =
+            // client's call) followed by xsurface.configure(serial).
+            // The buffer commit that follows MUST carry the ack.
+            wlw_init(&w, out, S->top, 0);    // toplevel.configure
+            wlw_i32(&w, 0); wlw_i32(&w, 0); wlw_u32(&w, 0); // w,h,states[]
+            wsend(c, &w);
+            wlw_init(&w, out, S->xsurf, 0);  // xsurface.configure(ser)
+            wlw_u32(&w, serial);
+            printf("WLSRV toplevel configure ser=%u\n", serial);
+            S->confser = serial++;
+            wsend(c, &w);
+        }
+        if (S->xsurf && S->confser && S->attached &&
+            S->acked != S->confser) {
+            // presenting an unacked buffer is the exact protocol
+            // violation real compositors raise as a client error —
+            // loud, and the pixels do not ride the scene.
+            printf("WLSRV unacked commit (ack=%u want=%u)\n",
+                   S->acked, S->confser);
+        }
+        if (S->attached && S->bw && S->bh && S->map &&
+            !(S->xsurf && S->acked != S->confser)) {
             uint32_t magic = wl_u32(S->map + S->boff);
             uint32_t tag = wl_u32(S->map + S->boff + 4);
             unsigned px0 = S->boff + 256 < (uint32_t)S->poolsize
@@ -387,9 +481,9 @@ static void dispatch(struct cl *c) {
             wsend(c, &w);
             S->cb = 0;
         }
-        if (S->buf) {
-            wlw_init(&w, out, S->buf, 0);    // buffer.release
-            wsend(c, &w);
+        if (S->buf && S->attached) {
+            wlw_init(&w, out, S->buf, 0);    // buffer.release — only
+            wsend(c, &w);                    // for a buffer we held
         }
     } else if (oid == 1 && op == 0) {       // display.sync(new callback)
         uint32_t scb = wl_arg(msg, 0);
