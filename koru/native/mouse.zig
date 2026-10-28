@@ -20,6 +20,7 @@ const kbd = @import("kbd");
 extern fn koru_irq_unmask(irq: u8) void;
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+extern fn koru_input_wake() callconv(.c) void;
 
 const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64;
@@ -63,6 +64,13 @@ fn push(ev: kbd.InEv) void {
     }
     ring[head] = ev;
     head = next;
+    koru_input_wake(); // a child input fd is ready — mark-only prod
+}
+
+// pending — IRQ-safe readiness for the seam's poll predicate and a
+// blocked child reader's race recheck (peek, not pop).
+pub fn pending() u8 {
+    return if (tail != head) 1 else 0;
 }
 
 // one decoded event for the seam, or null — nonblocking pop
@@ -103,7 +111,11 @@ pub fn feedByte(b: u8) void {
     const ovf = (pkt[0] & 0xC0) != 0;
     if (ovf) overflows += 1;
     const dx = if (ovf) 0 else sign9(pkt[1], (pkt[0] & 0x10) != 0);
-    const dy = if (ovf) 0 else sign9(pkt[2], (pkt[0] & 0x20) != 0);
+    // PS/2 Y is positive-up (device space); the seam's contract is
+    // evdev-shaped — positive-dy means DOWN, surface-coordinate space.
+    // The negate lives here, at the provider, so every reader of the
+    // ring sees the same convention the compositor's cursor follows.
+    const dy = if (ovf) 0 else -sign9(pkt[2], (pkt[0] & 0x20) != 0);
     if (dx != 0 or dy != 0)
         push(.{ .kind = 3, .code = 0, .pressed = 0, .dx = dx, .dy = dy });
     // button edges — a packet reports state, the seam wants transitions

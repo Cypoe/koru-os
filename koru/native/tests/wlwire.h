@@ -99,6 +99,25 @@ static int wl_popfd(struct wlconn *cn) {
     return f;
 }
 
+// Peel one complete message WITHOUT filling — the poll-driven shape:
+// the caller already know bytes are waiting (POLLIN -> wl_fill once),
+// then drains whole messages until this returns 0 = incomplete
+// buffered, NOT end-of-stream (EOS is wl_fill's verdict, never this
+// one's). -1 malformed/oversize.
+static int wl_peel(struct wlconn *cn, unsigned char *msg, int cap) {
+    if (cn->len >= 8) {
+        int sz = wl_u16(cn->buf + 6);
+        if (sz < 8 || sz > cap) return -1;
+        if (cn->len >= sz) {
+            memcpy(msg, cn->buf, (size_t)sz);
+            memmove(cn->buf, cn->buf + sz, (size_t)(cn->len - sz));
+            cn->len -= sz;
+            return sz;
+        }
+    }
+    return 0;
+}
+
 // Peel one complete message into msg[] (cap bytes max).
 // Returns message size, 0 EOS, -1 error/oversize.
 static int wl_next(struct wlconn *cn, unsigned char *msg, int cap) {

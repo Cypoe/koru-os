@@ -164,6 +164,37 @@ pub fn attach(buf: [*]u32, w: u32, h: u32, sx: *u32, sy: *u32) i32 {
     return slot;
 }
 
+// move relayers a surface to a new scene coord — damage the vacated
+// rect AND the destination, so occluded regions beneath redraw too.
+// Placement is the compositor's policy; the layer lookup is by backing
+// (slots compact on detach — an index would stale).
+pub fn move(buf: [*]u32, nx: u32, ny: u32, sx: *u32, sy: *u32) i32 {
+    if (!live) return -1;
+    for (layers[0..top], 0..) |*l, i| {
+        if (l.buf == buf) {
+            const rx = l.x;
+            const ry = l.y;
+            const rw = l.w;
+            const rh = l.h;
+            l.x = nx;
+            l.y = ny;
+            sx.* = nx;
+            sy.* = ny;
+            _ = damage(rx, ry, rw, rh);
+            _ = damage(nx, ny, l.w, l.h);
+            return @intCast(i);
+        }
+    }
+    return -1;
+}
+
+// the scene's extent — a compositor needs it for cursor clamping and
+// placement policy.
+pub fn dims(sw: *u32, sh: *u32) void {
+    sw.* = W;
+    sh.* = H;
+}
+
 // detach leaves the scene: compact the stack, then damage the vacated
 // rect — what's beneath repaints from its retained backing, no client
 // involved.

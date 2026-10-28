@@ -1,9 +1,11 @@
-// wlrinit.elf — same orchestration as wlinit, but the client is
+// wlrinit.elf — same orchestration as wlinit, but the clients are
 // wlreal.elf: the REAL vendored libwayland-1.26 binary, not our
 // hand-rolled wlwire one. Server stays wlserver.elf — the honest
 // asymmetric step: unmodified client library against our compositor.
-// NO channel wiring: both children rendezvous on wayland-1 through
-// the shared fs view; waits both zombies.
+// TWO clients: each mints its own *Surf through commit, the seat's
+// routed input must reach the right session — multi-client is the
+// point, not a second binary for its own sake. NO channel wiring:
+// all rendezvous on wayland-1 through the shared fs view.
 #include <stdio.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -16,13 +18,17 @@ int main(void) {
     long sp = syscall(KORU_SPAWN_START, "wlserver.elf", ~0UL, 0, 0,
                       NO_FD, NO_FD);
     if (sp < 0) { printf("WLRINIT FAIL srv spawn %ld\n", sp); return 1; }
-    long cp = syscall(KORU_SPAWN_START, "wlreal.elf", ~0UL, 0, 0,
+    long c1 = syscall(KORU_SPAWN_START, "wlreal.elf", ~0UL, 0, 0,
                       NO_FD, NO_FD);
-    if (cp < 0) { printf("WLRINIT FAIL cli spawn %ld\n", cp); return 1; }
-    int ss = 0, cs = 0;
+    if (c1 < 0) { printf("WLRINIT FAIL cli1 spawn %ld\n", c1); return 1; }
+    long c2 = syscall(KORU_SPAWN_START, "wlreal.elf", ~0UL, 0, 0,
+                      NO_FD, NO_FD);
+    if (c2 < 0) { printf("WLRINIT FAIL cli2 spawn %ld\n", c2); return 1; }
+    int ss = 0, s1 = 0, s2 = 0;
     syscall(KORU_WAIT, sp, &ss);
-    syscall(KORU_WAIT, cp, &cs);
-    printf("WLRINIT srv=%d cli=%d\n", ss, cs);
+    syscall(KORU_WAIT, c1, &s1);
+    syscall(KORU_WAIT, c2, &s2);
+    printf("WLRINIT srv=%d cli=%d,%d\n", ss, s1, s2);
     printf("WLRINIT COMPLETE\n");
-    return (ss == 0 && cs == 0) ? 0 : 1;
+    return (ss == 0 && s1 == 0 && s2 == 0) ? 0 : 1;
 }

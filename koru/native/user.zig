@@ -42,7 +42,21 @@ extern fn ukplat_monotonic_clock() callconv(.c) u64;
 extern fn koruos_surface_open(w: u32, h: u32, title: [*:0]const u8) callconv(.c) ?*anyopaque;
 extern fn koruos_surface_blit(p: ?*anyopaque, dx: u32, dy: u32, w: u32, h: u32, src: [*]const u32, src_stride: u32) callconv(.c) u8;
 extern fn koruos_surface_present(p: ?*anyopaque, x: u32, y: u32, w: u32, h: u32) callconv(.c) u8;
+extern fn koruos_surface_move(p: ?*anyopaque, nx: u32, ny: u32) callconv(.c) u8;
+extern fn koruos_surface_geom(p: ?*anyopaque, out: *SurfGeom) callconv(.c) u8;
 extern fn koruos_surface_close(p: ?*anyopaque) callconv(.c) u8;
+extern fn koruos_input_poll(out: *InEv) callconv(.c) u8;
+extern fn koruos_input_pending() callconv(.c) u8;
+
+const SurfGeom = extern struct { x: u32, y: u32, w: u32, h: u32, sw: u32, sh: u32 };
+const InEv = extern struct { kind: u32, code: u32, pressed: u32, dx: i32, dy: i32 };
+
+// IRQ-time hook: an input event landed in a provider ring — prod any
+// child parked on .input (kbd.feedByte/mouse.push call this; the wake
+// is mark-only, the parked read re-decides).
+pub export fn koru_input_wake() callconv(.c) void {
+    wakeKind(.input);
+}
 
 const ENT: u64 = 0x3; // present | writable
 const US: u64 = 0x4; // user-accessible
@@ -826,13 +840,13 @@ const ChildFsOps = extern struct {
     mknod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
 };
 
-const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll };
+const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input };
 
 // fd slots are projections over typed seam endpoints, not bare provider
 // handles: stdio are real entries (conin/conout), fs a view handle,
 // pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
 // kind, never on the number — closing fd0 detaches like any discharge.
-const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf };
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input };
 
 // ---- the bag: class grants + nid-scoped object grants ------------------
 // DESIGN-0001 §8.6's grant {handle, verbs, as} distilled to the syscall
@@ -872,9 +886,9 @@ const Child = struct {
     ngrants: u8 = 0,
     state: ChildState = .empty,
     fsv: ?*const ChildFsOps = null, // scoped fs view (the spawning fs)
-    fds: [8]u64 = .{0} ** 8,        // endpoint id by kind: fs handle or pipe idx
-    fdkinds: [8]FdKind = .{.none} ** 8,
-    fdverbs: [8]u8 = .{0} ** 8,     // the fd IS a grant — V_READ/V_WRITE
+    fds: [32]u64 = .{0} ** 32,      // endpoint id by kind: fs handle or pipe idx
+    fdkinds: [32]FdKind = .{.none} ** 32,
+    fdverbs: [32]u8 = .{0} ** 32,   // the fd IS a grant — V_READ/V_WRITE
                                     // recorded when the projection was
                                     // minted; read/write dispatch checks
                                     // the verb, not just the kind
@@ -1542,9 +1556,12 @@ fn canonNr(nr: u64) u64 {
         // class question is "may this child wait on channels".
         41, 42, 43, 288, 46, 47, 49, 50, 53, 319, 7, 271 => 22,
         // scene class (bit 59): a child minting a display surface is a
-        // compositor's cap, not a client's — mint/blit/present ride one
-        // bag bit; close is ordinary fd lifetime.
-        515, 516, 517 => 59,
+        // compositor's cap, not a client's — mint/blit/present/move/info
+        // ride one bag bit; close is ordinary fd lifetime.
+        515, 516, 517, 519, 520 => 59,
+        // input class (bit 55): draining the machine's input rings is
+        // the compositor's second cap — a client never reads /dev/input.
+        518 => 55,
         else => nr,
     };
 }
@@ -2014,6 +2031,11 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             stw(&st, 24, 0o20600);
             stw(&st, 16, 1);
         },
+        .input => {
+            // an input reader is a char device — the evdev answer
+            stw(&st, 24, 0o20600);
+            stw(&st, 16, 1);
+        },
         .fs => {
             const ops = c.fsv orelse return -38;
             if (ops.stat(ops.ctx, c.fds[fd], &st) < 0) return -9;
@@ -2266,6 +2288,7 @@ fn fdDupRef(c: *Child, fd: usize, out: *FdRef) bool {
         .slisten => listeners[@intCast(c.fds[fd] - 1)].refs += 1,
         .shm => shms[@intCast(c.fds[fd] - 1)].refs += 1,
         .surf => surfs[@intCast(c.fds[fd] - 1)].refs += 1,
+        .input => ins[@intCast(c.fds[fd] - 1)] += 1,
         .fs => {
             const ops = c.fsv orelse return false;
             const nh = ops.dup(ops.ctx, c.fds[fd]);
@@ -2289,6 +2312,7 @@ fn fdFreeRef(r: FdRef) void {
         .slisten => listenerRelease(@intCast(r.h - 1)),
         .shm => shmRelease(@intCast(r.h - 1)),
         .surf => surfRefFree(@intCast(r.h - 1)),
+        .input => inputFree(@intCast(r.h - 1)),
         else => {},
     }
 }
@@ -2481,6 +2505,75 @@ fn childSurfPresent(c: *Child, f: *TrapFrame) i64 {
     return 0;
 }
 
+fn childSurfMove(c: *Child, f: *TrapFrame) i64 {
+    const tok = surfTok(c, f.rdi) orelse return -9;
+    const nx: u32 = @intCast(f.rsi & 0xFFFFFFFF);
+    const ny: u32 = @intCast(f.rdx & 0xFFFFFFFF);
+    if (koruos_surface_move(tok, nx, ny) == 0) return -22;
+    return 0;
+}
+
+// info(fd, out_va) — the surface's scene rect + the scene's extent;
+// a compositor needs both to hit-test and clamp the pointer.
+fn childSurfInfo(c: *Child, f: *TrapFrame) i64 {
+    const tok = surfTok(c, f.rdi) orelse return -9;
+    var g: SurfGeom = undefined;
+    if (koruos_surface_geom(tok, &g) == 0) return -22;
+    if (copyToUser(c, @intCast(f.rsi), std.mem.sliceAsBytes((&g)[0..1])) < @sizeOf(SurfGeom)) return -14;
+    return 0;
+}
+
+// ---- input door: evdev-shaped InEv records off the provider rings ------
+// input_open (nr518) mints a reader fd over the seam's event drain —
+// the SAME queue koruos_input_poll drains kernel-side, so the
+// compositor's cursor fan-out keeps working while a child reads. One
+// merged stream, device-separated by InEv.kind (1 key, 2 button,
+// 3 motion) — per-device nodes are the /dev/input/ rung, not this one.
+const NIN = 4;
+var ins: [NIN]u32 = .{0} ** NIN; // refs per open
+
+fn inputFree(idx: usize) void {
+    if (ins[idx] > 0) ins[idx] -= 1;
+}
+
+fn childInputOpen(c: *Child) i64 {
+    var fd: ?usize = null;
+    for (c.fds, 0..) |v, i| if (v == 0 and c.fdkinds[i] == .none) {
+        fd = i;
+        break;
+    };
+    const fdi = fd orelse return -24;
+    for (&ins, 0..) |*r, i| if (r.* == 0) {
+        r.* = 1;
+        c.fds[fdi] = i + 1;
+        c.fdkinds[fdi] = .input;
+        c.fdverbs[fdi] = V_READ;
+        return @intCast(fdi);
+    };
+    return -24;
+}
+
+// read(inputfd) — drain complete InEv records into the user buffer,
+// 20 bytes each; an empty drain parks on .input (IRQ wakes re-decide).
+fn childInputRead(c: *Child, f: *TrapFrame) i64 {
+    const want: usize = @intCast(f.rdx);
+    if (want < @sizeOf(InEv)) return 0;
+    const bva: usize = @intCast(f.rsi);
+    while (true) {
+        var n: usize = 0;
+        var ev: InEv = undefined;
+        while (n + @sizeOf(InEv) <= want and koruos_input_poll(&ev) != 0) {
+            if (copyToUser(c, bva + n, std.mem.sliceAsBytes((&ev)[0..1])) < @sizeOf(InEv)) break;
+            n += @sizeOf(InEv);
+        }
+        if (n != 0) return @intCast(n);
+        // pending-before-park is the race guard: an IRQ landing between
+        // drain and park leaves the predicate true and we re-drain.
+        if (userEntry(c, bva) & 1 == 0) return -14;
+        if (koruos_input_pending() == 0) kblock(.input);
+    }
+}
+
 fn shmRelease(idx: usize) void {
     const s = &shms[idx];
     if (s.refs > 0) s.refs -= 1;
@@ -2535,6 +2628,7 @@ fn releaseFd(c: *Child, i: usize) void {
         .slisten => listenerRelease(@intCast(c.fds[i] - 1)),
         .shm => shmRelease(@intCast(c.fds[i] - 1)),
         .surf => surfRefFree(@intCast(c.fds[i] - 1)),
+        .input => inputFree(@intCast(c.fds[i] - 1)),
         .conin, .conout => {},
     }
     c.fds[i] = 0;
@@ -2564,6 +2658,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
         .slisten => listeners[@intCast(src.fds[sfd] - 1)].refs += 1,
         .shm => shms[@intCast(src.fds[sfd] - 1)].refs += 1,
         .surf => surfs[@intCast(src.fds[sfd] - 1)].refs += 1,
+        .input => ins[@intCast(src.fds[sfd] - 1)] += 1,
         .fs => {
             const ops = src.fsv orelse return false;
             const nh = ops.dup(ops.ctx, src.fds[sfd]);
@@ -2872,6 +2967,9 @@ fn fdPollRev(c: *Child, fdi: usize, ev: u16) u16 {
         // a surface accepts a blit at any time — always writable,
         // never readable (it is not a byte channel).
         .surf => r |= ev & POLLOUT,
+        .input => {
+            if (ev & POLLIN != 0 and koruos_input_pending() != 0) r |= POLLIN;
+        },
         .none => return POLLNVAL,
     }
     return r;
@@ -3596,6 +3694,15 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         517 => { // surf_present(fd, x, y, w, h) — damage through the scene
             f.rax = @bitCast(childSurfPresent(c, f));
         },
+        518 => { // input_open() — evdev-shaped door onto the input rings
+            f.rax = @bitCast(childInputOpen(c));
+        },
+        519 => { // surf_move(fd, x, y) — compositor placement
+            f.rax = @bitCast(childSurfMove(c, f));
+        },
+        520 => { // surf_info(fd, rect_va) — surface rect + scene extent
+            f.rax = @bitCast(childSurfInfo(c, f));
+        },
         82, 264, 316 => { // rename / renameat / renameat2 — the directory
                           // entries move; the inode (the identity) does
                           // not. renameat2 flags must be 0 (no exchange/
@@ -3661,6 +3768,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             } else {
                 const fdi: usize = @intCast(f.rdi);
                 f.rax = @bitCast(switch (c.fdkinds[fdi]) {
+                    .input => childInputRead(c, f),
                     .conin => coninRead(c, f),
                     .fs => if (c.fdverbs[fdi] & V_READ != 0)
                         childRead(c, f.rdi, f.rsi, f.rdx) else -9,
@@ -3812,6 +3920,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                               // last ref detaches; comp repaints the
                               // vacated rect from lower backings.
                         surfRefFree(@intCast(c.fds[fd] - 1));
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .input => {
+                        inputFree(@intCast(c.fds[fd] - 1));
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
                         f.rax = 0;
@@ -4541,11 +4655,11 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
             return -1;
         }
         c.fsv = fsv;
-        c.fds = .{0} ** 8;
+        c.fds = .{0} ** 32;
         // provider children get the stdio projection too — stdio is a
         // typed entry now, not an fd-number special case
-        c.fdkinds = .{ .conin, .conout, .conout, .none, .none, .none, .none, .none };
-        c.fdverbs = .{ V_READ, V_WRITE, V_WRITE, 0, 0, 0, 0, 0 };
+        c.fdkinds = .{ .conin, .conout, .conout } ++ .{.none} ** 29;
+        c.fdverbs = .{ V_READ, V_WRITE, V_WRITE } ++ .{0} ** 29;
         var ipath: [256]u8 = undefined;
         var ilen: usize = 0;
         const info = loadElf(c, imgs[i][0..sizes[i]], USER_VA_BASE, &ipath, &ilen) orelse {

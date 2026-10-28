@@ -145,6 +145,32 @@ pub export fn koruos_surface_present(p: ?*anyopaque, x: u32, y: u32, w: u32, h: 
     return comp.damage(s.x + x, s.y + y, x1 - x, y1 - y);
 }
 
+// move — the compositor's placement verb: relayer to scene coords,
+// damage the vacated and the destination rect. Returns the live
+// placement back through the surf (present's damage offset follows).
+pub export fn koruos_surface_move(p: ?*anyopaque, nx: u32, ny: u32) callconv(.c) u8 {
+    const s = asSurf(p) orelse return 0;
+    var sx: u32 = 0;
+    var sy: u32 = 0;
+    if (comp.move(s.buf, nx, ny, &sx, &sy) < 0) return 0;
+    s.x = sx;
+    s.y = sy;
+    return 1;
+}
+
+// geom — what the compositor needs to reason about placement and
+// hit-testing: the surface's scene rect plus the scene's extent.
+pub export fn koruos_surface_geom(p: ?*anyopaque, out: *Geom) callconv(.c) u8 {
+    const s = asSurf(p) orelse return 0;
+    comp.dims(&out.sw, &out.sh);
+    out.x = s.x;
+    out.y = s.y;
+    out.w = s.w;
+    out.h = s.h;
+    return 1;
+}
+pub const Geom = extern struct { x: u32, y: u32, w: u32, h: u32, sw: u32, sh: u32 };
+
 pub export fn koruos_surface_close(p: ?*anyopaque) callconv(.c) u8 {
     const s = asSurf(p) orelse return 0;
     // detach before freeing — the reveal repaint reads lower backings

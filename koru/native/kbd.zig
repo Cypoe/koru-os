@@ -18,6 +18,7 @@ const comp = @import("comp");
 extern fn koru_irq_unmask(irq: u8) void;
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+extern fn koru_input_wake() callconv(.c) void;
 
 const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64;
@@ -86,6 +87,7 @@ pub fn feedByte(sc: u8) void {
             }
         }
     }
+    koru_input_wake(); // a child input fd is ready — mark-only prod
 }
 
 // vec-0x21 path — called from user.zig's irq_exc_dispatch. Status bit5
@@ -132,6 +134,26 @@ pub const InEv = extern struct {
     dx: i32,
     dy: i32,
 };
+
+// would a pop yield an event? — non-destructive scan mirroring the
+// decode loop: every byte that isn't a bare E0/E1 prefix decodes to
+// one InEv, so readiness is "a decodable byte is latched".
+fn evPending() bool {
+    var t = tail;
+    while (t != head) {
+        const sc = ring[t];
+        t = (t + 1) % ring.len;
+        if (sc != 0xE0 and sc != 0xE1) return true;
+    }
+    return false;
+}
+
+// pending() — non-destructive readiness across both rings; the seam's
+// POLLIN predicate and block/race recheck for a child input fd.
+pub export fn koruos_input_pending() callconv(.c) u8 {
+    if (evPending()) return 1;
+    return if (mouse.pending() != 0) 1 else 0;
+}
 
 pub export fn koruos_input_poll(out: *InEv) callconv(.c) u8 {
     // drain-on-poll: a byte latched while IRQs were masked (or an edge

@@ -680,9 +680,28 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
             surf_close nr — close(fd) IS the release, detach+reveal
             on last ref, bag class 59 is a compositor's cap);
             screendump evidence: client deadbeef/c0ffee/5a read off
-            the virtio-gpu scanout at the anchor — still open: a
-            compositor that draws more than client pixels (decor,
-            input routing, multi-client z)
+            the virtio-gpu scanout at the anchor; INPUT+MULTI-SURFACE
+            LANDED — nr518 input_open mints an evdev-shaped fd over the
+            merged input rings (InEv records, blocking read on a new
+            .input wait kind, POLLIN via a non-destructive pending
+            predicate, IRQ-side koru_input_wake; bag class 55 is the
+            compositor's second cap — a client never reads the
+            machine's input), nr519 surf_move relocates a *Surf with
+            old+new damage, nr520 surf_info reads rect+scene extent;
+            wlserver is now a real compositor loop — poll over
+            {listener, input fd, every client conn}, per-client
+            object tables, wl_seat v7 global + capabilities, wl_pointer
+            enter/leave/motion/button/frame routed by ITS OWN hit-test
+            over the z-ordered surface list (keyboard focus follows
+            pointer focus), wl_keyboard keymap (real memfd over
+            SCM_RIGHTS) + key events; drag-to-move: button-held motion
+            rides surf_move — compositor policy, not a client verb;
+            wlreal binds the seat through UNMODIFIED libwayland —
+            two clients, two *Surfs, injected pointer/key events reach
+            the focused session only; screendump evidence: deadbeef at
+            the DRAGGED rect (160,155), vacated tiles black — still
+            open: xdg_shell+toplevel (real clients don't speak bare
+            wl_surface), decor, clipboard
             → Hyprland/Noctalia oracle harness over the real scene
 ```
 

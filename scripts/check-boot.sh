@@ -10,7 +10,11 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 QEMU="${QEMU:-/c/Program Files/qemu/qemu-system-x86_64.exe}"
-TIMEOUT="${TIMEOUT:-15}"
+# wall-clock only — every row's evidence is a serial grep, so a
+# stretched window can never turn a fail green; it just keeps a loaded
+# host's slow QEMU from being mistaken for a dead guest. boot_real's
+# multi-spawn chain has measurably crossed 15s under gate load.
+TIMEOUT="${TIMEOUT:-30}"
 FIX="$(cygpath -m "$ROOT/koru/native/tests" 2>/dev/null || echo "$ROOT/koru/native/tests")"
 
 pass=0; failn=0
@@ -881,34 +885,42 @@ else
             # endpoint, real ppoll event loop, MSG_DONTWAIT recvmsg,
             # F_DUPFD on the received pool, ffi-closure dispatch of the
             # registry/frame/sync events. Same wlserver.elf compositor.
-            boot_check "$ROOT/koru/native/tests/boot_wlr.k" "WLREXEC COMPLETE" \
+            # headless run: both clients still wait out their input
+            # deadline — wider window than the generic 15s.
+            TIMEOUT=30 boot_check "$ROOT/koru/native/tests/boot_wlr.k" "WLREXEC COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on
             if grep -qF "WLSRV bound wayland-1" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLSRV input open" "$WORK/boot_wlr.serial" \
                && grep -qE "WLR connected tries=[0-9]+" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR global 1 wl_compositor v4" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR global 2 wl_shm v1" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR global 3 wl_seat v7" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR seat caps 3" "$WORK/boot_wlr.serial" \
+               && grep -qF "WLR kbd keymap fmt=1" "$WORK/boot_wlr.serial" \
                && grep -qF "WLSRV magic=deadbeef tag=00c0ffee px0=5a" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR frame done=42" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR buffer release" "$WORK/boot_wlr.serial" \
                && grep -qF "WLR sync done=43" "$WORK/boot_wlr.serial" \
                && grep -qF "WLSRV EOS" "$WORK/boot_wlr.serial" \
-               && grep -qF "WLRINIT srv=0 cli=0" "$WORK/boot_wlr.serial"; then
-                ok "wlreal: UNMODIFIED libwayland-client 1.26 + libffi ran the full session — connect/registry/shm/ppoll/SCM_RIGHTS/frame-done/sync"
+               && grep -qF "WLRINIT srv=0 cli=0,0" "$WORK/boot_wlr.serial"; then
+                ok "wlreal: 2x UNMODIFIED libwayland-client 1.26 + libffi — connect/registry/shm/seat caps/keymap-fd/ppoll/SCM_RIGHTS/frame-done/sync, headless-safe"
             else
                 bad "wlreal: evidence missing: $(grep -aE 'WLR|WLSRV|FAIL|REFUSE|EXC' "$WORK/boot_wlr.serial" | tail -8 | tr '\n' '|')"
             fi
             # wlscene: the compositor drives the REAL scene — wlserver's
             # surface.commit mints a *Surf through the child-facing seam
-            # (nr515 open-as-fd, nr516 blit of the client's shm bytes,
-            # nr517 damage through the z-stack), riding virtio-gpu. The
-            # pixel oracle is a screendump while the scene is live:
-            # client pixels at the anchor, root color outside — then
-            # EOS + close detaches and comp repaints the vacated rect.
+            # (nr515 open-as-fd, nr516 blit, nr517 damage, nr519 move),
+            # riding virtio-gpu. TWO clients tile two surfaces; the seat
+            # rung rides the same monitor: injected pointer/key events
+            # ride the nr518 input fd into per-focus wl_pointer/
+            # wl_keyboard protocol. The pixel oracle is a screendump
+            # taken after the drag — client pixels at the MOVED rect,
+            # the vacated tiles black.
             wlport=$((5900 + $$ % 400))
             wlppm="$WORK/wlscene.ppm"
             wlppmw="$(cygpath -m "$wlppm" 2>/dev/null || echo "$wlppm")"
-            timeout 60 "$QEMU" -kernel "$WORK/boot_wlr.elf" -serial stdio \
+            timeout 90 "$QEMU" -kernel "$WORK/boot_wlr.elf" -serial stdio \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on \
                 -display none -m 64M -no-reboot \
@@ -916,20 +928,44 @@ else
                 -monitor "tcp:127.0.0.1:$wlport,server,nowait" \
                 > "$WORK/boot_wlscene.serial" 2>&1 &
             wq=$!
-            for _ in $(seq 1 20); do
+            for _ in $(seq 1 40); do
                 exec 3<>"/dev/tcp/127.0.0.1/$wlport" 2>/dev/null && break
                 sleep 0.5
             done
-            wdumped=0
+            wdumped=0; wmon=0; wslot=0
             if [ -e /dev/fd/3 ]; then
-                for _ in $(seq 1 80); do
-                    if grep -qF "comp: paint 64x64 nb=3" "$WORK/boot_wlscene.serial" 2>/dev/null; then
+                wmon=1
+                # wait both clients' commits, then the scripted input:
+                # A: move+click+key (exit); B: move+press+drag ->
+                # "WLSRV move" -> dump while held -> release+key (exit).
+                for _ in $(seq 1 120); do
+                    if grep -qF "WLSRV surf slot=1" "$WORK/boot_wlscene.serial" 2>/dev/null; then
+                        wslot=1; break
+                    fi
+                    sleep 0.25
+                done
+                [ "$wslot" -eq 1 ] || echo "wlscene: slot=1 marker never appeared — injection skipped" >&2
+                # ONE move — (60,60) lands inside slot0's 64px tile.
+                # A second 60,60 overshoots into the dead gap between
+                # the tiles (120,120) and the press/key drop unfocused.
+                printf 'mouse_move 60 60\n' >&3 2>/dev/null; sleep 0.4
+                printf 'mouse_button 1\n' >&3 2>/dev/null; sleep 0.3
+                printf 'mouse_button 0\n' >&3 2>/dev/null; sleep 0.3
+                printf 'sendkey a\n' >&3 2>/dev/null; sleep 0.4
+                printf 'mouse_move 80 80\n' >&3 2>/dev/null; sleep 0.4
+                printf 'mouse_button 1\n' >&3 2>/dev/null; sleep 0.3
+                printf 'mouse_move 20 15\n' >&3 2>/dev/null
+                for _ in $(seq 1 40); do
+                    if grep -qF "WLSRV move" "$WORK/boot_wlscene.serial" 2>/dev/null; then
                         printf 'screendump %s\n' "$wlppmw" >&3 2>/dev/null && wdumped=1
                         break
                     fi
                     sleep 0.25
                 done
-                for _ in $(seq 1 60); do
+                sleep 0.3
+                printf 'mouse_button 0\n' >&3 2>/dev/null; sleep 0.3
+                printf 'sendkey b\n' >&3 2>/dev/null
+                for _ in $(seq 1 80); do
                     grep -qF "WLREXEC COMPLETE" "$WORK/boot_wlscene.serial" 2>/dev/null && break
                     sleep 0.25
                 done
@@ -938,36 +974,54 @@ else
             fi
             kill $wq 2>/dev/null
             wait $wq 2>/dev/null || true
-            wlanchor="$(grep -oE 'surf: open 64x64 at [0-9]+,[0-9]+' "$WORK/boot_wlscene.serial" | grep -oE '[0-9]+,[0-9]+' | head -1)"
-            wax="${wlanchor%,*}"; way="${wlanchor#*,}"
             if grep -qF "surf: open 64x64 at" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLSRV surf slot=0" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLSRV surf slot=1" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLSRV surf 64x64 blit=0/0 present=0/0" "$WORK/boot_wlscene.serial" \
-               && grep -qF "WLSRV surf released" "$WORK/boot_wlscene.serial" \
-               && grep -qF "WLRINIT srv=0 cli=0" "$WORK/boot_wlscene.serial"; then
-                ok "wlscene: commit minted a real *Surf — blit+present through the z-stack, detach+reveal on close"
+               && grep -qF "WLR ptr enter" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLR kbd enter" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLR ptr motion" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLR ptr button 272 1" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLR kbd key 30 1" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLSRV move 160,155" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLR kbd key 48 1" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLSRV surf released slot=0" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLSRV surf released slot=1" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLRINIT srv=0 cli=0,0" "$WORK/boot_wlscene.serial"; then
+                ok "wlscene: 2 clients -> 2 *Surfs; input fd -> per-focus wl_pointer/wl_keyboard (enter/motion/button/key), drag moved a surface through nr519, detach+reveal on EOS"
             else
-                bad "wlscene: seam evidence missing: $(grep -aE 'surf|comp:|WLSRV|FAIL|EXC' "$WORK/boot_wlscene.serial" | tail -8 | tr '\n' '|')"
+                # name the precondition that failed, not just the
+                # evidence tail — a dead monitor or a missing slot
+                # marker is a different diagnosis than dead routing.
+                if [ "$wmon" -eq 0 ]; then
+                    bad "wlscene: monitor connect failed — no injection happened (like input-kbd, a dead socket is a loud fail)"
+                elif [ "$wslot" -eq 0 ]; then
+                    bad "wlscene: clients never committed slot=1 — injection had nothing to hit: $(grep -aE 'WLSRV|WLR |FAIL|EXC' "$WORK/boot_wlscene.serial" | tail -6 | tr '\n' '|')"
+                else
+                    bad "wlscene: seam evidence missing: $(grep -aE 'surf|comp:|WLSRV|WLR |FAIL|EXC' "$WORK/boot_wlscene.serial" | tail -10 | tr '\n' '|')"
+                fi
             fi
-            if [ "$wdumped" -eq 1 ] && [ -s "$wlppm" ] && [ -n "$wax" ]; then
+            if [ "$wdumped" -eq 1 ] && [ -s "$wlppm" ]; then
                 if command -v python >/dev/null 2>&1 && \
-                   WAX="$wax" WAY="$way" python -c "
-import sys,re,os
+                   python -c "
+import sys,re
 d=open(sys.argv[1],'rb').read()
 m=re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s', d)
 w,h,_=map(int,m.groups()); o=m.end()
-ax,ay=int(os.environ['WAX']),int(os.environ['WAY'])
 px=lambda x,y: d[o+(y*w+x)*3:o+(y*w+x)*3+3]
-# client buffer on the scanout: px(0,0)=DEADBEEF->ad be ef, px(1,0)=00C0FFEE->c0 ff ee,
-# px(0,1) blue=0x5a; the root outside the 64x64 stays black.
-sys.exit(0 if px(ax,ay)==b'\xad\xbe\xef' and px(ax+1,ay)==b'\xc0\xff\xee'
-         and px(ax,ay+1)[2:3]==b'\x5a' and px(ax+200,ay+200)==b'\x00\x00\x00' else 1)
+# mid-drag: client B's 64x64 was moved to (160,155) — deadbeef/c0ffee
+# sit at the MOVED origin; both original tiles are black (A already
+# detached, B's old rect damaged away).
+sys.exit(0 if px(160,155)==b'\xad\xbe\xef' and px(161,155)==b'\xc0\xff\xee'
+         and px(40,40)==b'\x00\x00\x00' and px(140,140)==b'\x00\x00\x00'
+         and px(300,300)==b'\x00\x00\x00' else 1)
 " "$(cygpath -w "$wlppm")"; then
-                    ok "wlscene-pixels: client deadbeef/c0ffee/5a read off the scanout at the anchor — shm bytes composited for real"
+                    ok "wlscene-pixels: deadbeef/c0ffee at the DRAGGED rect (160,155) — nr519 moved the backing, old tiles black"
                 else
                     bad "wlscene-pixels: dump present but pixels wrong (or python missing)"
                 fi
             else
-                bad "wlscene-pixels: screendump failed — dumped=$wdumped ppm=$([ -s "$wlppm" ] && echo written || echo missing) anchor=$wlanchor"
+                bad "wlscene-pixels: screendump failed — dumped=$wdumped ppm=$([ -s "$wlppm" ] && echo written || echo missing)"
             fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null

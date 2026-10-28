@@ -6,11 +6,15 @@
 // fs view, ppoll() in the dispatch loop, recvmsg MSG_DONTWAIT, real
 // SCM_RIGHTS fd passing, fcntl F_DUPFD on the incoming pool fd — the
 // same syscalls a linux client makes, answered by the koru seam.
-// The session is the canonical one: registry globals → compositor+shm
-// binds → shm formats → surface → memfd pool (fd crosses ancillary)
-// → buffer → attach/damage/frame/commit → callback.done + release →
-// display.sync roundtrip → disconnect (server sees EOS).
+// The session is the canonical one, now WITH A SEAT: registry globals
+// → compositor+shm+seat binds → shm formats → surface → memfd pool
+// (fd crosses ancillary) → buffer → attach/damage/frame/commit →
+// callback.done + release → display.sync roundtrip → then a bounded
+// dispatch loop collecting wl_pointer enter/motion/button and
+// wl_keyboard keymap/key events the compositor routes off its real
+// input fd → disconnect (server sees EOS).
 #include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -27,7 +31,9 @@ static int memfd_create(const char *name, unsigned flags) {
 
 static struct wl_compositor *comp;
 static struct wl_shm *shm;
+static struct wl_seat *seat;
 static int fmt_argb, fmt_xrgb;
+static const struct wl_seat_listener seat_l; // tentative — defined below
 
 static void reg_global(void *d, struct wl_registry *r, uint32_t name,
                        const char *iface, uint32_t ver) {
@@ -38,6 +44,14 @@ static void reg_global(void *d, struct wl_registry *r, uint32_t name,
     else if (strcmp(iface, "wl_shm") == 0)
         shm = (struct wl_shm *)wl_registry_bind(r, name,
                 &wl_shm_interface, 1);
+    else if (strcmp(iface, "wl_seat") == 0) {
+        seat = (struct wl_seat *)wl_registry_bind(r, name,
+                &wl_seat_interface, ver > 7 ? 7 : ver);
+        // capabilities arrive on the SAME roundtrip the bind rode —
+        // the listener must be attached inside the callback or the
+        // first caps event is dispatched listenerless and dropped.
+        wl_seat_add_listener(seat, &seat_l, NULL);
+    }
 }
 static void reg_remove(void *d, struct wl_registry *r, uint32_t name) {}
 static const struct wl_registry_listener reg_l = {
@@ -65,7 +79,72 @@ static void cb_done(void *d, struct wl_callback *c, uint32_t data) {
 }
 static const struct wl_callback_listener cb_l = { .done = cb_done };
 
+// ---- seat: the compositor's input fd lands here as protocol ----------
+static int got_enter, got_button, got_key;
+
+static void seat_caps(void *d, struct wl_seat *s, uint32_t caps) {
+    printf("WLR seat caps %u\n", caps);
+}
+static void seat_name(void *d, struct wl_seat *s, const char *n) {}
+static const struct wl_seat_listener seat_l = {
+    .capabilities = seat_caps, .name = seat_name,
+};
+
+static void ptr_enter(void *d, struct wl_pointer *p, uint32_t ser,
+                      struct wl_surface *s, wl_fixed_t sx, wl_fixed_t sy) {
+    got_enter = 1;
+    printf("WLR ptr enter s=%u %d,%d\n", ser,
+           wl_fixed_to_int(sx), wl_fixed_to_int(sy));
+}
+static void ptr_leave(void *d, struct wl_pointer *p, uint32_t ser,
+                      struct wl_surface *s) {
+    printf("WLR ptr leave s=%u\n", ser);
+}
+static void ptr_motion(void *d, struct wl_pointer *p, uint32_t t,
+                       wl_fixed_t sx, wl_fixed_t sy) {
+    printf("WLR ptr motion %d,%d\n",
+           wl_fixed_to_int(sx), wl_fixed_to_int(sy));
+}
+static void ptr_button(void *d, struct wl_pointer *p, uint32_t ser,
+                       uint32_t t, uint32_t btn, uint32_t st) {
+    got_button = 1;
+    printf("WLR ptr button %u %u\n", btn, st);
+}
+static void ptr_frame(void *d, struct wl_pointer *p) {}
+static const struct wl_pointer_listener ptr_l = {
+    .enter = ptr_enter, .leave = ptr_leave,
+    .motion = ptr_motion, .button = ptr_button,
+    .frame = ptr_frame,   // v5 event a real compositor batches with —
+                          // NULL is a protocol error, not a default
+};
+
+static void kbd_keymap(void *d, struct wl_keyboard *k, uint32_t fmt,
+                       int32_t fd, uint32_t sz) {
+    printf("WLR kbd keymap fmt=%u sz=%u\n", fmt, sz);
+    close(fd); // protocol delivery proved; parsing is xkbcommon's layer
+}
+static void kbd_enter(void *d, struct wl_keyboard *k, uint32_t ser,
+                      struct wl_surface *s, struct wl_array *keys) {
+    printf("WLR kbd enter s=%u\n", ser);
+}
+static void kbd_leave(void *d, struct wl_keyboard *k, uint32_t ser,
+                      struct wl_surface *s) {}
+static void kbd_key(void *d, struct wl_keyboard *k, uint32_t ser,
+                    uint32_t t, uint32_t key, uint32_t st) {
+    got_key = 1;
+    printf("WLR kbd key %u %u\n", key, st);
+}
+static void kbd_mods(void *d, struct wl_keyboard *k, uint32_t ser,
+                     uint32_t dep, uint32_t lat, uint32_t lck, uint32_t grp) {}
+static void kbd_rep(void *d, struct wl_keyboard *k, int32_t rate,
+                    int32_t delay) {}
+static const struct wl_keyboard_listener kbd_l = {
+    .keymap = kbd_keymap, .enter = kbd_enter, .leave = kbd_leave,
+    .key = kbd_key, .modifiers = kbd_mods, .repeat_info = kbd_rep,
+};
+
 int main(void) {
+    setvbuf(stdout, 0, _IONBF, 0); // evidence in real time, not at exit
     // An absolute display name skips XDG_RUNTIME_DIR entirely (the lib
     // requires it absolute anyway): sun_path="/wayland-1" resolves to
     // the same object as "wayland-1" — the walker's empty-component
@@ -89,11 +168,20 @@ int main(void) {
     wl_registry_add_listener(reg, &reg_l, NULL);
     wl_display_roundtrip(dpy);            // globals arrive — ppoll +
                                           // recvmsg inside libwayland
-    if (!comp || !shm) { printf("WLR FAIL globals c=%p s=%p\n",
-                              (void *)comp, (void *)shm); return 1; }
+    if (!comp || !shm || !seat) { printf("WLR FAIL globals c=%p s=%p t=%p\n",
+                              (void *)comp, (void *)shm, (void *)seat); return 1; }
     wl_shm_add_listener(shm, &shm_l, NULL);
     wl_display_roundtrip(dpy);            // format events
     if (!fmt_argb || !fmt_xrgb) { printf("WLR FAIL fmt\n"); return 1; }
+
+    // the seat's halves: pointer listener for routed hit events,
+    // keyboard for the keymap + focused keys. caps were already heard
+    // (the listener attached inside reg_global, at bind time).
+    struct wl_pointer *ptr = wl_seat_get_pointer(seat);
+    wl_pointer_add_listener(ptr, &ptr_l, NULL);
+    struct wl_keyboard *kb = wl_seat_get_keyboard(seat);
+    wl_keyboard_add_listener(kb, &kbd_l, NULL);
+    wl_display_roundtrip(dpy);            // caps + keymap fd land here
 
     struct wl_surface *surf = wl_compositor_create_surface(comp);
     // the pool must actually hold the buffer it backs: 64*64*4 ARGB —
@@ -132,6 +220,31 @@ int main(void) {
         printf("WLR FAIL framed=%d rel=%d\n", frame_done, buf_released);
         return 1;
     }
+
+    // stay for the input window: the canonical libwayland event loop —
+    // prepare_read + poll + read_events/cancel — deadline-bounded so a
+    // run with no injected input still exits honestly (the gate's
+    // injection rows close the loop earlier once all three routed
+    // kinds have landed — waiting for enter AND button AND key keeps
+    // event batching deterministic: a fast inject burst can't strand
+    // a key behind an early exit. The deadline must outlast the
+    // gate's injected sequence even when its sleeps stretch under
+    // load — a real client waits forever; this bound only exists so
+    // an inputless run still exits.
+    int waited = 0;
+    while (!(got_enter && got_button && got_key) && waited < 12000) {
+        while (wl_display_prepare_read(dpy) != 0)
+            wl_display_dispatch_pending(dpy);
+        wl_display_flush(dpy);
+        struct pollfd pfd = { wl_display_get_fd(dpy), POLLIN, 0 };
+        if (poll(&pfd, 1, 200) > 0)
+            wl_display_read_events(dpy);
+        else
+            wl_display_cancel_read(dpy);
+        wl_display_dispatch_pending(dpy);
+        waited += 200;
+    }
+    printf("WLR seen enter=%d btn=%d key=%d\n", got_enter, got_button, got_key);
     printf("WLR COMPLETE\n");
     wl_display_disconnect(dpy);           // last close → server EOS
     return 0;
