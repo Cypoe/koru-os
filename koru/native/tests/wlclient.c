@@ -82,18 +82,20 @@ int main(void) {
     wl_send(cn.fd, out, wlw_len(&w));
 
     // the shm pool: a memfd we size, map shared, and paint before the fd
-    // ever crosses — the server reads the same frame set.
+    // ever crosses — the server reads the same frame set. Size must
+    // cover the buffer it backs (64*64*4) — a short pool is a hole.
+    const int poolsize = 64 * 64 * 4;
     int mfd = memfd_create("wlpool", 0);
     if (mfd < 0) { printf("WLCLI FAIL memfd e=%d\n", mfd); return 1; }
-    if (ftruncate(mfd, 4096) < 0) { printf("WLCLI FAIL trunc\n"); return 1; }
-    unsigned char *map = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+    if (ftruncate(mfd, poolsize) < 0) { printf("WLCLI FAIL trunc\n"); return 1; }
+    unsigned char *map = mmap(0, poolsize, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
     if (map == MAP_FAILED) { printf("WLCLI FAIL mmap\n"); return 1; }
     wl_le32(map + 0, 0xdeadbeef);
     wl_le32(map + 4, 0x00c0ffee);
     map[256] = 0x5a;
 
-    // shm.create_pool(new_id=6, fd=mfd, size=4096) — fd rides ancillary
-    wlw_init(&w, out, 4, 0); wlw_u32(&w, 6); wlw_i32(&w, 4096);
+    // shm.create_pool(new_id=6, fd=mfd, size=poolsize) — fd rides ancillary
+    wlw_init(&w, out, 4, 0); wlw_u32(&w, 6); wlw_i32(&w, poolsize);
     if (wl_sendfd(cn.fd, out, wlw_len(&w), mfd) < 0) { printf("WLCLI FAIL pool\n"); return 1; }
 
     // pool.create_buffer(new_id=7, offset=0, 64x64, stride=256, fmt=argb8888)

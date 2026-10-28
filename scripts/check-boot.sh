@@ -898,6 +898,77 @@ else
             else
                 bad "wlreal: evidence missing: $(grep -aE 'WLR|WLSRV|FAIL|REFUSE|EXC' "$WORK/boot_wlr.serial" | tail -8 | tr '\n' '|')"
             fi
+            # wlscene: the compositor drives the REAL scene — wlserver's
+            # surface.commit mints a *Surf through the child-facing seam
+            # (nr515 open-as-fd, nr516 blit of the client's shm bytes,
+            # nr517 damage through the z-stack), riding virtio-gpu. The
+            # pixel oracle is a screendump while the scene is live:
+            # client pixels at the anchor, root color outside — then
+            # EOS + close detaches and comp repaints the vacated rect.
+            wlport=$((5900 + $$ % 400))
+            wlppm="$WORK/wlscene.ppm"
+            wlppmw="$(cygpath -m "$wlppm" 2>/dev/null || echo "$wlppm")"
+            timeout 60 "$QEMU" -kernel "$WORK/boot_wlr.elf" -serial stdio \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on \
+                -display none -m 64M -no-reboot \
+                -vga none -device virtio-gpu-pci \
+                -monitor "tcp:127.0.0.1:$wlport,server,nowait" \
+                > "$WORK/boot_wlscene.serial" 2>&1 &
+            wq=$!
+            for _ in $(seq 1 20); do
+                exec 3<>"/dev/tcp/127.0.0.1/$wlport" 2>/dev/null && break
+                sleep 0.5
+            done
+            wdumped=0
+            if [ -e /dev/fd/3 ]; then
+                for _ in $(seq 1 80); do
+                    if grep -qF "comp: paint 64x64 nb=3" "$WORK/boot_wlscene.serial" 2>/dev/null; then
+                        printf 'screendump %s\n' "$wlppmw" >&3 2>/dev/null && wdumped=1
+                        break
+                    fi
+                    sleep 0.25
+                done
+                for _ in $(seq 1 60); do
+                    grep -qF "WLREXEC COMPLETE" "$WORK/boot_wlscene.serial" 2>/dev/null && break
+                    sleep 0.25
+                done
+                sleep 0.3
+                exec 3>&-
+            fi
+            kill $wq 2>/dev/null
+            wait $wq 2>/dev/null || true
+            wlanchor="$(grep -oE 'surf: open 64x64 at [0-9]+,[0-9]+' "$WORK/boot_wlscene.serial" | grep -oE '[0-9]+,[0-9]+' | head -1)"
+            wax="${wlanchor%,*}"; way="${wlanchor#*,}"
+            if grep -qF "surf: open 64x64 at" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLSRV surf 64x64 blit=0/0 present=0/0" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLSRV surf released" "$WORK/boot_wlscene.serial" \
+               && grep -qF "WLRINIT srv=0 cli=0" "$WORK/boot_wlscene.serial"; then
+                ok "wlscene: commit minted a real *Surf — blit+present through the z-stack, detach+reveal on close"
+            else
+                bad "wlscene: seam evidence missing: $(grep -aE 'surf|comp:|WLSRV|FAIL|EXC' "$WORK/boot_wlscene.serial" | tail -8 | tr '\n' '|')"
+            fi
+            if [ "$wdumped" -eq 1 ] && [ -s "$wlppm" ] && [ -n "$wax" ]; then
+                if command -v python >/dev/null 2>&1 && \
+                   WAX="$wax" WAY="$way" python -c "
+import sys,re,os
+d=open(sys.argv[1],'rb').read()
+m=re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s', d)
+w,h,_=map(int,m.groups()); o=m.end()
+ax,ay=int(os.environ['WAX']),int(os.environ['WAY'])
+px=lambda x,y: d[o+(y*w+x)*3:o+(y*w+x)*3+3]
+# client buffer on the scanout: px(0,0)=DEADBEEF->ad be ef, px(1,0)=00C0FFEE->c0 ff ee,
+# px(0,1) blue=0x5a; the root outside the 64x64 stays black.
+sys.exit(0 if px(ax,ay)==b'\xad\xbe\xef' and px(ax+1,ay)==b'\xc0\xff\xee'
+         and px(ax,ay+1)[2:3]==b'\x5a' and px(ax+200,ay+200)==b'\x00\x00\x00' else 1)
+" "$(cygpath -w "$wlppm")"; then
+                    ok "wlscene-pixels: client deadbeef/c0ffee/5a read off the scanout at the anchor — shm bytes composited for real"
+                else
+                    bad "wlscene-pixels: dump present but pixels wrong (or python missing)"
+                fi
+            else
+                bad "wlscene-pixels: screendump failed — dumped=$wdumped ppm=$([ -s "$wlppm" ] && echo written || echo missing) anchor=$wlanchor"
+            fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null
         fi

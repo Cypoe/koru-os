@@ -671,8 +671,18 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
             via monotonic clock, nr186 gettid for wl_log — registry
             globals + shm formats demarshalled through ffi closures,
             pool fd over SCM_RIGHTS, commit → done=42 + release,
-            sync=43, server reads client pixels — still open: a
-            compositor driving comp.zig's scene)
+            sync=43, server reads client pixels; the COMPOSITOR
+            drives the scene — wlserver's surface.commit mints a
+            real *Surf through the child-facing scene seam (nr515
+            surf_open projected as an fd, nr516 surf_blit copying the
+            client's shm bytes into provider backing, nr517
+            surf_present committing damage through the z-stack; no
+            surf_close nr — close(fd) IS the release, detach+reveal
+            on last ref, bag class 59 is a compositor's cap);
+            screendump evidence: client deadbeef/c0ffee/5a read off
+            the virtio-gpu scanout at the anchor — still open: a
+            compositor that draws more than client pixels (decor,
+            input routing, multi-client z)
             → Hyprland/Noctalia oracle harness over the real scene
 ```
 

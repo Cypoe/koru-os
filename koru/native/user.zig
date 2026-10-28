@@ -39,6 +39,10 @@ const pmm = @import("pmm");
 const kbd = @import("kbd");
 extern fn serPut(c: u8) callconv(.c) void;
 extern fn ukplat_monotonic_clock() callconv(.c) u64;
+extern fn koruos_surface_open(w: u32, h: u32, title: [*:0]const u8) callconv(.c) ?*anyopaque;
+extern fn koruos_surface_blit(p: ?*anyopaque, dx: u32, dy: u32, w: u32, h: u32, src: [*]const u32, src_stride: u32) callconv(.c) u8;
+extern fn koruos_surface_present(p: ?*anyopaque, x: u32, y: u32, w: u32, h: u32) callconv(.c) u8;
+extern fn koruos_surface_close(p: ?*anyopaque) callconv(.c) u8;
 
 const ENT: u64 = 0x3; // present | writable
 const US: u64 = 0x4; // user-accessible
@@ -828,7 +832,7 @@ const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll };
 // handles: stdio are real entries (conin/conout), fs a view handle,
 // pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
 // kind, never on the number — closing fd0 detaches like any discharge.
-const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten };
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf };
 
 // ---- the bag: class grants + nid-scoped object grants ------------------
 // DESIGN-0001 §8.6's grant {handle, verbs, as} distilled to the syscall
@@ -1537,6 +1541,10 @@ fn canonNr(nr: u64) u64 {
         // resolves. poll/ppoll multiplex those same channels — the
         // class question is "may this child wait on channels".
         41, 42, 43, 288, 46, 47, 49, 50, 53, 319, 7, 271 => 22,
+        // scene class (bit 59): a child minting a display surface is a
+        // compositor's cap, not a client's — mint/blit/present ride one
+        // bag bit; close is ordinary fd lifetime.
+        515, 516, 517 => 59,
         else => nr,
     };
 }
@@ -2000,6 +2008,12 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             stw(&st, 16, 1);
             stw(&st, 48, shms[@intCast(c.fds[fd] - 1)].size); // st_size
         },
+        .surf => {
+            // a display surface is a handle on the scene, not a byte
+            // channel — chrdev 0600 names it honestly
+            stw(&st, 24, 0o20600);
+            stw(&st, 16, 1);
+        },
         .fs => {
             const ops = c.fsv orelse return -38;
             if (ops.stat(ops.ctx, c.fds[fd], &st) < 0) return -9;
@@ -2251,6 +2265,7 @@ fn fdDupRef(c: *Child, fd: usize, out: *FdRef) bool {
         },
         .slisten => listeners[@intCast(c.fds[fd] - 1)].refs += 1,
         .shm => shms[@intCast(c.fds[fd] - 1)].refs += 1,
+        .surf => surfs[@intCast(c.fds[fd] - 1)].refs += 1,
         .fs => {
             const ops = c.fsv orelse return false;
             const nh = ops.dup(ops.ctx, c.fds[fd]);
@@ -2273,6 +2288,7 @@ fn fdFreeRef(r: FdRef) void {
         .sock => sockCloseEnd(@intCast((r.h - 1) >> 1), @intCast((r.h - 1) & 1)),
         .slisten => listenerRelease(@intCast(r.h - 1)),
         .shm => shmRelease(@intCast(r.h - 1)),
+        .surf => surfRefFree(@intCast(r.h - 1)),
         else => {},
     }
 }
@@ -2369,6 +2385,102 @@ const ShmObj = struct {
 var shms: [NSHM]ShmObj = .{ShmObj{}} ** NSHM;
 pub export var shm_maps: u64 = 0;
 
+// ---- scene surfaces: the compositor's door --------------------------------
+// surf_open (nr515) mints a *Surf through the provider and projects it
+// as a .surf fd — the child's custody rides the fd table, so dup shares
+// the token and close()/exit auto-detaches from the scene (the reveal
+// repaint is comp.zig's job, not the caller's). surf_blit (nr516) is the
+// bulk commit write: a rect of the child's own pixels copied into the
+// provider's retained backing, row-bounced through a kernel page.
+// surf_present (nr517) is the damage commit through the z-stack.
+const NSURF = 8;
+const SurfRef = struct {
+    tok: ?*anyopaque = null, // the provider's *Surf — never trusted arithmetic
+    refs: u32 = 0,
+};
+var surfs: [NSURF]SurfRef = .{SurfRef{}} ** NSURF;
+
+fn surfRefFree(idx: usize) void {
+    const s = &surfs[idx];
+    if (s.refs > 0) s.refs -= 1;
+    if (s.refs == 0) {
+        _ = koruos_surface_close(s.tok);
+        s.tok = null;
+    }
+}
+
+fn childSurfOpen(c: *Child, f: *TrapFrame) i64 {
+    const w: u32 = @intCast(f.rdi & 0xFFFFFFFF);
+    const h: u32 = @intCast(f.rsi & 0xFFFFFFFF);
+    if (w == 0 or h == 0) return -22;
+    var fd: ?usize = null;
+    for (c.fds, 0..) |v, i| if (v == 0 and c.fdkinds[i] == .none) {
+        fd = i;
+        break;
+    };
+    const fdi = fd orelse return -24;
+    var slot: ?usize = null;
+    for (&surfs, 0..) |*s, i| if (s.refs == 0) {
+        slot = i;
+        break;
+    };
+    const si = slot orelse return -24;
+    const tok = koruos_surface_open(w, h, "koru-os") orelse return -19; // no display backend — ENODEV
+    surfs[si] = .{ .tok = tok, .refs = 1 };
+    c.fds[fdi] = si + 1;
+    c.fdkinds[fdi] = .surf;
+    c.fdverbs[fdi] = 0;
+    return @intCast(fdi);
+}
+
+fn surfTok(c: *Child, fdu: u64) ?*anyopaque {
+    if (fdu >= c.fds.len) return null;
+    const fd: usize = @intCast(fdu);
+    if (c.fdkinds[fd] != .surf or c.fds[fd] == 0) return null;
+    const idx: usize = @intCast(c.fds[fd] - 1);
+    if (idx >= NSURF) return null;
+    return surfs[idx].tok;
+}
+
+// blit(fd, src_va, src_stride_bytes, rect_va) — rect_va points at a
+// {dx,dy,w,h}:u32x4 in the child's space (the 6-register ABI means the
+// rect rides memory, like iovec does). Rows bounce through one kernel
+// page: a stride over the page refuses rather than splitting a row.
+fn childSurfBlit(c: *Child, f: *TrapFrame) i64 {
+    const tok = surfTok(c, f.rdi) orelse return -9;
+    const src_va: usize = @intCast(f.rsi);
+    const stride: usize = @intCast(f.rdx);
+    var rect: [4]u32 = undefined;
+    if (copyFromUser(c, @intCast(f.r10), std.mem.sliceAsBytes(&rect)) < 16) return -14;
+    const dx = rect[0];
+    const dy = rect[1];
+    const w = rect[2];
+    const h = rect[3];
+    if (w == 0 or h == 0 or @as(usize, w) * 4 > stride or stride > 4096) return -22;
+    const page = allocPage() orelse return -12;
+    defer _ = pmm.free(@intFromPtr(page));
+    const bounce: [*]u8 = @ptrCast(page);
+    var y: u32 = 0;
+    while (y < h) : (y += 1) {
+        if (copyFromUser(c, src_va + @as(usize, y) * stride, bounce[0 .. w * 4]) < w * 4)
+            return -14;
+        if (koruos_surface_blit(tok, dx, dy + y, w, 1, @ptrCast(@alignCast(bounce)), w) == 0)
+            return -22;
+    }
+    return 0;
+}
+
+fn childSurfPresent(c: *Child, f: *TrapFrame) i64 {
+    const tok = surfTok(c, f.rdi) orelse return -9;
+    const x: u32 = @intCast(f.rsi & 0xFFFFFFFF);
+    const y: u32 = @intCast(f.rdx & 0xFFFFFFFF);
+    const w: u32 = @intCast(f.r10 & 0xFFFFFFFF);
+    const h: u32 = @intCast(f.r8 & 0xFFFFFFFF);
+    if (w == 0 or h == 0) return -22; // commit means damage
+    if (koruos_surface_present(tok, x, y, w, h) == 0) return -22;
+    return 0;
+}
+
 fn shmRelease(idx: usize) void {
     const s = &shms[idx];
     if (s.refs > 0) s.refs -= 1;
@@ -2422,6 +2534,7 @@ fn releaseFd(c: *Child, i: usize) void {
         .sock => sockCloseEnd(@intCast((c.fds[i] - 1) >> 1), @intCast((c.fds[i] - 1) & 1)),
         .slisten => listenerRelease(@intCast(c.fds[i] - 1)),
         .shm => shmRelease(@intCast(c.fds[i] - 1)),
+        .surf => surfRefFree(@intCast(c.fds[i] - 1)),
         .conin, .conout => {},
     }
     c.fds[i] = 0;
@@ -2450,6 +2563,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
         },
         .slisten => listeners[@intCast(src.fds[sfd] - 1)].refs += 1,
         .shm => shms[@intCast(src.fds[sfd] - 1)].refs += 1,
+        .surf => surfs[@intCast(src.fds[sfd] - 1)].refs += 1,
         .fs => {
             const ops = src.fsv orelse return false;
             const nh = ops.dup(ops.ctx, src.fds[sfd]);
@@ -2755,6 +2869,9 @@ fn fdPollRev(c: *Child, fdi: usize, ev: u16) u16 {
             const l = &listeners[@intCast(c.fds[fdi] - 1)];
             if (ev & POLLIN != 0 and l.npend > 0) r |= POLLIN;
         },
+        // a surface accepts a blit at any time — always writable,
+        // never readable (it is not a byte channel).
+        .surf => r |= ev & POLLOUT,
         .none => return POLLNVAL,
     }
     return r;
@@ -3470,6 +3587,15 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                  // key is the name, no path ever resolves.
             f.rax = @bitCast(childOpenObj(c, f.rdi, f.rsi));
         },
+        515 => { // surf_open(w, h) — mint a display surface, project as fd
+            f.rax = @bitCast(childSurfOpen(c, f));
+        },
+        516 => { // surf_blit(fd, src_va, stride, rect_va) — commit write
+            f.rax = @bitCast(childSurfBlit(c, f));
+        },
+        517 => { // surf_present(fd, x, y, w, h) — damage through the scene
+            f.rax = @bitCast(childSurfPresent(c, f));
+        },
         82, 264, 316 => { // rename / renameat / renameat2 — the directory
                           // entries move; the inode (the identity) does
                           // not. renameat2 flags must be 0 (no exchange/
@@ -3678,6 +3804,14 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     },
                     .shm => {
                         shmRelease(@intCast(c.fds[fd] - 1));
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .surf => { // close is the surface's release verb —
+                              // last ref detaches; comp repaints the
+                              // vacated rect from lower backings.
+                        surfRefFree(@intCast(c.fds[fd] - 1));
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
                         f.rax = 0;

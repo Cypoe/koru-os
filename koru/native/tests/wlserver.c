@@ -9,16 +9,27 @@
 // reads are the client's writes to the same frame set. The node is
 // left on disk: it's the gate's fs-visibility evidence (a real
 // compositor would unlink it on shutdown).
+#include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include "wlwire.h"
 
 #define WL_SOCK_NAME "wayland-1"
+
+// koru scene seam: 515 mints a *Surf as an fd-table projection, 516
+// blits a rect of client pixels into the provider backing (stride in
+// bytes; rect rides memory like iovec), 517 commits damage through
+// the z-stack. close(fd) detaches — compositor lifetime, not a verb.
+#define K_SURF_OPEN    515
+#define K_SURF_BLIT    516
+#define K_SURF_PRESENT 517
 
 int main(void) {
     int lfd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -41,12 +52,25 @@ int main(void) {
     unsigned char msg[1024], out[1024];
     struct wlw w;
     uint32_t reg = 0, comp = 0, shm = 0, surf = 0, pool = 0, buf = 0, cb = 0;
-    int poolfd = -1, poolsize = 0;
+    uint32_t bufoff = 0, bufw = 0, bufh = 0, bufstride = 0;
+    int poolfd = -1, poolsize = 0, surffd = -1;
     unsigned char *map = 0;
 
     for (;;) {
         int n = wl_next(&cn, msg, sizeof msg);
-        if (n == 0) { printf("WLSRV EOS\n"); break; }
+        if (n == 0) {
+            printf("WLSRV EOS\n");
+            // a dead client's last frame lingers — the compositor's
+            // policy is to hold the scene a beat before teardown, the
+            // same linger a real one shows while reaping. poll's tick
+            // deadline carries the hold without starving the machine.
+            if (surffd >= 0) {
+                poll(0, 0, 1500);
+                close(surffd); // detach — comp repaints the vacated rect
+                printf("WLSRV surf released\n");
+            }
+            break;
+        }
         if (n < 0) { printf("WLSRV FAIL wire\n"); return 1; }
         uint32_t oid = wl_u32(msg);
         uint16_t op = wl_u16(msg + 4);
@@ -85,6 +109,8 @@ int main(void) {
             if (map == MAP_FAILED) { printf("WLSRV FAIL mmap\n"); return 1; }
         } else if (oid == pool && op == 0) {  // pool.create_buffer(new_id, off, w, h, stride, fmt)
             buf = wl_arg(msg, 0);
+            bufoff = wl_arg(msg, 1); bufw = wl_arg(msg, 2);
+            bufh = wl_arg(msg, 3); bufstride = wl_arg(msg, 4);
         } else if (oid == surf && op == 1) {  // surface.attach(buffer, x, y)
         } else if (oid == surf && op == 2) {  // surface.damage(x, y, w, h)
         } else if (oid == surf && op == 3) {  // surface.frame(new callback)
@@ -93,6 +119,32 @@ int main(void) {
             uint32_t magic = wl_u32(map + 0), tag = wl_u32(map + 4);
             unsigned px0 = map[256];
             printf("WLSRV magic=%08x tag=%08x px0=%02x\n", magic, tag, px0);
+            // commit IS the scene door: mint a *Surf sized to the
+            // buffer on first frame, blit the client's shm bytes into
+            // the provider backing, present full-surface damage. A
+            // headless boot (no fb backend) refuses the mint and the
+            // wire session still completes — weston's headless mode
+            // is the same shape.
+            if (bufw && bufh && map) {
+                if (surffd < 0) {
+                    surffd = (int)syscall(K_SURF_OPEN, bufw, bufh);
+                    if (surffd < 0) {
+                        printf("WLSRV surf refused e=%d\n", errno);
+                        surffd = -1;
+                    }
+                }
+                if (surffd >= 0) {
+                    uint32_t rect[4] = { 0, 0, bufw, bufh };
+                    long br = syscall(K_SURF_BLIT, surffd, map + bufoff,
+                                      bufstride, rect);
+                    int be = errno;
+                    long pr = br < 0 ? br
+                        : syscall(K_SURF_PRESENT, surffd, 0, 0, bufw, bufh);
+                    int pe = errno;
+                    printf("WLSRV surf %ux%u blit=%ld/%d present=%ld/%d\n",
+                           bufw, bufh, br, be, pr, pe);
+                }
+            }
             wlw_init(&w, out, cb, 0); wlw_u32(&w, 42);     // callback.done
             wl_send(cn.fd, out, wlw_len(&w));
             wlw_init(&w, out, buf, 0);                     // buffer.release

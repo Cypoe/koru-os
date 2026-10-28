@@ -96,18 +96,22 @@ int main(void) {
     if (!fmt_argb || !fmt_xrgb) { printf("WLR FAIL fmt\n"); return 1; }
 
     struct wl_surface *surf = wl_compositor_create_surface(comp);
+    // the pool must actually hold the buffer it backs: 64*64*4 ARGB —
+    // a short pool is a mapping hole past page 0 (the commit-blit is
+    // what first walks the full declared geometry).
+    const int poolsize = 64 * 64 * 4;
     int mfd = memfd_create("wlpool", 0);
-    if (mfd < 0 || ftruncate(mfd, 4096) < 0) {
+    if (mfd < 0 || ftruncate(mfd, poolsize) < 0) {
         printf("WLR FAIL memfd e=%d\n", mfd); return 1;
     }
-    unsigned char *map = mmap(0, 4096, PROT_READ | PROT_WRITE,
+    unsigned char *map = mmap(0, poolsize, PROT_READ | PROT_WRITE,
                               MAP_SHARED, mfd, 0);
     if (map == MAP_FAILED) { printf("WLR FAIL mmap\n"); return 1; }
     map[0] = 0xef; map[1] = 0xbe; map[2] = 0xad; map[3] = 0xde; // deadbeef
     map[4] = 0xee; map[5] = 0xff; map[6] = 0xc0; map[7] = 0x00; // 00c0ffee
     map[256] = 0x5a;
 
-    struct wl_shm_pool *pool = wl_shm_create_pool(shm, mfd, 4096);
+    struct wl_shm_pool *pool = wl_shm_create_pool(shm, mfd, poolsize);
     struct wl_buffer *buf = wl_shm_pool_create_buffer(pool, 0, 64, 64,
                                  256, WL_SHM_FORMAT_ARGB8888);
     wl_buffer_add_listener(buf, &buf_l, NULL);

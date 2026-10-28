@@ -117,6 +117,22 @@ pub export fn koruos_surface_px(p: ?*anyopaque, x: u32, y: u32, color: u32) call
     return 1;
 }
 
+// blit — the bulk write a compositor makes: copy a w*h rect of u32
+// pixels out of a kernel-readable source (stride in PIXELS) into the
+// provider backing at (dx,dy), clipped to bounds. This is
+// wl_surface.commit's shape — the client's shm bytes become the
+// retained backing; nothing reaches the scanout until present().
+pub export fn koruos_surface_blit(p: ?*anyopaque, dx: u32, dy: u32, w: u32, h: u32, src: [*]const u32, src_stride: u32) callconv(.c) u8 {
+    const s = asSurf(p) orelse return 0;
+    if (dx >= s.w or dy >= s.h or w == 0 or h == 0) return 0;
+    const x1 = @min(dx + w, s.w);
+    const y1 = @min(dy + h, s.h);
+    var y = dy;
+    while (y < y1) : (y += 1)
+        @memcpy(s.buf[y * s.w + dx .. y * s.w + x1], src[(y - dy) * src_stride .. (y - dy) * src_stride + (x1 - dx)]);
+    return 1;
+}
+
 pub export fn koruos_surface_present(p: ?*anyopaque, x: u32, y: u32, w: u32, h: u32) callconv(.c) u8 {
     const s = asSurf(p) orelse return 0;
     if (w == 0 or h == 0) return 0; // commit means damage
