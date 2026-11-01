@@ -88,8 +88,11 @@ static void buf_rel(void *d, struct wl_buffer *b) {
 static const struct wl_buffer_listener buf_l = { .release = buf_rel };
 
 static int frame_done;
+static struct wl_callback *frame_cb;
 static void cb_done(void *d, struct wl_callback *c, uint32_t data) {
-    if (data == 42) { frame_done = 1; printf("WLR frame done=%u\n", data); }
+    // frame vs sync is decided by the callback OBJECT, not the payload —
+    // a real compositor sends a CLOCK_MONOTONIC timestamp, not 42.
+    if (c == frame_cb) { frame_done = 1; printf("WLR frame done=%u\n", data); }
     else printf("WLR sync done=%u\n", data);
 }
 static const struct wl_callback_listener cb_l = { .done = cb_done };
@@ -199,7 +202,12 @@ int main(void) {
     // requires it absolute anyway): sun_path="/wayland-1" resolves to
     // the same object as "wayland-1" — the walker's empty-component
     // skip makes a leading slash free — the node wlserver bound.
-    setenv("WAYLAND_DISPLAY", "/wayland-1", 1);
+    // WLREAL_SOCK re-points the same binary at the nested compositor
+    // (wlrcomp serves /wayland-2) without a second source file.
+#ifndef WLREAL_SOCK
+#define WLREAL_SOCK "/wayland-1"
+#endif
+    setenv("WAYLAND_DISPLAY", WLREAL_SOCK, 1);
 
     // Real libwayland makes ONE connect attempt — retrying until the
     // compositor's socket exists is the caller's job (the server races
@@ -273,15 +281,39 @@ int main(void) {
 
     wl_surface_attach(surf, buf, 0, 0);
     wl_surface_damage(surf, 0, 0, 64, 64);
-    struct wl_callback *cb = wl_surface_frame(surf);
-    wl_callback_add_listener(cb, &cb_l, NULL);
+    frame_cb = wl_surface_frame(surf);
+    wl_callback_add_listener(frame_cb, &cb_l, NULL);
+    wl_surface_commit(surf);
+
+    // A real compositor retains the attached buffer as front content —
+    // wl_buffer.release arrives when the buffer is SUPERSEDED, not on
+    // first commit (our wlserver releases eagerly, which also answers
+    // this). Commit a second buffer: buf1's release is the proof the
+    // release path is live upstream too.
+    struct wl_shm_pool *pool2 = wl_shm_create_pool(shm, mfd, poolsize);
+    struct wl_buffer *buf2 = wl_shm_pool_create_buffer(pool2, 0, 64, 64,
+                                 256, WL_SHM_FORMAT_ARGB8888);
+    wl_buffer_add_listener(buf2, &buf_l, NULL);
+    wl_shm_pool_destroy(pool2);
+    wl_surface_attach(surf, buf2, 0, 0);
+    wl_surface_damage(surf, 0, 0, 64, 64);
     wl_surface_commit(surf);
 
     struct wl_callback *scb = wl_display_sync(dpy);
     wl_callback_add_listener(scb, &cb_l, NULL);
-    wl_display_roundtrip(dpy);            // commit lands: server reads
-                                          // our pixels, answers done +
-                                          // release + sync done
+    int waited = 0;
+    while (!(frame_done && buf_released) && waited < 15000) {
+        while (wl_display_prepare_read(dpy) != 0)
+            wl_display_dispatch_pending(dpy);
+        wl_display_flush(dpy);
+        struct pollfd pfd = { wl_display_get_fd(dpy), POLLIN, 0 };
+        if (poll(&pfd, 1, 200) > 0)
+            wl_display_read_events(dpy);
+        else
+            wl_display_cancel_read(dpy);
+        wl_display_dispatch_pending(dpy);
+        waited += 200;
+    }
     if (!frame_done || !buf_released) {
         printf("WLR FAIL framed=%d rel=%d\n", frame_done, buf_released);
         return 1;
@@ -297,7 +329,7 @@ int main(void) {
     // gate's injected sequence even when its sleeps stretch under
     // load — a real client waits forever; this bound only exists so
     // an inputless run still exits.
-    int waited = 0;
+    waited = 0;
     while (!(got_enter && got_button && got_key) && waited < 12000) {
         while (wl_display_prepare_read(dpy) != 0)
             wl_display_dispatch_pending(dpy);

@@ -680,7 +680,7 @@ fi
 if [ -z "$IMGWSL" ] || [ -z "$ELFWSL" ]; then
     bad "boot_ext2: WSL/wslpath or python unavailable — cannot build the ext2 image"
 else
-    if MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 128 -O none -L koru-native "$IMGWSL" 16384 > "$WORK/mke2fs.out" 2>&1 \
+    if MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 4096 -O none -L koru-native "$IMGWSL" 32768 > "$WORK/mke2fs.out" 2>&1 \
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $ELFWSL child.elf" "$IMGWSL" > "$WORK/debugfs.out" 2>&1 \
         && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "mkdir bin" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
         && { printf 'cd bin\nwrite %s childA.elf\nwrite %s childB.elf\nwrite %s spin.elf\n' "$ELFAWSL" "$ELFBWSL" "$SPINWSL" > "$WORK/debugfs.cmds" \
@@ -710,6 +710,7 @@ else
         cp "$ROOT/koru/native/tests/wlinit.c" "$WORK/wlinit.c"
         cp "$ROOT/koru/native/tests/wlreal.c" "$WORK/wlreal.c"
         cp "$ROOT/koru/native/tests/wlrinit.c" "$WORK/wlrinit.c"
+        cp "$ROOT/koru/native/tests/wlrcinit.c" "$WORK/wlrcinit.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -731,6 +732,9 @@ else
         WLINITWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlinit.elf")")"
         WLREALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlreal.elf")")"
         WLRINITWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlrinit.elf")")"
+        WLRCOMPWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlrcomp.elf")")"
+        WLRINNERWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlrinner.elf")")"
+        WLRCINITWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/wlrcinit.elf")")"
         printf 'hello-from-ext2\n' > "$WORK/hello.txt"
         # musl hello: zig cc emits a real static musl ET_EXEC linked above
         # the kernel identity region (0x48000000) — ~1MB, exercised through
@@ -757,6 +761,10 @@ else
            && WLHOST="$ROOT/koru/hosted/wayland" \
            && "$ZIGBIN" cc -O2 -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -I"$WLHOST" -I"$WLHOST/libffi" -DHAVE_CONFIG_H -o "$WORK/wlreal.elf" "$WORK/wlreal.c" "$WLHOST/src/connection.c" "$WLHOST/src/wayland-client.c" "$WLHOST/src/wayland-os.c" "$WLHOST/src/wayland-util.c" "$WLHOST/wayland-client-protocol.c" "$WLHOST/xdg-shell-protocol.c" "$WLHOST/libffi/libffi.a" > "$WORK/wlreal.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlrinit.elf" "$WORK/wlrinit.c" > "$WORK/wlrinit.build" 2>&1 \
+           && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlrcinit.elf" "$WORK/wlrcinit.c" > "$WORK/wlrcinit.build" 2>&1 \
+           && WLHOST="$ROOT/koru/hosted/wayland" \
+           && "$ZIGBIN" cc -O2 -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -DWLREAL_SOCK='"/wayland-2"' -I"$WLHOST" -I"$WLHOST/libffi" -DHAVE_CONFIG_H -o "$WORK/wlrinner.elf" "$WORK/wlreal.c" "$WLHOST/src/connection.c" "$WLHOST/src/wayland-client.c" "$WLHOST/src/wayland-os.c" "$WLHOST/src/wayland-util.c" "$WLHOST/wayland-client-protocol.c" "$WLHOST/xdg-shell-protocol.c" "$WLHOST/libffi/libffi.a" > "$WORK/wlrinner.build" 2>&1 \
+           && bash "$ROOT/scripts/build-wlrcomp.sh" "$WORK/wlrcomp.elf" > "$WORK/wlrcomp.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -dynamic -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/hi.elf" "$WORK/hi.c" "$WORK/libhi.so" >> "$WORK/hi.build" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $PIEWSL pie.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
@@ -779,6 +787,19 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLINITWSL wlinit.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLREALWSL wlreal.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLRINITWSL wlrinit.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLRCOMPWSL wlrcomp.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLRINNERWSL wlrinner.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLRCINITWSL wlrcinit.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "mkdir xkb" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
+           && XKBSRCWSL="$(wsl -e wslpath -u "$(cygpath -w "$ROOT/koru/hosted/xkbdata/xkb")")" \
+           && { echo 'cd /'; \
+                (cd "$ROOT/koru/hosted/xkbdata/xkb" && find . -type d | sed 's|^\./||' | grep -vx '\.' | sort) | \
+                  while read -r d; do \
+                    echo "cd /"; echo "mkdir xkb/$d"; echo "cd xkb/$d"; \
+                    (cd "$ROOT/koru/hosted/xkbdata/xkb" && find "$d" -maxdepth 1 -type f | while read -r f; do \
+                       echo "write $XKBSRCWSL/$f $(basename "$f")"; done); \
+                  done; echo 'cd /'; } > "$WORK/xkb.cmds" \
+           && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -f "$(wsl -e wslpath -u "$(cygpath -w "$WORK/xkb.cmds")")" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
             boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
@@ -983,7 +1004,7 @@ else
             if grep -qF "surf: open 64x64 at" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLSRV surf slot=0" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLSRV surf slot=1" "$WORK/boot_wlscene.serial" \
-               && grep -qF "WLSRV surf 64x64 blit=0/0 present=0/0" "$WORK/boot_wlscene.serial" \
+               && grep -qE "WLSRV surf 64x64 dmg=[0-9]+x[0-9]+@[0-9]+,[0-9]+ blit=0/0 present=0/0" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLR ptr enter" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLR kbd enter" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLR ptr motion" "$WORK/boot_wlscene.serial" \
@@ -1029,6 +1050,100 @@ sys.exit(0 if px(160,155)==b'\xad\xbe\xef' and px(161,155)==b'\xc0\xff\xee'
                 fi
             else
                 bad "wlscene-pixels: screendump failed — dumped=$wdumped ppm=$([ -s "$wlppm" ] && echo written || echo missing)"
+            fi
+            # wlrcomp: the NESTED compositor rung — wlroots 0.16 runs as
+            # a real client of wlserver (/wayland-1), pixman-renders its
+            # scene into an shm toplevel, and serves its OWN libwayland
+            # display on /wayland-2 where wlrinner (unmodified
+            # libwayland-1.26, -DWLREAL_SOCK=/wayland-2) speaks xdg_shell
+            # to wlroots' implementation. Three protocol hops: client
+            # shm -> wlroots scene -> pixman -> wl_shm -> *Surf -> scanout.
+            sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_wlc.k" \
+                > "$WORK/boot_wlc.k"
+            if ! bash "$ROOT/scripts/build-native.sh" "$WORK/boot_wlc.k" \
+                    "$WORK/boot_wlc.elf" > "$WORK/boot_wlc.build" 2>&1; then
+                bad "wlrcomp: boot fixture failed to build"; tail -4 "$WORK/boot_wlc.build"
+            fi
+            wlcppm="$WORK/wlrcomp.ppm"
+            wlcppmw="$(cygpath -m "$wlcppm" 2>/dev/null || echo "$wlcppm")"
+            wlcport=$((5700 + $$ % 400))
+            timeout 90 "$QEMU" -kernel "$WORK/boot_wlc.elf" -serial stdio \
+                -drive "file=$IMG,format=raw,if=none,id=d0" \
+                -device virtio-blk-pci,drive=d0,disable-modern=on \
+                -display none -m 64M -no-reboot \
+                -vga none -device virtio-gpu-pci \
+                -monitor "tcp:127.0.0.1:$wlcport,server,nowait" \
+                > "$WORK/boot_wlc.serial" 2>&1 &
+            wlcpid=$!
+            for _ in $(seq 1 40); do
+                exec 3<>"/dev/tcp/127.0.0.1/$wlcport" 2>/dev/null && break
+                sleep 0.5
+            done
+            wcdumped=0; wcmon=0
+            if [ -e /dev/fd/3 ]; then
+                wcmon=1
+                # WLSRV magic=ffb0cefb is the inner client's deadbeef,
+                # pixman-blended, landing in wlserver's commit read —
+                # wlserver prints it mid-run (WLRC lines buffer until
+                # wlrcomp exits, so they cannot be the dump trigger).
+                # The frame stays on scanout until teardown, seconds
+                # later; dump right then.
+                for _ in $(seq 1 160); do
+                    if grep -qF "WLSRV magic=ffb0cefb" "$WORK/boot_wlc.serial" 2>/dev/null; then
+                        sleep 1
+                        printf 'screendump %s\n' "$wlcppmw" >&3 2>/dev/null && wcdumped=1
+                        break
+                    fi
+                    grep -qF "WLCEXEC COMPLETE" "$WORK/boot_wlc.serial" 2>/dev/null && break
+                    sleep 0.25
+                done
+            fi
+            for i in $(seq 1 60); do
+                grep -qF "WLCEXEC COMPLETE" "$WORK/boot_wlc.serial" 2>/dev/null && break
+                sleep 0.5
+            done
+            exec 3>&-
+            wait "$wlcpid" 2>/dev/null
+            if grep -qF "WLSRV bound wayland-1" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLRC up: backend=wayland renderer=pixman" "$WORK/boot_wlc.serial" \
+               && grep -qE "WLRC new-output [0-9]+x[0-9]+" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLRC client +1" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLRC new xdg toplevel" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLRC view mapped" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLSRV magic=ffb0cefb" "$WORK/boot_wlc.serial" \
+               && grep -qE "WLSRV surf 1280x720 dmg=[0-9]+x[0-9]+@[0-9]+,[0-9]+ blit=0/0 present=0/0" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLR buffer release" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLR frame done" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLRC quiescent" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLSRV EOS" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLCEXEC COMPLETE" "$WORK/boot_wlc.serial" \
+               && grep -qF "WLRCINIT srv=0 comp=0 inner=0" "$WORK/boot_wlc.serial"; then
+                ok "wlrcomp: wlroots 0.16 NESTED — /wayland-1 client + /wayland-2 compositor, pixman scene, inner libwayland client did xdg_shell through wlroots, frame-done+buffer-release ran, quiescence unwound the chain"
+            else
+                bad "wlrcomp: chain evidence missing: $(grep -aE 'WLRC|WLR |WLSRV|FAIL|REFUSE|EXC' "$WORK/boot_wlc.serial" | tail -12 | tr '\n' '|')"
+            fi
+            if [ "$wcdumped" -eq 1 ] && [ -s "$wlcppm" ]; then
+                if command -v python >/dev/null 2>&1 && \
+                   python -c "
+import sys,re
+d=open(sys.argv[1],'rb').read()
+m=re.match(rb'P6\s+(\d+)\s+(\d+)\s+(\d+)\s', d)
+w,h,_=map(int,m.groups()); o=m.end()
+px=lambda x,y: d[o+(y*w+x)*3:o+(y*w+x)*3+3]
+# wlrcomp's toplevel sits at slot0 (40,40) covering the scanout with
+# its scene: the INNER client's 64x64 at scene (0,0) — its deadbeef/
+# c0ffee arrive pixman-BLENDED (premult over bg) as ffb0cefb/ffd9ffff
+# => (40,40)=b0cefb,(41,40)=d9ffff on scanout; away from it the
+# compositor's own bg rect (0.1,0.5,0.35) -> (25,127,89).
+sys.exit(0 if px(40,40)==b'\xb0\xce\xfb' and px(41,40)==b'\xd9\xff\xff'
+         and px(300,300)==b'\x19\x7f\x59' else 1)
+" "$(cygpath -w "$wlcppm")"; then
+                    ok "wlrcomp-pixels: inner client's deadbeef composited INSIDE wlrcomp's toplevel, bg rect behind — 3 protocol hops to scanout"
+                else
+                    bad "wlrcomp-pixels: dump present but pixels wrong (or python missing)"
+                fi
+            else
+                bad "wlrcomp-pixels: screendump failed — dumped=$wcdumped ppm=$([ -s "$wlcppm" ] && echo written || echo missing)"
             fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null

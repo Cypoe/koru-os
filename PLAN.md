@@ -724,9 +724,32 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
             (wl_display_init_shm) — buffer access via wl_shm_buffer_*,
             no compositor-side pool code at all. Every prior row
             stands: registry/shm fmt/seat caps/keymap-fd/xdg role
-            handshake/blit/present/frame/release/drag/pixels
-            → Hyprland/Noctalia oracle harness over the real scene —
-            wlroots-minimal is the next binary to link
+            handshake/blit/present/frame/release/drag/pixels;
+            NESTED-WLROOTS LANDED — wlrcomp.elf is a real wlroots
+            0.16 compositor (vendored wlroots + pixman + xkbcommon +
+            real xkb data): the wayland backend makes it a wl_shm/
+            xdg client of wlserver on /wayland-1 while its own
+            libwayland-server display on /wayland-2 serves wlrinner
+            (unmodified libwayland-1.26) a full xdg_shell handshake —
+            three protocol hops: client shm → wlroots scene → pixman
+            → wl_shm → *Surf → scanout. Kernel grew the stack's real
+            appetite on the way in: flock (wl_socket_lock, nr73),
+            lstat/stat via a stat_path ops verb (stale-socket probe +
+            xkb include-path stat), faccessat2/access (xkb's eaccess
+            check), rt_sigaction (wayland-shm SIGBUS machinery —
+            stored, never delivered), file-backed read-only mmap
+            (xkb rules files), shm objects to 8MB/16 slots with npages
+            widened past u8 wrap. wlserver learned damage accumulation
+            (swapchain-ring truth: undamaged regions of a fresh attach
+            are stale — blit the declared rect, present the same).
+            Composited pixels on virtio-gpu scanout: inner client's
+            deadbeef/c0ffee arrive pixman-blended (ffb0cefb/ffd9ffff)
+            at the toplevel origin, bg rect behind — read off the
+            PPM, not self-report. Found + worked around an LLVM fold
+            bug in the blit loop (andl $0x7fc on the copy len — asm
+            barrier makes it opaque). Still open: timerfd/signalfd
+            arming (eventfd exists), mmap-backed backend surfaces,
+            DRM/EGL vs *Surf — the Hyprland/Noctalia harness direction
 ```
 
 Also open, smaller:

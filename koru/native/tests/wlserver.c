@@ -76,6 +76,7 @@ struct rsurf {
     int attached;
     int surfix;                      // scs[] index or -1
     struct scsurf *sc;
+    int32_t dx, dy, dw, dh;          // pending damage union; dw<=0 = none
 };
 
 // a session — one wl_client, our side-table of its routed objects
@@ -230,7 +231,21 @@ static void surf_attach(struct wl_client *cl, struct wl_resource *res,
     S->attached = buffer != NULL;    // stays honest either way
 }
 static void surf_damage(struct wl_client *cl, struct wl_resource *res,
-                        int32_t x, int32_t y, int32_t w, int32_t h) {}
+                        int32_t x, int32_t y, int32_t w, int32_t h) {
+    // damage (surface-space) and damage_buffer (buffer-space) share this
+    // handler — at scale 1 with no transform they coincide. The union is
+    // the honest part: a swapchain ring means undamaged regions of the
+    // newly attached buffer are stale, never re-presented.
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (w <= 0 || h <= 0) return;
+    if (S->dw <= 0) { S->dx = x; S->dy = y; S->dw = w; S->dh = h; return; }
+    int32_t x2 = S->dx + S->dw, y2 = S->dy + S->dh;
+    if (x < S->dx) S->dx = x;
+    if (y < S->dy) S->dy = y;
+    if (x + w > x2) x2 = x + w;
+    if (y + h > y2) y2 = y + h;
+    S->dw = x2 - S->dx; S->dh = y2 - S->dy;
+}
 static void surf_frame(struct wl_client *cl, struct wl_resource *res,
                        uint32_t cbid) {
     struct rsurf *S = wl_resource_get_user_data(res);
@@ -277,6 +292,24 @@ static void surf_commit(struct wl_client *cl, struct wl_resource *res) {
         uint32_t tag = *(uint32_t *)((char *)wl_shm_buffer_get_data(shb) + 4);
         unsigned px0 = ((unsigned char *)wl_shm_buffer_get_data(shb))[256];
         printf("WLSRV magic=%08x tag=%08x px0=%02x\n", magic, tag, px0);
+        {
+            const char *bd = wl_shm_buffer_get_data(shb);
+            uint32_t pr[6] = {0};
+            unsigned want[6][2] = { {0,0},{1,0},{10,10},{40,40},
+                                    {200,150},{640,360} };
+            if (bd) {
+                for (int pi = 0; pi < 6; pi++) {
+                    unsigned wx = want[pi][0], wy = want[pi][1];
+                    if (wx < bw && wy < bh)
+                        pr[pi] = *(const uint32_t *)(bd + (size_t)wy * bstride
+                                                     + (size_t)wx * 4);
+                }
+            }
+            printf("WLSRV probe"
+                   " p00=%08x p10=%08x p1010=%08x"
+                   " p4040=%08x p200150=%08x p640360=%08x\n",
+                   pr[0], pr[1], pr[2], pr[3], pr[4], pr[5]);
+        }
         if (S->surfix < 0) {
             for (int i = 0; i < NSURF && S->surfix < 0; i++)
                 if (!scs[i].live) S->surfix = i;
@@ -305,15 +338,34 @@ static void surf_commit(struct wl_client *cl, struct wl_resource *res) {
             }
         }
         if (S->surfix >= 0) {
-            uint32_t rect[4] = { 0, 0, bw, bh };
-            long br = syscall(K_SURF_BLIT, scs[S->surfix].fd,
-                              wl_shm_buffer_get_data(shb), bstride, rect);
+            // only the declared damage is fresh in this buffer — blit
+            // that rect onto the accumulated backing; no damage declared
+            // falls back to the whole buffer (legacy clients).
+            int32_t rx = 0, ry = 0, rw = (int32_t)bw, rh = (int32_t)bh;
+            if (S->dw > 0) {
+                rx = S->dx; ry = S->dy; rw = S->dw; rh = S->dh;
+                if (rx < 0) { rw += rx; rx = 0; }
+                if (ry < 0) { rh += ry; ry = 0; }
+                if (rx + rw > (int32_t)bw) rw = (int32_t)bw - rx;
+                if (ry + rh > (int32_t)bh) rh = (int32_t)bh - ry;
+            }
+            S->dw = 0; // damage consumed by this commit
+            uint32_t rect[4] = { (uint32_t)rx, (uint32_t)ry,
+                                 (uint32_t)(rw > 0 ? rw : 0),
+                                 (uint32_t)(rh > 0 ? rh : 0) };
+            long br = rect[2] && rect[3]
+                ? syscall(K_SURF_BLIT, scs[S->surfix].fd,
+                          wl_shm_buffer_get_data(shb), bstride, rect)
+                : 0;
             int be = br < 0 ? errno : 0;
             long pr = br < 0 ? br
-                : syscall(K_SURF_PRESENT, scs[S->surfix].fd, 0, 0, bw, bh);
+                : syscall(K_SURF_PRESENT, scs[S->surfix].fd,
+                          rect[0], rect[1], rect[2], rect[3]);
             int pe = pr < 0 ? errno : 0;
-            printf("WLSRV surf %ux%u blit=%ld/%d present=%ld/%d\n",
-                   bw, bh, br, be, pr, pe);
+            printf("WLSRV surf %ux%u dmg=%ux%u@%u,%u blit=%ld/%d "
+                   "present=%ld/%d\n",
+                   bw, bh, rect[2], rect[3], rect[0], rect[1],
+                   br, be, pr, pe);
         }
         wl_shm_buffer_end_access(shb);
     }

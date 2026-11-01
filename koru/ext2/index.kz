@@ -1008,6 +1008,10 @@ const ChildFsOps = extern struct {
     // Returns the object key (dev<<32|ino) so the caller can name the
     // node it just made.
     mknod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    // stat_path(path): stat WITHOUT a handle — the only way to see
+    // objects open() refuses (directories, socket nodes). The inode
+    // carries the truth: mode is read, never synthesized.
+    stat_path: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64,
 };
 
 // readAt: inode + byte-range → bytes, reading only the blocks covered —
@@ -1422,6 +1426,35 @@ fn cfClose(ctx: ?*anyopaque, h: u64) callconv(.c) void {
     if (fp.refs == 0) free(fp);
 }
 
+// cfStatPath: stat WITHOUT a handle — the path-stats (nr4/nr6) ride
+// this, and so does every consumer that must see a directory or a
+// socket node, neither of which open() will mint a handle for. The
+// inode carries the truth: mode is read, not synthesized.
+fn cfStatPath(ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    var dir: [BS]u8 = undefined;
+    const ino = lookupPath(fs, std.mem.span(path), &dir) orelse return -2; // ENOENT
+    const iloc = inodeLoc(fs, ino) orelse return -5;
+    var ib: [BS]u8 = undefined;
+    if (!readBlock(fs, iloc.block, &ib)) return -5;
+    for (0..144) |i| dst[i] = 0;
+    const w64 = struct {
+        fn s(b: [*]u8, off: usize, v: u64) void {
+            for (0..8) |i| b[off + i] = @truncate(v >> @intCast(i * 8));
+        }
+    }.s;
+    w64(dst, 0, fs.dev_id);                          // st_dev
+    w64(dst, 8, ino);                                // st_ino
+    w64(dst, 16, rd16(&ib, iloc.off + 26));          // st_nlink — real
+    const mode: u64 = rd16(&ib, iloc.off);           // st_mode: the
+    for (0..4) |i| dst[24 + i] = @truncate(mode >> @intCast(i * 8)); // inode's own
+    const size: u64 = rd32(&ib, iloc.off + 4);
+    w64(dst, 48, size);                              // st_size
+    w64(dst, 56, BS);                                // st_blksize
+    w64(dst, 64, (size + 511) / 512);                // st_blocks
+    return 0;
+}
+
 // dup: same handle, +1 ref — the child shares the file (one offset),
 // and each table's close drops exactly its own reference.
 fn cfDup(ctx: ?*anyopaque, h: u64) callconv(.c) i64 {
@@ -1437,7 +1470,7 @@ fn childFs(fs: *Fs) ChildFsOps {
               .dup = cfDup, .key = cfKey, .write = cfWrite,
               .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey,
               .mkdir = cfMkdir, .rmdir = cfRmdir, .link = cfLink,
-              .mknod = cfMknod };
+              .mknod = cfMknod, .stat_path = cfStatPath };
 }
 
 ~proc fetch|zig {

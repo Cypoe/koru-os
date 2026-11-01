@@ -1,0 +1,25 @@
+// Hand-written for x86_64-linux-musl: every HAVE_* musl actually has.
+#define _GNU_SOURCE 1
+#define EXIT_INVALID_USAGE 2
+#define LIBXKBCOMMON_VERSION "1.6.0"
+#define LIBXKBCOMMON_TOOL_PATH "/nonexistent"
+#define DFLT_XKB_CONFIG_ROOT "/nonexistent/xkb"
+#define DFLT_XKB_CONFIG_EXTRA_PATH "/nonexistent/xkb-extra"
+#define XLOCALEDIR "/nonexistent/locale"
+#define DEFAULT_XKB_RULES "evdev"
+#define DEFAULT_XKB_MODEL "pc105"
+#define DEFAULT_XKB_LAYOUT "us"
+#define DEFAULT_XKB_VARIANT NULL
+#define DEFAULT_XKB_OPTIONS NULL
+#define HAVE_UNISTD_H 1
+#define HAVE___BUILTIN_EXPECT 1
+#define HAVE_EACCESS 1
+#define HAVE_EUIDACCESS 1
+#define HAVE_MMAP 1
+#define HAVE_MKOSTEMP 1
+#define HAVE_STRNDUP 1
+#define HAVE_ASPRINTF 1
+#define HAVE_VASPRINTF 1
+#define HAVE_SECURE_GETENV 1
+#define HAVE___SECURE_GETENV 1
+#define PATH_MAX 4096

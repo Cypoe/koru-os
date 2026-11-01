@@ -21,6 +21,14 @@ or refuses loudly. Unikraft is one arm, not the OS. Design contract:
 - zig: `W:\tools\zig-0.15.1` — must be on `PATH` (POSIX form
   `/w/tools/zig-0.15.1`) or koruc crashes `FileNotFound` spawning the
   backend build. From Git Bash: `PATH="/w/tools/zig-0.15.1:$PATH" koruc ...`
+  **Fold-bug caveat (measured 2026-10):** this zig/LLVM mis-optimizes
+  bounded-int arithmetic in `native/user.zig`'s surface-blit loop —
+  observed `cw*4` folded through `andl $0x7fc` (len=0 for cw=1024 →
+  silent zero-blit) and a phantom `0x1ff` bound-check `ud2`. The
+  workaround in-tree: `@setRuntimeSafety(false)` on the already-validated
+  loop plus an empty `asm volatile` barrier making the byte count opaque
+  to the folder. If a syscall loop produces zeros/short-copies with no
+  error, disassemble the loop before trusting the source semantics.
 - koru-libs modules (e.g. `unikraft/sched`): `W:\src\koru-libs`
 
 ## The realize command (the instrument)

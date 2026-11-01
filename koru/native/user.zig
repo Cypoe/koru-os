@@ -77,6 +77,19 @@ fn say(s: [*:0]const u8) void {
     _ = fputs(s, stdout);
 }
 
+fn sayU32Hex(v: u32) void {
+    var b: [9]u8 = undefined;
+    const digs = "0123456789abcdef";
+    var i: usize = 8;
+    var x: u32 = v;
+    while (i > 0) : (i -= 1) {
+        b[i - 1] = digs[x & 15];
+        x >>= 4;
+    }
+    b[8] = 0;
+    say(@ptrCast(&b));
+}
+
 fn puthex(v: u64) void {
     const digs = "0123456789abcdef";
     var buf: [17]u8 = undefined;
@@ -838,6 +851,10 @@ const ChildFsOps = extern struct {
     // and return its object key. A unix socket's name IS the node;
     // connect resolves the same key through key().
     mknod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    // stat_path(path): stat WITHOUT a handle — path-stats ride it, and
+    // it's the only way to see objects open() refuses (directories,
+    // socket nodes). Mode comes off the inode, never synthesized.
+    stat_path: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64,
 };
 
 const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd };
@@ -846,7 +863,7 @@ const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, inp
 // handles: stdio are real entries (conin/conout), fs a view handle,
 // pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
 // kind, never on the number — closing fd0 detaches like any discharge.
-const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input, epoll, efd };
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input, epoll, efd, tfd };
 
 // ---- the bag: class grants + nid-scoped object grants ------------------
 // DESIGN-0001 §8.6's grant {handle, verbs, as} distilled to the syscall
@@ -1273,6 +1290,19 @@ fn copyFromUser(c: *Child, va: usize, dst: []u8) usize {
     return n;
 }
 
+// Blit-path copy with runtime safety off: userEntry gates every byte on
+// a present PTE, so the inlined @ptrFromInt null/align checks are
+// redundant noise — and they were implicated in an unexplained ud2.
+noinline fn copyChunk(c: *Child, va: usize, dst: [*]u8, len: usize) usize {
+    @setRuntimeSafety(false);
+    var n: usize = 0;
+    while (n < len) : (n += 1) {
+        if (userEntry(c, va + n) & 1 == 0) break;
+        dst[n] = userByte(c, va + n);
+    }
+    return n;
+}
+
 // MAXARGS bounds the argv vector a spawn blob may mint — argv[] lives on
 // the child's own stack, but argc past the cap is a malformed request,
 // refused loudly as -E2BIG before any loading happens.
@@ -1533,6 +1563,8 @@ fn canonNr(nr: u64) u64 {
         318 => 61,
         158, 218, 273, 302 => 62,
         14 => 62, // rt_sigprocmask — proc-self metadata, no signals exist
+        13 => 62, // rt_sigaction — registration is metadata too; a handler
+                  // stored where nothing can deliver it fires exactly never
         72 => 62, // fcntl folds to the proc-self group — our handles carry no flag state
         32, 33, 292 => 62, // dup family — fd-table ops on own handles
         228 => 62, // clock_gettime — a self-time query, same describe class
@@ -1562,6 +1594,22 @@ fn canonNr(nr: u64) u64 {
         // eventfd is a counted channel — same "wait on channels" class;
         // libwayland-server's terminate semaphore is one.
         284, 290 => 22,
+        // timerfd is the same class: a time-shaped channel whose only
+        // readiness source is the tick — create/settime/gettime share
+        // the bit. wl_event_loop_add_timer rides it (wlr_output frame
+        // scheduling, seat repeat).
+        283, 286, 287 => 22,
+        // fchmod mutates an object's mode bits — same class as
+        // ftruncate's shape mutation.
+        91 => 2,
+        // flock is an advisory-lock verb ON an fs object — same class.
+        // wl_socket_lock's /wayland-N.lock contention check rides it.
+        73 => 2,
+        // stat/lstat query an fs object by path — the same class's
+        // read half (fstat already rides the fd it names).
+        4, 6 => 2,
+        // access family — an fs-object permission query; same class.
+        21, 269, 439 => 2,
         // scene class (bit 59): a child minting a display surface is a
         // compositor's cap, not a client's — mint/blit/present/move/info
         // ride one bag bit; close is ordinary fd lifetime.
@@ -1677,6 +1725,9 @@ fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
     var pb: [256]u8 = undefined;
     const p = userPath(c, pva, &pb) orelse return -14; // EFAULT
     pb[p.len] = 0;
+    // /dev/shm/<name> is the POSIX shm namespace, not an fs path — the
+    // intercept runs before the fs grant check entirely.
+    if (shmPathName(p)) |nm| return childShmOpen(c, nm, flags);
     // The class bit covers every object+verb (mount-wide); without it
     // the object-scoped check runs against the resolved key.
     if ((c.rights >> 2) & 1 == 0) {
@@ -1702,6 +1753,47 @@ fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
         else => V_READ | V_WRITE,
     };
     return @intCast(fd);
+}
+
+// Path-stat (nr4 stat / nr6 lstat — no symlink layer exists, so the
+// two verbs honestly coincide): the provider's stat_path names the
+// inode directly — directories and socket nodes included, neither of
+// which open() will mint a handle for. ENOENT propagates; mode is the
+// inode's own.
+fn childStatPath(c: *Child, pva: usize, stva: u64) i64 {
+    const ops = c.fsv orelse return -38;
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    pb[p.len] = 0;
+    var st: [144]u8 = std.mem.zeroes([144]u8);
+    const r = ops.stat_path(ops.ctx, @ptrCast(&pb), &st);
+    if (r < 0) return r;
+    const n = copyToUser(c, @intCast(stva), &st);
+    return if (n < 144) -14 else 0;
+}
+
+// access/faccessat/faccessat2 (nr21/269/439): a permission query, not a
+// handle. No uid model exists — every child is its own authority — so
+// the honest check is DAC-root semantics: R_OK/W_OK grant on an extant
+// object (the fs is rw), X_OK requires an x bit set, ENOENT and friends
+// propagate. flags beyond AT_EACCESS|AT_SYMLINK_NOFOLLOW refuse EINVAL —
+// AT_EMPTY_PATH and the dirfd-relative forms aren't armed, honestly.
+fn childAccess(c: *Child, pva: usize, mode: u64, flags: u64) i64 {
+    if (mode & ~@as(u64, 7) != 0) return -22; // EINVAL — RWX only
+    if (flags & ~@as(u64, 0x300) != 0) return -22;
+    const ops = c.fsv orelse return -38;
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    pb[p.len] = 0;
+    var st: [144]u8 = std.mem.zeroes([144]u8);
+    const r = ops.stat_path(ops.ctx, @ptrCast(&pb), &st);
+    if (r < 0) return r;
+    if (mode & 1 != 0) { // X_OK — root still needs a real x bit
+        var m: u32 = 0;
+        for (0..4) |i| m |= @as(u32, st[24 + i]) << @intCast(i * 8);
+        if (m & 0o111 == 0) return -13; // EACCES
+    }
+    return 0;
 }
 
 // nr514 openobj(key, flags) — koru's object-axis open. There is no
@@ -1806,6 +1898,7 @@ fn childUnlink(c: *Child, pva: usize) i64 {
     var pb: [256]u8 = undefined;
     const p = userPath(c, pva, &pb) orelse return -14;
     pb[p.len] = 0;
+    if (shmPathName(p)) |nm| return childShmUnlink(nm);
     if ((c.rights >> 2) & 1 == 0) {
         var db: [256]u8 = undefined;
         const dp = parentPath(p, &db);
@@ -1953,7 +2046,9 @@ fn childMmapFile(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fdu: 
     if (c.fdkinds[fd] == .shm) return childMmapShm(c, addru, len, prot, flags, fd, off);
     if (c.fdkinds[fd] != .fs) return -9; // sockets/pipes have no mapping
     const ops = c.fsv orelse return -38;
-    if (flags & 0x01 != 0) return -95; // EOPNOTSUPP — shared maps need write-through
+    if (flags & 0x01 != 0 and prot & 2 != 0) return -95; // EOPNOTSUPP — writable
+        // shared maps need write-through; read-only MAP_SHARED is honest: every
+        // mapper reads the same provider bytes at map time anyway.
     var base: usize = 0;
     if (flags & 0x10 != 0 and addru != 0) { // MAP_FIXED
         base = @intCast(addru);
@@ -1986,6 +2081,9 @@ fn childMmapFile(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fdu: 
 fn childMmapShm(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fd: usize, off: u64) i64 {
     const s = &shms[@intCast(c.fds[fd] - 1)];
     if (flags & 0x01 == 0) return -95; // EOPNOTSUPP — private maps need CoW
+    // PROT_WRITE|SHARED on a read-only projection is the fd-verb
+    // question again: O_RDONLY shm pairs exist for this exact refusal.
+    if (prot & 2 != 0 and c.fdverbs[fd] & V_WRITE == 0) return -13;
     var base: usize = 0;
     if (flags & 0x10 != 0 and addru != 0) {
         base = @intCast(addru);
@@ -2027,8 +2125,9 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             stw(&st, 16, 1);
         },
         .shm => {
-            // S_IFREG|0600 — a memfd is a file-shaped anonymous object
-            stw(&st, 24, 0o100600);
+            // S_IFREG|mode — a file-shaped object whose mode fchmod
+            // actually writes (the shm pair's RW-lockdown uses it)
+            stw(&st, 24, 0o100000 | shms[@intCast(c.fds[fd] - 1)].mode);
             stw(&st, 16, 1);
             stw(&st, 48, shms[@intCast(c.fds[fd] - 1)].size); // st_size
         },
@@ -2043,9 +2142,9 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             stw(&st, 24, 0o20600);
             stw(&st, 16, 1);
         },
-        .epoll, .efd => {
-            // interest list and counter are anonymous — linux fstat
-            // calls them S_IFIFO|0600 (anon_inode); same answer, honestly
+        .epoll, .efd, .tfd => {
+            // interest list, counter, and clock are anonymous — linux
+            // fstat calls them S_IFIFO|0600 (anon_inode); same answer
             stw(&st, 24, 0o10600);
             stw(&st, 16, 1);
         },
@@ -2306,6 +2405,7 @@ fn fdDupRef(c: *Child, fd: usize, out: *FdRef) bool {
         .input => ins[@intCast(c.fds[fd] - 1)] += 1,
         .epoll => epolls[@intCast(c.fds[fd] - 1)].refs += 1,
         .efd => efds[@intCast(c.fds[fd] - 1)].refs += 1,
+        .tfd => tfds[@intCast(c.fds[fd] - 1)].refs += 1,
         .fs => {
             const ops = c.fsv orelse return false;
             const nh = ops.dup(ops.ctx, c.fds[fd]);
@@ -2332,6 +2432,7 @@ fn fdFreeRef(r: FdRef) void {
         .input => inputFree(@intCast(r.h - 1)),
         .epoll => epollFree(@intCast(r.h - 1)),
         .efd => efdFree(@intCast(r.h - 1)),
+        .tfd => tfdFree(@intCast(r.h - 1)),
         else => {},
     }
 }
@@ -2416,13 +2517,21 @@ fn sockCloseEnd(pair: usize, side: usize) void {
 // into its PT, so the pages outlive every fd and die with the last
 // unmap — memfd's real lifetime, which wl_shm's "close the fd after
 // sendmsg" idiom depends on.
-const NSHM = 4;
-const SHM_MAXPAGES = 64;
+const NSHM = 16;
+// 8 MiB per object — a nested compositor's pixman swapchain buffer is a
+// real framebuffer (1280x720x4 ~ 3.5 MiB), not a test tile.
+const SHM_MAXPAGES = 2048;
 const ShmObj = struct {
     used: bool = false,
     refs: u8 = 0, // live fd handles (each SCM_QUEUED ref counts too)
-    npages: u8 = 0,
+    npages: u16 = 0, // SHM_MAXPAGES=2048 — u8 silently wrapped at 255
     size: u64 = 0,
+    // POSIX shm namespace: a /dev/shm/<name> open carries these — an
+    // anonymous memfd is namelen 0. unlink clears the name while the
+    // object lives on through refs — real tmpfs unlink semantics.
+    name: [48]u8 = .{0} ** 48,
+    namelen: u8 = 0,
+    mode: u16 = 0o600,
     frames: [SHM_MAXPAGES]u64 = .{0} ** SHM_MAXPAGES,
 };
 var shms: [NSHM]ShmObj = .{ShmObj{}} ** NSHM;
@@ -2499,19 +2608,49 @@ fn childSurfBlit(c: *Child, f: *TrapFrame) i64 {
     const dy = rect[1];
     const w = rect[2];
     const h = rect[3];
-    if (w == 0 or h == 0 or @as(usize, w) * 4 > stride or stride > 4096) return -22;
-    const page = allocPage() orelse return -12;
-    defer _ = pmm.free(@intFromPtr(page));
-    const bounce: [*]u8 = @ptrCast(page);
+    if (w == 0 or h == 0 or @as(usize, w) * 4 > stride or stride > 65536) return -22;
+    // A 1280-wide row is 5120 bytes — wider than the bounce page. Rows go
+    // in ≤1024-px column chunks: same provider rect contract, arbitrary
+    // stride, one page of bounce. Inputs are validated above; the block
+    // runs with runtime safety off — the compiler was emitting a bogus
+    // 0x1ff bound on (w - cx) that fired on every wide row.
     var y: u32 = 0;
-    while (y < h) : (y += 1) {
-        if (copyFromUser(c, src_va + @as(usize, y) * stride, bounce[0 .. w * 4]) < w * 4)
-            return -14;
-        if (koruos_surface_blit(tok, dx, dy + y, w, 1, @ptrCast(@alignCast(bounce)), w) == 0)
-            return -22;
+    var ret: i64 = 0;
+    blk: {
+        @setRuntimeSafety(false);
+        while (y < h) : (y += 1) {
+            var cx: u32 = 0;
+            while (cx < w) : (cx += 1024) {
+                const cw = @min(@as(u32, 1024), w - cx);
+                const off = src_va + @as(usize, y) * stride + @as(usize, cx) * 4;
+                var nb: usize = @as(usize, cw) * 4;
+                // The folder mis-optimizes the bounded (w - cx)*4 chain in
+                // this loop (observed: `andl $0x7fc` → len=0 for cw=1024).
+                // An empty asm barrier keeps nb opaque — the value is what
+                // the arithmetic says, not what a wrong range inference
+                // decides it must be.
+                asm volatile (""
+                    : [nb] "+r" (nb),
+                );
+                if (copyChunk(c, off, &blit_bounce, nb) < nb) {
+                    ret = -14;
+                    break :blk;
+                }
+                if (koruos_surface_blit(tok, dx + cx, dy + y, cw, 1,
+                    @ptrCast(&blit_bounce), cw) == 0) {
+                    ret = -22;
+                    break :blk;
+                }
+            }
+        }
     }
-    return 0;
+    return ret;
 }
+
+// Static bounce page for childSurfBlit — the syscall path is
+// single-runner (BKL), so one shared page is sound and removes
+// alloc/free from the copy loop entirely.
+var blit_bounce: [4096]u8 align(4096) = undefined;
 
 fn childSurfPresent(c: *Child, f: *TrapFrame) i64 {
     const tok = surfTok(c, f.rdi) orelse return -9;
@@ -2809,6 +2948,158 @@ fn childEfdWrite(c: *Child, f: *TrapFrame) i64 {
     }
 }
 
+// nr 283/286/287 timerfd_create/settime/gettime — a time-shaped channel:
+// read yields a u64 expiry count, readiness is count!=0. There is no
+// interrupt side to pump — irq_ticks is the only wall clock, so
+// expirations accrue lazily at query time (read/poll/ready), and a
+// blocked reader parks on .poll, which the tick already wakes.
+// Quantization is the PIT/LAPIC tick (~55ms) — the same granularity
+// every deadline in the seam states honestly.
+const NTFD = 8;
+const TFD_TICK_NS: u64 = 55_000_000; // the tick's nominal wall time
+const Tfd = struct {
+    refs: u32 = 0,
+    nonblock: u8 = 0,
+    next: u64 = std.math.maxInt(u64), // tick of next expiry; max = disarmed
+    iticks: u64 = 0,                  // period in ticks; 0 = one-shot
+    count: u64 = 0,                   // expirations not yet read
+};
+var tfds: [NTFD]Tfd = .{Tfd{}} ** NTFD;
+
+fn tfdFree(idx: usize) void {
+    const t = &tfds[idx];
+    if (t.refs > 0) t.refs -= 1;
+    if (t.refs == 0) t.* = .{};
+}
+
+// ns → ticks, ceiling — the deadline quantum, same rule as poll's.
+fn tfdTicks(ns: u64) u64 {
+    if (ns == 0) return 0;
+    return (ns + TFD_TICK_NS - 1) / TFD_TICK_NS;
+}
+
+// Accrue whatever the clock already earned. Repeating timers lap: a
+// slow reader sees the COUNT, not just the lateness — linux semantics.
+fn tfdPump(t: *Tfd) void {
+    if (t.next == std.math.maxInt(u64)) return;
+    while (irq_ticks >= t.next) {
+        t.count +|= 1;
+        if (t.iticks == 0) {
+            t.next = std.math.maxInt(u64);
+            break;
+        }
+        t.next += t.iticks;
+    }
+}
+
+fn childTimerfdCreate(c: *Child, clockid: u64, flags: u64) i64 {
+    // CLOCK_REALTIME=0 / CLOCK_MONOTONIC=1 share the tick — there is no
+    // second wall clock to distinguish them by; anything else refuses.
+    if (clockid > 1) {
+        say("SEAM REFUSE timerfd clock=");
+        puthex(clockid);
+        say(" (only boot/monotonic exist)\n");
+        return -22;
+    }
+    if (flags & ~@as(u64, 0x80800) != 0) {
+        say("SEAM REFUSE timerfd flags=");
+        puthex(flags);
+        say(" (unknown bits)\n");
+        return -22;
+    }
+    var fd: ?usize = null;
+    for (c.fds, 0..) |v, i| if (v == 0 and c.fdkinds[i] == .none) {
+        fd = i;
+        break;
+    };
+    const fdi = fd orelse return -24;
+    for (&tfds, 0..) |*t, i| if (t.refs == 0) {
+        t.* = .{ .refs = 1, .nonblock = @intFromBool(flags & 0x800 != 0) };
+        c.fds[fdi] = i + 1;
+        c.fdkinds[fdi] = .tfd;
+        c.fdverbs[fdi] = V_READ;
+        return @intCast(fdi);
+    };
+    return -24;
+}
+
+// itimerspec on x86_64: {it_value {sec,nsec}, it_interval {sec,nsec}}
+// = 4x i64 = 32 bytes. flags bit0 TFD_TIMER_ABSTIME (the value reads
+// against the same tick clock), bit1 CANCEL_ON_SET (inert here — the
+// clock is never set); anything else refuses.
+fn childTimerfdSettime(c: *Child, fdu: u64, flags: u64, newva: u64, oldva: u64) i64 {
+    if (fdu >= c.fds.len or c.fdkinds[@intCast(fdu)] != .tfd) return -9;
+    if (flags & ~@as(u64, 0x3) != 0) return -22;
+    const t = &tfds[@intCast(c.fds[@intCast(fdu)] - 1)];
+    tfdPump(t);
+    if (oldva != 0) {
+        var ob: [32]u8 = std.mem.zeroes([32]u8);
+        if (t.next != std.math.maxInt(u64)) {
+            const rem = (t.next - irq_ticks) * TFD_TICK_NS;
+            std.mem.writeInt(i64, ob[0..8], @intCast(rem / 1_000_000_000), .little);
+            std.mem.writeInt(i64, ob[8..16], @intCast(rem % 1_000_000_000), .little);
+        }
+        const insns = t.iticks * TFD_TICK_NS;
+        std.mem.writeInt(i64, ob[16..24], @intCast(insns / 1_000_000_000), .little);
+        std.mem.writeInt(i64, ob[24..32], @intCast(insns % 1_000_000_000), .little);
+        if (copyToUser(c, @intCast(oldva), &ob) < 32) return -14;
+    }
+    var nb: [32]u8 = undefined;
+    if (copyFromUser(c, @intCast(newva), &nb) < 32) return -14;
+    const vsec = std.mem.readInt(i64, nb[0..8], .little);
+    const vnsec = std.mem.readInt(i64, nb[8..16], .little);
+    const isec = std.mem.readInt(i64, nb[16..24], .little);
+    const isnsec = std.mem.readInt(i64, nb[24..32], .little);
+    if (vsec < 0 or isec < 0 or
+        vnsec < 0 or vnsec >= 1_000_000_000 or
+        isnsec < 0 or isnsec >= 1_000_000_000) return -22;
+    t.next = std.math.maxInt(u64);
+    t.iticks = 0;
+    t.count = 0; // re-arm discards unread expirations — linux semantics
+    const vns: u64 = @as(u64, @intCast(vsec)) * 1_000_000_000 + @as(u64, @intCast(vnsec));
+    const insns: u64 = @as(u64, @intCast(isec)) * 1_000_000_000 + @as(u64, @intCast(isnsec));
+    if (vns != 0) {
+        t.next = if (flags & 1 != 0) tfdTicks(vns) // absolute tick
+            else irq_ticks + @max(tfdTicks(vns), 1);
+        t.iticks = tfdTicks(insns);
+        tfdPump(t); // an abstime already past expires NOW
+    }
+    return 0;
+}
+
+fn childTimerfdGettime(c: *Child, fdu: u64, curva: u64) i64 {
+    if (fdu >= c.fds.len or c.fdkinds[@intCast(fdu)] != .tfd) return -9;
+    const t = &tfds[@intCast(c.fds[@intCast(fdu)] - 1)];
+    tfdPump(t);
+    var ob: [32]u8 = std.mem.zeroes([32]u8);
+    if (t.next != std.math.maxInt(u64)) {
+        const rem = (t.next - irq_ticks) * TFD_TICK_NS;
+        std.mem.writeInt(i64, ob[0..8], @intCast(rem / 1_000_000_000), .little);
+        std.mem.writeInt(i64, ob[8..16], @intCast(rem % 1_000_000_000), .little);
+    }
+    const insns = t.iticks * TFD_TICK_NS;
+    std.mem.writeInt(i64, ob[16..24], @intCast(insns / 1_000_000_000), .little);
+    std.mem.writeInt(i64, ob[24..32], @intCast(insns % 1_000_000_000), .little);
+    return if (copyToUser(c, @intCast(curva), &ob) < 32) -14 else 0;
+}
+
+fn childTfdRead(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdx < 8) return -22; // a count read is one u64
+    const t = &tfds[@intCast(c.fds[@intCast(f.rdi)] - 1)];
+    while (true) {
+        tfdPump(t);
+        if (t.count != 0) {
+            var eb: [8]u8 = undefined;
+            std.mem.writeInt(u64, &eb, t.count, .little);
+            if (copyToUser(c, @intCast(f.rsi), &eb) < 8) return -14;
+            t.count = 0;
+            return 8;
+        }
+        if (t.nonblock != 0) return -11;
+        kblock(.poll); // the tick is the wake — .poll rides it for free
+    }
+}
+
 fn shmRelease(idx: usize) void {
     const s = &shms[idx];
     if (s.refs > 0) s.refs -= 1;
@@ -2834,6 +3125,120 @@ fn shmTrunc(idx: usize, len: u64) i64 {
     return 0;
 }
 
+// ---- flock: advisory locks on object identity -------------------------
+// wl_display_add_socket locks /wayland-N.lock with LOCK_EX|LOCK_NB and a
+// second compositor must see EWOULDBLOCK — the contention is REAL, not
+// proforma. Locks key on the object (dev<<32|ino out of fstat's st_dev/
+// st_ino — the same key the grant layer names) and belong to the open
+// file description: dup'd fds share the lock, a fresh open is a stranger.
+// Blocking (no LOCK_NB) parks on .poll — the tick re-evaluates, and
+// every unlock wakes .poll waiters so a released lock is seen promptly.
+const NFLOCK = 16;
+const FLock = struct {
+    used: bool = false,
+    key: u64 = 0,     // dev<<32|ino for .fs, shm-namespaced for .shm
+    ofd: u64 = 0,     // open-file-description identity: the fd's handle
+    excl: bool = false,
+};
+var flocks: [NFLOCK]FLock = [_]FLock{.{}} ** NFLOCK;
+
+fn flockKeyOf(c: *Child, fd: usize) i64 {
+    switch (c.fdkinds[fd]) {
+        .fs => {
+            const ops = c.fsv orelse return -38;
+            var st: [144]u8 = std.mem.zeroes([144]u8);
+            if (ops.stat(ops.ctx, c.fds[fd], &st) < 0) return -9;
+            var dev: u64 = 0;
+            var ino: u64 = 0;
+            for (0..8) |i| {
+                dev |= @as(u64, st[i]) << @intCast(i * 8);
+                ino |= @as(u64, st[8 + i]) << @intCast(i * 8);
+            }
+            return @bitCast((dev << 32) | (ino & 0xFFFF_FFFF));
+        },
+        .shm => return @bitCast(@as(u64, 0xFEED_0000_0000_0000) | c.fds[fd]),
+        else => return -9, // EBADF — channels don't flock
+    }
+}
+
+// The OFD identity the lock belongs to: dup'd fds share the object
+// handle (and the lock); a fresh open of the same object is a stranger
+// whose handle differs. fs and shm handles share the small-int space —
+// the high bit keeps them from colliding as OFDs.
+fn ofdOf(c: *Child, i: usize) u64 {
+    return switch (c.fdkinds[i]) {
+        .fs => c.fds[i],
+        .shm => 0x8000_0000_0000_0000 | c.fds[i],
+        else => 0xFFFF_0000_0000_0000 | i, // unique, never lockable
+    };
+}
+
+fn flockDropOfd(key: u64, ofd: u64) void {
+    for (&flocks) |*l| {
+        if (l.used and l.key == key and l.ofd == ofd) {
+            l.* = .{};
+            wakeKind(.poll); // a released lock is readiness for waiters
+        }
+    }
+}
+
+// An OFD's locks die only when NO fd of this child still projects it —
+// the last close discharges, a dup's first close must not.
+fn flockDropIfOrphaned(c: *Child, ofd: u64) void {
+    for (0..c.fds.len) |j| {
+        if (c.fdkinds[j] != .none and ofdOf(c, j) == ofd) return;
+    }
+    for (&flocks) |*l| {
+        if (l.used and l.ofd == ofd) {
+            l.* = .{};
+            wakeKind(.poll);
+        }
+    }
+}
+
+fn childFlock(c: *Child, fdu: u64, opu: u64) i64 {
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    const op: u32 = @intCast(opu);
+    const LOCK_SH: u32 = 1;
+    const LOCK_EX: u32 = 2;
+    const LOCK_NB: u32 = 4;
+    const LOCK_UN: u32 = 8;
+    if (op & ~(LOCK_SH | LOCK_EX | LOCK_NB | LOCK_UN) != 0) return -22;
+    if ((op & LOCK_SH != 0) and (op & LOCK_EX != 0)) return -22;
+    const k = flockKeyOf(c, fd);
+    if (k < 0) return k;
+    const key: u64 = @bitCast(k);
+    const ofd = ofdOf(c, fd);
+    if (op & LOCK_UN != 0) {
+        flockDropOfd(key, ofd);
+        return 0; // unlocking an unlocked object still succeeds
+    }
+    const want_ex = (op & LOCK_EX) != 0;
+    while (true) {
+        var contend = false;
+        for (&flocks) |*l| {
+            if (l.used and l.key == key and l.ofd != ofd and
+                (l.excl or want_ex)) {
+                contend = true;
+                break;
+            }
+        }
+        if (!contend) break;
+        if (op & LOCK_NB != 0) return -11; // EWOULDBLOCK
+        kblock(.poll); // tick + every unlock re-evaluate — same lazy
+                       // contract as the poll arm's re-scan
+    }
+    flockDropOfd(key, ofd); // upgrade/downgrade replaces my own entry
+    var slot: ?*FLock = null;
+    for (&flocks) |*l| {
+        if (!l.used) { slot = l; break; }
+    }
+    const l = slot orelse return -12; // ENOMEM — table exhausted, loudly
+    l.* = .{ .used = true, .key = key, .ofd = ofd, .excl = want_ex };
+    return 0;
+}
+
 // Close one fd entry's endpoint. Ring outlives either end; both gone
 // releases the slot. The surviving side wakes on its NEXT endpoint op —
 // a parked peer is marked now and rechecks the new refcount itself.
@@ -2853,6 +3258,8 @@ fn pipeCloseEnd(idx: usize, kind: FdKind) void {
 // table, so endpoint release lives here — called once, at death, before
 // the slot becomes a zombie/dead.
 fn releaseFd(c: *Child, i: usize) void {
+    const ofd = ofdOf(c, i); // captured before discharge — the lock
+                           // on this OFD dies if this was its last fd
     switch (c.fdkinds[i]) {
         .none => {},
         .fs => {
@@ -2866,11 +3273,13 @@ fn releaseFd(c: *Child, i: usize) void {
         .input => inputFree(@intCast(c.fds[i] - 1)),
         .epoll => epollFree(@intCast(c.fds[i] - 1)),
         .efd => efdFree(@intCast(c.fds[i] - 1)),
+        .tfd => tfdFree(@intCast(c.fds[i] - 1)),
         .conin, .conout => {},
     }
     c.fds[i] = 0;
     c.fdkinds[i] = .none;
     c.fdverbs[i] = 0;
+    flockDropIfOrphaned(c, ofd);
 }
 
 fn releaseFds(c: *Child) void {
@@ -2898,6 +3307,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
         .input => ins[@intCast(src.fds[sfd] - 1)] += 1,
         .epoll => epolls[@intCast(src.fds[sfd] - 1)].refs += 1,
         .efd => efds[@intCast(src.fds[sfd] - 1)].refs += 1,
+        .tfd => tfds[@intCast(src.fds[sfd] - 1)].refs += 1,
         .fs => {
             const ops = src.fsv orelse return false;
             const nh = ops.dup(ops.ctx, src.fds[sfd]);
@@ -3250,6 +3660,11 @@ fn fdPollRev(c: *Child, fdi: usize, ev: u16) u16 {
             if (ev & POLLIN != 0 and e.val != 0) r |= POLLIN;
             if (ev & POLLOUT != 0 and e.val < EFD_MAX) r |= POLLOUT;
         },
+        .tfd => {
+            const t = &tfds[@intCast(c.fds[fdi] - 1)];
+            tfdPump(t);
+            if (ev & POLLIN != 0 and t.count != 0) r |= POLLIN;
+        },
         .none => return POLLNVAL,
     }
     return r;
@@ -3462,6 +3877,93 @@ fn childMemfd(c: *Child) i64 {
     c.fds[s] = si + 1;
     c.fdverbs[s] = V_READ | V_WRITE;
     return @intCast(s);
+}
+
+// ---- POSIX shm namespace: /dev/shm/<name> -------------------------------
+// musl's shm_open is open("/dev/shm/"+name); shm_unlink is unlink of
+// the same path. The name lives ON the shm object, so reopen-by-name
+// (wlroots' RW+RO pool pair), cross-process sharing, and unlink-
+// while-mapped are all just the object's own lifetime. Path opens
+// under the prefix are intercepted before the fs view — the namespace
+// IS /dev/shm on this arm; the channel class (22, memfd's bit) covers
+// the syscall already since it folds through open().
+
+fn shmNameMatch(s: *const ShmObj, name: []const u8) bool {
+    return s.namelen == name.len and
+        std.mem.eql(u8, s.name[0..s.namelen], name);
+}
+
+fn shmFind(name: []const u8) ?usize {
+    for (&shms, 0..) |*s, i| {
+        if (s.used and shmNameMatch(s, name)) return i;
+    }
+    return null;
+}
+
+// "/dev/shm/" → rest or null. Names carry no '/' and fit the object.
+fn shmPathName(p: []const u8) ?[]const u8 {
+    const pre = "/dev/shm/";
+    if (p.len <= pre.len or !std.mem.eql(u8, p[0..pre.len], pre)) return null;
+    const rest = p[pre.len..];
+    if (rest.len > 47 or std.mem.indexOfScalar(u8, rest, '/') != null) return null;
+    return rest;
+}
+
+fn childShmOpen(c: *Child, name: []const u8, flags: u64) i64 {
+    const creat = flags & 0o100 != 0;
+    const excl = flags & 0o200 != 0;
+    const trunc = flags & 0o1000 != 0;
+    var si: ?usize = shmFind(name);
+    if (si != null and creat and excl) return -17; // EEXIST
+    if (si == null) {
+        if (!creat) return -2; // ENOENT
+        for (&shms, 0..) |*s, i| if (!s.used) {
+            s.* = .{ .used = true, .refs = 1 };
+            @memcpy(s.name[0..name.len], name);
+            s.namelen = @intCast(name.len);
+            si = i;
+            break;
+        };
+        if (si == null) return -24;
+    } else {
+        shms[si.?].refs += 1;
+        if (trunc) _ = shmTrunc(si.?, 0);
+    }
+    var slot: ?usize = null;
+    for (0..c.fds.len) |i| {
+        if (c.fdkinds[i] == .none) { slot = i; break; }
+    }
+    const fdi = slot orelse {
+        shmRelease(si.?);
+        return -24;
+    };
+    c.fdkinds[fdi] = .shm;
+    c.fds[fdi] = si.? + 1;
+    const mode: u8 = @intCast(flags & 3);
+    c.fdverbs[fdi] = switch (mode) {
+        0 => V_READ,
+        1 => V_WRITE,
+        else => V_READ | V_WRITE,
+    };
+    return @intCast(fdi);
+}
+
+fn childShmUnlink(name: []const u8) i64 {
+    const si = shmFind(name) orelse return -2;
+    shms[si].namelen = 0; // the NAME dies; refs keep the object
+    return 0;
+}
+
+// nr 91 — fchmod(fd, mode): mode bits live on shm objects (the pair
+// locks its rw side to 0 — we store, fstat reports). Other kinds have
+// no mutable mode — ENOSYS says so rather than lying about success.
+fn childFchmod(c: *Child, fdu: u64, mode: u64) i64 {
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    if (c.fdkinds[fd] != .shm) return -38;
+    if (mode & ~@as(u64, 0o7777) != 0) return -22;
+    shms[@intCast(c.fds[fd] - 1)].mode = @intCast(mode);
+    return 0;
 }
 
 // nr 77 — ftruncate(fd, len): only shm objects take a size.
@@ -3893,6 +4395,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     .fs => f.rax = @bitCast(if (c.fdverbs[fdi] & V_WRITE != 0)
                         childWrite(c, fdi, f.rsi, f.rdx) else -9),
                     .efd => f.rax = @bitCast(childEfdWrite(c, f)),
+                    .tfd => f.rax = @bitCast(@as(i64, -22)), // EINVAL — a clock has no write end
                     else => f.rax = @bitCast(@as(i64, -9)),
                 }
             }
@@ -4051,6 +4554,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @bitCast(switch (c.fdkinds[fdi]) {
                     .input => childInputRead(c, f),
                     .efd => childEfdRead(c, f),
+                    .tfd => childTfdRead(c, f),
                     .conin => coninRead(c, f),
                     .fs => if (c.fdverbs[fdi] & V_READ != 0)
                         childRead(c, f.rdi, f.rsi, f.rdx) else -9,
@@ -4154,6 +4658,35 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                       // counted semaphore as an fd; terminate_efd is one
             f.rax = @bitCast(childEventfd(c, f.rdi, if (f.rax == 290) f.rsi else 0));
         },
+        283 => { // timerfd_create(clockid, flags) — a time-shaped channel
+            f.rax = @bitCast(childTimerfdCreate(c, f.rdi, f.rsi));
+        },
+        286 => { // timerfd_settime(fd, flags, new, old) — arm/disarm
+            f.rax = @bitCast(childTimerfdSettime(c, f.rdi, f.rsi, f.rdx, f.r10));
+        },
+        287 => { // timerfd_gettime(fd, cur) — remaining + interval
+            f.rax = @bitCast(childTimerfdGettime(c, f.rdi, f.rsi));
+        },
+        91 => { // fchmod(fd, mode) — mode bits on objects that carry them
+            f.rax = @bitCast(childFchmod(c, f.rdi, f.rsi));
+        },
+        73 => { // flock(fd, op) — advisory locks on object identity;
+                // wl_socket_lock's compositor-contention check rides it
+            f.rax = @bitCast(childFlock(c, f.rdi, f.rsi));
+        },
+        4, 6 => { // stat/lstat(path, st) — no symlink layer; identical
+            f.rax = @bitCast(childStatPath(c, @intCast(f.rdi), f.rsi));
+        },
+        21 => { // access(path, mode)
+            f.rax = @bitCast(childAccess(c, @intCast(f.rdi), f.rsi, 0));
+        },
+        269 => { // faccessat(dfd, path, mode) — no cwd model; AT_FDCWD
+                 // shape only, relative paths resolve from the view root
+            f.rax = @bitCast(childAccess(c, @intCast(f.rsi), f.rdx, 0));
+        },
+        439 => { // faccessat2(dfd, path, mode, flags)
+            f.rax = @bitCast(childAccess(c, @intCast(f.rsi), f.rdx, f.r10));
+        },
         55 => { // getsockopt(fd, level, optname, optval, optlen)
             f.rax = @bitCast(childGetsockopt(c, f));
         },
@@ -4191,9 +4724,11 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         f.rax = 0;
                     },
                     .fs => {
+                        const ofd = ofdOf(c, fd);
                         if (c.fsv) |ops| _ = ops.close(ops.ctx, c.fds[fd]);
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
+                        flockDropIfOrphaned(c, ofd);
                         f.rax = 0;
                     },
                     .pipe_r, .pipe_w => {
@@ -4215,9 +4750,11 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         f.rax = 0;
                     },
                     .shm => {
+                        const ofd = ofdOf(c, fd);
                         shmRelease(@intCast(c.fds[fd] - 1));
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
+                        flockDropIfOrphaned(c, ofd);
                         f.rax = 0;
                     },
                     .surf => { // close is the surface's release verb —
@@ -4246,6 +4783,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         c.fdkinds[fd] = .none;
                         f.rax = 0;
                     },
+                    .tfd => {
+                        tfdFree(@intCast(c.fds[fd] - 1));
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
                 }
             } else {
                 f.rax = @bitCast(@as(i64, -9));
@@ -4263,6 +4806,14 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         14 => { // rt_sigprocmask — no signals exist to mask; musl's
                 // _Fork calls this on both sides. A no-op success, same
                 // class as fcntl's flagless handles.
+            f.rax = 0;
+        },
+        13 => { // rt_sigaction — wl_shm's SIGBUS guard installs/restores a
+                // handler around each shm access. No kill, no SIGBUS (our
+                // eager map faults at copy time) — a registered handler
+                // that can never fire is the truthful shape. oldact gets
+                // SIG_DFL, the honest current disposition.
+            if (f.rdx != 0) _ = copyToUser(c, @intCast(f.rdx), &[_]u8{0} ** 32);
             f.rax = 0;
         },
         39, 186 => { // getpid / gettid — the pid domain is slot+1; one
