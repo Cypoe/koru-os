@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/un.h>
@@ -63,6 +64,9 @@ struct scsurf {
     struct sess *ses;            // owning session
     struct wl_resource *sres;    // the client's wl_surface
     int fd;                      // the *Surf projection
+    uint32_t *smap;              // mmap'd provider backing, if the seam
+                                 // answered projectable — commit writes
+                                 // land directly, no blit syscall
     uint32_t x, y, w, h;
 };
 
@@ -320,6 +324,14 @@ static void surf_commit(struct wl_client *cl, struct wl_resource *res) {
                     t->live = 1; t->ses = ses_of(cl);
                     t->sres = res; t->fd = f;
                     t->w = bw; t->h = bh;
+                    // the projectable-backing arm: mmap the *Surf fd and
+                    // commit writes land straight on provider memory;
+                    // MAP_FAILED leaves smap NULL and the blit syscall
+                    // stays the honest path.
+                    void *m = mmap(NULL, (size_t)bw * bh * 4,
+                                   PROT_READ | PROT_WRITE, MAP_SHARED,
+                                   f, 0);
+                    t->smap = m == MAP_FAILED ? NULL : m;
                     S->sc = t;
                     t->x = 40 + 100 * (uint32_t)S->surfix;
                     t->y = 40 + 100 * (uint32_t)S->surfix;
@@ -353,18 +365,33 @@ static void surf_commit(struct wl_client *cl, struct wl_resource *res) {
             uint32_t rect[4] = { (uint32_t)rx, (uint32_t)ry,
                                  (uint32_t)(rw > 0 ? rw : 0),
                                  (uint32_t)(rh > 0 ? rh : 0) };
-            long br = rect[2] && rect[3]
-                ? syscall(K_SURF_BLIT, scs[S->surfix].fd,
-                          wl_shm_buffer_get_data(shb), bstride, rect)
-                : 0;
+            struct scsurf *sc = &scs[S->surfix];
+            long br = 0;
+            if (rect[2] && rect[3]) {
+                if (sc->smap) {
+                    // projectable backing — copy the damaged rows
+                    // straight into provider memory; present() is the
+                    // commit point either way.
+                    const char *src = wl_shm_buffer_get_data(shb);
+                    for (uint32_t row = 0; row < rect[3]; row++)
+                        memcpy(sc->smap + (rect[1] + row) * sc->w + rect[0],
+                               src + (size_t)(rect[1] + row) * bstride
+                                   + (size_t)rect[0] * 4,
+                               (size_t)rect[2] * 4);
+                } else {
+                    br = syscall(K_SURF_BLIT, sc->fd,
+                                 wl_shm_buffer_get_data(shb), bstride, rect);
+                }
+            }
             int be = br < 0 ? errno : 0;
             long pr = br < 0 ? br
                 : syscall(K_SURF_PRESENT, scs[S->surfix].fd,
                           rect[0], rect[1], rect[2], rect[3]);
             int pe = pr < 0 ? errno : 0;
-            printf("WLSRV surf %ux%u dmg=%ux%u@%u,%u blit=%ld/%d "
+            printf("WLSRV surf %ux%u smap=%d dmg=%ux%u@%u,%u blit=%ld/%d "
                    "present=%ld/%d\n",
-                   bw, bh, rect[2], rect[3], rect[0], rect[1],
+                   bw, bh, sc->smap != NULL,
+                   rect[2], rect[3], rect[0], rect[1],
                    br, be, pr, pe);
         }
         wl_shm_buffer_end_access(shb);
@@ -392,6 +419,7 @@ static void surf_res_destroy(struct wl_resource *res) {
         if (s->live) {
             if (focus == (int)(s - scs)) focus = -1;
             if (drag == (int)(s - scs)) drag = -1;
+            if (s->smap) munmap(s->smap, (size_t)s->w * s->h * 4);
             close(s->fd);
             s->live = 0;
             printf("WLSRV surf released slot=%d\n", (int)(s - scs));

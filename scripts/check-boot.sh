@@ -1004,7 +1004,7 @@ else
             if grep -qF "surf: open 64x64 at" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLSRV surf slot=0" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLSRV surf slot=1" "$WORK/boot_wlscene.serial" \
-               && grep -qE "WLSRV surf 64x64 dmg=[0-9]+x[0-9]+@[0-9]+,[0-9]+ blit=0/0 present=0/0" "$WORK/boot_wlscene.serial" \
+               && grep -qE "WLSRV surf 64x64 smap=[01] dmg=[0-9]+x[0-9]+@[0-9]+,[0-9]+ blit=0/0 present=0/0" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLR ptr enter" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLR kbd enter" "$WORK/boot_wlscene.serial" \
                && grep -qF "WLR ptr motion" "$WORK/boot_wlscene.serial" \
@@ -1111,14 +1111,17 @@ sys.exit(0 if px(160,155)==b'\xad\xbe\xef' and px(161,155)==b'\xc0\xff\xee'
                && grep -qF "WLRC new xdg toplevel" "$WORK/boot_wlc.serial" \
                && grep -qF "WLRC view mapped" "$WORK/boot_wlc.serial" \
                && grep -qF "WLSRV magic=ffb0cefb" "$WORK/boot_wlc.serial" \
-               && grep -qE "WLSRV surf 1280x720 dmg=[0-9]+x[0-9]+@[0-9]+,[0-9]+ blit=0/0 present=0/0" "$WORK/boot_wlc.serial" \
+               && grep -qE "WLSRV surf 1280x720 smap=1 dmg=[0-9]+x[0-9]+@[0-9]+,[0-9]+ blit=0/0 present=0/0" "$WORK/boot_wlc.serial" \
                && grep -qF "WLR buffer release" "$WORK/boot_wlc.serial" \
                && grep -qF "WLR frame done" "$WORK/boot_wlc.serial" \
                && grep -qF "WLRC quiescent" "$WORK/boot_wlc.serial" \
                && grep -qF "WLSRV EOS" "$WORK/boot_wlc.serial" \
                && grep -qF "WLCEXEC COMPLETE" "$WORK/boot_wlc.serial" \
+               && grep -qE "WLRC sigchld pid=[0-9]+ st=[0-9]+" "$WORK/boot_wlc.serial" \
+               && grep -qE "WLRC sfd comp drained=[0-9]+" "$WORK/boot_wlc.serial" \
+               && grep -qE "WLRC tfd n=[0-9]+" "$WORK/boot_wlc.serial" \
                && grep -qF "WLRCINIT srv=0 comp=0 inner=0" "$WORK/boot_wlc.serial"; then
-                ok "wlrcomp: wlroots 0.16 NESTED — /wayland-1 client + /wayland-2 compositor, pixman scene, inner libwayland client did xdg_shell through wlroots, frame-done+buffer-release ran, quiescence unwound the chain"
+                ok "wlrcomp: wlroots 0.16 NESTED — /wayland-1 client + /wayland-2 compositor, pixman scene, inner libwayland client did xdg_shell through wlroots, frame-done+buffer-release ran, mmap'd *Surf backing, signalfd+SIGCHLD+timerfd armed, quiescence unwound the chain"
             else
                 bad "wlrcomp: chain evidence missing: $(grep -aE 'WLRC|WLR |WLSRV|FAIL|REFUSE|EXC' "$WORK/boot_wlc.serial" | tail -12 | tr '\n' '|')"
             fi

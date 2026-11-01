@@ -747,9 +747,30 @@ kernel-as-context (LANDED: kblock suspends a trap mid-call on its own
             at the toplevel origin, bg rect behind — read off the
             PPM, not self-report. Found + worked around an LLVM fold
             bug in the blit loop (andl $0x7fc on the copy len — asm
-            barrier makes it opaque). Still open: timerfd/signalfd
-            arming (eventfd exists), mmap-backed backend surfaces,
-            DRM/EGL vs *Surf — the Hyprland/Noctalia harness direction
+            barrier makes it opaque). EVENT-LOOP RUNG — the pair
+            libwayland's loop was built around is now real on both
+            sides: signalfd/signalfd4 (nr 282/327) projects the
+            child's pending queue — SIGCHLD lands on the spawner from
+            `spawned_by`, the only producer shape that exists (queued
+            facts, no async delivery — frag-signal-is-a-queued-fact);
+            timerfd was already lazily armed (tfdPump at query time,
+            .poll rides the tick) and wlrcinit now exercises it: a
+            periodic arm accrues real expirations across the whole
+            nested chain. mmap-BACKED SURFACES — `mmap` on a `.surf`
+            fd projects the provider's contiguous backing into the
+            child VA (koruos_surface_map answers phys+bytes by consent;
+            MAP_PRIVATE refuses — the backing IS shared); wlserver
+            commits damaged rows straight into provider memory, no
+            blit bounce (smap=1 in the evidence line), munmap at
+            release (frag-backing-is-projectable-by-consent — the
+            dumb-buffer-mmap precedent for a DRM-shaped provider).
+            Still open: DRM/EGL vs *Surf — measured gap: wlroots' drm
+            backend demands a /dev/dri node + DRM ioctl space (dumb
+            create/map ≈ surf alloc+map — the verbs already line up),
+            legacy modeset/page_flip ≈ present, GBM/EGL render node =
+            refused until a real GPU command path exists (virtio-gpu
+            here is 2D: create/transfer/flush only) — the
+            Hyprland/Noctalia harness direction
 ```
 
 Also open, smaller:

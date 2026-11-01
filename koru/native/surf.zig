@@ -171,6 +171,17 @@ pub export fn koruos_surface_geom(p: ?*anyopaque, out: *Geom) callconv(.c) u8 {
 }
 pub const Geom = extern struct { x: u32, y: u32, w: u32, h: u32, sw: u32, sh: u32 };
 
+// map — the provider's answer to "is the retained backing directly
+// projectable into a client VA?". This arm's backing is a contiguous
+// pmm block, so the answer is phys+bytes; a GPU-resident backing on
+// another arm returns 0 and the blit verb stays the honest path.
+pub export fn koruos_surface_map(p: ?*anyopaque, out_phys: *u64, out_bytes: *u64) callconv(.c) u8 {
+    const s = asSurf(p) orelse return 0;
+    out_phys.* = s.phys;
+    out_bytes.* = @as(u64, s.w) * s.h * 4;
+    return 1;
+}
+
 pub export fn koruos_surface_close(p: ?*anyopaque) callconv(.c) u8 {
     const s = asSurf(p) orelse return 0;
     // detach before freeing — the reveal repaint reads lower backings

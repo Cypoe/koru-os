@@ -44,6 +44,7 @@ extern fn koruos_surface_blit(p: ?*anyopaque, dx: u32, dy: u32, w: u32, h: u32, 
 extern fn koruos_surface_present(p: ?*anyopaque, x: u32, y: u32, w: u32, h: u32) callconv(.c) u8;
 extern fn koruos_surface_move(p: ?*anyopaque, nx: u32, ny: u32) callconv(.c) u8;
 extern fn koruos_surface_geom(p: ?*anyopaque, out: *SurfGeom) callconv(.c) u8;
+extern fn koruos_surface_map(p: ?*anyopaque, out_phys: *u64, out_bytes: *u64) callconv(.c) u8;
 extern fn koruos_surface_close(p: ?*anyopaque) callconv(.c) u8;
 extern fn koruos_input_poll(out: *InEv) callconv(.c) u8;
 extern fn koruos_input_pending() callconv(.c) u8;
@@ -863,7 +864,43 @@ const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, inp
 // handles: stdio are real entries (conin/conout), fs a view handle,
 // pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
 // kind, never on the number — closing fd0 detaches like any discharge.
-const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input, epoll, efd, tfd };
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input, epoll, efd, tfd, sfd };
+
+// ---- signals: queueable kernel facts, not interruptions -------------------
+// This arm delivers NO asynchronous invocation — a handler registered
+// through rt_sigaction fires never (the stored-metadata ruling stands).
+// A signal is a pending fact on the child; the ONLY consumer shape is the
+// signalfd projection, which is exactly what wl_event_loop_add_signal
+// wants: the event loop eats the fact as bytes. SIGCHLD is the first
+// honest producer — a real kernel event (child death) lands on the
+// spawner's queue. A second instance of a pending signo merges, newest
+// payload wins — the coalescing posix grants non-RT signals; a merged
+// signo still reports even if the queue was full (payload zeroed).
+const NSIGQ = 8;
+const SigEnt = struct { signo: u8 = 0, code: i16 = 0, pid: u32 = 0, status: i32 = 0 };
+const SIGCHLD: u8 = 17;
+const CLD_EXITED: i16 = 1;
+const NO_PARENT: usize = ~@as(usize, 0);
+
+// Enqueue a pending fact. Same-signo merges (the bit stays, payload
+// refreshes); an unseen signo on a full queue still marks the bit — the
+// read side reports it with a zeroed payload, fact preserved.
+fn sigQueue(c: *Child, e: SigEnt) void {
+    const bit = @as(u64, 1) << @intCast(e.signo - 1);
+    var i: usize = 0;
+    while (i < c.nsigs) : (i += 1) {
+        if (c.sigs[i].signo == e.signo) {
+            c.sigs[i] = e;
+            c.sig_pending |= bit;
+            return;
+        }
+    }
+    c.sig_pending |= bit;
+    if (c.nsigs < NSIGQ) {
+        c.sigs[c.nsigs] = e;
+        c.nsigs += 1;
+    }
+}
 
 // ---- the bag: class grants + nid-scoped object grants ------------------
 // DESIGN-0001 §8.6's grant {handle, verbs, as} distilled to the syscall
@@ -926,6 +963,15 @@ const Child = struct {
                                     // is a per-syscall global; a blocked
                                     // syscall outlives it, so we snapshot
                                     // here and the epilogue reads it back
+    spawned_by: usize = NO_PARENT,  // spawner's roster slot — the SIGCHLD
+                                    // destination; NO_PARENT names the
+                                    // boot/root children nobody spawned
+    sig_blocked: u64 = 0,           // rt_sigprocmask's stored set — real
+                                    // state now: the loop's promise to
+                                    // consume via signalfd, recorded
+    sig_pending: u64 = 0,           // bitmask of queued signos
+    sigs: [NSIGQ]SigEnt = .{SigEnt{}} ** NSIGQ, // per-signo payload queue
+    nsigs: u8 = 0,
 };
 
 var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{} };
@@ -1562,7 +1608,8 @@ fn canonNr(nr: u64) u64 {
         231 => 60,
         318 => 61,
         158, 218, 273, 302 => 62,
-        14 => 62, // rt_sigprocmask — proc-self metadata, no signals exist
+        14 => 62, // rt_sigprocmask — proc-self metadata; the stored set
+                  // is now real state (signalfd consumes the queue)
         13 => 62, // rt_sigaction — registration is metadata too; a handler
                   // stored where nothing can deliver it fires exactly never
         72 => 62, // fcntl folds to the proc-self group — our handles carry no flag state
@@ -1599,6 +1646,9 @@ fn canonNr(nr: u64) u64 {
         // the bit. wl_event_loop_add_timer rides it (wlr_output frame
         // scheduling, seat repeat).
         283, 286, 287 => 22,
+        // signalfd is the same class again: the pending-signal queue is
+        // a channel — wl_event_loop_add_signal rides it.
+        282, 289 => 22,
         // fchmod mutates an object's mode bits — same class as
         // ftruncate's shape mutation.
         91 => 2,
@@ -2044,6 +2094,7 @@ fn childMmapFile(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fdu: 
     const fd: usize = @intCast(fdu);
     if (fd < 3 or c.fds[fd] == 0) return -9; // EBADF
     if (c.fdkinds[fd] == .shm) return childMmapShm(c, addru, len, prot, flags, fd, off);
+    if (c.fdkinds[fd] == .surf) return childMmapSurf(c, addru, len, prot, flags, fd, off);
     if (c.fdkinds[fd] != .fs) return -9; // sockets/pipes have no mapping
     const ops = c.fsv orelse return -38;
     if (flags & 0x01 != 0 and prot & 2 != 0) return -95; // EOPNOTSUPP — writable
@@ -2103,6 +2154,39 @@ fn childMmapShm(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fd: us
     return @intCast(base);
 }
 
+// mmap a surface: the provider answers whether its retained backing is
+// directly projectable — koruos_surface_map hands the contiguous frames
+// or refuses (a GPU-resident backing on another arm would say no, and
+// the blit verb stays the honest path). MAP_SHARED only: the backing IS
+// shared by definition — a private map would be a copy that silently
+// diverges from the scene, the same CoW ruling shm carries. Lifetime:
+// the pmm pin model holds — each mapped page is co-owned, so a map that
+// outlives the fd's close keeps the frames alive but orphaned (the
+// layer is already detached); exit's walk drops the refs like shm's.
+fn childMmapSurf(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fd: usize, off: u64) i64 {
+    if (flags & 0x01 == 0) return -95; // EOPNOTSUPP — private on a shared backing
+    const tok = surfTok(c, fd) orelse return -9;
+    var phys: u64 = 0;
+    var bytes: u64 = 0;
+    if (koruos_surface_map(tok, &phys, &bytes) == 0) return -19; // ENODEV
+    if (off >= bytes) return -22; // past the backing — honest EINVAL
+    const avail = @min(len, @as(usize, @intCast(bytes - off)));
+    var base: usize = 0;
+    if (flags & 0x10 != 0 and addru != 0) {
+        base = @intCast(addru);
+        if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
+    } else {
+        base = c.mmap_top;
+        c.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
+    }
+    var p: usize = 0;
+    while (p < avail) : (p += 0x1000) {
+        if (!mapUserPhys(c, base + p, phys + off + p)) return -12;
+    }
+    setUserWritable(c, base, len, prot & 2 != 0);
+    return @intCast(base);
+}
+
 fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
     if (fdu >= c.fds.len) return -9;
     var st: [144]u8 = std.mem.zeroes([144]u8);
@@ -2142,9 +2226,10 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             stw(&st, 24, 0o20600);
             stw(&st, 16, 1);
         },
-        .epoll, .efd, .tfd => {
-            // interest list, counter, and clock are anonymous — linux
-            // fstat calls them S_IFIFO|0600 (anon_inode); same answer
+        .epoll, .efd, .tfd, .sfd => {
+            // interest list, counter, clock, and signal queue are all
+            // anonymous — linux fstat calls them S_IFIFO|0600
+            // (anon_inode); same answer
             stw(&st, 24, 0o10600);
             stw(&st, 16, 1);
         },
@@ -3100,6 +3185,112 @@ fn childTfdRead(c: *Child, f: *TrapFrame) i64 {
     }
 }
 
+// nr 282/327 signalfd/signalfd4 — a pending-signal queue projected as an
+// fd: the object's mask selects which queued facts dequeue as
+// signalfd_siginfo bytes. There is no async delivery to race — signalfd
+// is the ONLY consumer of pending facts, which is the contract
+// wl_event_loop_add_signal was always about. Readiness is
+// pending∩mask through fdPollRev; a blocked reader parks on .poll,
+// woken by the producer's wakeKind.
+const NSFD = 8;
+const Sfd = struct {
+    refs: u32 = 0,
+    mask: u64 = 0,
+    nonblock: u8 = 0,
+};
+var sfds: [NSFD]Sfd = .{Sfd{}} ** NSFD;
+
+fn sfdFree(idx: usize) void {
+    const s = &sfds[idx];
+    if (s.refs > 0) s.refs -= 1;
+    if (s.refs == 0) s.* = .{};
+}
+
+// signalfd(fd, mask, flags) — fd -1 mints a projection bound to the
+// caller's 8-byte mask; an existing .sfd fd RE-BINDS the mask (linux's
+// update verb — the fd is a window on the child's queue, not the queue).
+// SFD_NONBLOCK(0x800)/SFD_CLOEXEC(0x80000) are the only legal flags;
+// SFD_CLOEXEC rides no state here (the fcntl fold's ruling).
+fn childSignalfd(c: *Child, fdu: u64, maskva: u64, flags: u64) i64 {
+    if (flags & ~@as(u64, 0x80800) != 0) {
+        say("SEAM REFUSE signalfd flags=");
+        puthex(flags);
+        say(" (unknown bits)\n");
+        return -22;
+    }
+    if (maskva == 0) return -14;
+    var mb: [8]u8 = undefined;
+    if (copyFromUser(c, @intCast(maskva), &mb) < 8) return -14;
+    const mask = std.mem.readInt(u64, &mb, .little);
+    if (fdu != NO_PARENT) { // ~0UL — an existing projection re-binds
+        if (fdu >= c.fds.len or c.fdkinds[@intCast(fdu)] != .sfd) return -9;
+        const s = &sfds[@intCast(c.fds[@intCast(fdu)] - 1)];
+        s.mask = mask;
+        s.nonblock = @intFromBool(flags & 0x800 != 0); // linux applies
+            // the flag word on update — clear counts too
+        return @intCast(fdu);
+    }
+    var fd: ?usize = null;
+    for (c.fds, 0..) |v, i| if (v == 0 and c.fdkinds[i] == .none) {
+        fd = i;
+        break;
+    };
+    const fdi = fd orelse return -24;
+    for (&sfds, 0..) |*s, i| if (s.refs == 0) {
+        s.* = .{ .refs = 1, .mask = mask,
+                  .nonblock = @intFromBool(flags & 0x800 != 0) };
+        c.fds[fdi] = i + 1;
+        c.fdkinds[fdi] = .sfd;
+        c.fdverbs[fdi] = V_READ;
+        return @intCast(fdi);
+    };
+    return -24;
+}
+
+// read — signalfd_siginfo is 128 bytes: a short buffer is EINVAL, a
+// longer one drains multiple facts (linux's floor(len/128) rule). A
+// pending bit whose payload merged away still reports its signo —
+// coalescing loses the detail, never the fact.
+fn childSfdRead(c: *Child, f: *TrapFrame) i64 {
+    if (f.rdx < 128) return -22;
+    const s = &sfds[@intCast(c.fds[@intCast(f.rdi)] - 1)];
+    while (true) {
+        var out: usize = 0;
+        var i: usize = 0;
+        while (i < c.nsigs and out + 128 <= f.rdx) {
+            const e = c.sigs[i];
+            if (s.mask & (@as(u64, 1) << @intCast(e.signo - 1)) == 0) {
+                i += 1;
+                continue;
+            }
+            var ib: [128]u8 = std.mem.zeroes([128]u8);
+            std.mem.writeInt(u32, ib[0..4], e.signo, .little);    // ssi_signo
+            std.mem.writeInt(i32, ib[8..12], e.code, .little);    // ssi_code
+            std.mem.writeInt(u32, ib[12..16], e.pid, .little);    // ssi_pid
+            std.mem.writeInt(i32, ib[40..44], e.status, .little); // ssi_status
+            if (copyToUser(c, @intCast(f.rsi + out), &ib) < 128) return -14;
+            out += 128;
+            c.sig_pending &= ~(@as(u64, 1) << @intCast(e.signo - 1));
+            c.nsigs -= 1;
+            c.sigs[i] = c.sigs[c.nsigs]; // compact — re-examine the swap-in
+        }
+        var bits = c.sig_pending & s.mask;
+        while (bits != 0 and out + 128 <= f.rdx) {
+            const b: u6 = @intCast(@ctz(bits));
+            var ib: [128]u8 = std.mem.zeroes([128]u8);
+            std.mem.writeInt(u32, ib[0..4], @as(u32, b) + 1, .little);
+            if (copyToUser(c, @intCast(f.rsi + out), &ib) < 128) return -14;
+            out += 128;
+            c.sig_pending &= ~(@as(u64, 1) << b);
+            bits = c.sig_pending & s.mask;
+        }
+        if (out != 0) return @intCast(out);
+        if (s.nonblock != 0) return -11;
+        if (userEntry(c, @intCast(f.rsi)) & 1 == 0) return -14;
+        kblock(.poll); // a produced fact is a .poll readiness change
+    }
+}
+
 fn shmRelease(idx: usize) void {
     const s = &shms[idx];
     if (s.refs > 0) s.refs -= 1;
@@ -3274,6 +3465,7 @@ fn releaseFd(c: *Child, i: usize) void {
         .epoll => epollFree(@intCast(c.fds[i] - 1)),
         .efd => efdFree(@intCast(c.fds[i] - 1)),
         .tfd => tfdFree(@intCast(c.fds[i] - 1)),
+        .sfd => sfdFree(@intCast(c.fds[i] - 1)),
         .conin, .conout => {},
     }
     c.fds[i] = 0;
@@ -3308,6 +3500,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
         .epoll => epolls[@intCast(src.fds[sfd] - 1)].refs += 1,
         .efd => efds[@intCast(src.fds[sfd] - 1)].refs += 1,
         .tfd => tfds[@intCast(src.fds[sfd] - 1)].refs += 1,
+        .sfd => sfds[@intCast(src.fds[sfd] - 1)].refs += 1,
         .fs => {
             const ops = src.fsv orelse return false;
             const nh = ops.dup(ops.ctx, src.fds[sfd]);
@@ -3664,6 +3857,10 @@ fn fdPollRev(c: *Child, fdi: usize, ev: u16) u16 {
             const t = &tfds[@intCast(c.fds[fdi] - 1)];
             tfdPump(t);
             if (ev & POLLIN != 0 and t.count != 0) r |= POLLIN;
+        },
+        .sfd => {
+            const s = &sfds[@intCast(c.fds[fdi] - 1)];
+            if (ev & POLLIN != 0 and c.sig_pending & s.mask != 0) r |= POLLIN;
         },
         .none => return POLLNVAL,
     }
@@ -4134,6 +4331,7 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
     nc.* = .{};
     if (!buildTables(nc)) return -12; // ENOMEM
     nc.fsv = c.fsv; // spawned inside the same view the caller names paths through
+    nc.spawned_by = cur_child; // the spawner is the SIGCHLD parent
     // stdio is a projection too: conin/conout entries by default, the
     // caller's in_src/out_src entries cloned in when wiring is asked for.
     nc.fdkinds[0] = .conin;
@@ -4287,6 +4485,7 @@ fn childFork(c: *Child, f: *TrapFrame) i64 {
         return -12;
     }
     nc.fsv = c.fsv;
+    nc.spawned_by = cur_child; // fork's child reports its death upward
     // dup the whole fd projection — fs handles go through the provider's
     // dup (refcounted share, one offset), pipe ends bump ring refs.
     for (0..c.fds.len) |i| {
@@ -4302,6 +4501,8 @@ fn childFork(c: *Child, f: *TrapFrame) i64 {
     nc.grants = c.grants;
     nc.ngrants = c.ngrants;
     nc.waitable = true;   // the status holds in a zombie for nr61 wait
+    nc.sig_blocked = c.sig_blocked; // posix: the mask inherits, pending
+                                  // does not — sigs stay empty
     nc.fsbase = c.fsbase;
     nc.brk = c.brk;
     nc.brk_base = c.brk_base;
@@ -4555,6 +4756,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     .input => childInputRead(c, f),
                     .efd => childEfdRead(c, f),
                     .tfd => childTfdRead(c, f),
+                    .sfd => childSfdRead(c, f),
                     .conin => coninRead(c, f),
                     .fs => if (c.fdverbs[fdi] & V_READ != 0)
                         childRead(c, f.rdi, f.rsi, f.rdx) else -9,
@@ -4613,9 +4815,10 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             const ms: i64 = @as(i32, @bitCast(@as(u32, @truncate(f.rdx))));
             f.rax = @bitCast(childPoll(c, f.rdi, f.rsi, ms));
         },
-        271 => { // ppoll(fds, nfds, ts, mask) — mask swapping needs
-                 // signals that don't exist; NULL mask is the only
-                 // honest shape, which is the only shape libwayland sends.
+        271 => { // ppoll(fds, nfds, ts, mask) — the atomic mask swap
+                 // is about async delivery, which doesn't exist here
+                 // (queued facts only); NULL mask is the only honest
+                 // shape, which is the only shape libwayland sends.
             if (f.r10 != 0) {
                 f.rax = @bitCast(@as(i64, -38)); // ENOSYS — sigmask swap
             } else {
@@ -4650,7 +4853,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         232, 281 => { // epoll_wait/epoll_pwait(epfd, events, maxevents,
                       // timeout [, sigmask, sigsetsize]) — musl issues
                       // the pwait nr for plain epoll_wait; the mask arg
-                      // is inert — no signals exist (arm-14's ruling)
+                      // is inert — facts queue, nothing interrupts
             const ms: i64 = @as(i32, @bitCast(@as(u32, @truncate(f.r10))));
             f.rax = @bitCast(childEpollWait(c, f.rdi, f.rsi, f.rdx, ms));
         },
@@ -4666,6 +4869,16 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         },
         287 => { // timerfd_gettime(fd, cur) — remaining + interval
             f.rax = @bitCast(childTimerfdGettime(c, f.rdi, f.rsi));
+        },
+        282, 289 => { // signalfd/signalfd4(fd, mask, sizemask, flags) —
+                      // the pending queue as a channel; 282 has no size/
+                      // flags words; the 4-arg form's sizemask must be
+                      // the honest 8 like linux validates.
+            f.rax = @bitCast(if (f.rax == 289 and f.rdx != 8)
+                @as(i64, -22)
+            else
+                childSignalfd(c, f.rdi, f.rsi,
+                    if (f.rax == 289) f.r10 else 0));
         },
         91 => { // fchmod(fd, mode) — mode bits on objects that carry them
             f.rax = @bitCast(childFchmod(c, f.rdi, f.rsi));
@@ -4789,6 +5002,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         c.fdkinds[fd] = .none;
                         f.rax = 0;
                     },
+                    .sfd => {
+                        sfdFree(@intCast(c.fds[fd] - 1));
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
                 }
             } else {
                 f.rax = @bitCast(@as(i64, -9));
@@ -4803,10 +5022,33 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         17 => { // pread64(fd, buf, len, off) — read without moving pos
             f.rax = @bitCast(childPread(c, f.rdi, f.rsi, f.rdx, f.r10));
         },
-        14 => { // rt_sigprocmask — no signals exist to mask; musl's
-                // _Fork calls this on both sides. A no-op success, same
-                // class as fcntl's flagless handles.
-            f.rax = 0;
+        14 => { // rt_sigprocmask(how, set, oldset, size) — the block set
+                // is real state: wl_event_loop_add_signal blocks before
+                // signalfd, and the recorded mask is the loop's promise
+                // to consume the queue through the fd. No async delivery
+                // exists to race — stored, consulted by nothing but the
+                // next oldset read.
+            var ret: i64 = 0;
+            if (f.rdx != 0) {
+                var ob: [8]u8 = undefined;
+                std.mem.writeInt(u64, &ob, c.sig_blocked, .little);
+                if (copyToUser(c, @intCast(f.rdx), &ob) < 8) ret = -14;
+            }
+            if (ret == 0 and f.rsi != 0) {
+                var ib: [8]u8 = undefined;
+                if (copyFromUser(c, @intCast(f.rsi), &ib) < 8) {
+                    ret = -14;
+                } else {
+                    const m = std.mem.readInt(u64, &ib, .little);
+                    switch (f.rdi) {
+                        0 => c.sig_blocked |= m,  // SIG_BLOCK
+                        1 => c.sig_blocked &= ~m, // SIG_UNBLOCK
+                        2 => c.sig_blocked = m,   // SIG_SETMASK
+                        else => ret = -22,
+                    }
+                }
+            }
+            f.rax = @bitCast(ret);
         },
         13 => { // rt_sigaction — wl_shm's SIGBUS guard installs/restores a
                 // handler around each shm access. No kill, no SIGBUS (our
@@ -5044,6 +5286,25 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     (p.wait_pid == dead_slot or p.wait_pid == ANY_PID)) {
                     p.spawn_ret = @bitCast(last_exit);
                     p.state = .runnable;
+                }
+            }
+            // SIGCHLD — the first honest producer: the spawner's queue
+            // gets the death fact whether or not it ever reads it. Only
+            // a live slot carries a queue (runnable/blocked/zombie —
+            // .dead is free for reuse, .empty never ran).
+            {
+                const db = children[dead_slot].spawned_by;
+                if (db < nchildren and db != dead_slot) {
+                    const p = &children[db];
+                    if (p.state == .runnable or p.state == .blocked or
+                        p.state == .zombie) {
+                        sigQueue(p, .{ .signo = SIGCHLD,
+                            .code = CLD_EXITED,
+                            .pid = @intCast(dead_slot + 1),
+                            .status = @intCast(last_exit) });
+                        wakeKind(.poll); // the fact lands while a reader
+                                         // parks on the queue's fd
+                    }
                 }
             }
             const dead = &children[cur_child];
