@@ -233,6 +233,73 @@ pub fn heldCount(phys: u64) u8 {
     return refs[i];
 }
 
+// ---- mb2 modules ---------------------------------------------------------
+// Tag 3 arrives once per loader-loaded file: {u32 start, u32 end, name[]} —
+// absolute physical addresses, the payload does NOT live inside the tag.
+// GRUB emits one tag per `module` command; PVH carries no module concept
+// (count stays 0 there, honestly). Each module's page range is reserve()d
+// so the frame allocator can never hand loader payload out as free RAM.
+
+pub const Mb2Module = extern struct {
+    phys: u64,
+    size: u64,
+    name: [*:0]const u8, // points into the reserved mbi — stable for boot
+};
+
+pub var mb2_mods: [8]Mb2Module = undefined;
+pub var mb2_nmods: usize = 0;
+var mb2_seen: usize = 0; // tags encountered, stored or not
+
+fn parseModules(mbi_phys: u32) void {
+    const base: [*]const u8 = @ptrFromInt(mbi_phys);
+    const total = std.mem.readInt(u32, base[0..4], .little);
+    var off: usize = 8;
+    while (off + 8 <= total) {
+        const t = std.mem.readInt(u32, base[off..][0..4], .little);
+        const s = std.mem.readInt(u32, base[off + 4 ..][0..4], .little);
+        if (t == 0 or s < 8) break;
+        if (t == 3 and s >= 16) {
+            mb2_seen += 1;
+            const mstart = std.mem.readInt(u32, base[off + 8 ..][0..4], .little);
+            const mend = std.mem.readInt(u32, base[off + 12 ..][0..4], .little);
+            // name is a NUL-terminated string inside the tag payload —
+            // a tag that can't prove termination is skipped, not trusted.
+            var np = off + 16;
+            var nul = false;
+            while (np < off + s) : (np += 1) {
+                if (base[np] == 0) {
+                    nul = true;
+                    break;
+                }
+            }
+            if (nul and mend > mstart) {
+                const name: [*:0]const u8 = @ptrCast(base + off + 16);
+                say("pmm: mb2 module \"");
+                say(name);
+                sayf("\" phys={x} size={d}", .{ mstart, mend - mstart });
+                if (mb2_nmods < mb2_mods.len) {
+                    mb2_mods[mb2_nmods] = .{ .phys = mstart, .size = mend - mstart, .name = name };
+                    mb2_nmods += 1;
+                }
+                reserve(mstart, mend - mstart);
+            }
+        }
+        off += (s + 7) & ~@as(usize, 7);
+    }
+    if (mb2_seen > mb2_mods.len)
+        sayf("pmm: mb2 modules truncated — {d} seen, {d} stored", .{ mb2_seen, mb2_mods.len });
+}
+
+pub export fn koruos_mb2_module_count() callconv(.c) u32 {
+    return @intCast(mb2_nmods);
+}
+
+pub export fn koruos_mb2_module(i: u32, out: *Mb2Module) callconv(.c) c_int {
+    if (i >= mb2_nmods) return -1;
+    out.* = mb2_mods[i];
+    return 0;
+}
+
 // ---- init + identity map ------------------------------------------------
 
 const Probe = struct { usable_end: u64, usable_bytes: u64 };
@@ -285,6 +352,14 @@ pub fn init(mbi_phys: u32) void {
             const total = std.mem.readInt(u32, base[0..4], .little);
             reserve(mbi_phys, total);
         }
+    }
+
+    // mb2 modules — after freeCb so the reserve()s land on frames the
+    // usable-walk already freed; PVH has no module tag, skip by magic.
+    if (mbi_phys != 0) {
+        const base: [*]const u8 = @ptrFromInt(mbi_phys);
+        if (std.mem.readInt(u32, base[0..4], .little) != XEN_MAGIC)
+            parseModules(mbi_phys);
     }
 
     // Extend the identity map: pd[0..ceil(limit/2MiB)) so kernel code can

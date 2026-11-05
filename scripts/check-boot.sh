@@ -209,6 +209,31 @@ else
     fi
 fi
 
+# iso-mod: GRUB `module` -> mb2 tag 3 -> pmm reserves the payload pages
+# -> koruos/module execs the ELF as a real CPL=3 child with fsv=null.
+# This is the transport a flash stick's ESP payload will ride — the
+# child's own "musl child says hi" + exit 42 are the evidence, and the
+# parent reports the seam's returned status, not its own claim.
+ZIGBIN="${ZIG:-/w/tools/zig-0.15.1/zig.exe}"
+if cp "$ROOT/koru/native/tests/muslhello.c" "$WORK/muslhello-mod.c" \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/musl-mod.elf" "$WORK/muslhello-mod.c" > "$WORK/muslmod.build" 2>&1 \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/module/tests/boot_mod.k" > "$WORK/boot_mod.k" \
+   && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_mod.k" "$WORK/koru-mod.iso" "$WORK/musl-mod.elf" > "$WORK/isomod.build" 2>&1; then
+    timeout 60 "$QEMU" -cdrom "$WORK/koru-mod.iso" -boot d -serial stdio \
+        -display none -m 128M -no-reboot > "$WORK/boot_isomod.serial" 2>&1 || true
+    if grep -qF 'pmm: mb2 module' "$WORK/boot_isomod.serial" \
+       && grep -qF "musl-mod.elf" "$WORK/boot_isomod.serial" \
+       && grep -qF "musl child says hi" "$WORK/boot_isomod.serial" \
+       && grep -qF "mod: exec status=42" "$WORK/boot_isomod.serial" \
+       && grep -qF "MODEXEC COMPLETE" "$WORK/boot_isomod.serial"; then
+        ok "iso-mod: GRUB module -> mb2 tag3 -> reserved payload -> CPL=3 child ran (status=42)"
+    else
+        bad "iso-mod: $(grep -aE 'GRUB|pmm:|mod:|musl' "$WORK/boot_isomod.serial" | tail -10 | tr '\n' '|')"
+    fi
+else
+    bad "iso-mod: build failed"; tail -6 "$WORK/muslmod.build" "$WORK/isomod.build" 2>/dev/null
+fi
+
 # disk: installable media — a partitioned MBR image whose ext2 root
 # holds /boot/koru.elf + grub.cfg, GRUB i386-pc written into the MBR
 # and post-MBR gap by grub-install. The chain SeaBIOS -> boot.img ->

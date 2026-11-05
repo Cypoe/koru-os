@@ -63,6 +63,8 @@ comptime {
     _ = &surf.koruos_surface_px;
     _ = &surf.koruos_surface_present;
     _ = &surf.koruos_surface_close;
+    _ = &pmm.koruos_mb2_module_count;
+    _ = &pmm.koruos_mb2_module;
     _ = &mouse.mouse_irq;
 }
 

@@ -791,7 +791,16 @@ Also open, smaller:
   RSDP via tag at a different address than PVH's). ~~install-to-disk~~ —
   landed: `build-disk.sh` emits a partitioned MBR image (ext2 root,
   /boot/koru.elf + grub.cfg, grub-install's MBR+core); SeaBIOS →
-  boot.img → core.img → partition /boot/grub → mb2 measured. Still open
+  boot.img → core.img → partition /boot/grub → mb2 measured.
+  Loader-module transport LANDED — mb2 tag 3 parsed in pmm.zig
+  ({start,end,cmdline} per tag, pages reserve()d against the frame
+  allocator, PVH honestly has none), koruos/module lift exposes
+  modules()/exec(name,rights) → koru_spawn_elf with fsv=null; GRUB
+  side is `module2` (NOT `module` — that's the mb1 spelling and
+  refuses "you need to load the kernel first"), and the tag's string
+  field is a cmdline, not the path — pass the basename as the arg.
+  iso-mod gate row: GRUB module2 → tag3 → reserved payload → real
+  CPL=3 child ran, exit status 42 through the seam. Still open
   inside the cell: init that doesn't halt-on-exit
   ~~shutdown/reboot~~ — landed:
   `koruos_powerctl` door, S5 payload AML-decoded off FADT+DSDT, reboot

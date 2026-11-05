@@ -1,0 +1,74 @@
+// koruos/module — the multiboot2 module provider.
+//
+// GRUB's `module` command hands the kernel loader-allocated payloads
+// through mb2 tag 3: {u32 start, u32 end, name[]} — absolute physical
+// addresses, one tag per file, the payload NOT inside the tag. pmm.zig
+// walks the tags, reserves each payload's pages against the frame
+// allocator, and serves the table through koruos_mb2_module{,_count}.
+// This lift is the Koru-side contract: enumerate, and exec an ELF
+// module as a real child — rung-2 spawn, own CR3 at CPL=3, fsv=null so
+// the child gets ENOSYS on open, honestly (a module is bytes, not a fs).
+//
+// Scope, stated: modules are read-only loader memory for boot's
+// lifetime. The initramfs provider — cpio unpack into a ChildFsOps
+// view — is the next rung on the same tags. PVH boot carries no module
+// concept: modules() refuses `absent` there, not an invented empty list.
+
+~import std/realize
+~import koruos/realize
+
+~std/realize:row(iface: koruos/module) {
+    "resources": "modules: mb2 tag-3 loader payloads — phys ranges reserved by pmm",
+    "evidence": "V: koru/native/pmm.zig tag-3 walk + koruos_mb2_module exports; spawn rung-2 koru_spawn_elf",
+    "binds": [
+        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/pmm.zig", "src:koru/native/user.zig"] }
+    ]
+}
+
+const std = @import("std");
+
+const Mb2Module = extern struct { phys: u64, size: u64, name: [*:0]const u8 };
+extern fn koruos_mb2_module_count() c_uint;
+extern fn koruos_mb2_module(i: c_uint, out: *Mb2Module) c_int;
+extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64, fsv: ?*anyopaque) c_int;
+extern var child_arg0: [64]u8;
+
+~pub tor modules {}
+| ok u32
+| absent string
+
+~proc modules|zig {
+    const n = koruos_mb2_module_count();
+    if (n == 0) return .{ .absent = "no mb2 modules — PVH boot or the loader loaded none" };
+    return .{ .ok = @as(u32, @intCast(n)) };
+}
+
+// exec spawns the named module's bytes as an ELF64 child and blocks
+// until it exits through the seam — the same provider ext2's exec tor
+// calls, reached here without a filesystem in between. `name` matches
+// the recorded module name exactly or by basename (GRUB keeps the
+// /boot/... path verbatim; callers name the file). rights is the bag's
+// class mask, caller-named like every spawn.
+~pub tor exec { name: string, rights: u64 }
+| ok i64
+| refused string
+
+~proc exec|zig {
+    const n = koruos_mb2_module_count();
+    var i: c_uint = 0;
+    while (i < n) : (i += 1) {
+        var m = Mb2Module{ .phys = 0, .size = 0, .name = undefined };
+        if (koruos_mb2_module(i, &m) != 0) continue;
+        const mname = std.mem.sliceTo(m.name, 0);
+        const base = if (std.mem.lastIndexOfScalar(u8, mname, '/')) |s| mname[s + 1 ..] else mname;
+        if (!std.mem.eql(u8, mname, name) and !std.mem.eql(u8, base, name)) continue;
+        // argv[0] = basename — POSIX's own convention, same as ext2 exec.
+        @memset(&child_arg0, 0);
+        @memcpy(child_arg0[0..@min(base.len, 63)], base[0..@min(base.len, 63)]);
+        const img: [*]const u8 = @ptrFromInt(@as(usize, @intCast(m.phys)));
+        const st = koru_spawn_elf(img, @intCast(m.size), rights, null);
+        if (st < 0) return .{ .refused = "koru_spawn_elf refused the image" };
+        return .{ .ok = @as(i64, @intCast(st)) };
+    }
+    return .{ .refused = "no module by that name" };
+}
