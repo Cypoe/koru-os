@@ -5,7 +5,7 @@ Self-contained: assumes koru internals knowledge, no koru-os context.
 ## The one-paragraph context
 
 `koru-os` (`C:\Users\fabi0\repos\koru-os`) is a Koru platform namespace:
-`koru/*/index.kz` lifts declare identity-bound interfaces; `koru/realize`
+`koruos/*/index.kz` lifts declare identity-bound interfaces; `koruos/realize`
 is a `[command]` `|zig` proc that is a **solver** — it walks module and
 program-level `koruos/realize:row { json }` declarations (the
 `std/invariants` idiom: `[comptime|norun]` tors carrying JSON blocks,
@@ -103,14 +103,14 @@ proven-equivalent alternatives — equivalence first, measured-best second.
 - koru-os repo: `C:\Users\fabi0\repos\koru-os` (github Cypoe/koru-os,
   commit `522c07d`). koru: `W:\src\koru` (koruc at `zig-out/bin/koruc.exe`;
   zig must be on PATH: `/w/tools/zig-0.15.1`).
-- Emit sites: `koru/realize/index.kz` — builtin rows ~L92, decl scanner
+- Emit sites: `koruos/realize/index.kz` — builtin rows ~L92, decl scanner
   ~L132-360, verdict marks ~L505-630, marks file ~L706.
 - Checks: `bash scripts/check-realize.sh` — 9/9 (controls bind,
   negatives refuse by name in both text + marks surfaces, native provider
   opt-in, matrix recount).
-- Fixtures: `koru/realize/tests/` (`control_rowed`, `negative_unrowed`,
+- Fixtures: `koruos/realize/tests/` (`control_rowed`, `negative_unrowed`,
   `negative_contradict`, `negative_badrow` + `badrow|unrowed` module dirs;
   `{{ ENTRY }}` template = fixture dir path).
-- Native provider: `koru/native/{index.kz,runtime.zig}` — freestanding
+- Native provider: `koruos/native/{index.kz,runtime.zig}` — freestanding
   `posix_memalign`/`free` + `fputs`/`stdout`/`stderr`→COM1.
 - Design contract: `docs/design/DESIGN-0001-execution-contract.md` §11.1.

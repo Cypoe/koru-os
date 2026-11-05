@@ -1,5 +1,5 @@
 #!/bin/bash
-# mk-vroot — build the vendored rootfs (hosted/vroot/Dockerfile →
+# mk-vroot — build the vendored rootfs (rig/vroot/Dockerfile →
 # docker export → $KVROOT_DIR) and smoke the jail. The rootfs is
 # environment state, not a build artifact: it lives in the WSL home,
 # not the repo. Run once per host; check-hosted's vroot rows probe for
@@ -7,7 +7,7 @@
 # not a skip, same as a missing X server.
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
-VROOT_SRC="$HERE/../hosted/vroot"
+VROOT_SRC="$HERE/../rig/vroot"
 KVROOT_DIR="${KVROOT_DIR:-/home/$USER/kvroot}"
 WSL_DISTRO="${WSL_DISTRO:-Ubuntu}"
 

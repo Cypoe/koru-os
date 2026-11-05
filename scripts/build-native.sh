@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Pinned: koru@aaa64576c worktree — the live /w/src/koru checkout is on
 # fork/ccomp where the zig emitter leaks |c proc bodies into zig output
 # (handler__c with raw C text — every std/io consumer fails the backend
-# build). Restore to /w/src/koru/zig-out/bin/koruc.exe once fixed.
+# build). Restore to /w/src/koruos/zig-out/bin/koruc.exe once fixed.
 KORUC="${KORUC:-/w/src/koru-aaa6457/zig-out/bin/koruc.exe}"
 ZIG="${ZIG:-/w/tools/zig-0.15.1/zig.exe}"
 export PATH="/w/tools/zig-0.15.1:$PATH"
@@ -34,24 +34,24 @@ cp "$PROG" "$WORK/program.$EXT"
     -target x86_64-freestanding-none -mcpu=x86_64 \
     -O ReleaseSafe \
     -fno-entry -fno-stack-protector -mno-red-zone \
-    -T "$ROOT/koru/native/link.ld" \
-    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm --dep kbd --dep pci --dep mmio --dep virtiopci --dep mouse --dep comp --dep acpi --dep smp --dep ioapic -Mroot="$ROOT/koru/native/boot.zig" \
-    -Macpi="$ROOT/koru/native/acpi.zig" \
-    --dep acpi --dep mmio --dep pci -Mioapic="$ROOT/koru/native/ioapic.zig" \
-    --dep pmm --dep mmio --dep acpi -Msmp="$ROOT/koru/native/smp.zig" \
+    -T "$ROOT/koruos/native/link.ld" \
+    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm --dep kbd --dep pci --dep mmio --dep virtiopci --dep mouse --dep comp --dep acpi --dep smp --dep ioapic -Mroot="$ROOT/koruos/native/boot.zig" \
+    -Macpi="$ROOT/koruos/native/acpi.zig" \
+    --dep acpi --dep mmio --dep pci -Mioapic="$ROOT/koruos/native/ioapic.zig" \
+    --dep pmm --dep mmio --dep acpi -Msmp="$ROOT/koruos/native/smp.zig" \
     --dep compiler_env -Mprogram="$WORK/output_emitted.zig" \
-    -Mcompiler_env="$ROOT/koru/native/compiler_env.zig" \
-    -Mruntime="$ROOT/koru/native/runtime.zig" \
-    -Mpci="$ROOT/koru/native/pci.zig" \
-    --dep pmm -Mmmio="$ROOT/koru/native/mmio.zig" \
-    --dep pci --dep mmio -Mvirtiopci="$ROOT/koru/native/virtiopci.zig" \
-    --dep pci -Mvirtio="$ROOT/koru/native/virtio.zig" \
-    --dep pmm -Maspace="$ROOT/koru/native/aspace.zig" \
-    --dep pmm --dep kbd --dep mmio --dep ioapic --dep smp -Muser="$ROOT/koru/native/user.zig" \
-    -Mpmm="$ROOT/koru/native/pmm.zig" \
-    --dep mouse --dep comp -Mkbd="$ROOT/koru/native/kbd.zig" \
-    --dep kbd -Mmouse="$ROOT/koru/native/mouse.zig" \
-    -Mcomp="$ROOT/koru/native/comp.zig" \
+    -Mcompiler_env="$ROOT/koruos/native/compiler_env.zig" \
+    -Mruntime="$ROOT/koruos/native/runtime.zig" \
+    -Mpci="$ROOT/koruos/native/pci.zig" \
+    --dep pmm -Mmmio="$ROOT/koruos/native/mmio.zig" \
+    --dep pci --dep mmio -Mvirtiopci="$ROOT/koruos/native/virtiopci.zig" \
+    --dep pci -Mvirtio="$ROOT/koruos/native/virtio.zig" \
+    --dep pmm -Maspace="$ROOT/koruos/native/aspace.zig" \
+    --dep pmm --dep kbd --dep mmio --dep ioapic --dep smp -Muser="$ROOT/koruos/native/user.zig" \
+    -Mpmm="$ROOT/koruos/native/pmm.zig" \
+    --dep mouse --dep comp -Mkbd="$ROOT/koruos/native/kbd.zig" \
+    --dep kbd -Mmouse="$ROOT/koruos/native/mouse.zig" \
+    -Mcomp="$ROOT/koruos/native/comp.zig" \
     -femit-bin="$OUT" || {
     echo "build-native: zig link failed"; exit 1;
 }

@@ -16,10 +16,18 @@ KORULIBS="${KORULIBS:-/w/src/koru-libs}"
 export PATH="/w/tools/zig-0.15.1:$PATH"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FIX="$(cygpath -m "$ROOT/koru/realize/tests" 2>/dev/null || echo "$ROOT/koru/realize/tests")"
+FIX="$(cygpath -m "$ROOT/koruos/realize/tests" 2>/dev/null || echo "$ROOT/koruos/realize/tests")"
 LIBS="$(cygpath -m "$KORULIBS" 2>/dev/null || echo "$KORULIBS")"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# Gate runs are evidence, not scratch: each run gets its own dir under
+# evidence/runs/<ts>-realize.XXXXXX (gitignored). EVIDENCE_KEEP prunes.
+KEEP="${EVIDENCE_KEEP:-10}"
+RUNS="$ROOT/evidence/runs"
+mkdir -p "$RUNS"
+WORK="$(mktemp -d "$RUNS/$(date +%Y%m%d-%H%M%S)-realize.XXXXXX")"
+# Build caches are not evidence — strip them on exit, keep logs/artifacts.
+trap 'find "$WORK" -type d \( -name .zig-cache -o -name zig-out -o -name zig-cache \) -exec rm -rf {} + 2>/dev/null; echo "evidence: $WORK"' EXIT
+find "$RUNS" -mindepth 1 -maxdepth 1 -type d -name '*-realize.*' \
+    | sort -r | tail -n +$((KEEP+1)) | xargs -r rm -rf
 
 pass=0; failn=0
 ok()  { pass=$((pass+1));  echo "ok   $1"; }
@@ -29,7 +37,7 @@ bad() { failn=$((failn+1)); echo "FAIL $1"; }
 stage() {
     sed -e "s|{{ ENTRY }}|$FIX|g" \
         -e "s|unikraft: .*|unikraft: $LIBS/unikraft|" \
-        "$ROOT/koru/realize/tests/$1.k" > "$WORK/$1.k"
+        "$ROOT/koruos/realize/tests/$1.k" > "$WORK/$1.k"
 }
 
 # run_k <name> [realize args...]: compile, capture output+exit code
@@ -76,14 +84,14 @@ else bad "negative_badrow (rc=$RC)"; fi
 
 # --- native provider: binds iff imported -----------------------------------
 cat > "$WORK/tnat.k" <<EOF
-std/compiler:paths { koruos: $(cygpath -m "$ROOT/koru" 2>/dev/null || echo "$ROOT/koru") }
+std/compiler:paths { koruos: $(cygpath -m "$ROOT/koruos" 2>/dev/null || echo "$ROOT/koruos") }
 import koruos/native
 import koruos/realize
 import std/io
 std/io:print.ln("x")
 EOF
 cat > "$WORK/tnoimp.k" <<EOF
-std/compiler:paths { koruos: $(cygpath -m "$ROOT/koru" 2>/dev/null || echo "$ROOT/koru") }
+std/compiler:paths { koruos: $(cygpath -m "$ROOT/koruos" 2>/dev/null || echo "$ROOT/koruos") }
 import koruos/realize
 import std/io
 std/io:print.ln("x")
@@ -123,11 +131,11 @@ else bad "badrow mark missing"; fi
 
 # the native provider binds the clock/entropy lifts it serves — boot_silo
 # with koruos/native imported must bind all 11 silo tors on koru-native
-FIX_SILO="$(cygpath -m "$ROOT/koru/silo/tests" 2>/dev/null || echo "$ROOT/koru/silo/tests")"
+FIX_SILO="$(cygpath -m "$ROOT/koruos/silo/tests" 2>/dev/null || echo "$ROOT/koruos/silo/tests")"
 sed -e "s|{{ ENTRY }}|$FIX_SILO|g" \
     -e "s|unikraft: .*|unikraft: $LIBS/unikraft|" \
     -e '0,/^import /s//import koruos\/native\nimport /' \
-    "$ROOT/koru/silo/tests/boot_silo.k" > "$WORK/tsilo_nat.k"
+    "$ROOT/koruos/silo/tests/boot_silo.k" > "$WORK/tsilo_nat.k"
 run_k tsilo_nat gen --arm koru-native
 if [ -f "$WORK/manifest-koru-native.txt" ] \
    && grep -q "bind: koruos.silo -> native-runtime" "$WORK/manifest-koru-native.txt" \
@@ -139,11 +147,11 @@ else bad "tsilo_nat native (rc=$RC)"; fi
 # children run to completion inside start, seam-enforced bag) needs only
 # heap+clock+console — all 12 tors are served by the one module row, and
 # the rung caveat must ride the bind deltas (no MMU isolation claimed)
-FIX_SPAWN="$(cygpath -m "$ROOT/koru/spawn/tests" 2>/dev/null || echo "$ROOT/koru/spawn/tests")"
+FIX_SPAWN="$(cygpath -m "$ROOT/koruos/spawn/tests" 2>/dev/null || echo "$ROOT/koruos/spawn/tests")"
 sed -e "s|{{ ENTRY }}|$FIX_SPAWN|g" \
     -e "s|unikraft: .*|unikraft: $LIBS/unikraft|" \
     -e '0,/^import /s//import koruos\/native\nimport /' \
-    "$ROOT/koru/spawn/tests/boot_spawn.k" > "$WORK/tspawn_nat.k"
+    "$ROOT/koruos/spawn/tests/boot_spawn.k" > "$WORK/tspawn_nat.k"
 run_k tspawn_nat gen --arm koru-native
 if [ -f "$WORK/manifest-koru-native.txt" ] \
    && grep -q "bind: koruos.spawn -> native-runtime" "$WORK/manifest-koru-native.txt" \
@@ -163,7 +171,7 @@ else bad "matrix marks missing"; fi
 
 # the Lean checker recounts the projection over the committed catalog —
 # a missing toolchain is failure, never a skip
-WITNESS_DIR="${KORU_WITNESS:-/w/src/koru/verify/witness}"
+WITNESS_DIR="${KORU_WITNESS:-/w/src/koru-aaa6457/verify/witness}"
 LEAN="${KORU_LEAN:-$HOME/.elan/toolchains/leanprover--lean4---v4.31.0/bin/lean.exe}"
 if [ ! -x "$LEAN" ]; then
     for cand in "$HOME"/.elan/toolchains/leanprover--lean4---v*/bin/lean.exe; do

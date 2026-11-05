@@ -9,7 +9,7 @@
         "origin": "https://github.com/korulang/koru.git",
         "revision": "3d81f837f63dc9eb0b5a5a6f96e17e09f3cc0aeb"
       },
-      "target": "tc/koru"
+      "target": "upstream/koru"
     },
     {
       "name": "koru-libs",
@@ -19,7 +19,7 @@
         "origin": "https://github.com/korulang/koru-libs.git",
         "revision": "ff5cb559e1c00431a1bb36024871c760a9bdcbe9"
       },
-      "target": "tc/koru-libs"
+      "target": "upstream/koru-libs"
     },
     {
       "name": "unikraft",
@@ -49,7 +49,7 @@
         "origin": "https://github.com/unikraft/app-elfloader.git",
         "revision": "6ecbcd08d85b4688112a3b275a9c8446cf59e25d"
       },
-      "target": "upstream/app-elfloader"
+      "target": "upstream/app-elfloader-stable"
     },
     {
       "name": "app-elfloader",
@@ -59,7 +59,7 @@
         "origin": "https://github.com/unikraft/app-elfloader.git",
         "revision": "0cd7a2b2c4d5ece85647c0c9903b50426e849420"
       },
-      "target": "m3/app-elfloader"
+      "target": "upstream/app-elfloader"
     },
     {
       "name": "unikraft-catalog",
@@ -69,7 +69,7 @@
         "origin": "https://github.com/unikraft/catalog.git",
         "revision": "476b59ce1ea67979ec32b79d61ae0aae29f745b9"
       },
-      "target": "m3/catalog"
+      "target": "upstream/unikraft-catalog"
     },
     {
       "name": "libudev-zero",
@@ -79,7 +79,7 @@
         "origin": "https://github.com/illiliti/libudev-zero.git",
         "revision": "8f1d3d0624496f1c4967f18d6afaddbd552d8bce"
       },
-      "target": "m7bin/src/libudev-zero"
+      "target": "upstream/libudev-zero"
     },
     {
       "name": "foot",
@@ -89,7 +89,7 @@
         "origin": "https://codeberg.org/dnkl/foot.git",
         "revision": "ab33c9a19d626f8d0ac0bd1adfdba21946ada948"
       },
-      "target": "m9src/foot"
+      "target": "upstream/foot"
     },
     {
       "name": "aquamarine",
@@ -99,7 +99,7 @@
         "origin": "https://github.com/hyprwm/aquamarine.git",
         "revision": "f31c47a1b9d300847d8fc3108ad959448103dfc1"
       },
-      "target": "m9src/aquamarine"
+      "target": "upstream/aquamarine"
     },
     {
       "name": "kolibrios",

@@ -232,7 +232,7 @@ every gated item holds, and M4 passes only with 3/3 runs.
 - **Absent:** no virtio-gpu and no virtio-input driver.
 
 **M2 route decision (2026-10-18, about 19:55 CEST).** The minimal ext2 driver is a
-Koru lift over `ukblkdev` (`koru/ext2`). Reasons:
+Koru lift over `ukblkdev` (`koruos/ext2`). Reasons:
 - No `unikraft/lib-lwext4` is reachable. Upstream lwext4 @ `58bcf89a` is GPL-2.0 by
   default, so under R-SILO-1 it could only run inside a silo.
 - `unikraft/lib-fatfs` is an empty initial commit.
@@ -243,7 +243,7 @@ result. It is deliberately narrow: one file, one group, direct blocks, and no vf
 yet. vfscore integration is the next step for M3.
 
 *Update 2026-10-18, about 20:30 CEST:* the read path is now a vfscore filesystem,
-`lib/koruext2fs`. It has an allocation-free Zig core with a C ABI plus a C vnops glue,
+`arms/unikraft/koruext2fs`. It has an allocation-free Zig core with a C ABI plus a C vnops glue,
 and it is host-tested against `mke2fs -d` images in six geometries. It carries the M3
 acceptance (`experiments/m3-ext2root/`). The writer is still the Koru lift; merging
 the two parsers is debt.
@@ -253,7 +253,7 @@ the two parsers is debt.
 *Reformulated 2026-10-19 ~20:05 CEST per Q19, on top of the **conditionally accepted**
 Spawn lib (§8.6.7b). The previous wording is kept below as superseded.*
 
-- **Arm.** L2 (`app-elfloader` + `lib/koruspawn` loud compat), reference L1 (oracle only).
+- **Arm.** L2 (`app-elfloader` + `arms/unikraft/koruspawn` loud compat), reference L1 (oracle only).
 - **Acceptance (current).** A real shell and real programs are launched **via Spawn**
   with an **explicit rights bag**. Wholesale POSIX `fork` is **refused** (F2), or is
   available only as a **dissected grant** (address-space copy/CoW never ambient; today
@@ -382,17 +382,17 @@ means the test is first run against a Linux guest to produce the expected trace.
 | M1 | Koru-built Unikraft image reads and writes a sector | L2 native (koru-libs `unikraft/blk`) | guest writes pattern *P* to sector *s*; host `cmp` of `disk.img` at *s* equals *P*; serial shows the read-back bytes | **M (TCG), 2026-10-18**: 3/3 runs pass host `cmp`, image 194,176 B, 0.24–0.26 s wall (`experiments/m1-blk/`) |
 | DS0 | silo contract and refusal harness | L2 | a silo with an empty row manifest boots. Every call into it is refused and logged as `refused: <identity> silo=<id>`. A call with a forged or expired handle is refused. The host-side log check finds no `ENOSYS` without a refusal entry | host model **M** (5/5 zig tests); **in-image M (TCG)**: `koruos/silo` Koru lift, 3/3 runs equal `expected.txt`; compile gates reject call-unbound, call-after-revoked, bind-twice (KORU030); leaks are auto-discharged by koruc, not rejected (`experiments/ds0-silo/`) |
 | DS1 | LKL blk/fs silo | L2 + silo:lkl (host ops on Unikraft, Q25) | silo mounts ext4 from virtio-blk via `blk.*` rows and exposes `fs.*`; DoD-1 test (M2) passes through it | D |
-| M2 | real FS allocates blocks (**DoD-1**) | L2: vfscore + ext2 driver, **or** DS1 | guest creates `/dod1` of *N* blocks, writes, `fsync`s, halts; host `e2fsck -fn` clean, `debugfs -R 'cat /dod1'` equals pattern, free-block count dropped by ≥ *N* | **M (TCG), 2026-10-18**: minimal ext2 Koru lift (`koru/ext2`); 3/3 + 1 runs pass, e2fsck exit 0, free blocks −10, inodes −1 (`experiments/m2-ext2/`). Scope of the writer: one file, one group, direct blocks. Read path under vfscore since 2026-10-18 (`lib/koruext2fs`, host oracle 7/7; B7 closed) |
-| M3 | static busybox shell from the ext root | L2 `app-elfloader` (L1 trace first) | scripted serial session: `echo`, `ls /`, `cat /dod1`, `exit 3` → exit status 3 observed; refusal log empty or only by-design rows | **M (TCG), 2026-10-18, PASS 3/3**: M2 guest writes `/dod1` into an `mke2fs -d` busybox image, host `e2fsck -fn` clean; M3 guest mounts it through `koruext2fs` (vfscore, read-only) as `/` and runs `ls /`, `cat /dod1` (guest sha256 = pattern), a pipeline, `exit 3` → "init exited with status 3"; boot to exit 0.39–0.42 s wall (`experiments/m3-ext2root/`). Refusal-log clause N/A (no silo in this image). Fixed on the way: B6 (vfork FSBASE, empty argv), virtio ring destroy under LIBUKVMEM. Debt: root is read-only; `koru/ext2` (writer) and `ext2core.zig` (reader) duplicate parsing |
+| M2 | real FS allocates blocks (**DoD-1**) | L2: vfscore + ext2 driver, **or** DS1 | guest creates `/dod1` of *N* blocks, writes, `fsync`s, halts; host `e2fsck -fn` clean, `debugfs -R 'cat /dod1'` equals pattern, free-block count dropped by ≥ *N* | **M (TCG), 2026-10-18**: minimal ext2 Koru lift (`koruos/ext2`); 3/3 + 1 runs pass, e2fsck exit 0, free blocks −10, inodes −1 (`experiments/m2-ext2/`). Scope of the writer: one file, one group, direct blocks. Read path under vfscore since 2026-10-18 (`arms/unikraft/koruext2fs`, host oracle 7/7; B7 closed) |
+| M3 | static busybox shell from the ext root | L2 `app-elfloader` (L1 trace first) | scripted serial session: `echo`, `ls /`, `cat /dod1`, `exit 3` → exit status 3 observed; refusal log empty or only by-design rows | **M (TCG), 2026-10-18, PASS 3/3**: M2 guest writes `/dod1` into an `mke2fs -d` busybox image, host `e2fsck -fn` clean; M3 guest mounts it through `koruext2fs` (vfscore, read-only) as `/` and runs `ls /`, `cat /dod1` (guest sha256 = pattern), a pipeline, `exit 3` → "init exited with status 3"; boot to exit 0.39–0.42 s wall (`experiments/m3-ext2root/`). Refusal-log clause N/A (no silo in this image). Fixed on the way: B6 (vfork FSBASE, empty argv), virtio ring destroy under LIBUKVMEM. Debt: root is read-only; `koruos/ext2` (writer) and `ext2core.zig` (reader) duplicate parsing |
 | M4 | **T-CYB** (§0.2) | L2 (L1 trace first) | (a)–(d) gated, (e) open; frozen parameters in §0.2 "M4 acceptance for the stand-in" | **M (stand-in): (a)–(d) PASS 3/3 under TCG, 2026-10-19 12:55 CEST; (e) open** (`experiments/m4-cyb/README.md`); needed fixes B9, B10. Full T-CYB still waits for boot-animator (Q18) and a UTF-8 display path |
 | M5 | real programs, dynamic linking (**DoD-2**) | L2 | musl, then glibc, `ld.so` run coreutils and an interactive `ash` with a pipeline (`ls \| wc -l`); T-CYB still passes | **M5a (M): PASS 3/3 under TCG, 2026-10-19 13:06 CEST**: musl and glibc `ld.so`, GNU coreutils 9.7, dynamic busybox shell pipeline; M3 and M4 regressions 3/3 on the same kernel (`experiments/m5-dyn/README.md`); needed fix B12. Open: musl-built busybox, `dlopen`, threads; `fork` clause superseded by Spawn (DoD-2 reformulated 20:05; M-SPAWN-MMU owed for unconditional caps) |
-| M-SPAWN-MMU | MMU-enforced Spawn caps + dissected fork (follow-up to conditional Spawn-lib acceptance) | L2 + rung 2 (`unikraft/paging`) | per-child page tables; object ≠ vaddr ≠ permission ≠ residency; CoW/share only as an explicit grant; hostile child cannot read ungranted parent pages (M under TCG) | **Gaps 1–3 PASS 3/3** (reconfirmed after ELF-CR3). **ELF child-CR3 PASS 3/3** (2026-10-19 ~22:17 CEST): chosen path = **kernel-half** (boot text/.bss + dual-mapped ambient stack/heap + auxsp/uktls/thread metadata pages; never full parent heap) **+ syscall/IRQ CR3 leave** + naked CR3 gate after parent `ctx_switch`; AT_RANDOM/AT_EXECFN on child stack (`lib/koruelf/elf_ctx.c`). spawn-elf E0–E12+M (hw parent-heap fault + RO attenuation under child CR3) 3/3 (`experiments/spawn-elf/evidence/elf-cr3-accept/`). Rejected: per-child arena alone; CR3-only without assist. **Review of `d1dc650` (2026-10-19 ~23:15 CEST), gaps R1–R3, see §8.6.7d:** R2 direct-map PML4[511] + all non-image `pt_clone` leftovers stripped, census undeclared=0, alias faults in child: PASS 3/3. R3 child PF → `kill(getpid(),SIGSEGV)` → WTERMSIG=11 (status 139) + logged reason: PASS 3/3. **R1 open:** M9 foot not on child CR3 (m9k4 elfloader has no koruspawn MMU). Spawn: **not yet ready (gaps listed)**, not accepted. Q33 open. |
+| M-SPAWN-MMU | MMU-enforced Spawn caps + dissected fork (follow-up to conditional Spawn-lib acceptance) | L2 + rung 2 (`unikraft/paging`) | per-child page tables; object ≠ vaddr ≠ permission ≠ residency; CoW/share only as an explicit grant; hostile child cannot read ungranted parent pages (M under TCG) | **Gaps 1–3 PASS 3/3** (reconfirmed after ELF-CR3). **ELF child-CR3 PASS 3/3** (2026-10-19 ~22:17 CEST): chosen path = **kernel-half** (boot text/.bss + dual-mapped ambient stack/heap + auxsp/uktls/thread metadata pages; never full parent heap) **+ syscall/IRQ CR3 leave** + naked CR3 gate after parent `ctx_switch`; AT_RANDOM/AT_EXECFN on child stack (`arms/unikraft/koruelf/elf_ctx.c`). spawn-elf E0–E12+M (hw parent-heap fault + RO attenuation under child CR3) 3/3 (`experiments/spawn-elf/evidence/elf-cr3-accept/`). Rejected: per-child arena alone; CR3-only without assist. **Review of `d1dc650` (2026-10-19 ~23:15 CEST), gaps R1–R3, see §8.6.7d:** R2 direct-map PML4[511] + all non-image `pt_clone` leftovers stripped, census undeclared=0, alias faults in child: PASS 3/3. R3 child PF → `kill(getpid(),SIGSEGV)` → WTERMSIG=11 (status 139) + logged reason: PASS 3/3. **R1 open:** M9 foot not on child CR3 (m9k4 elfloader has no koruspawn MMU). Spawn: **not yet ready (gaps listed)**, not accepted. Q33 open. |
 | M-SPAWN-RING3 | Spawn children in ring 3 (user mode), so a hostile child cannot write CR3 or kernel `.data` (follow-up to M-SPAWN-MMU; recorded 2026-10-19 ~23:30 CEST) | L2 + rung 2 + a user/supervisor split (U/S page bits, `syscall`/`sysret` or `iret` entry, TSS RSP0) | child code runs at CPL 3; kernel image and all kernel data mapped supervisor-only in the child PT; a child write to CR3, an IDT/GDT load, or a write to kernel `.data` is a #GP/#PF in the child that becomes SIGSEGV/SIGILL, never kernel state (M under TCG, hostile probes) | D, **not started** (Fabian: do not start yet). Prerequisite: R1. Until it lands, Spawn isolation is **fault isolation, not adversarial** (§8.6.7d) |
 | DS2 | Kolibri driver silo, first driver | L2 + silo:kolibri (KolibriOS driver-service personality) | an unmodified KolibriOS `.sys` network or input driver (`RTL8139`/`pcnet32` on QEMU `rtl8139`/`pcnet`, or `ps2mouse4d`) loads in the silo. Its imports either bind to rows or are refused by name. `net.*` frames or `input.*` events cross the silo boundary (serial log) | D |
 | DS3 | GPU driver silo | silo:lkl `virtio_gpu` on `virtio-gpu-pci`, or silo:kolibri `vmwgfx` on `vmware-svga` | the silo exposes only the `kms.*` rows of Appendix C.3; M6 passes through it | D |
 | DS4 | input driver silo | silo:lkl `virtio_input` (evdev) or silo:kolibri `usbhid`/`ps2` translated to `input.*` | M7 passes through it | D |
 | M6 | KMS scanout of a dumb buffer | L2 + DS3 (L1 trace first); M6 uses a native provider instead ("M6 decision" below, Q28) | libdrm `modetest -s <conn>:<mode>` (or equivalent) draws a test pattern; screendump pixel check at known coordinates; frozen parameters in "M6 acceptance" below | **M (native provider): PASS 3/3 under TCG, 2026-10-19 13:36 CEST**: `kmsdumb` (raw ioctls, two dumb buffers, two `SETCRTC`) and unmodified libdrm `modetest -M korukms -s Virtual-1:1024x768`; all three screendumps 0 of 786,432 pixels off the independent references, and byte-identical to the L1 `bochs-drm` twin; M3/M4/M5a regressions 3/3 (`experiments/m6-kms/README.md`). Not through DS3 (Q28); no atomic, properties or vblank events yet |
-| M7 | input | L2 + DS4; M7 uses a native provider instead ("M7 decision" below, Q28) | QMP `input-send-event` key events appear in `libinput debug-events` on serial; split into M7a (evdev uAPI) and M7b (libinput) | **M7a PASS 3/3** (13:57). **M7b PASS 3/3 under TCG, 2026-10-19 15:07 CEST**: unmodified Debian `libinput debug-events --device /dev/input/event0` (1.28.1) over the kernel sysfs view (`lib/korusysfs`) and libudev-zero; 18 KEYBOARD_KEY lines = derived = L1 (udevd and libudev-zero twins); M3/M4/M5a/M6/M7a/M8a/M8b regressions 3/3 (`experiments/m7b-libinput/README.md`). B15 resolved. Not through DS4 (Q28) |
+| M7 | input | L2 + DS4; M7 uses a native provider instead ("M7 decision" below, Q28) | QMP `input-send-event` key events appear in `libinput debug-events` on serial; split into M7a (evdev uAPI) and M7b (libinput) | **M7a PASS 3/3** (13:57). **M7b PASS 3/3 under TCG, 2026-10-19 15:07 CEST**: unmodified Debian `libinput debug-events --device /dev/input/event0` (1.28.1) over the kernel sysfs view (`arms/unikraft/korusysfs`) and libudev-zero; 18 KEYBOARD_KEY lines = derived = L1 (udevd and libudev-zero twins); M3/M4/M5a/M6/M7a/M8a/M8b regressions 3/3 (`experiments/m7b-libinput/README.md`). B15 resolved. Not through DS4 (Q28) |
 | M8 | GL on KMS | L2 + DS3 + Mesa llvmpipe/`kms_swrast` in userspace | `kmscube` runs; two screendumps 1 s apart differ, and both are non-black; split into M8a (offscreen EGL/GBM, frozen in "M8a acceptance") and M8b (kmscube) | **M8a: PASS 3/3 under TCG, 2026-10-19 14:15 CEST**: unmodified Mesa 25.0.7 llvmpipe (LLVM 19.1.7) renders offscreen via EGL surfaceless and via EGL on GBM over `/dev/dri/card0`; frame hashes equal the L1 twin's, probe pixels as derived (`experiments/m8-gl/README.md`). **M8b: PASS 3/3 under TCG, 2026-10-19 14:26 CEST**: unmodified Debian `kmscube` on `/dev/dri/card0` (GBM surface, `kms_swrast`/llvmpipe, legacy page flips with flip events), 149 frames at 13–14 fps, two screendumps 1 s apart differ in ~206,000 of 1,024,000 pixels, cube visible; L1 `bochs-drm` twin alike at ~20 fps; M3/M4/M5a/M6/M7a/M8a regressions 3/3 on the M8b kernel. Native KMS provider, not DS3 (Q28); no vblank pacing |
 | M9 | **DoD-3**: Hyprland + foot | L2 + native `bochs-display` and i8042 providers (Q28 closed 15:55: native first; DS3/DS4 as a later milestone of their own) | screendump shows a foot window; QMP keys type `echo DOD3 > /tmp/dod3`; `hyprctl -j clients` lists class `foot`; after shutdown the host reads `/tmp/dod3` from the image | **M (TCG), PASS 3/3, 2026-10-19 20:19–20:22 CEST**: (h1)–(h5)+(x) all PASS 3/3. (h2a) via Q30 stage 1: `LD_PRELOAD=libhypr-spawn-compat.so` interposes Hyprland `fork` inside `spawnRawProc` → `posix_spawnp` of `/usr/bin/foot --pty=/dev/korupty0` (Hyprland-launched; init `--pty` workaround off). Loud `spawn-compat:` lines in `/tmp/hl.out`. B20 closed for M9 (h2a); B21 still uses korupty for foot's shell. M-SPAWN-MMU still open. Evidence `experiments/m9-hyprland/evidence/accept-h2a-run-{1,2,3}/`. **Q30 stage 2 (20:32–20:35 CEST):** explicit `hyprland.children` grants for foot (not posix-inherit); negatives (ungranted path EACCES, fd census); `accept-q30s2-run-{1,2,3}/` M9+STAGE2 PASS 3/3. Regressions M3–M8b/M7b, Slice A, NID, spawn, spawn-elf 3/3 on the changed tree (`regress-q30s2/BOARD.txt`). M9 kernel still `595f8c05…` (m9k4; no koruspawn MMU — foot not on child CR3). **Recounted M9+STAGE2 PASS 3/3** (2026-10-19 ~22:20 CEST; QMP connect retries hardened in `drive-m9.py`; `evidence/recount-elfcr3-run-{1,2,3}/`). M-SPAWN-MMU ELF child-CR3 closed for spawn-elf; foot CR3 remaining. **Recount after R2/R3 (2026-10-19 ~22:50 CEST):** M9+STAGE2 PASS 3/3 on the *unchanged* m9k4 kernel `595f8c05…` (`evidence/recount-gap23/`); this is a regression count only, **not** R1: no foot-side hardware negative exists yet |
 | M10 | **DoD-4**: QML exemplar | same as M9 | a quickshell bar on a layer-shell surface is visible in a screendump; editing its QML changes the next screendump without a restart | D |
@@ -463,13 +463,13 @@ it. The arm is therefore rebuilt with `CONFIG_STACK_SIZE_PAGE_ORDER=7` (512 KiB)
 
 **M6 decision: where the KMS driver lives (2026-10-19, 13:34 CEST).** The table above names
 "L2 + DS3" for M6. M6 instead binds the `kms.*` rows to a **native koru-os provider** for
-QEMU `bochs-display` (`lib/korukms`), and DS3 stays open. The reasons, against §0.6:
+QEMU `bochs-display` (`arms/unikraft/korukms`), and DS3 stays open. The reasons, against §0.6:
 - §0.6 governs *foreign* driver code: Linux (LKL) and KolibriOS drivers enter only as silo
   personalities, never in the core (R-SILO-1). A koru-os driver written from the device's
   register layout is not foreign code. M2 set the precedent ("vfscore + ext2 driver, **or**
   DS1"): the native path proves the rows, and the silo path re-binds the same rows later.
 - The contract that M7–M10 depend on is the `kms.*` row set and the Linux DRM uAPI above it,
-  not the provider. `lib/korukms/kms_rows.h` is that seam. DS3 replaces `bochs.c` with a
+  not the provider. `arms/unikraft/korukms/kms_rows.h` is that seam. DS3 replaces `bochs.c` with a
   silo membrane; the DRM personality, the programs and the tests do not change.
 - DS3 is the largest unknown in this note (Q25: an LKL host port onto Unikraft, PCI/IRQ/DMA
   from inside a silo). Gating every graphics milestone on it first would leave M7–M9
@@ -487,7 +487,7 @@ acceptance run).** Probe boots before this freeze found and fixed: the posix-mma
 was localized by `exportsyms.uk` (mmap fell back to the file VMA, `EOPNOTSUPP`), and devfs
 readdir listed the root inside `/dev/dri`. The L1 twin ran once before the freeze (below).
 - **Arm.** The M5a arm (Unikraft 0.21 + app-elfloader + `koruext2fs` root, B6/B8/B9/B10/B12
-  and the refusal log) plus `lib/korukms` and two patches
+  and the refusal log) plus `arms/unikraft/korukms` and two patches
   (`experiments/m6-kms/patches/`: devfs one-level subdirectories with `st_rdev`; the
   posix-mmap device-memory hook). QEMU `-vga none -device bochs-display` (16 MiB VRAM),
   TCG only.
@@ -532,18 +532,18 @@ readdir listed the root inside `/dev/dri`. The L1 twin ran once before the freez
 
 **M7 decision: where the input driver lives, and what M7 can claim now (2026-10-19, 13:55
 CEST).** The table names "L2 + DS4" and `libinput debug-events`. M7 is split:
-- **Provider.** As in M6, the `input.*` rows (`lib/koruinput/input_rows.h`) are bound to a
+- **Provider.** As in M6, the `input.*` rows (`arms/unikraft/koruinput/input_rows.h`) are bound to a
   **native koru-os provider**, here the i8042 PS/2 keyboard of the QEMU i440fx machine
-  (`lib/koruinput/ps2kbd.c`), and DS4 stays open. The §0.6 reasoning of the M6 decision holds
+  (`arms/unikraft/koruinput/ps2kbd.c`), and DS4 stays open. The §0.6 reasoning of the M6 decision holds
   unchanged (native, non-foreign code; the rows are the seam; DS4 depends on Q25). DS4 itself
   names "silo:kolibri `ps2`" as one option, so PS/2 is a device the DoD already expects.
   `virtio-input` natively is unreachable for the same reason as virtio-gpu (B13: the Unikraft
   0.21 virtio-pci transport is legacy only; virtio-input is a virtio 1.0 device).
 - **Personality.** Linux evdev on `/dev/input/event0` (char 13:64,
-  `lib/koruinput/evdev_linux.c`): `read()` of `struct input_event`, `O_NONBLOCK`, poll/select/
+  `arms/unikraft/koruinput/evdev_linux.c`): `read()` of `struct input_event`, `O_NONBLOCK`, poll/select/
   epoll readiness, the identity and bitmap ioctls, `EVIOCGRAB`, `EVIOCSCLOCKID`.
 - **M7a**: the evdev uAPI (PASS). **M7b (PASS 15:07)**: the table's `libinput debug-events`,
-  over a kernel-written sysfs view (`lib/korusysfs`) and **libudev-zero** as `libudev.so.1`
+  over a kernel-written sysfs view (`arms/unikraft/korusysfs`) and **libudev-zero** as `libudev.so.1`
   (no udevd, no `/run/udev` database; B15 resolved, see "M7b acceptance"). systemd's libudev
   on koru-os is B16.
 - Whether DoD-3 accepts native providers for GPU *and* input is the same question as Q28;
@@ -555,7 +555,7 @@ Unikraft 0.21 never set `epf`, so the first `eventpoll_signal()` from any vfscor
 dereferenced NULL (patch `unikraft-0.21-posix-poll-legacy-epf.patch`, B14); the set 1 decoder
 dropped `0xaa` (LeftShift break) as a BAT code; `MSC_SCAN` for 0xE0 keys now reports
 `code | 0x80` as Linux `atkbd` does. The L1 twin ran once before the freeze (below).
-- **Arm.** The M6 arm plus `lib/koruinput` and two patches (`experiments/m7-input/patches/`:
+- **Arm.** The M6 arm plus `arms/unikraft/koruinput` and two patches (`experiments/m7-input/patches/`:
   devfs poll dispatch and `O_NONBLOCK` to device read; the posix-poll `epf` fix). QEMU
   i440fx with its i8042, `-vga none -device bochs-display`, TCG only. The host injects keys
   with QMP `input-send-event` (qcodes), one press/release chord every 0.4 s
@@ -640,7 +640,7 @@ compiled-in `/usr/lib/x86_64-linux-gnu/{gbm,dri}` paths; GBM has no pbuffer conf
 This is the table's M8 criterion. Probe boots before this freeze found: kmscube's legacy loop
 `select()`s on stdin as well and quits when it is readable (the serial console always is), so
 stdin is an idle pipe, as for modetest in M6; and the M6 personality had no page flip.
-- **Arm.** The M7a arm with `lib/korukms` extended (`drm_linux.c`): legacy
+- **Arm.** The M7a arm with `arms/unikraft/korukms` extended (`drm_linux.c`): legacy
   `DRM_IOCTL_MODE_PAGE_FLIP` with `DRM_MODE_PAGE_FLIP_EVENT`, `read()` of
   `DRM_EVENT_FLIP_COMPLETE` (whole 32-byte events, `O_NONBLOCK`), and poll/select readiness on
   `/dev/dri/card0` (through the M7 devfs poll patch). The flip takes effect at once and its
@@ -691,7 +691,7 @@ on koru-os fails before any of that: its path resolution needs `statx` with `STA
   no udevd and no `/run/udev` database. The libinput binaries and libraries stay Debian's,
   unmodified. systemd's libudev on koru-os is B16 (not needed for M7b; revisit if an M9
   component insists on it).
-- **Kernel side.** `lib/korusysfs` mounts a ramfs on `/sys` (mount point in the image) at a
+- **Kernel side.** `arms/unikraft/korusysfs` mounts a ramfs on `/sys` (mount point in the image) at a
   late initcall and replays what was published: a **provider** publishes the nodes of its own
   hardware (`ps2kbd.c`: `platform/i8042/serio0`; `bochs.c`: `pci0000:00/0000:00:BB.F` with
   `vendor`/`device`/`class`/... from PCI config space) and names its node in the row
@@ -700,7 +700,7 @@ on koru-os fails before any of that: its path resolution needs `statx` with `STA
   `input_dev_uevent` lines and attributes, `input0/event0`; `drm_linux.c`: `drm/card0`, `device`
   link), plus `/sys/class/*`, `/sys/bus/*/devices/*`, `/sys/dev/char/M:m`. A driver silo would fill
   the same row fields; nothing here assumes the native providers (Q28 stays open).
-- **Arm.** The M8b kernel plus `lib/korusysfs` and the fstatat patch (built by
+- **Arm.** The M8b kernel plus `arms/unikraft/korusysfs` and the fstatat patch (built by
   `experiments/m7-input/build-image.sh`), QEMU i440fx, `-vga none -device bochs-display`, TCG
   only, keys via QMP `input-send-event` (`experiments/m7b-libinput/drive.py`, after
   `DEVICE_ADDED`: k, o, r, u, shift+1, enter, up, esc).
@@ -804,7 +804,7 @@ stay in place (Q28 with Fabian); nothing here builds a silo path or prejudges th
   three options left open above, M9 takes the **snapshotted ramfs `/tmp`**. `/tmp` stays the
   ramfs; the root image stays read-only and untouched. The guest snapshots explicitly: after
   the QMP keys and before shutdown, the init script runs `tar -cf /dev/korusnap /tmp/dod3`
-  (busybox tar). `/dev/korusnap` (`lib/korusnap`) accepts one byte stream per boot and on close
+  (busybox tar). `/dev/korusnap` (`arms/unikraft/korusnap`) accepts one byte stream per boot and on close
   writes it to block device 1, a second, empty 8 MiB scratch virtio-blk image, as a 512-byte
   header `KORUSNAP1 <length>` plus the stream. After QEMU exits, the host (`run-probe.sh`)
   decodes that image to `snap.bin` and reads `tmp/dod3` from the tar. (h3) passes only if that
@@ -813,7 +813,7 @@ stay in place (Q28 with Fabian); nothing here builds a silo path or prejudges th
   15:49 CEST (`experiments/m9-hyprland/evidence/korusnap-smoke`): 2048 bytes persisted, the host
   extracts `tmp/dod3` = `DOD3\n`.
 - **Probe 8 (17:15 CEST, not a pass): foot runs as a Hyprland window.** foot cannot fork its
-  shell here, so it runs as `foot --pty=/dev/korupty0` on a pty pair from `lib/korupty`, with
+  shell here, so it runs as `foot --pty=/dev/korupty0` on a pty pair from `arms/unikraft/korupty`, with
   busybox `sh -i` on the slave, both started by the init script. The way there needed, in the kernel
   (`experiments/m9-hyprland/patches`): `SO_PEERCRED` (libwayland-server refuses a client without
   it); clearing a listener's POLLIN once its accept queue drains (a stale level event made
@@ -821,7 +821,7 @@ stay in place (Q28 with Fabian); nothing here builds a silo path or prejudges th
   pipe end; zeroing the `cmsghdr` before filling it (musl's 4-byte `cmsg_len` plus padding,
   read by glibc as a `size_t`: libwayland-client grew a 128 GiB ring buffer); `epoll_pwait`
   and `ppoll` with a signal mask (the mask is swapped around the wait, not atomically); POSIX
-  shm (`/dev/shm/NAME` is served by `lib/korumemfd`; Hyprland's keymap uses an rw/ro shm pair
+  shm (`/dev/shm/NAME` is served by `arms/unikraft/korumemfd`; Hyprland's keymap uses an rw/ro shm pair
   and `fchmod`, so devfs `setattr` is accepted and ignored); devfs `fallocate` refused (with a
   fake success, foot's punch-hole probe passes and it maps a 128 GiB pool); a device mmap
   refusal returned as an error instead of a copy-on-fault file mapping; `FIONBIO` on the pty.
@@ -1095,7 +1095,7 @@ Per the matrix's own §4 precedent, a row is a claim about the tree. The terms m
 | `bridge` / `session` (`std/bridge`) | durable REPL / session environment with a capability scope | the session is itself an obligation (`<session!>`, discharged only by `close`) | yes (`koru_std/bridge*.kz`) |
 | `platform namespace` | target / platform layer (HAL) | path alias beside `std` (`unikraft`); a miss is a loud "module not found" | yes (`src/config.zig` comment) |
 | `platform arm` | target backend / port | one substrate's realization of the same interfaces; avoids the `arm` collision | not yet in tree (koru-os) |
-| `correspondence row` | symbol-resolution record plus provenance (linker / NID table) | persistent: foreign name ↔ minted interface ↔ provider, with lineage and evidence | **in tree** (koru-os `koru/nid/index.kz` `Row`, 2026-10-19) |
+| `correspondence row` | symbol-resolution record plus provenance (linker / NID table) | persistent: foreign name ↔ minted interface ↔ provider, with lineage and evidence | **in tree** (koru-os `koruos/nid/index.kz` `Row`, 2026-10-19) |
 | `live binding` | resolved PLT/GOT entry / capability handle | ephemeral: carries instance, generation and an obligation lifetime | **in tree** (`koruos/nid` `*Binding<live!>`, minted by `resolve`, discharged by `release`) |
 | `generation` | epoch / incarnation number | a stale generation is refused at use, never redirected | **in tree** (`koruos/nid` `call` → `\| stale`, bumped by `retarget`) |
 | `NID` | symbol hash / name id (PS4/PS5 NID, ELF `DT_GNU_HASH` key) | koru-os: 64-bit sha256 prefix of `scheme/ns/version/name` under a versioned domain; a comparison key, never authority; collisions refused | in tree (`koruos/nid`) |
@@ -1378,7 +1378,7 @@ Notes:
   row separates `interface` from `provider.mechanism`.
 - **The `unikraft` path alias is the namespace mechanism to copy** (V, `src/config.zig`).
   The source comment states the design intent: `unikraft` sits beside `std` rather
-  than under `koru/` because "`unikraft/net` is the operating system the program is
+  than under `koruos/` because "`unikraft/net` is the operating system the program is
   running inside". A koru-os platform arm would add an alias the same way.
 - **KolibriOS is a donor, not a model.** It is in the timesharing line
   (CTSS → Multics → Unix): ring-0/ring-3 trap boundary, process slots, a scheduler in
@@ -1441,9 +1441,9 @@ Status values: **V** (read now at the pinned SHA), **C** (claim carried over), *
 
 | piece | location | status | what it gives koru-os | gap |
 |---|---|---|---|---|
-| platform alias resolution | `koru/src/config.zig` | V | `unikraft` and `koru` aliases: two install layouts tried in order, and a loud "module not found" when neither exists | no platform arm selection; aliases are path probes, not interface resolution |
+| platform alias resolution | `koruos/src/config.zig` | V | `unikraft` and `koru` aliases: two install layouts tried in order, and a loud "module not found" when neither exists | no platform arm selection; aliases are path probes, not interface resolution |
 | Unikraft image manifests | `koru-libs/unikraft/index.kz`, `README.md` | V | `unikraft:image` derives `addlib` plus prefixed variables from one name; `unikraft:kconfig` writes Kraftfile deltas; `koruc app.k unikraft gen` | the Kconfig is **passed through, not derived**; `CONFIG_STACK_SIZE_PAGE_ORDER: '6'` is always injected as a constant (overridable), not computed from stack demand |
-| Unikraft image numbers | `koru/examples/unikraft/BUILD.md` | C | 164,544 B image; 2 MB floor; 1.5 MB fails; ~15 s build; no syscall shim, no VFS | not re-run; static archive is 2,968 B in BUILD.md vs 3,214 B in the lib README (two builds, both repo-reported) |
+| Unikraft image numbers | `koruos/examples/unikraft/BUILD.md` | C | 164,544 B image; 2 MB floor; 1.5 MB fails; ~15 s build; no syscall shim, no VFS | not re-run; static archive is 2,968 B in BUILD.md vs 3,214 B in the lib README (two builds, both repo-reported) |
 | known-not-done list | same file | V (as text) | `INITSCHED='n'` and `SCHEDCOOP='n'` silently ignored (99 KB of scheduler objects stay in); 41,920 B (25%) `.eh_frame` unreachable by C flags, needs linker-script `/DISCARD/`; LTO breaks the link; `DEADELIM` saves 24,832 B | exactly the first slice's job |
 | Unikraft subsystem lifts | `koru-libs/unikraft/{alloc, allocpool, blk, intctlr, lock, mpi, net, ninep, pages, paging, sched, store, vmem}` | V (13 directories, each with README, index.kz, tests) | phantom-typed wrappers over `lib/uk*`, with negative tests | provider-side only; no rows, no platform arm abstraction |
 | vmem | `unikraft/vmem/README.md` | V | reserve mints `<reserved!>` (costs one `struct uk_vma`); commit is the only path to backing; `release` takes only `<!used\|!frozen>`, so commit-then-release-untouched does not compile; freeze is one-way; `VADDR_ANY` and page size derived by behavioural probe | — |
@@ -1936,7 +1936,7 @@ only those frozen regions that are granted `across_exec`.
 #### 8.6.4 The compatibility layer (Linux ABI on L2): thin and loud
 
 The layer translates Linux process calls into Spawn calls. It runs inside the image (koru-os
-`lib/`, C, until the Koru lift has a C-ABI entry). Every translation it makes prints one line
+`arms/unikraft/`, C, until the Koru lift has a C-ABI entry). Every translation it makes prints one line
 (`spawn-compat: …`) and records a manifest row. "Loud" means that every right the layer grants
 because POSIX would have inherited it is **visible** as such (`provenance.why = posix-inherit`),
 never silent.
@@ -2035,14 +2035,14 @@ claim, D design). L1 (hosted Linux) is an oracle and trace source only and never
 | part | home | why |
 |---|---|---|
 | the Spawn interface: child record, grant, manifest, tors, phantom states, refusal shapes | **koru-libs** (`Cypoe/koru-libs`), arm-independent | the model belongs to the ecosystem, not to one OS; identity is not location (§3.1) |
-| the Unikraft provider (`unikraft/spawn`): binds posix-process process creation, the per-process fd table and app-elfloader's image loading, with a layout proof and an `UK_ASSERT` census as in `unikraft/sched` | **koru-libs** `unikraft/spawn` | a lift of Unikraft primitives, no koru-os policy. Q32 (2026-10-19): a local fork of the load path lives in koru-os `lib/koruelf` (see `experiments/spawn-elf/`); app-elfloader remains an application upstream |
+| the Unikraft provider (`unikraft/spawn`): binds posix-process process creation, the per-process fd table and app-elfloader's image loading, with a layout proof and an `UK_ASSERT` census as in `unikraft/sched` | **koru-libs** `unikraft/spawn` | a lift of Unikraft primitives, no koru-os policy. Q32 (2026-10-19): a local fork of the load path lives in koru-os `arms/unikraft/koruelf` (see `experiments/spawn-elf/`); app-elfloader remains an application upstream |
 | a hosted provider (`posix_spawn`, `pidfd`, `close_range`) | koru-libs, later | an L1 oracle for the semantics, never a pass |
-| the compat layer (8.6.4), C | **koru-os** `lib/koruspawn` (later, calling the lift through a C-ABI seam such as `tests/wrapper.zig`) | Linux-ABI personality policy: what "loud" prints, which `posix-inherit` is allowed |
+| the compat layer (8.6.4), C | **koru-os** `arms/unikraft/koruspawn` (later, calling the lift through a C-ABI seam such as `tests/wrapper.zig`) | Linux-ABI personality policy: what "loud" prints, which `posix-inherit` is allowed |
 | policy rows (`init.children`, `hyprland.children`, foot's attenuation), the Hyprland/hyprutils/foot patches, acceptance runners | **koru-os** | per-image policy and DoD evidence |
 | the local Unikraft 0.21 patches | koru-os, until upstreamed | upstreaming is a separate ask (ruling 4) |
 | the recent OS lifts (`korumemfd`, `korupty`, `korusnap`, `korusysfs`, `koruinput`, `korukms`, `koruext2fs`) | candidates for koru-libs `unikraft/*` | they are C today. Moving one means re-lifting it in Koru with phantom states and gates, not copying it. Order and criteria are Q33 |
 
-*2026-10-19 19:33–19:37 CEST:* a measured skeleton of the Spawn interface now exists as `koru/spawn/index.kz` (`koruos/spawn`, koru-libs shape, in koru-os). It covers `reserve`/`grant`/`seal`/`start`/`wait`/`reap`/`abandon`, with empty-by-default rights and loud refusal of address-space copy (F2) and over-grant. S1–S11 and R pass 3/3 under TCG, and regressions pass 3/3 (`experiments/spawn/`). The Unikraft provider, the hosted provider and the compat layer are still not code. Nothing has been pushed to `Cypoe/koru-libs`:
+*2026-10-19 19:33–19:37 CEST:* a measured skeleton of the Spawn interface now exists as `koruos/spawn/index.kz` (`koruos/spawn`, koru-libs shape, in koru-os). It covers `reserve`/`grant`/`seal`/`start`/`wait`/`reap`/`abandon`, with empty-by-default rights and loud refusal of address-space copy (F2) and over-grant. S1–S11 and R pass 3/3 under TCG, and regressions pass 3/3 (`experiments/spawn/`). The Unikraft provider, the hosted provider and the compat layer are still not code. Nothing has been pushed to `Cypoe/koru-libs`:
 it is another remote, and this work's push authorisation covers `Cypoe/koru-os` only. Upstream
 (Unikraft, korulang, hyprwm, foot) is untouched.
 
@@ -2067,9 +2067,9 @@ The acceptance (`experiments/spawn/ACCEPTANCE.md`) was frozen in `8dae7ec` befor
 seam-level Spawn lib (S1–S13, E0–E12) stands; it is **not** an unconditional pass. The
 named follow-up is **M-SPAWN-MMU** (§8.6.7c, §11.5 item, ladder).
 
-- **Koru lift** (`koru/spawn`): `replace` (rights die unless `across_exec`), `detach`,
+- **Koru lift** (`koruos/spawn`): `replace` (rights die unless `across_exec`), `detach`,
   `revoke` (epoch, §8.5), nested attenuation (`authority-of`). S1–S13 PASS 3/3 (seam).
-- **Unikraft provider** (`lib/koruspawn`) + **ELF load fork** (`lib/koruelf`, Q32): an
+- **Unikraft provider** (`arms/unikraft/koruspawn`) + **ELF load fork** (`arms/unikraft/koruelf`, Q32): an
   external static-pie ELF is started via Spawn with an explicit rights bag. E0–E12 PASS
   3/3 under TCG (`experiments/spawn-elf/`).
 - **Loud compat** (§8.6.4): `spawn-compat:` lines for `posix_spawn`, `vfork+execve`,
@@ -2104,7 +2104,7 @@ named follow-up is **M-SPAWN-MMU** (§8.6.7c, §11.5 item, ladder).
 measured path for M9 stage 1 until M-SPAWN-MMU lands.
 
 **Implementation home (Q33 still open).** Built locally in `koru-os`
-(`lib/koruspawn` + `experiments/m-spawn-mmu/`), on Unikraft `ukpaging` /
+(`arms/unikraft/koruspawn` + `experiments/m-spawn-mmu/`), on Unikraft `ukpaging` /
 `ukvmem` (the same facts `Cypoe/koru-libs` `unikraft/paging` + `unikraft/vmem`
 lift). No move to koru-libs until Q33.
 
@@ -2124,7 +2124,7 @@ lift). No move to koru-libs until Q33.
    a child PF on an ungranted address is now a real SIGSEGV; `uk_nofault` remains only
    for parent-side probes.)*
 
-**Measured steps (2026-10-19, TCG):** `experiments/m-spawn-mmu/` + `lib/koruspawn/mmu.c`.
+**Measured steps (2026-10-19, TCG):** `experiments/m-spawn-mmu/` + `arms/unikraft/koruspawn/mmu.c`.
 
 | Step | Evidence class | Result |
 |---|---|---|
@@ -2191,7 +2191,7 @@ by Hyprland via `hyprland.children` still runs on the parent CR3: the M9 kernel 
 - foot is a **dynamic glibc PIE** (`/lib64/ld-linux-x86-64.so.2`; NEEDED libm, pixman,
   wayland-client/cursor, xkbcommon, fontconfig, utf8proc, fcft, libc and their closure),
   launched by `posix_spawnp` → Unikraft vfork/execve → **app-elfloader**, not by
-  `lib/koruelf`. The spawn-elf child-CR3 path (static-pie, ambient stack/heap
+  `arms/unikraft/koruelf`. The spawn-elf child-CR3 path (static-pie, ambient stack/heap
   dual-mapped by our own loader, no shared libs, no threads, no post-start mmap) does
   **not** carry over.
 - **ukvmem demand-pages.** Anonymous and stack VMAs are populated on first touch
@@ -2209,7 +2209,7 @@ by Hyprland via `hyprland.children` still runs on the parent CR3: the M9 kernel 
 Plan (each item a separate measured step, in this order):
 
 1. **Wire the R2/R3 base into m9k4.** Apply the except CR3-hook patch and the
-   syscall-shim enter/exit hooks to the m9k4 tree; link `lib/koruspawn` (MMU on) next to
+   syscall-shim enter/exit hooks to the m9k4 tree; link `arms/unikraft/koruspawn` (MMU on) next to
    app-elfloader. Gate: M9+STAGE2 still 3/3 with no domain created (no behaviour change).
 2. **Domain at execve.** On the `hyprland.children` execve of foot, derive a child PT
    (image + strip as R2) and own foot's ELF, ld.so, stack, brk and TLS VMAs.
@@ -2486,7 +2486,7 @@ realization. Every build output explains three things, the three tables of §3.5
 The shell **manages realized apps**; it does not define their identity. KolibriOS is a **donor**
 (§4.1), not a prerequisite.
 
-**What already crosses the boot boundary (C, `koru/examples/unikraft/BUILD.md`; S5 reproduces it):**
+**What already crosses the boot boundary (C, `koruos/examples/unikraft/BUILD.md`; S5 reproduces it):**
 
 - Koru emits a freestanding archive with a C-ABI seam, booting at 164,544 B with a 2 MB RAM floor,
   with no syscall shim and no VFS;
@@ -2532,7 +2532,7 @@ The slice does not need a bootloader or a wholesale port first.
 
 **Result, 2026-10-19 19:00–19:05 CEST (M, TCG; `experiments/realize/`, checks frozen in
 `c2f4de7` before the counted runs).** The comptime command `koruc <boot.k> realize gen`
-(`koru/realize/index.kz`, koru-libs shape) walks the program's flows, collects every used
+(`koruos/realize/index.kz`, koru-libs shape) walks the program's flows, collects every used
 `module:tor`, maps each through a row table (interface → kconfig + stack demand + resources,
 with evidence) and writes `Kraftfile`, `Makefile.uk` and `realize.txt` (the three tables of
 §3.5). An interface with no row, or an author line that contradicts a derived line, is a
@@ -2601,7 +2601,7 @@ graduated from host-line text to **typed AST declarations** — each lift invoke
 tor carrying a JSON block, harvested by the command; the host-line form stays as the
 fallback for lifts that cannot import `koruos/realize`). Measured: identical
 `arm-matrix.txt`, identical Kraftfiles on qemu and linuxu; malformed blocks refuse
-naming the module, file, line and the missing field (`koru/realize/tests/badrow` +
+naming the module, file, line and the missing field (`koruos/realize/tests/badrow` +
 `negative_badrow.k`). Follow-up same day, after poking the shape: the declared
 `iface` names what the row serves (`qual/path[:tor_prefix]` — tor-scoped rows cover a
 subset of a lift's verbs), and the declaring site is provenance, not ownership — a
@@ -2669,7 +2669,7 @@ The smallest prototype that exercises the whole contract end to end:
 (`experiments/slice-a/ACCEPTANCE.md`, commit `88516f4`). The counted runs at 18:48 CEST pass
 **3 of 3**, along with the compile gates and the DS0 regression.
 
-- **Realization.** The lift is `koru/slice` (module `koruos/slice`), in koru-libs shape. Its
+- **Realization.** The lift is `koruos/slice` (module `koruos/slice`), in koru-libs shape. Its
   supervisor is a Spawn stand-in that matches §8.6.2: child record, grants that take custody of
   bindings, seal, start on evidence, wait, reap, abandon.
 - **The view.** The status view runs over `isa-debugcon`. A host renderer detached for 3.5 s
@@ -2733,7 +2733,7 @@ spawn-compat (20:22 CEST); stage 2 remains optional.
 
 ### 11.6 The NID binding layer (result, 2026-10-19 19:13–19:17 CEST, M under TCG)
 
-`koru/nid/index.kz` (`koruos/nid`, koru-libs shape) makes the binding chain of §3.0
+`koruos/nid/index.kz` (`koruos/nid`, koru-libs shape) makes the binding chain of §3.0
 executable:
 
 ```

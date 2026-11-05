@@ -15,14 +15,23 @@ QEMU="${QEMU:-/c/Program Files/qemu/qemu-system-x86_64.exe}"
 # host's slow QEMU from being mistaken for a dead guest. boot_real's
 # multi-spawn chain has measurably crossed 15s under gate load.
 TIMEOUT="${TIMEOUT:-30}"
-FIX="$(cygpath -m "$ROOT/koru/native/tests" 2>/dev/null || echo "$ROOT/koru/native/tests")"
+FIX="$(cygpath -m "$ROOT/koruos/native/tests" 2>/dev/null || echo "$ROOT/koruos/native/tests")"
 
 pass=0; failn=0
 ok()  { pass=$((pass+1));  echo "ok   $1"; }
 bad() { failn=$((failn+1)); echo "FAIL $1"; }
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# Gate runs are evidence, not scratch: each run gets its own dir under
+# evidence/runs/<ts>-boot.XXXXXX (gitignored) so serial logs, ISOs and
+# screendumps survive for re-runs and postmortems. EVIDENCE_KEEP prunes.
+KEEP="${EVIDENCE_KEEP:-10}"
+RUNS="$ROOT/evidence/runs"
+mkdir -p "$RUNS"
+WORK="$(mktemp -d "$RUNS/$(date +%Y%m%d-%H%M%S)-boot.XXXXXX")"
+# Build caches are not evidence — strip them on exit, keep serial/ISOs/dumps.
+trap 'find "$WORK" -type d \( -name .zig-cache -o -name zig-out -o -name zig-cache \) -exec rm -rf {} + 2>/dev/null; echo "evidence: $WORK"' EXIT
+find "$RUNS" -mindepth 1 -maxdepth 1 -type d -name '*-boot.*' \
+    | sort -r | tail -n +$((KEEP+1)) | xargs -r rm -rf
 
 # boot_check <fixture.k> <expected-substring> [extra qemu args...]
 boot_check() {
@@ -44,7 +53,7 @@ boot_check() {
     fi
 }
 
-boot_check "$ROOT/koru/native/tests/boot_hello.k" "KORU NATIVE BOOT OK"
+boot_check "$ROOT/koruos/native/tests/boot_hello.k" "KORU NATIVE BOOT OK"
 
 # pmm: the frame allocator must discover RAM from the loader's own map —
 # PVH hvm_start_info under QEMU -kernel, mb2 tag 6 under GRUB — and pass
@@ -122,7 +131,7 @@ fi
 for acf in acpi reboot; do
     akwant="ACPI-S5-ARMED"; [ "$acf" = reboot ] && akwant="ACPI-REBOOT-ARMED"
     afsrc="$WORK/boot_$acf.kz"
-    sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_$acf.kz" > "$afsrc"
+    sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_$acf.kz" > "$afsrc"
     if bash "$ROOT/scripts/build-native.sh" "$afsrc" "$WORK/boot_$acf.elf" > "$WORK/boot_$acf.build" 2>&1; then
         timeout 30 "$QEMU" -kernel "$WORK/boot_$acf.elf" -serial stdio \
             -display none -m 64M -no-reboot > "$WORK/boot_$acf.serial" 2>&1
@@ -215,9 +224,9 @@ fi
 # child's own "musl child says hi" + exit 42 are the evidence, and the
 # parent reports the seam's returned status, not its own claim.
 ZIGBIN="${ZIG:-/w/tools/zig-0.15.1/zig.exe}"
-if cp "$ROOT/koru/native/tests/muslhello.c" "$WORK/muslhello-mod.c" \
+if cp "$ROOT/koruos/native/tests/muslhello.c" "$WORK/muslhello-mod.c" \
    && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/musl-mod.elf" "$WORK/muslhello-mod.c" > "$WORK/muslmod.build" 2>&1 \
-   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/module/tests/boot_mod.k" > "$WORK/boot_mod.k" \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/module/tests/boot_mod.k" > "$WORK/boot_mod.k" \
    && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_mod.k" "$WORK/koru-mod.iso" "$WORK/musl-mod.elf" > "$WORK/isomod.build" 2>&1; then
     timeout 60 "$QEMU" -cdrom "$WORK/koru-mod.iso" -boot d -serial stdio \
         -display none -m 128M -no-reboot > "$WORK/boot_isomod.serial" 2>&1 || true
@@ -243,7 +252,7 @@ fi
 # path a flash stick needs before any disk driver exists.
 WORKW="$(cygpath -m "$WORK" 2>/dev/null || echo "$WORK")"
 if command -v python >/dev/null 2>&1 \
-   && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fsread.elf" "$ROOT/koru/native/tests/fsread.c" > "$WORK/fsread.build" 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fsread.elf" "$ROOT/koruos/native/tests/fsread.c" > "$WORK/fsread.build" 2>&1 \
    && printf 'initramfs says hi\n' > "$WORK/hello.txt" \
    && printf 'motd from synthesized /etc\n' > "$WORK/motd.txt" \
    && python "$ROOT/scripts/mkcpio.py" "$WORKW/initramfs.cpio" \
@@ -253,7 +262,7 @@ if command -v python >/dev/null 2>&1 \
         "etc/alias.txt=->../hello.txt" \
         "link.txt=->/hello.txt" \
         "bin/fsread=$WORKW/fsread.elf|755" > "$WORK/mkcpio.log" 2>&1 \
-   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/initramfs/tests/boot_initramfs.k" > "$WORK/boot_initramfs.k" \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/initramfs/tests/boot_initramfs.k" > "$WORK/boot_initramfs.k" \
    && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_initramfs.k" "$WORK/koru-ramfs.iso" "$WORKW/initramfs.cpio" > "$WORK/isorf.build" 2>&1; then
     timeout 60 "$QEMU" -cdrom "$WORK/koru-ramfs.iso" -boot d -serial stdio \
         -display none -m 128M -no-reboot > "$WORK/boot_isorf.serial" 2>&1 || true
@@ -285,10 +294,10 @@ fi
 # linux twin (posix_openpt) — WSL is the measured oracle this rung
 # was built against.
 if command -v python >/dev/null 2>&1 \
-   && "$ZIGBIN" cc -target x86_64-linux-musl -static -DKORU_DOOR -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/ptytest.elf" "$ROOT/koru/native/tests/ptytest.c" > "$WORK/ptytest.build" 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -DKORU_DOOR -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/ptytest.elf" "$ROOT/koruos/native/tests/ptytest.c" > "$WORK/ptytest.build" 2>&1 \
    && python "$ROOT/scripts/mkcpio.py" "$WORKW/pty.cpio" \
         "bin/ptytest=$WORKW/ptytest.elf|755" > "$WORK/mkcpiopty.log" 2>&1 \
-   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_pty.k" > "$WORK/boot_pty.k" \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_pty.k" > "$WORK/boot_pty.k" \
    && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_pty.k" "$WORK/koru-pty.iso" "$WORKW/pty.cpio" > "$WORK/isopty.build" 2>&1; then
     timeout 60 "$QEMU" -cdrom "$WORK/koru-pty.iso" -boot d -serial stdio \
         -display none -m 128M -no-reboot > "$WORK/boot_pty.serial" 2>&1 || true
@@ -321,7 +330,7 @@ fi
 # through it: userland off a stick with zero disk drivers.
 if [ -f "$OVMF_FD" ] \
    && command -v python >/dev/null 2>&1 \
-   && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fsread-usb.elf" "$ROOT/koru/native/tests/fsread.c" > "$WORK/fsreadusb.build" 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fsread-usb.elf" "$ROOT/koruos/native/tests/fsread.c" > "$WORK/fsreadusb.build" 2>&1 \
    && printf 'initramfs says hi\n' > "$WORK/hello-usb.txt" \
    && printf 'motd from synthesized /etc\n' > "$WORK/motd-usb.txt" \
    && python "$ROOT/scripts/mkcpio.py" "$WORKW/initramfs.cpio" \
@@ -331,7 +340,7 @@ if [ -f "$OVMF_FD" ] \
         "etc/alias.txt=->../hello.txt" \
         "link.txt=->/hello.txt" \
         "bin/fsread=$WORKW/fsread-usb.elf|755" > "$WORK/mkcpiousb.log" 2>&1 \
-   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/initramfs/tests/boot_initramfs.k" > "$WORK/boot_initramfs-usb.k" \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/initramfs/tests/boot_initramfs.k" > "$WORK/boot_initramfs-usb.k" \
    && bash "$ROOT/scripts/build-usb.sh" "$WORK/boot_initramfs-usb.k" "$WORK/koru-usb.img" "$WORKW/initramfs.cpio" > "$WORK/usb.build" 2>&1; then
     timeout 90 "$QEMU" \
         -drive if=pflash,format=raw,readonly=on,file="$OVMF_FD" \
@@ -382,7 +391,7 @@ fi
 # LFB phys from PCI BAR0. Serial geometry is the gate; the three-band
 # screen is human evidence (screendump). -display none still models the
 # device, so no display is needed.
-boot_check "$ROOT/koru/fb/tests/boot_fb.k" "FB COMPLETE" -vga std
+boot_check "$ROOT/koruos/fb/tests/boot_fb.k" "FB COMPLETE" -vga std
 
 # vgpu: the same fb fixture over virtio-gpu — modern virtio-pci vendor
 # caps walked for the common/notify/isr windows, VERSION_1 negotiated,
@@ -466,7 +475,7 @@ fi
 # Pixel evidence is the dump, not serial — the TRANSFER-offset oracle
 # lesson stands.
 surf_src="$WORK/boot_surf.kz"
-sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/surface/tests/boot_surf.kz" > "$surf_src"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/surface/tests/boot_surf.kz" > "$surf_src"
 if bash "$ROOT/scripts/build-native.sh" "$surf_src" "$WORK/boot_surf.elf" > "$WORK/boot_surf.build" 2>&1; then
     surfport=$((5600 + $$ % 400))
     surfs="$WORK/surfscene.ppm"
@@ -571,7 +580,7 @@ fi
 # The holds are hlt-paced: a busy spin starves TCG's main loop and dumps
 # land on the post-detach frame instead of the state they name.
 comp_src="$WORK/boot_comp.kz"
-sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/surface/tests/boot_comp.kz" > "$comp_src"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/surface/tests/boot_comp.kz" > "$comp_src"
 if bash "$ROOT/scripts/build-native.sh" "$comp_src" "$WORK/boot_comp.elf" > "$WORK/boot_comp.build" 2>&1; then
     compport=$((6000 + $$ % 400))
     cu="$WORK/compunder.ppm"; cs="$WORK/compscene.ppm"
@@ -698,7 +707,7 @@ fi
 # the lift in a bounded spin and prints the raw event (make 'a' = 0x1E).
 # The monitor socket is the injection path; evidence is serial-only.
 kbd_src="$WORK/boot_kbd.kz"
-sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/input/tests/boot_kbd.kz" > "$kbd_src"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/input/tests/boot_kbd.kz" > "$kbd_src"
 if bash "$ROOT/scripts/build-native.sh" "$kbd_src" "$WORK/boot_kbd.elf" > "$WORK/boot_kbd.build" 2>&1; then
     kbdport=$((4600 + $$ % 400))
     timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_kbd.elf" -serial stdio \
@@ -739,7 +748,7 @@ fi
 # the sum. Same injection contract as input-kbd: a dead monitor socket
 # fails loudly, never reads as "no pointer".
 ms_src="$WORK/boot_mouse.kz"
-sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/input/tests/boot_mouse.kz" > "$ms_src"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/input/tests/boot_mouse.kz" > "$ms_src"
 if bash "$ROOT/scripts/build-native.sh" "$ms_src" "$WORK/boot_mouse.elf" > "$WORK/boot_mouse.build" 2>&1; then
     msport=$((4800 + $$ % 400))
     timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_mouse.elf" -serial stdio \
@@ -832,29 +841,29 @@ else
         # real-ELF rung: gcc static-pie ET_DYN staged beside the hand-made
         # child — the loader bias+stack path exercised on a real toolchain
         # image, not a fixture we built byte by byte.
-        cp "$ROOT/koru/native/tests/realhello.c" "$WORK/realhello.c"
-        cp "$ROOT/koru/native/tests/muslhello.c" "$WORK/muslhello.c"
-        cp "$ROOT/koru/native/tests/fscat.c" "$WORK/fscat.c"
-        cp "$ROOT/koru/native/tests/hi.c" "$WORK/hi.c"
-        cp "$ROOT/koru/native/tests/libhi.c" "$WORK/libhi.c"
-        cp "$ROOT/koru/native/tests/getc.c" "$WORK/getc.c"
-        cp "$ROOT/koru/native/tests/sh.c" "$WORK/sh.c"
-        cp "$ROOT/koru/native/tests/args.c" "$WORK/args.c"
-        cp "$ROOT/koru/native/tests/catc.c" "$WORK/catc.c"
-        cp "$ROOT/koru/native/tests/pipegen.c" "$WORK/pipegen.c"
-        cp "$ROOT/koru/native/tests/forktest.c" "$WORK/forktest.c"
-        cp "$ROOT/koru/native/tests/granttest.c" "$WORK/granttest.c"
-        cp "$ROOT/koru/native/tests/grantc.c" "$WORK/grantc.c"
-        cp "$ROOT/koru/native/tests/objt.c" "$WORK/objt.c"
-        cp "$ROOT/koru/native/tests/wtest.c" "$WORK/wtest.c"
-        cp "$ROOT/koru/native/tests/wlpair.c" "$WORK/wlpair.c"
-        cp "$ROOT/koru/native/tests/wlwire.h" "$WORK/wlwire.h"
-        cp "$ROOT/koru/native/tests/wlserver.c" "$WORK/wlserver.c"
-        cp "$ROOT/koru/native/tests/wlclient.c" "$WORK/wlclient.c"
-        cp "$ROOT/koru/native/tests/wlinit.c" "$WORK/wlinit.c"
-        cp "$ROOT/koru/native/tests/wlreal.c" "$WORK/wlreal.c"
-        cp "$ROOT/koru/native/tests/wlrinit.c" "$WORK/wlrinit.c"
-        cp "$ROOT/koru/native/tests/wlrcinit.c" "$WORK/wlrcinit.c"
+        cp "$ROOT/koruos/native/tests/realhello.c" "$WORK/realhello.c"
+        cp "$ROOT/koruos/native/tests/muslhello.c" "$WORK/muslhello.c"
+        cp "$ROOT/koruos/native/tests/fscat.c" "$WORK/fscat.c"
+        cp "$ROOT/koruos/native/tests/hi.c" "$WORK/hi.c"
+        cp "$ROOT/koruos/native/tests/libhi.c" "$WORK/libhi.c"
+        cp "$ROOT/koruos/native/tests/getc.c" "$WORK/getc.c"
+        cp "$ROOT/koruos/native/tests/sh.c" "$WORK/sh.c"
+        cp "$ROOT/koruos/native/tests/args.c" "$WORK/args.c"
+        cp "$ROOT/koruos/native/tests/catc.c" "$WORK/catc.c"
+        cp "$ROOT/koruos/native/tests/pipegen.c" "$WORK/pipegen.c"
+        cp "$ROOT/koruos/native/tests/forktest.c" "$WORK/forktest.c"
+        cp "$ROOT/koruos/native/tests/granttest.c" "$WORK/granttest.c"
+        cp "$ROOT/koruos/native/tests/grantc.c" "$WORK/grantc.c"
+        cp "$ROOT/koruos/native/tests/objt.c" "$WORK/objt.c"
+        cp "$ROOT/koruos/native/tests/wtest.c" "$WORK/wtest.c"
+        cp "$ROOT/koruos/native/tests/wlpair.c" "$WORK/wlpair.c"
+        cp "$ROOT/koruos/native/tests/wlwire.h" "$WORK/wlwire.h"
+        cp "$ROOT/koruos/native/tests/wlserver.c" "$WORK/wlserver.c"
+        cp "$ROOT/koruos/native/tests/wlclient.c" "$WORK/wlclient.c"
+        cp "$ROOT/koruos/native/tests/wlinit.c" "$WORK/wlinit.c"
+        cp "$ROOT/koruos/native/tests/wlreal.c" "$WORK/wlreal.c"
+        cp "$ROOT/koruos/native/tests/wlrinit.c" "$WORK/wlrinit.c"
+        cp "$ROOT/koruos/native/tests/wlrcinit.c" "$WORK/wlrcinit.c"
         REALWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/realhello.c")")"
         PIEWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/pie.elf")")"
         MUSLWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK/musl.elf")")"
@@ -898,15 +907,15 @@ else
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/objt.elf" "$WORK/objt.c" > "$WORK/objt.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wtest.elf" "$WORK/wtest.c" > "$WORK/wtest.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlpair.elf" "$WORK/wlpair.c" > "$WORK/wlpair.build" 2>&1 \
-           && WLHOST="$ROOT/koru/hosted/wayland" \
+           && WLHOST="$ROOT/koruos/hosted/wayland" \
            && "$ZIGBIN" cc -O2 -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -I"$WLHOST" -I"$WLHOST/libffi" -I"$WLHOST/src" -DHAVE_CONFIG_H -o "$WORK/wlserver.elf" "$WORK/wlserver.c" "$WLHOST/src/wayland-server.c" "$WLHOST/src/event-loop.c" "$WLHOST/src/wayland-shm.c" "$WLHOST/src/connection.c" "$WLHOST/src/wayland-os.c" "$WLHOST/src/wayland-util.c" "$WLHOST/wayland-protocol.c" "$WLHOST/xdg-shell-protocol.c" "$WLHOST/libffi/libffi.a" > "$WORK/wlserver.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlclient.elf" "$WORK/wlclient.c" > "$WORK/wlclient.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlinit.elf" "$WORK/wlinit.c" > "$WORK/wlinit.build" 2>&1 \
-           && WLHOST="$ROOT/koru/hosted/wayland" \
+           && WLHOST="$ROOT/koruos/hosted/wayland" \
            && "$ZIGBIN" cc -O2 -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -I"$WLHOST" -I"$WLHOST/libffi" -DHAVE_CONFIG_H -o "$WORK/wlreal.elf" "$WORK/wlreal.c" "$WLHOST/src/connection.c" "$WLHOST/src/wayland-client.c" "$WLHOST/src/wayland-os.c" "$WLHOST/src/wayland-util.c" "$WLHOST/wayland-client-protocol.c" "$WLHOST/xdg-shell-protocol.c" "$WLHOST/libffi/libffi.a" > "$WORK/wlreal.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlrinit.elf" "$WORK/wlrinit.c" > "$WORK/wlrinit.build" 2>&1 \
            && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/wlrcinit.elf" "$WORK/wlrcinit.c" > "$WORK/wlrcinit.build" 2>&1 \
-           && WLHOST="$ROOT/koru/hosted/wayland" \
+           && WLHOST="$ROOT/koruos/hosted/wayland" \
            && "$ZIGBIN" cc -O2 -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -DWLREAL_SOCK='"/wayland-2"' -I"$WLHOST" -I"$WLHOST/libffi" -DHAVE_CONFIG_H -o "$WORK/wlrinner.elf" "$WORK/wlreal.c" "$WLHOST/src/connection.c" "$WLHOST/src/wayland-client.c" "$WLHOST/src/wayland-os.c" "$WLHOST/src/wayland-util.c" "$WLHOST/wayland-client-protocol.c" "$WLHOST/xdg-shell-protocol.c" "$WLHOST/libffi/libffi.a" > "$WORK/wlrinner.build" 2>&1 \
            && bash "$ROOT/scripts/build-wlrcomp.sh" "$WORK/wlrcomp.elf" > "$WORK/wlrcomp.build" 2>&1 \
            && "$ZIGBIN" build-lib -target x86_64-linux-musl -dynamic -O ReleaseSmall -femit-bin="$WORK/libhi.so" "$WORK/libhi.c" > "$WORK/hi.build" 2>&1 \
@@ -935,17 +944,17 @@ else
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLRINNERWSL wlrinner.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "write $WLRCINITWSL wlrcinit.elf" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -R "mkdir xkb" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
-           && XKBSRCWSL="$(wsl -e wslpath -u "$(cygpath -w "$ROOT/koru/hosted/xkbdata/xkb")")" \
+           && XKBSRCWSL="$(wsl -e wslpath -u "$(cygpath -w "$ROOT/koruos/hosted/xkbdata/xkb")")" \
            && { echo 'cd /'; \
-                (cd "$ROOT/koru/hosted/xkbdata/xkb" && find . -type d | sed 's|^\./||' | grep -vx '\.' | sort) | \
+                (cd "$ROOT/koruos/hosted/xkbdata/xkb" && find . -type d | sed 's|^\./||' | grep -vx '\.' | sort) | \
                   while read -r d; do \
                     echo "cd /"; echo "mkdir xkb/$d"; echo "cd xkb/$d"; \
-                    (cd "$ROOT/koru/hosted/xkbdata/xkb" && find "$d" -maxdepth 1 -type f | while read -r f; do \
+                    (cd "$ROOT/koruos/hosted/xkbdata/xkb" && find "$d" -maxdepth 1 -type f | while read -r f; do \
                        echo "write $XKBSRCWSL/$f $(basename "$f")"; done); \
                   done; echo 'cd /'; } > "$WORK/xkb.cmds" \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e /usr/sbin/debugfs -w -f "$(wsl -e wslpath -u "$(cygpath -w "$WORK/xkb.cmds")")" "$IMGWSL" >> "$WORK/debugfs.out" 2>&1 \
            && MSYS2_ARG_CONV_EXCL='*' wsl -e bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-dynamic.sh")")" "$IMGWSL" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/hi.elf")")" "$(wsl -e wslpath -u "$(cygpath -w "$WORK/libhi.so")")" >> "$WORK/stage-dynamic.out" 2>&1; then
-            boot_check "$ROOT/koru/native/tests/boot_real.k" "REALELF COMPLETE" \
+            boot_check "$ROOT/koruos/native/tests/boot_real.k" "REALELF COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on
             if grep -qF "real pie child says hi" "$WORK/boot_real.serial" \
@@ -1005,7 +1014,7 @@ else
             # it MAP_SHARED — the same frames in two address spaces. This
             # is the wire wayland is built on; asserted here so the wl
             # server/client pair lands on a measured transport.
-            boot_check "$ROOT/koru/native/tests/boot_sock.k" "WLBOOT COMPLETE" \
+            boot_check "$ROOT/koruos/native/tests/boot_sock.k" "WLBOOT COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on
             if grep -qE "WLSERV bytes=[0-9]+:wl-go rfd=[0-9]+" "$WORK/boot_sock.serial" \
@@ -1026,7 +1035,7 @@ else
             # buffer objects, the pool fd over SCM_RIGHTS, attach/damage/
             # frame/commit answered by callback.done + buffer.release,
             # display.sync roundtrip, EOS on last close.
-            boot_check "$ROOT/koru/native/tests/boot_wl.k" "WLEXEC COMPLETE" \
+            boot_check "$ROOT/koruos/native/tests/boot_wl.k" "WLEXEC COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on
             if grep -qF "WLSRV bound wayland-1" "$WORK/boot_wl.serial" \
@@ -1053,7 +1062,7 @@ else
             # registry/frame/sync events. Same wlserver.elf compositor.
             # headless run: both clients still wait out their input
             # deadline — wider window than the generic 15s.
-            TIMEOUT=30 boot_check "$ROOT/koru/native/tests/boot_wlr.k" "WLREXEC COMPLETE" \
+            TIMEOUT=30 boot_check "$ROOT/koruos/native/tests/boot_wlr.k" "WLREXEC COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on
             if grep -qF "WLSRV bound wayland-1" "$WORK/boot_wlr.serial" \
@@ -1202,7 +1211,7 @@ sys.exit(0 if px(160,155)==b'\xad\xbe\xef' and px(161,155)==b'\xc0\xff\xee'
             # libwayland-1.26, -DWLREAL_SOCK=/wayland-2) speaks xdg_shell
             # to wlroots' implementation. Three protocol hops: client
             # shm -> wlroots scene -> pixman -> wl_shm -> *Surf -> scanout.
-            sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_wlc.k" \
+            sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_wlc.k" \
                 > "$WORK/boot_wlc.k"
             if ! bash "$ROOT/scripts/build-native.sh" "$WORK/boot_wlc.k" \
                     "$WORK/boot_wlc.elf" > "$WORK/boot_wlc.build" 2>&1; then
@@ -1295,7 +1304,7 @@ sys.exit(0 if px(40,40)==b'\xb0\xce\xfb' and px(41,40)==b'\xd9\xff\xff'
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null
         fi
-        boot_check "$ROOT/koru/native/tests/boot_ext2.k" "EXT2N COMPLETE" \
+        boot_check "$ROOT/koruos/native/tests/boot_ext2.k" "EXT2N COMPLETE" \
             -drive "file=$IMG,format=raw,if=none,id=d0" \
             -device virtio-blk-pci,drive=d0,disable-modern=on
         # virtio-blk's device now comes out of pci.zig's table — not a
@@ -1483,7 +1492,7 @@ sys.exit(0 if px(40,40)==b'\xb0\xce\xfb' and px(41,40)==b'\xd9\xff\xff'
         # switch counter in spawn_run reports the rotations. >=3 stream
         # transitions proves a return switch (not just a first handoff).
         if [ -n "$ELFAWSL" ] && [ -n "$ELFBWSL" ]; then
-            boot_check "$ROOT/koru/native/tests/boot_multi.k" "MULTI COMPLETE" \
+            boot_check "$ROOT/koruos/native/tests/boot_multi.k" "MULTI COMPLETE" \
                 -drive "file=$IMG,format=raw,if=none,id=d0" \
                 -device virtio-blk-pci,drive=d0,disable-modern=on
             sw=$(sed -n 's/.*sched: switches=\([0-9]*\).*/\1/p' "$WORK/boot_multi.serial" | tail -1)
@@ -1514,7 +1523,7 @@ sys.exit(0 if px(40,40)==b'\xb0\xce\xfb' and px(41,40)==b'\xd9\xff\xff'
         # prompt: an early sendkey just pre-loads the ring and the read
         # drains without ever blocking, proving nothing.
         con_src="$WORK/boot_conin.k"
-        sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_conin.k" > "$con_src"
+        sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_conin.k" > "$con_src"
         if bash "$ROOT/scripts/build-native.sh" "$con_src" "$WORK/boot_conin.elf" > "$WORK/boot_conin.build" 2>&1; then
             conport=$((5200 + $$ % 400))
             timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_conin.elf" -serial stdio \
@@ -1562,7 +1571,7 @@ sys.exit(0 if px(40,40)==b'\xb0\xce\xfb' and px(41,40)==b'\xd9\xff\xff'
         # return. Same monitor contract as conin: the prompt must be
         # observed BEFORE any sendkey, or a preloaded ring fakes the run.
         sh_src="$WORK/boot_shell.k"
-        sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_shell.k" > "$sh_src"
+        sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_shell.k" > "$sh_src"
         if bash "$ROOT/scripts/build-native.sh" "$sh_src" "$WORK/boot_shell.elf" > "$WORK/boot_shell.build" 2>&1; then
             shport=$((5400 + $$ % 300))
             # four command rounds (pie, args, pipe, fork) at human-key
@@ -1775,7 +1784,7 @@ sys.exit(0 if px(40,40)==b'\xb0\xce\xfb' and px(41,40)==b'\xd9\xff\xff'
         # tick path — [1-9] is the measured proof; GOT=x that the
         # resumed read completed itself.
         tk_src="$WORK/boot_tkctx.k"
-        sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_tkctx.k" > "$tk_src"
+        sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_tkctx.k" > "$tk_src"
         if bash "$ROOT/scripts/build-native.sh" "$tk_src" "$WORK/boot_tkctx.elf" > "$WORK/boot_tkctx.build" 2>&1; then
             tkport=$((5600 + $$ % 300))
             timeout "$TIMEOUT" "$QEMU" -kernel "$WORK/boot_tkctx.elf" -serial stdio \

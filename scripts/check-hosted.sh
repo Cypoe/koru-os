@@ -14,15 +14,23 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ZIG="${ZIG:-/w/tools/zig-0.15.1/zig.exe}"
 export PATH="/w/tools/zig-0.15.1:$PATH"
-FIX="$(cygpath -m "$ROOT/koru/hosted/tests" 2>/dev/null || echo "$ROOT/koru/hosted/tests")"
+FIX="$(cygpath -m "$ROOT/koruos/hosted/tests" 2>/dev/null || echo "$ROOT/koruos/hosted/tests")"
 WSL_DISTRO="${WSL_DISTRO:-Ubuntu}"
 
 pass=0; failn=0
 ok()  { pass=$((pass+1));  echo "ok   $1"; }
 bad() { failn=$((failn+1)); echo "FAIL $1"; }
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# Gate runs are evidence, not scratch: each run gets its own dir under
+# evidence/runs/<ts>-hosted.XXXXXX (gitignored). EVIDENCE_KEEP prunes.
+KEEP="${EVIDENCE_KEEP:-10}"
+RUNS="$ROOT/evidence/runs"
+mkdir -p "$RUNS"
+WORK="$(mktemp -d "$RUNS/$(date +%Y%m%d-%H%M%S)-hosted.XXXXXX")"
+# Build caches are not evidence — strip them on exit, keep logs/artifacts.
+trap 'find "$WORK" -type d \( -name .zig-cache -o -name zig-out -o -name zig-cache \) -exec rm -rf {} + 2>/dev/null; echo "evidence: $WORK"' EXIT
+find "$RUNS" -mindepth 1 -maxdepth 1 -type d -name '*-hosted.*' \
+    | sort -r | tail -n +$((KEEP+1)) | xargs -r rm -rf
 
 # --- the child: a real linux ELF, static musl — execve'able on any host --
 cat > "$WORK/child.zig" <<'EOF'
@@ -52,7 +60,7 @@ if ! MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e /usr/sbin/mke2fs -q -F -t e
 fi
 
 # --- the program: hosted fixture → static musl binary ---------------------
-sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/hosted_ext2.k" > "$WORK/hosted_ext2.k"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/hosted/tests/hosted_ext2.k" > "$WORK/hosted_ext2.k"
 bash "$ROOT/scripts/build-hosted.sh" "$WORK/hosted_ext2.k" "$WORK/hosted_ext2.bin" > "$WORK/hosted.build" 2>&1 || {
     bad "hosted_ext2: build failed"; tail -8 "$WORK/hosted.build"; echo "---"; echo "check-hosted: $pass passed, $failn failed"; exit 1; }
 
@@ -123,7 +131,7 @@ fi
 # language-level rights bag — unregistered tors refuse at dispatch. The fs
 # is a bridge resource: verbs take opaque tokens, the pool resolves them to
 # typed pointers, and a consumed token refuses by name afterwards.
-sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/repl.kz" > "$WORK/repl.kz"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/hosted/tests/repl.kz" > "$WORK/repl.kz"
 bash "$ROOT/scripts/build-hosted.sh" "$WORK/repl.kz" "$WORK/repl.bin" > "$WORK/repl.build" 2>&1 || {
     bad "repl: build failed"; tail -8 "$WORK/repl.build"; echo "---"; echo "check-hosted: $pass passed, $failn failed"; exit 1; }
 
@@ -198,7 +206,7 @@ fi
 # through the real provider. Realization is a live X server (WSLg :0) —
 # a compositor, not a file dump. The gate needs that server: absent is a
 # failure, not a skip — same rule as the rest of this file.
-sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/repl-x11.kz" > "$WORK/repl-x11.kz"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/hosted/tests/repl-x11.kz" > "$WORK/repl-x11.kz"
 bash "$ROOT/scripts/build-hosted.sh" "$WORK/repl-x11.kz" "$WORK/repl-x11.bin" linux-x11 > "$WORK/repl-x11.build" 2>&1 \
     && [ -s "$WORK/repl-x11.bin" ] \
     && ok "surface-x11: linux-x11 arm builds (dynamic glibc + staged libX11.so.6)" \
@@ -270,7 +278,7 @@ if [ "$XOK" -eq 1 ]; then
     # presents per-rect damage, and exits on 'q'. xprobe.py (ctypes→libX11)
     # is the witness: window by name, XGetImage pixels (the composite must
     # be on the wire, not just in our buffer), XSendEvent drives 'q'.
-    sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/painter.kz" > "$WORK/painter.kz"
+    sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/hosted/tests/painter.kz" > "$WORK/painter.kz"
     if bash "$ROOT/scripts/build-hosted.sh" "$WORK/painter.kz" "$WORK/painter.bin" linux-x11 > "$WORK/painter.build" 2>&1; then
         cp "$ROOT/scripts/xprobe.py" "$XSIDE/xprobe.py"
         MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
@@ -295,13 +303,13 @@ fi
 # The second hosted surface arm: same fixtures as linux-x11 (repl-x11.kz,
 # painter.kz — the iface is provider-agnostic), shim=linux-wayland —
 # musl-static with libwayland-client 1.26.0 vendored as source
-# (koru/hosted/wayland/src/) + a musl libffi.a. Zero runtime deps; runs
+# (koruos/hosted/wayland/src/) + a musl libffi.a. Zero runtime deps; runs
 # on the host AND inside the vroot unchanged. The protocol Hyprland
 # speaks — this arm is unchanged when a dmabuf compositor appears.
 # Evidence is wire-level (WAYLAND_DEBUG): wayland gives no cross-client
 # snooping like xwininfo — the attach+damage+commit stream IS the
 # composite by protocol.
-sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/repl-x11.kz" > "$WORK/repl-wl.kz"
+sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/hosted/tests/repl-x11.kz" > "$WORK/repl-wl.kz"
 bash "$ROOT/scripts/build-hosted.sh" "$WORK/repl-wl.kz" "$WORK/repl-wl.bin" linux-wayland > "$WORK/repl-wl.build" 2>&1 \
     && [ -s "$WORK/repl-wl.bin" ] \
     && ok "surface-wayland: linux-wayland arm builds (musl static + vendored libwayland/libffi)" \
@@ -357,7 +365,7 @@ if [ "$WLOK" -eq 1 ] && [ -s "$WORK/repl-wl.bin" ]; then
     # painter — the koru-written compositor fixture over wayland: same
     # source as the x11 arm; evidence is the damage stream on the wire
     # (per-rect damage, not full-surface re-pushes).
-    sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/hosted/tests/painter.kz" > "$WORK/painter-wl.kz"
+    sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/hosted/tests/painter.kz" > "$WORK/painter-wl.kz"
     if bash "$ROOT/scripts/build-hosted.sh" "$WORK/painter-wl.kz" "$WORK/painter-wl.bin" linux-wayland > "$WORK/painter-wl.build" 2>&1; then
         MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
             "cd '$WORKWSL' && WAYLAND_DEBUG=1 timeout 8 ./painter-wl.bin > '$WORKWSL/painter-wl.log' 2> '$WORKWSL/painter-wl-wire.log'"
@@ -373,15 +381,15 @@ if [ "$WLOK" -eq 1 ] && [ -s "$WORK/repl-wl.bin" ]; then
     fi
 fi
 
-# --- hosted/vroot — vendored rootfs arm ----------------------------------
+# --- rig/vroot — vendored rootfs arm ----------------------------------
 # The hosted desktop path needs real GUI programs (terminal, compositor,
-# webview) that this host's Ubuntu-20.04 cannot package. hosted/vroot is
+# webview) that this host's Ubuntu-20.04 cannot package. rig/vroot is
 # an Arch rootfs (hyprland/foot/weston/webkit2gtk) entered through
 # unshare+chroot with a socket relay for WSLg — same kernel, jail views.
 # It is environment state (~/kvroot), not a build artifact: absent is a
 # failure, not a skip — same rule as the X server above. Rebuild with
 # scripts/mk-vroot.sh.
-VROOTSRC_WSL="$(MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e wslpath -u "$(cygpath -w "$ROOT/hosted/vroot")" 2>/dev/null)"
+VROOTSRC_WSL="$(MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e wslpath -u "$(cygpath -w "$ROOT/rig/vroot")" 2>/dev/null)"
 KVOK=0
 MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
     "test -x ~/kvroot/usr/bin/foot -a -x ~/kvroot/usr/bin/weston -a -x ~/kvroot/usr/bin/Hyprland -a -x ~/kvroot/usr/local/bin/kvview" && KVOK=1
@@ -481,7 +489,7 @@ if [ "$KVOK" -eq 1 ]; then
                 > /dev/null 2>&1 || true
         fi
         MSYS2_ARG_CONV_EXCL='*' wsl -d "$WSL_DISTRO" -e bash -c \
-            "cd '$REPWSL' && timeout 240 bash hosted/vroot/hypr-oracle.sh" \
+            "cd '$REPWSL' && timeout 240 bash rig/vroot/hypr-oracle.sh" \
             > "$WORK/hypr-oracle.out" 2>&1
         if grep -qF "ORACLE-PASS" "$WORK/hypr-oracle.out" \
            && grep -qF "QS-UP" "$WORK/hypr-oracle.out"; then

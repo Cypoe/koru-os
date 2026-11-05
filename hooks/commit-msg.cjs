@@ -4,7 +4,7 @@
 // `## World Model`, `## Membrane`, and the koru-os addition `## Gates`:
 //
 //   ## Gates — evidence, not discipline. When a commit stages files the boot/
-//               hosted/realize gates cover (koru/**, scripts/build-*), it must
+//               hosted/realize gates cover (koruos/**, arms/**, scripts/build-*), it must
 //               declare measured results (`boot: 21/21`) or consciously defer
 //               (`deferred — <reason>`). Silence is the failure mode this repo
 //               actually commits: green claimed without a measured run.
@@ -446,14 +446,14 @@ if (touchesOKF) {
 
 // ---------------------------------------------------------------------------
 // 3. Gates wall — koru-os addition. A commit that stages gate-covered files
-//    (koru/** — the seams and providers the three check-*.sh suites measure —
+//    (koruos/** + arms/** — the seams and providers the check-*.sh suites measure —
 //    or scripts/build-*) must declare measured gate evidence or consciously
 //    defer. "Don't claim completion until the gates pass" is a convention; a
 //    convention you can skip silently is not a wall. The declaration shape is
 //    the same forced-attention contract as the other two gates: evidence rows
 //    or a recorded opt-out, never silence.
 // ---------------------------------------------------------------------------
-const GATE_COVERED = /^(koru\/|scripts\/build-)/;
+const GATE_COVERED = /^(koruos\/|arms\/|challenges\/|scripts\/build-)/;
 const gateCovered = staged.filter((f) => GATE_COVERED.test(f));
 if (gateCovered.length) {
   const gates = secs["gates"];

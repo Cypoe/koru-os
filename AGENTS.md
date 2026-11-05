@@ -1,7 +1,7 @@
 # AGENTS.md — koru-os
 
-Platform namespace for Koru. `koru/*/index.kz` lifts declare identity-bound
-interfaces; `koru/realize` is the resolver command that binds them to an arm
+Platform namespace for Koru. `koruos/*/index.kz` lifts declare identity-bound
+interfaces; `koruos/realize` is the resolver command that binds them to an arm
 or refuses loudly. Unikraft is one arm, not the OS. Design contract:
 `docs/design/DESIGN-0001-execution-contract.md`.
 
@@ -85,9 +85,9 @@ Each lift declares its own contract in `index.kz`:
 
 ## Tests
 
-Fixtures live in `koru/*/tests/*.k` and use `{{ ENTRY }}` templating
+Fixtures live in `koruos/*/tests/*.k` and use `{{ ENTRY }}` templating
 (substitute the fixture dir's absolute path before running — they are not
-runnable verbatim). Controls/negatives in `koru/realize/tests/`:
+runnable verbatim). Controls/negatives in `koruos/realize/tests/`:
 `control_rowed.k`, `negative_unrowed.k`, `negative_contradict.k`,
 `negative_badrow.k`. A refusal naming module + missing field is a PASS for a
 negative; never weaken a fixture to go green.
@@ -124,7 +124,7 @@ with `qemu-system-x86_64 -kernel out.elf -serial stdio -display none`.
   `unmeasured` when reporting toolchain state — claims get re-measured.
 - Refusals are the spec's loud axis, not bugs. A malformed row declaration
   must refuse naming module/file/line, never a silent skip.
-- Provider artifacts ride in `deltas` (e.g. `src:koru/native/runtime.zig`);
+- Provider artifacts ride in `deltas` (e.g. `src:koruos/native/runtime.zig`);
   mechanisms are names (`kconfig`, `host-libc`, `native-runtime`).
 - `git push` after meaningful commits (see BLOCKERS B4).
 
@@ -137,7 +137,7 @@ refusal, the honest opt-outs are explicit:
   `Signals: acknowledged-none`. Signal interfaces live in `signals/*.signal`
   (register-on-miss; `membrane: true` marks belief-class → a staged
   `concepts/` file is required in the same commit).
-- `## Gates` — REQUIRED when staging `koru/` or `scripts/build-*`:
+- `## Gates` — REQUIRED when staging `koruos/` or `scripts/build-*`:
   `name: pass/total` rows of measured evidence, or `deferred — <reason>`.
   "Gates green" is a measured claim, not prose.
 - `## Membrane` — durable beliefs live in `concepts/frag-<id>.md`

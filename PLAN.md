@@ -41,7 +41,7 @@ drivers, ABIs, behavior — and Hyprland/Quickshell/Noctalia are *oracles*
 
 Today the lifts speak Unikraft's ABI (`uk_blkdev_*`, `ukplat_*`,
 `uk_alloc`) and the native provider *implements* that ABI in
-`koru/native/*.zig`. Two honest options:
+`koruos/native/*.zig`. Two honest options:
 
 - **(a)** keep `uk_*` as a private ABI forever — legitimate; an ABI is
   just an ABI, and unikraft stays a first-class arm.
@@ -126,7 +126,7 @@ remaining pieces are the REPL driver program (read → `run(source:,
 scope:)` → print) and the os-scope registration, not an
 interpreter.
 
-**Landed: the system REPL** (`koru/hosted/tests/repl.kz`, gated by
+**Landed: the system REPL** (`koruos/hosted/tests/repl.kz`, gated by
 `check-hosted.sh` — 12/12). Boot mounts blkdev 0 and hands the
 mounted-fs obligation to `repl(fs: *Fs<!mounted>)` — the capability
 moves into the process by handoff, discharged via the os-scope
@@ -159,7 +159,7 @@ pin-local patch: `~[retain]` on bridge `create`/`run`/`close`/
 `get-handles` (host-text callers; upstreamable).
 
 **Landed on this track** (gated by `scripts/check-hosted.sh`):
-`koru/hosted/linux.zig` realizes the whole lift extern surface on
+`koruos/hosted/linux.zig` realizes the whole lift extern surface on
 host primitives — file-backed `uk_blkdev_*` (`$KORU_BLK0`, requests
 complete inline), `fork+execve+waitpid` spawn (rights bag advisory,
 printed not enforced — seccomp is the named future mechanism), and
@@ -169,7 +169,7 @@ chain `boot_ext2` gates: mount → exec(path) → pin → exec-nid →
 child ran twice as a real host process, nid survived process death.
 
 **`hosted/freebsd` (Capsicum arm, build-checked)** —
-`koru/hosted/freebsd.zig` + shared `common.zig` (file-backed blkdev,
+`koruos/hosted/freebsd.zig` + shared `common.zig` (file-backed blkdev,
 clock, nid store; spawn is the per-OS seam). The spawn path is where
 the bag stops being advisory: parent opens the staged image once,
 narrows the fd to `CAP_READ|CAP_FEXECVE|CAP_FSTAT` via
@@ -288,11 +288,11 @@ asserts both fixtures link for `x86_64-freebsd` (no linux-only
 primitive may leak into the shared seam).
 
 **`koruos/surface` on the hosted arm (linux-x11, gated)** —
-`koru/surface/index.kz` is the compositor-facing lift, deliberately
+`koruos/surface/index.kz` is the compositor-facing lift, deliberately
 split from `koruos/fb` (the dumb device): `open` mints
 `*Surf<open!>` into the bridge pool, `fill`/`px`/`present` borrow
 `*Surf<open>` through the pool token, `close` consumes
-`*Surf<!open>`. Realization is `koru/hosted/x11.zig` over
+`*Surf<!open>`. Realization is `koruos/hosted/x11.zig` over
 `libX11.so.6` — a real compositor (WSLg), not a PPM: the surface is
 a mapped X window backed by one provider-owned ZPixmap; `present`
 is `XPutImage`+flush. `build-hosted.sh linux-x11` is a separate arm
@@ -306,8 +306,8 @@ released at bridge `close` through the real provider verb; and
 `xwininfo` reports the mapped 640×480 "koru-os" window — the
 compositor's own account, not ours.
 
-**`koruos/surface` on koru-native (gated)** — `koru/native/surf.zig`
-+ `koru/native/comp.zig` are the surface-over-fb provider family the
+**`koruos/surface` on koru-native (gated)** — `koruos/native/surf.zig`
++ `koruos/native/comp.zig` are the surface-over-fb provider family the
 paragraph above was waiting on: a pool of provider-owned backings
 (contiguous pmm frames), open mints `*Surf<open!>` into the pool AND
 attaches the backing into the compositor's z-stack, fill/px touch
@@ -325,7 +325,7 @@ offset-semantics bug (TRANSFER's `offset` is the rect's byte offset
 in the *strided* backing, not a packed buffer start) doubled every
 sub-rect — the pixel readback caught what self-report could not.
 
-**`nativeCompositor` (gated)** — `koru/native/comp.zig` owns the
+**`nativeCompositor` (gated)** — `koruos/native/comp.zig` owns the
 scene: a fixed-size z-ordered layer stack over surface backings,
 `damage(x,y,w,h)` recomposites the region bottom-to-top and commits
 through the fb seam. Painter's-order-at-present is dead as the
@@ -364,15 +364,15 @@ no event loop (input is a different provider family) and no GPU
 submission — virtio-gpu stays its own axis.
 
 **`koruos/input` on both arms (gated)** —
-`koru/input/index.kz` is the shared human-input lift: `poll`
+`koruos/input/index.kz` is the shared human-input lift: `poll`
 returns one queued event or `empty` — never blocks (sleeping is
 the wait-queue rung's problem, not the iface's shape). Events are
 **raw**: `key` carries the provider's hardware code (set-1 scancode
 native, X keycode hosted) — charmap is a layer above; `motion` is a
 delta; `expose` is damage flowing *server→client* (a repaint
-demand — see below). Realized by `koru/native/kbd.zig` (8042 IRQ1 →
+demand — see below). Realized by `koruos/native/kbd.zig` (8042 IRQ1 →
 64-entry ring, drain-on-poll covers edges lost while masked) plus
-`koru/native/mouse.zig` (8042 aux channel, IRQ12 → 3-byte packet
+`koruos/native/mouse.zig` (8042 aux channel, IRQ12 → 3-byte packet
 assembler, button edges + raw deltas — status bit5 routes the
 shared port's bytes, the IRQ only doorbells) on `koru-native` and
 by `x11.zig` (XSelectInput + XPending drain on the same connection
@@ -392,7 +392,7 @@ and the contract now says so. This is the compositor fact the
 native side must internalize before `nativeCompositor` — a surface
 isn't "write and show", it's "hold a scene and repaint on demand".
 
-**`koru/hosted/tests/painter.kz` (gated)** — the koru-written
+**`koruos/hosted/tests/painter.kz` (gated)** — the koru-written
 compositor shape, hosted arm: owns a surface, composites its own
 scene (bg + fixed fg + a moving box drawn last), polls input,
 repaints on `expose`, presents per-rect damage, quits on 'q'
@@ -404,9 +404,9 @@ key. The driver calls the lifts' emitted `*_event.handler`s
 directly — typed `*Surf` inside one process; the bridge pool stays
 the wire-facing custody path.
 
-**`hosted/vroot` — the vendored-userspace desktop path (gated)** —
+**`rig/vroot` — the vendored-userspace desktop path (gated)** —
 Ubuntu-20.04 WSL cannot package a real terminal, compositor, or
-webview, so `hosted/vroot/` carries an **Arch rootfs** built by
+webview, so `rig/vroot/` carries an **Arch rootfs** built by
 `scripts/mk-vroot.sh` (`docker build` → `docker export` → `~/kvroot`)
 and entered via `unshare -Urmpf` + chroot — no root, same kernel,
 no daemon bridging. The jail membrane is measured
@@ -426,7 +426,7 @@ the user asked for; and a measured-refusal oracle: **hyprland
 (aquamarine) requires `zwp_linux_dmabuf_v1`** — WSLg is software,
 no dmabuf — the row pins *why* the direct WSLg path refuses. The
 environment answer now exists: **live Hyprland 0.56.2 runs in the
-vroot** (`hosted/vroot/hypr-oracle.sh`). `kv-shim` is a ~700-line
+vroot** (`rig/vroot/hypr-oracle.sh`). `kv-shim` is a ~700-line
 dmabuf-v4 parent compositor whose feedback names vgem's `card0`;
 a per-entry fake sysfs satisfies libdrm's dev_t→node resolution;
 aquamarine opens the node, builds a **real GBM allocator**, and
@@ -466,7 +466,7 @@ bounds: vgem must be loaded on the host when the rootfs is fresh
 exists too:
 
 **`linux-wayland` — the second hosted surface arm (gated)** —
-`koru/hosted/wayland.zig` implements the same `koruos.surface` +
+`koruos/hosted/wayland.zig` implements the same `koruos.surface` +
 `koruos.input` extern surface as `x11.zig` over libwayland-client:
 registry binds `wl_compositor`/`wl_shm`/`xdg_wm_base`/`wl_seat`, a
 surface is an xdg_toplevel on a `memfd`-backed `wl_shm` buffer —
@@ -474,7 +474,7 @@ surface is an xdg_toplevel on a `memfd`-backed `wl_shm` buffer —
 shape, no pixel copy), xdg `configure` doubles as the iface's
 repaint-demand (`expose`), and evdev codes pass through raw. The
 arm is **musl-static with the protocol stack vendored as source**
-(`koru/hosted/wayland/`: scanner-generated bindings + libwayland
+(`koruos/hosted/wayland/`: scanner-generated bindings + libwayland
 1.26.0 `src/` + alpine musl `libffi.a` — `VENDORED.md` records
 provenance): host Ubuntu's libwayland is 1.18 and predates
 `wl_proxy_marshal_flags`, and the vroot's 1.26 needs glibc 2.38 —
@@ -517,7 +517,7 @@ the `cyberboot` path — with virtio-gpu later for damage/3D).
 
 ## Landed (koru-native arm, gated by `scripts/check-boot.sh` — 43/43)
 
-- **pmm — the frame allocator + reclaim.** `koru/native/pmm.zig`:
+- **pmm — the frame allocator + reclaim.** `koruos/native/pmm.zig`:
   loader memory map (PVH `hvm_start_info` under QEMU `-kernel` —
   **correction**: the image was being PVH-booted all along; the mb2
   tag walk stays for GRUB) → u8-refcount bitmap over 4 KiB frames.
@@ -532,8 +532,8 @@ the `cyberboot` path — with virtio-gpu later for damage/3D).
   PDE needs a 2 MiB-aligned base or the walk faults RSVD. The 4 MiB bump
   heap still serves koru-level malloc — program data, not page tables.
 - **`koruos/fb` — display output through a dispatched backend.**
-  `koru/fb/index.kz` lift (info/fill/px/**present** — draw and commit
-  are distinct verbs; `absent` refusal) + `koru/native/fb.zig`
+  `koruos/fb/index.kz` lift (info/fill/px/**present** — draw and commit
+  are distinct verbs; `absent` refusal) + `koruos/native/fb.zig`
   dispatcher over three providers, ranked: mb2 mbi tag 8 (GRUB
   programs the mode), **virtio-gpu** (`gpu.zig` over `virtiopci.zig`
   — modern vendor-cap windows walked for common/notify/isr,
@@ -819,7 +819,7 @@ Also open, smaller:
   field is a cmdline, not the path — pass the basename as the arg.
   iso-mod gate row: GRUB module2 → tag3 → reserved payload → real
   CPL=3 child ran, exit status 42 through the seam. ~~initramfs
-  payload~~ — landed: `koru/initramfs` parses cpio-newc off a named
+  payload~~ — landed: `koruos/initramfs` parses cpio-newc off a named
   mb2 module into a RAM-backed `ChildFsOps` view — file bytes alias
   the loader-reserved pages (zero copy), hardlinks dedup to one
   object/ino, symlinks resolve at open (absolute + `..` relative

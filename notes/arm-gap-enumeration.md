@@ -9,7 +9,7 @@ The row table is the contract; an arm's binding set is what it can serve. Runnin
 error path — it is the enumeration of the provider gap for that arm. Every
 `refused:` line is one provider a standalone substrate must supply, produced by
 the gate rather than hand-listed. Running it over the real boot programs
-(`koru/*/tests/boot_*.k`) grows the table with the measured row catalog.
+(`koruos/*/tests/boot_*.k`) grows the table with the measured row catalog.
 
 ## Grown table (five boot programs)
 
@@ -54,7 +54,7 @@ blk last (first real device driver).
 
 ## Landed: the first provider (`koruos/native`, post-0d49358)
 
-`koru/native/` is the first `koru-native` provider family: `runtime.zig`
+`koruos/native/` is the first `koru-native` provider family: `runtime.zig`
 compiles freestanding (`zig build-obj -target x86_64-freestanding-none`)
 and carries the exact contract the emitted backend declares — the
 flow-prologue heap (`posix_memalign`/`free` over a 4 MiB bump region;
@@ -65,7 +65,7 @@ QEMU `-serial`, and a debug board alike; deliberately not isa-debugcon).
 Its `index.kz` declares two `koruos/realize:row` blocks whose `iface`
 targets `koru.runtime` and `std.io:print` — bindings merged onto the
 builtin rows with `koruos.native` provenance, mechanism `native-runtime`,
-payload `deltas=src:koru/native/runtime.zig`. Measured:
+payload `deltas=src:koruos/native/runtime.zig`. Measured:
 
 - program importing `koruos/native` → `manifest-koru-native.txt` written,
   2 bound (`bind: koru.runtime -> native-runtime`, `bind: std.io:print
@@ -100,7 +100,7 @@ the real boot programs (`import koruos/native` added — opt-in holds):
 
 ## Next items (ordered)
 
-1. ~~**Boot entry**~~ — **DONE, measured.** `koru/native/boot.zig` carries
+1. ~~**Boot entry**~~ — **DONE, measured.** `koruos/native/boot.zig` carries
    the multiboot2 header + PVH note (both loaders land in 32-bit protected
    mode; QEMU `-kernel` on ELF64 uses the PVH path), a 32→64 trampoline
    (identity map 0–6 MiB, PAE/LME/PG, `CR4.OSFXSR|OSXMMEXCPT` + `CR0.MP`
@@ -112,7 +112,7 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    Known honest limits: identity-mapped, 6 MiB window, bump heap,
    multiboot info ignored (no cmdline/modules yet).
 2. **blk transport** — **virtio done (legacy I/O-port), measured
-   2026-10-21.** `koru/native/virtio.zig` serves the same `uk_blkdev_*`
+   2026-10-21.** `koruos/native/virtio.zig` serves the same `uk_blkdev_*`
    externs the ext2 lift consumes (transitional PCI 0x1AF4:0x1001, BAR0
    I/O window, one synchronous queue, polled used ring). `runtime.zig`
    adds `malloc`/`memalign`/`_uk_alloc_head`; ext2's row gained a
@@ -131,10 +131,10 @@ the real boot programs (`import koruos/native` added — opt-in holds):
    substrate, not host-supplied like `kconfig`/`host-libc`); the
    provisional binds stay rung-honest until this family exists.
    **Sub-ladder in flight, two capabilities measured 2026-10-21:**
-   `koru/native/aspace.zig` clones the boot tables into a second CR3
+   `koruos/native/aspace.zig` clones the boot tables into a second CR3
    domain and proves on serial that VA 0x800000 resolves to different
    physical pages per space (`ASPACE A=aaaa B=bbbb DISTINCT`, pinned by
-   `check-boot.sh`). `koru/native/user.zig` then completes the first
+   `check-boot.sh`). `koruos/native/user.zig` then completes the first
    ring3 descent: a child CR3 with user (U/S) pages at VA 0x800000 —
    U/S required at *every* walk level, kernel leaves stay ring0-only —
    `iretq` into CPL=3 (user GDT entries + TSS + a 256-entry IDT added

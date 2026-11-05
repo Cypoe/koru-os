@@ -9,11 +9,11 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ZIGBIN="${ZIGBIN:-/w/src/koru-aaa6457/zig-out/bin/zig.exe}"
 [ -x "$ZIGBIN" ] || ZIGBIN=/w/tools/zig-0.15.1/zig.exe
-WL="$ROOT/koru/hosted/wayland"
-WLR="$ROOT/koru/hosted/wlroots"
-PIX="$ROOT/koru/hosted/pixman"
-XKB="$ROOT/koru/hosted/xkbcommon"
-DRM="$ROOT/koru/hosted/libdrm"
+WL="$ROOT/koruos/hosted/wayland"
+WLR="$ROOT/koruos/hosted/wlroots"
+PIX="$ROOT/koruos/hosted/pixman"
+XKB="$ROOT/koruos/hosted/xkbcommon"
+DRM="$ROOT/koruos/hosted/libdrm"
 OUT="${1:-/tmp/wlrcomp.elf}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -81,7 +81,7 @@ $CC $CFLAGS -DWLR_USE_UNSTABLE -DWLR_LITTLE_ENDIAN=1 -DWLR_BIG_ENDIAN=0 \
   -I"$WLR/src/include" -I"$WLR/glue" -I"$WLR/compat" -I"$DRM" -I"$DRM/drm" \
   -I"$PIX" -I"$XKB/include" -I"$WL" -I"$WL/src" \
   -Wl,--image-base=0x48000000 -Wl,--build-id=none ${WLRCOMP_STRIP:--s} \
-  -o "$OUT" "$ROOT/koru/native/tests/wlrcomp.c" "$WORK"/*.o "$WL/libffi/libffi.a" \
+  -o "$OUT" "$ROOT/koruos/native/tests/wlrcomp.c" "$WORK"/*.o "$WL/libffi/libffi.a" \
   2>"$WORK/link.err" || { cat "$WORK/link.err" >&2; exit 1; }
 
 echo "build-wlrcomp: $OUT" >&2
