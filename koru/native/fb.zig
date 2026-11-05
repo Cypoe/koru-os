@@ -72,11 +72,18 @@ fn fromMbi(mbi_phys: u32) bool {
         if (t == 0) break;
         if (t == 8 and s >= @sizeOf(Mb2Fb)) {
             const f: *align(1) const Mb2Fb = @ptrCast(base + off);
-            if (f.bpp == 32 and f.fb_type == 1) { // direct-color linear only
+            koru_say("fb: tag8 addr="); koru_putdec(f.addr);
+            koru_say(" pitch="); koru_putdec(f.pitch);
+            koru_say(" w="); koru_putdec(f.width);
+            koru_say(" h="); koru_putdec(f.height);
+            koru_say(" bpp="); koru_putdec(f.bpp);
+            koru_say(" type="); koru_putdec(f.fb_type); koru_say("\n");
+            if (f.bpp == 32 and f.fb_type == 1 and f.addr != 0) { // direct-color linear only
                 if (adopt(f.addr, f.pitch, f.width, f.height)) return true;
                 koru_say("fb: mb2 mode set but LFB unmappable — refused\n");
                 return false;
             }
+            if (f.addr == 0) koru_say("fb: mb2 tag8 reports addr=0 — GRUB-EFI leaves LFB phys unset; refused\n");
             return false;
         }
         off += (s + 7) & ~@as(usize, 7); // tags are 8-byte aligned
@@ -139,6 +146,8 @@ fn fromBga() bool {
 // not claim the backend: a mode tag that names memory we cannot reach
 // is a refusal, not a framebuffer.
 fn adopt(phys: u64, pitch: u32, w: u32, h: u32) bool {
+    koru_say("fb: adopt phys="); koru_putdec(phys);
+    koru_say(" len="); koru_putdec(@as(u64, pitch) * h); koru_say("\n");
     if (!mmio.map(phys, @as(u64, pitch) * h)) return false;
     fb_base = @ptrFromInt(@as(usize, @intCast(phys))); // identity map
     fb_width = w;
@@ -152,6 +161,7 @@ fn adopt(phys: u64, pitch: u32, w: u32, h: u32) bool {
 // --- init + externs ------------------------------------------------------
 
 pub fn init(mbi_phys: u32) void {
+    koru_say("fb: init mbi="); koru_putdec(mbi_phys); koru_say("\n");
     if (fromMbi(mbi_phys)) {
         koru_say("fb: backend=mb2\n");
         return;
@@ -166,6 +176,7 @@ pub fn init(mbi_phys: u32) void {
 }
 
 extern fn koru_say(s: [*:0]const u8) void;
+extern fn koru_putdec(v: u64) void;
 
 pub const Info = extern struct {
     width: u32,

@@ -1,0 +1,57 @@
+// boot_rainbow — unmissable display proof for bare-metal boots: one
+// fullscreen surface filled with four horizontal color bars (red, lime,
+// blue, yellow — 0xAARRGGBB, alpha ignored by the scanout), committed,
+// then held stable with hlt-paced spins so the composite stays up for
+// a human looking at the panel. "RAINBOW SCENE" marks the commit;
+// "RAINBOW COMPLETE" follows a long hold. If the screen stays black
+// after GRUB, the fb path delivered nothing — the fixture cannot lie
+// quieter than that.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/native
+~import koruos/surface
+~import std/io
+
+const std = @import("std");
+
+extern var stdout: ?*anyopaque;
+extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+fn say(s: [*:0]const u8) void {
+    _ = fputs(s, stdout);
+}
+
+fn spin(n: usize) void {
+    var i: usize = 0;
+    while (i < n) : (i += 1) asm volatile ("hlt");
+}
+
+~pub tor run {} -> string
+
+~proc run|zig {
+    const S = koru_koruos.koru_surface;
+    const W: u32 = 1024;
+    const H: u32 = 768;
+    const BAND: u32 = 192;
+    const s = switch (S.open_event.handler(.{ .width = W, .height = H })) {
+        .ok => |r| r.surface,
+        .refused => |e| return e,
+    };
+    const cols = [_]u32{ 0x00FF0000, 0x0000FF00, 0x000000FF, 0x0000FFFF };
+    var b: usize = 0;
+    while (b < cols.len) : (b += 1) {
+        _ = S.fill_event.handler(.{
+            .surface = s, .x = 0, .y = @intCast(b * BAND),
+            .w = W, .h = BAND, .color = cols[b],
+        });
+    }
+    _ = S.present_event.handler(.{ .surface = s, .x = 0, .y = 0, .w = W, .h = H });
+    say("RAINBOW SCENE\n");
+    spin(2400); // ~2 minutes of hlt-paced hold at the PIT tick rate
+    say("RAINBOW COMPLETE\n");
+    return "RAINBOW COMPLETE";
+}
+
+~run(): r |> std/io:print.ln("{{ r:s }}")

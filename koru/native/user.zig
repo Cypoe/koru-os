@@ -74,8 +74,50 @@ const USER_STACK_PAGES: usize = 16;
 const MMAP_BASE: usize = 0x6000_0000; // mmap arena — between image and stack
 const INTERP_BASE: usize = 0x7000_0000; // PT_INTERP loader's ET_DYN bias — clear of mains AND the mmap arena
 
+// VGA text-mode mirror: under CSM/SeaBIOS the firmware leaves 80x25
+// text mode active (no gfxterm in our grub.cfg), so 0xB8000 stays
+// writable for the whole boot — serial-less hardware gets the same
+// log on screen. Scrolls like a terminal; stops writing past the
+// last row rather than wrapping into garbage.
+var vga_row: usize = 0;
+var vga_col: usize = 0;
+
+fn vga_scroll() void {
+    const vga: [*]volatile u16 = @ptrFromInt(0xB8000);
+    var r: usize = 1;
+    while (r < 25) : (r += 1) {
+        var c: usize = 0;
+        while (c < 80) : (c += 1) vga[(r - 1) * 80 + c] = vga[r * 80 + c];
+    }
+    r = 24 * 80;
+    while (r < 25 * 80) : (r += 1) vga[r] = (@as(u16, 0x07) << 8) | ' ';
+}
+
+fn vga_putc(c: u8) void {
+    const vga: [*]volatile u16 = @ptrFromInt(0xB8000);
+    if (c == '\n') {
+        vga_col = 0;
+        vga_row += 1;
+    } else if (c != '\r') {
+        if (vga_col >= 80) {
+            vga_col = 0;
+            vga_row += 1;
+        }
+        if (vga_row < 25) {
+            vga[vga_row * 80 + vga_col] = (@as(u16, 0x07) << 8) | c;
+            vga_col += 1;
+        }
+    }
+    if (vga_row >= 25) {
+        vga_scroll();
+        vga_row = 24;
+    }
+}
+
 fn say(s: [*:0]const u8) void {
     _ = fputs(s, stdout);
+    var i: usize = 0;
+    while (s[i] != 0) : (i += 1) vga_putc(s[i]);
 }
 
 fn sayU32Hex(v: u32) void {

@@ -118,6 +118,7 @@ comptime {
         \\ .code32
     \\ .globl _start
     \\ _start:
+    \\   call kbled
     \\   cli
     \\   movl $pdpt, %eax
     \\   orl $0x3, %eax
@@ -150,6 +151,7 @@ comptime {
     \\   ljmp $0x08, $start64
     \\ .code64
     \\ start64:
+    \\   call kbled
     \\   movw $0x10, %ax
     \\   movw %ax, %ds
     \\   movw %ax, %es
@@ -159,9 +161,39 @@ comptime {
     \\   movq $__stack_top, %rsp
     \\   xorl %ebp, %ebp
     \\   movl %ebx, %edi      // mbi phys addr — EBX survives the 32→64 path
+    \\   call kbled
     \\   call kmain
     \\ 1: hlt
     \\   jmp 1b
+    \\ kbled:
+    \\   mov $32, %ecx
+    \\ .kd: inb $0x64, %al
+    \\   test $1, %al
+    \\   jz .kdd
+    \\   inb $0x60, %al
+    \\   loop .kd
+    \\ .kdd:
+    \\   mov $0xED, %al
+    \\   mov $0x64, %dx
+    \\   out %al, %dx
+    \\   mov $0x1000, %ecx
+    \\ .kd1: loop .kd1
+    \\   mov $0x04, %al
+    \\   mov $0x60, %dx
+    \\   out %al, %dx
+    \\   mov $0x4000000, %ecx
+    \\ .kdl: loop .kdl
+    \\   mov $0xED, %al
+    \\   mov $0x64, %dx
+    \\   out %al, %dx
+    \\   mov $0x1000, %ecx
+    \\ .kd2: loop .kd2
+    \\   xor %eax, %eax
+    \\   mov $0x60, %dx
+    \\   out %al, %dx
+    \\   mov $0x4000000, %ecx
+    \\ .kdl2: loop .kdl2
+    \\   ret
     \\ .section .rodata
     \\ .balign 8
     \\ .globl gdt64_ptr        // AP trampolines reuse this GDT for the long jump
@@ -182,20 +214,137 @@ comptime {
 // The program's Zig entry. The emitted program returns void from `main`;
 // anything it leaves on the console is the boot evidence. `mbi` is the
 // multiboot2 info block's physical address (EBX at _start).
+// PC-speaker stage beeps — bare-metal progress codes for hardware with
+// no serial and no visible fb: N short beeps after stage N of kmain.
+// PIT channel 2 (ports 0x42/0x43) gated through port 0x61 bit 1.
+fn outb(port: u16, val: u8) void {
+    asm volatile ("outb %[val], %[port]"
+        :
+        : [val] "{al}" (val),
+          [port] "{dx}" (port)
+        : .{ .memory = true });
+}
+fn inb(port: u16) u8 {
+    return asm volatile ("inb %[port], %[result]"
+        : [result] "={al}" (-> u8),
+        : [port] "{dx}" (port)
+        : .{ .memory = true });
+}
+fn spinCycles(n: u64) void {
+    var i: u64 = n;
+    while (i != 0) : (i -= 1) asm volatile ("pause");
+}
+fn kbc_drain() void {
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        if (inb(0x64) & 0x01 == 0) break;
+        _ = inb(0x60);
+    }
+}
+fn kbc_wait_ibf() void {
+    var i: usize = 0;
+    while (inb(0x64) & 0x02 != 0) : (i += 1) {
+        if (i > 1000000) return;
+    }
+}
+fn kbc_cmd(c: u8) void {
+    kbc_wait_ibf();
+    outb(0x64, c);
+}
+fn kbc_dat(d: u8) void {
+    kbc_wait_ibf();
+    outb(0x60, d);
+}
+fn kbc_ack() void {
+    var i: usize = 0;
+    while (i < 100000) : (i += 1) {
+        if (inb(0x64) & 0x01 != 0) {
+            if (inb(0x60) == 0xFA) return;
+        }
+    }
+}
+fn ledSet(mask: u8) void {
+    kbc_drain();
+    kbc_cmd(0xED); // set LEDs
+    kbc_ack();
+    kbc_dat(mask); // bit0 scroll, bit1 num, bit2 caps
+    kbc_ack();
+}
+fn blinkOnce() void {
+    ledSet(0x04); // caps on
+    spinCycles(40_000_000);
+    ledSet(0x00); // caps off
+    spinCycles(40_000_000);
+}
+fn beepStage(n: usize) void {
+    var i: usize = 0;
+    while (i < n) : (i += 1) blinkOnce();
+}
+
+// Force VGA text mode 3 (80x25) — makes 0xB8000 scannable regardless of
+// what graphics mode the firmware/loader left behind. Standard register
+// block; CRTC unlocked before writing, AC flip-flop reset first.
+fn vga_wr(idx_port: u16, data_port: u16, idx: u8, val: u8) void {
+    outb(idx_port, idx);
+    outb(data_port, val);
+}
+fn vga_text_mode() void {
+    const seq = [_]u8{ 0x03, 0x01, 0x0F, 0x00, 0x0E };
+    const crtc = [_]u8{
+        0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0xBF, 0x1F,
+        0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x9C, 0x8F,
+        0x28, 0x1F, 0x96, 0xB9, 0xA3, 0xFF,
+    };
+    const gc = [_]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0F, 0xFF };
+    const ac_tail = [_]u8{ 0x41, 0x00, 0x0F, 0x00, 0x00 };
+    outb(0x3C2, 0x63); // misc output
+    for (seq, 0..) |v, i| vga_wr(0x3C4, 0x3C5, @intCast(i), v);
+    // unlock CRTC: reg3 |= 0x80, reg0x11 &= ~0x80
+    outb(0x3D4, 0x03);
+    outb(0x3D5, inb(0x3D5) | 0x80);
+    outb(0x3D4, 0x11);
+    outb(0x3D5, inb(0x3D5) & ~@as(u8, 0x80));
+    for (crtc, 0..) |v, i| vga_wr(0x3D4, 0x3D5, @intCast(i), v);
+    for (gc, 0..) |v, i| vga_wr(0x3CE, 0x3CF, @intCast(i), v);
+    _ = inb(0x3DA); // reset AC flip-flop
+    var ai: u8 = 0;
+    while (ai < 16) : (ai += 1) {
+        outb(0x3C0, ai);
+        outb(0x3C0, ai);
+    }
+    for (ac_tail, 0..) |v, i| {
+        outb(0x3C0, @intCast(16 + i));
+        outb(0x3C0, v);
+    }
+    outb(0x3C0, 0x20); // re-enable display
+}
+
 export fn kmain(mbi: u32) callconv(.c) noreturn {
+    vga_text_mode();
+    beepStage(1); // kmain entry reached
     pmm.init(mbi); // frames live before anything allocates
+    beepStage(2);
     acpi.init(mbi); // RSDP + table directory — MADT/FACP names resolved
+    beepStage(3);
     pci.init();  // config-space scan while IF=0 — the dump can't
                  // interleave with IRQ prints; providers look up, never
                  // rescan
+    beepStage(4);
     ioapic.init(); // GSI routes armed (masked) — every later unmask
                    // takes the LAPIC door; PIC lines masked for good
+    beepStage(5);
     user.init(); // IDT + PIC + sti — interrupts live before the program
+    beepStage(6);
     kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
+    beepStage(7);
     mouse.init(); // 8042 aux channel — PS/2 mouse, IRQ12
+    beepStage(8);
     smp.init();  // INIT-SIPI-SIPI — APs ack + park before userland runs
+    beepStage(9);
     fb.init(mbi);
+    beepStage(10);
     comp.init(); // nativeCompositor — owns the scanout's scene from here
+    beepStage(11);
     aspace.selftest();
     prog.main();
     user.run();
