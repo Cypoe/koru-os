@@ -276,6 +276,47 @@ else
     bad "iso-initramfs: build failed (python/fsread/mkcpio/iso)"; tail -4 "$WORK/fsread.build" "$WORK/mkcpio.log" "$WORK/isorf.build" 2>/dev/null
 fi
 
+# usb-esp: the flash-stick rung — a raw GPT image whose FAT32 ESP
+# carries a standalone GRUB-EFI (modules+cfg embedded) plus the kernel
+# and the cpio module. QEMU attaches it as USB mass-storage behind
+# qemu-xhci so OVMF's own firmware does GPT->FAT32->BOOTX64.EFI — the
+# same reads a real stick gets, no storage driver on our side yet.
+# The cpio module then feeds the initramfs view and /bin/fsread runs
+# through it: userland off a stick with zero disk drivers.
+if [ -f "$OVMF_FD" ] \
+   && command -v python >/dev/null 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fsread-usb.elf" "$ROOT/koru/native/tests/fsread.c" > "$WORK/fsreadusb.build" 2>&1 \
+   && printf 'initramfs says hi\n' > "$WORK/hello-usb.txt" \
+   && printf 'motd from synthesized /etc\n' > "$WORK/motd-usb.txt" \
+   && python "$ROOT/scripts/mkcpio.py" "$WORKW/initramfs.cpio" \
+        "hello.txt=$WORKW/hello-usb.txt#hl" \
+        "hello2.txt=$WORKW/hello-usb.txt#hl" \
+        "etc/motd.txt=$WORKW/motd-usb.txt" \
+        "etc/alias.txt=->../hello.txt" \
+        "link.txt=->/hello.txt" \
+        "bin/fsread=$WORKW/fsread-usb.elf|755" > "$WORK/mkcpiousb.log" 2>&1 \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/initramfs/tests/boot_initramfs.k" > "$WORK/boot_initramfs-usb.k" \
+   && bash "$ROOT/scripts/build-usb.sh" "$WORK/boot_initramfs-usb.k" "$WORK/koru-usb.img" "$WORKW/initramfs.cpio" > "$WORK/usb.build" 2>&1; then
+    timeout 90 "$QEMU" \
+        -drive if=pflash,format=raw,readonly=on,file="$OVMF_FD" \
+        -drive "file=$WORK/koru-usb.img,format=raw,if=none,id=stick" \
+        -device qemu-xhci -device usb-storage,drive=stick \
+        -serial stdio -display none -m 128M -no-reboot \
+        > "$WORK/boot_usb.serial" 2>&1 || true
+    if grep -qF 'USB HARDDRIVE' "$WORK/boot_usb.serial" \
+       && grep -qF "GRUB: multiboot2 /boot/koru.elf" "$WORK/boot_usb.serial" \
+       && grep -qF 'pmm: mb2 module "initramfs.cpio"' "$WORK/boot_usb.serial" \
+       && grep -qF "ramfs: entries=" "$WORK/boot_usb.serial" \
+       && grep -qF "ramfs: exec /bin/fsread" "$WORK/boot_usb.serial" \
+       && grep -qF "RAMFS COMPLETE" "$WORK/boot_usb.serial"; then
+        ok "usb-esp: OVMF->USB-storage->GPT->FAT32 ESP->GRUB-EFI->mb2->cpio->child fs view, status=0"
+    else
+        bad "usb-esp: $(grep -aE 'BdsDxe|GRUB|pmm:|ramfs:|FSREAD|error' "$WORK/boot_usb.serial" | tail -12 | tr '\n' '|')"
+    fi
+else
+    bad "usb-esp: build failed (ovmf/python/fsread/mkcpio/build-usb)"; tail -4 "$WORK/fsreadusb.build" "$WORK/mkcpiousb.log" "$WORK/usb.build" 2>/dev/null
+fi
+
 # disk: installable media — a partitioned MBR image whose ext2 root
 # holds /boot/koru.elf + grub.cfg, GRUB i386-pc written into the MBR
 # and post-MBR gap by grub-install. The chain SeaBIOS -> boot.img ->

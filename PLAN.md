@@ -812,7 +812,17 @@ Also open, smaller:
   module → child `/bin/fsread` resolved 5 paths through the view
   (plain, abs+rel symlink, hardlink, synth dir), status=0. This is
   the storage-independent userland path a flash stick needs before
-  any disk driver exists. Still open
+  any disk driver exists. ~~flash-stick image~~ — landed:
+  `build-usb.sh` emits a raw GPT disk whose FAT32 ESP carries a
+  standalone GRUB-EFI (`grub-mkstandalone`, modules+grub.cfg on the
+  memdisk, removable `\\EFI\\BOOT\\BOOTX64.EFI` path) plus
+  `boot/koru.elf` and `module2` payloads; the menuentry re-roots
+  onto the ESP via `search --file /boot/koru.elf` so `$root` is the
+  FAT32 disk, not the memdisk. usb-esp gate row: OVMF pflash +
+  qemu-xhci usb-storage → BdsDxe booted the stick → GRUB-EFI →
+  mb2 → cpio module → initramfs view → `/bin/fsread` status=0 —
+  userland off a stick with zero storage drivers on our side.
+  Still open
   inside the cell: init that doesn't halt-on-exit
   ~~shutdown/reboot~~ — landed:
   `koruos_powerctl` door, S5 payload AML-decoded off FADT+DSDT, reboot
