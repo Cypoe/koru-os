@@ -1,0 +1,1005 @@
+// koruos/initramfs: a cpio-newc archive, unpacked into a RAM-backed
+// ChildFsOps view — the storage-independent userland rung.
+//
+// The archive arrives as an mb2 module (GRUB `module2`, QEMU -initrd,
+// Limine MODULE_PATH — the same tag-3 transport koruos/module proved).
+// Unpack is two-pass: pass 1 walks the archive counting entries and
+// sizing the name/link-target arena; pass 2 fills an entry table whose
+// file bytes POINT INTO THE RESERVED MODULE PAYLOAD — zero copy, and
+// the pages are pmm-reserved for boot's lifetime so the pointers are
+// stable by construction. This fs is READ-ONLY: every mutation verb
+// refuses EROFS by name. A writable RAM arm (tmpfs-shaped) is a later
+// provider, not a flag on this one.
+//
+// Object model, stated:
+//   - path is a view; entry index+1 is the inode number, stable for
+//     the mount's (boot's) lifetime;
+//   - hardlinks are honest: entries sharing cpio (devmajor,devminor,
+//     ino) with nlink>=2 and matching kind resolve to ONE canonical
+//     entry — same ino, same data, nlink counts the names (the
+//     kernel's own dedup rule);
+//   - symlinks resolve at lookup (stat semantics — the seam's
+//     stat/lstat honestly coincide), depth-capped at 8 -> ELOOP;
+//   - synthesized parent dirs (cpio may omit them) are real dir
+//     entries, mode 040755, uid/gid/mtime zero — explicit archive
+//     dir entries always win because real entries insert first;
+//   - device/fifo/socket nodes keep their real mode in stat but
+//     open() refuses ENODEV — there is no device layer behind them;
+//   - only cpio "070701" is served — the "070702" CRC variant refuses
+//     loudly rather than trusting an unchecked checksum.
+//
+// Scope, stated: linear path lookup (initramfs scale — a hashed index
+// is a later cell if profiles say so); no readdir verb exists in
+// ChildFsOps at all, so directory listing is a named gap for EVERY
+// provider, not this one's deficiency; no unmount — the fs is
+// boot-lifetime like the module pages it views.
+
+~import std/realize
+~import koruos/realize
+
+~std/realize:row(iface: koruos/initramfs) {
+    "stack": 16384,
+    "resources": "module: mb2 tag-3 payload (pmm-reserved); heap: malloc for entry table + name arena + handles",
+    "evidence": "V: koru/native/pmm.zig tag-3 walk; koru/native/user.zig ChildFsOps ABI + koru_spawn_elf rung-2",
+    "binds": [
+        { "arm": "koru-native", "mechanism": "native-runtime", "deltas": ["src:koru/native/pmm.zig", "src:koru/native/user.zig"] }
+    ]
+}
+
+const std = @import("std");
+
+extern fn koruos_mb2_module_count() c_uint;
+extern fn koruos_mb2_module(i: c_uint, out: *Mb2Module) c_int;
+extern fn koru_spawn_elf(image: [*]const u8, size: usize, rights: u64, fsv: ?*const ChildFsOps) c_int;
+extern fn malloc(size: usize) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) void;
+extern var child_arg0: [64]u8;
+
+const Mb2Module = extern struct { phys: u64, size: u64, name: [*:0]const u8 };
+
+// ---- the child's fs view (ABI mirror of koru/native/user.zig) -----------
+
+const ChildFsOps = extern struct {
+    ctx: ?*anyopaque,
+    open: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64,
+    read: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64,
+    read_at: *const fn (ctx: ?*anyopaque, h: u64, off: u64, dst: [*]u8, len: usize) callconv(.c) i64,
+    seek: *const fn (ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64,
+    stat: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
+    close: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) void,
+    dup: *const fn (ctx: ?*anyopaque, h: u64) callconv(.c) i64,
+    key: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    write: *const fn (ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) i64,
+    rename: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
+    unlink: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    open_key: *const fn (ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64,
+    mkdir: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    rmdir: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    link: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
+    mknod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
+    stat_path: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64,
+};
+
+// ---- object model ---------------------------------------------------------
+
+const Kind = enum(u8) { reg, dir, link, other };
+const NIL: u32 = 0xFFFFFFFF;
+const MAX_DEPTH: u32 = 8;
+const DEV_BASE: u32 = 0x52410000; // "RA\0\0" — per-mount dev_id = base+seq
+
+const Ent = struct {
+    path: [*:0]const u8, // canonical "/a/b" in the arena; "/" is root
+    parent: u32,         // entry index of the parent dir, NIL for root
+    ino: u32,            // index+1, assigned after the table freezes
+    kind: Kind,
+    mode: u32,           // full st_mode (type|perms) from cpio / synthesized
+    uid: u32,
+    gid: u32,
+    mtime: u32,
+    rdev: u32,           // encoded device numbers for kind=other
+    nlink: u32,          // computed post-build: 1+aliases for files, 2+subdirs for dirs
+    data: ?[*]const u8,  // reg bytes — phys ptr into the reserved module
+    size: u64,
+    link: ?[*:0]const u8, // symlink target, arena NUL-terminated
+};
+
+const Alias = struct { path: [*:0]const u8, canon: u32 }; // hardlink name -> canonical ent
+const SeenKey = struct { ino: u32, dmaj: u32, dmin: u32, ent: u32 };
+
+const OpenFile = struct { ent: u32, pos: u64, refs: u32, append: bool };
+
+const Ramfs = struct {
+    dev_id: u32,
+    ents: [*]Ent,
+    nents: usize,
+    cap: usize,
+    aliases: [*]Alias,
+    naliases: usize,
+    alias_cap: usize,
+    arena: [*]u8,
+    arena_len: usize,
+    arena_used: usize,
+    vfs: ChildFsOps,
+};
+
+var dev_seq: u32 = 0;
+
+// ---- cpio-newc -------------------------------------------------------------
+// Entry: 110-byte header (magic "070701" + 13 x 8-hex fields:
+// ino mode uid gid nlink mtime filesize devmaj devmin rdevmaj rdevmin
+// namesize check), then a name field of N_ALIGN(namesize) bytes where
+// N_ALIGN(l) = ((l+1) & ~3) + 2 — the +2 pays the 110-byte header's own
+// 2-byte misalignment so file data always lands 4-aligned — then data,
+// then the whole entry pads to 4. "TRAILER!!!" ends the archive; only
+// "070701" is served (the "070702" CRC variant refuses by name).
+
+const Parse = union(enum) { ent: CpioEnt, end: void, bad: void };
+
+const CpioEnt = struct {
+    ino: u32, mode: u32, uid: u32, gid: u32, nlink: u32, mtime: u32,
+    size: u64, dmaj: u32, dmin: u32, rdevmaj: u32, rdevmin: u32,
+    name: []const u8,   // namesize-1 bytes (NUL stripped)
+    data: []const u8,   // size bytes at the aligned offset
+    next: usize,        // offset of the following entry
+};
+
+fn hex8(b: [*]const u8, off: usize) u32 {
+    var v: u32 = 0;
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        const c = b[off + i];
+        const d: u32 = if (c >= '0' and c <= '9') c - '0'
+            else if (c >= 'a' and c <= 'f') c - 'a' + 10
+            else if (c >= 'A' and c <= 'F') c - 'A' + 10
+            else return 0xFFFFFFFF;
+        v = (v << 4) | d;
+    }
+    return v;
+}
+
+fn nalignName(n: usize) usize {
+    return ((n + 1) / 4) * 4 + 2;
+}
+
+fn cpioNext(buf: [*]const u8, total: usize, off: usize) Parse {
+    if (off + 110 > total) return .end;
+    const magic = buf[off..][0..6];
+    if (std.mem.eql(u8, magic, "070702")) return .bad; // CRC variant — refuse, don't trust
+    if (!std.mem.eql(u8, magic, "070701")) return .end;
+    const namesize = hex8(buf, off + 94);
+    const size = @as(u64, hex8(buf, off + 54));
+    if (namesize == 0 or namesize > 4096 or hex8(buf, off + 102) == 0xFFFFFFFF) return .bad;
+    const nf = nalignName(namesize);
+    const noff = off + 110;
+    if (noff + nf > total) return .bad;
+    var nl: usize = namesize;
+    if (buf[noff + nl - 1] == 0) nl -= 1; // strip the NUL
+    const doff = noff + nf;
+    if (doff + @as(usize, @intCast(size)) > total) return .bad;
+    const next0 = doff + @as(usize, @intCast(size));
+    return .{ .ent = .{
+        .ino = hex8(buf, off + 6),
+        .mode = hex8(buf, off + 14),
+        .uid = hex8(buf, off + 22),
+        .gid = hex8(buf, off + 30),
+        .nlink = hex8(buf, off + 38),
+        .mtime = hex8(buf, off + 46),
+        .size = size,
+        .dmaj = hex8(buf, off + 62),
+        .dmin = hex8(buf, off + 70),
+        .rdevmaj = hex8(buf, off + 78),
+        .rdevmin = hex8(buf, off + 86),
+        .name = buf[noff..][0..nl],
+        .data = buf[doff..][0..@intCast(size)],
+        .next = (next0 + 3) & ~@as(usize, 3),
+    } };
+}
+
+fn kindOf(mode: u32) Kind {
+    return switch (mode & 0o170000) {
+        0o100000 => .reg,
+        0o040000 => .dir,
+        0o120000 => .link,
+        else => .other,
+    };
+}
+
+// makedev: linux's device encoding — (maj<<8)|min for the small range
+// our archives carry; computed in u64 so the high-bit form can't wrap.
+fn makedev(maj: u32, min: u32) u32 {
+    const v: u64 = (@as(u64, maj & 0xFFF) << 8) | @as(u64, min & 0xFF) |
+        (@as(u64, maj & ~@as(u32, 0xFFF)) << 32) | (@as(u64, min & ~@as(u32, 0xFF)) << 12);
+    return @truncate(v);
+}
+
+// ---- path canonicalization -------------------------------------------------
+// Components are walked, never string-matched: "." drops, ".." pops the
+// resolved prefix, empties (// or a leading /) skip. The result is the
+// canonical "/a/b" form every stored path uses. Depth is capped — a
+// deeper path is refused, not truncated.
+
+fn canonPath(raw: []const u8, out: *[512]u8) ?usize {
+    var comps: [64][]const u8 = undefined;
+    var nc: usize = 0;
+    var i: usize = 0;
+    while (i < raw.len) {
+        while (i < raw.len and raw[i] == '/') i += 1;
+        const s = i;
+        while (i < raw.len and raw[i] != '/') i += 1;
+        const c = raw[s..i];
+        if (c.len == 0) continue;
+        if (c.len == 1 and c[0] == '.') continue;
+        if (c.len == 2 and c[0] == '.' and c[1] == '.') {
+            if (nc > 0) nc -= 1;
+            continue;
+        }
+        if (nc == comps.len) return null;
+        comps[nc] = c;
+        nc += 1;
+    }
+    if (nc == 0) {
+        out[0] = '/';
+        out[1] = 0;
+        return 1;
+    }
+    var n: usize = 0;
+    for (comps[0..nc]) |c| {
+        out[n] = '/';
+        n += 1;
+        @memcpy(out[n..][0..c.len], c);
+        n += c.len;
+    }
+    out[n] = 0;
+    return n;
+}
+
+// arena: bump-allocate a NUL-terminated copy; returns null when the
+// pass-1 sizing lied (a build bug — refuse, never overflow).
+fn arenaPut(fs: *Ramfs, s: []const u8) ?[*:0]const u8 {
+    const need = s.len + 1;
+    if (fs.arena_used + need > fs.arena_len) return null;
+    const p = fs.arena + fs.arena_used;
+    @memcpy(p[0..s.len], s);
+    p[s.len] = 0;
+    fs.arena_used += need;
+    return @ptrCast(p);
+}
+
+fn findEnt(fs: *Ramfs, path: [*:0]const u8) ?u32 {
+    const want = std.mem.sliceTo(path, 0);
+    for (fs.ents[0..fs.nents], 0..) |*e, i| {
+        if (std.mem.eql(u8, std.mem.sliceTo(e.path, 0), want)) return @intCast(i);
+    }
+    return null;
+}
+
+fn findAlias(fs: *Ramfs, path: [*:0]const u8) ?u32 {
+    const want = std.mem.sliceTo(path, 0);
+    for (fs.aliases[0..fs.naliases]) |*a| {
+        if (std.mem.eql(u8, std.mem.sliceTo(a.path, 0), want)) return a.canon;
+    }
+    return null;
+}
+
+// resolve: component walk from root with symlink follow. Returns the
+// canonical entry index — hardlink aliases resolve through to canon.
+const Res = union(enum) { ent: u32, err: i64 };
+
+fn resolveZ(fs: *Ramfs, p: [*:0]const u8, depth: u32) Res {
+    if (depth >= MAX_DEPTH) return .{ .err = -40 }; // ELOOP
+    var cur: u32 = 0; // root
+    var i: usize = 0;
+    while (nextComp(p, &i)) |comp| {
+        if (compEq(comp, ".")) continue;
+        if (compEq(comp, "..")) {
+            const par = fs.ents[cur].parent;
+            if (par != NIL) cur = par;
+            continue;
+        }
+        var cb: [320]u8 = undefined;
+        const clen = joinChild(std.mem.sliceTo(fs.ents[cur].path, 0), comp, &cb) orelse
+            return .{ .err = -36 }; // ENAMETOOLONG
+        cb[clen] = 0;
+        const cp: [*:0]const u8 = @ptrCast(&cb);
+        var ei = findEnt(fs, cp);
+        if (ei == null) {
+            if (findAlias(fs, cp)) |canon| {
+                ei = canon;
+            } else return .{ .err = -2 }; // ENOENT
+        }
+        const e = &fs.ents[ei.?];
+        const last = !moreComps(p, i);
+        if (e.kind == .link) {
+            // splice: link target + the unconsumed remainder, recurse.
+            const rem = std.mem.sliceTo(p[i..], 0);
+            const tgt = std.mem.sliceTo(e.link.?, 0);
+            const parpath = if (e.parent == NIL) "/" else std.mem.sliceTo(fs.ents[e.parent].path, 0);
+            var nb: [640]u8 = undefined;
+            const total = splicePath(parpath, tgt, rem, &nb) orelse return .{ .err = -36 };
+            nb[total] = 0;
+            const np: [*:0]const u8 = @ptrCast(&nb);
+            return resolveZ(fs, np, depth + 1);
+        }
+        if (!last and e.kind != .dir) return .{ .err = -20 }; // ENOTDIR
+        cur = ei.?;
+    }
+    return .{ .ent = cur };
+}
+
+fn nextComp(p: [*:0]const u8, i: *usize) ?[]const u8 {
+    var j = i.*;
+    while (p[j] == '/') j += 1;
+    if (p[j] == 0) {
+        i.* = j;
+        return null;
+    }
+    const s = j;
+    while (p[j] != 0 and p[j] != '/') j += 1;
+    i.* = j;
+    return p[s..j];
+}
+
+fn moreComps(p: [*:0]const u8, i: usize) bool {
+    var j = i;
+    while (p[j] == '/') j += 1;
+    return p[j] != 0;
+}
+
+fn compEq(c: []const u8, lit: []const u8) bool {
+    return std.mem.eql(u8, c, lit);
+}
+
+// joinChild: parent "/a/b" + comp "c" -> "/a/b/c"; parent "/" + "c" -> "/c".
+fn joinChild(parent: []const u8, comp: []const u8, out: *[320]u8) ?usize {
+    const need = if (std.mem.eql(u8, parent, "/"))
+        1 + comp.len
+    else
+        parent.len + 1 + comp.len;
+    if (need >= out.len) return null;
+    var n: usize = 0;
+    if (!std.mem.eql(u8, parent, "/")) {
+        @memcpy(out[0..parent.len], parent);
+        n = parent.len;
+        out[n] = '/';
+        n += 1;
+    } else {
+        out[0] = '/';
+        n = 1;
+    }
+    @memcpy(out[n..][0..comp.len], comp);
+    n += comp.len;
+    return n;
+}
+
+// splicePath: absolute target -> target+rem; relative -> parentdir+
+// target+rem. rem already begins with '/' or is empty.
+fn splicePath(parentdir: []const u8, target: []const u8, rem: []const u8, out: *[640]u8) ?usize {
+    var n: usize = 0;
+    if (target.len > 0 and target[0] == '/') {
+        if (target.len + rem.len >= out.len) return null;
+        @memcpy(out[0..target.len], target);
+        n = target.len;
+    } else {
+        const need = if (std.mem.eql(u8, parentdir, "/"))
+            1 + target.len + rem.len
+        else
+            parentdir.len + 1 + target.len + rem.len;
+        if (need >= out.len) return null;
+        if (std.mem.eql(u8, parentdir, "/")) {
+            out[0] = '/';
+            n = 1;
+        } else {
+            @memcpy(out[0..parentdir.len], parentdir);
+            n = parentdir.len;
+            out[n] = '/';
+            n += 1;
+        }
+        @memcpy(out[n..][0..target.len], target);
+        n += target.len;
+    }
+    @memcpy(out[n..][0..rem.len], rem);
+    n += rem.len;
+    return n;
+}
+
+// resolve a slice path (tor boundary) through a stack NUL buffer.
+fn resolveSlice(fs: *Ramfs, path: []const u8) Res {
+    var b: [300]u8 = undefined;
+    if (path.len >= b.len) return .{ .err = -36 };
+    @memcpy(b[0..path.len], path);
+    b[path.len] = 0;
+    return resolveZ(fs, @ptrCast(&b), 0);
+}
+
+// ---- stat fill ---------------------------------------------------------------
+
+fn fillStat(fs: *Ramfs, e: *Ent, dst: [*]u8) void {
+    for (0..144) |i| dst[i] = 0;
+    const w64 = struct {
+        fn s(b: [*]u8, off: usize, v: u64) void {
+            for (0..8) |i| b[off + i] = @truncate(v >> @intCast(i * 8));
+        }
+        fn s32(b: [*]u8, off: usize, v: u32) void {
+            for (0..4) |i| b[off + i] = @truncate(v >> @intCast(i * 8));
+        }
+    };
+    w64.s(dst, 0, fs.dev_id);             // st_dev
+    w64.s(dst, 8, e.ino);                 // st_ino
+    w64.s(dst, 16, e.nlink);              // st_nlink — computed, real
+    w64.s32(dst, 24, e.mode);             // st_mode — the entry's own
+    w64.s32(dst, 28, e.uid);              // st_uid
+    w64.s32(dst, 32, e.gid);              // st_gid
+    w64.s(dst, 40, e.rdev);               // st_rdev (0 for non-devices)
+    w64.s(dst, 48, e.size);               // st_size
+    w64.s(dst, 56, 4096);                 // st_blksize
+    w64.s(dst, 64, (e.size + 511) / 512); // st_blocks
+    w64.s(dst, 88, e.mtime);              // st_mtim.tv_sec
+}
+
+// ---- build -------------------------------------------------------------------
+
+fn synthDir(fs: *Ramfs, path_z: [*:0]const u8) bool {
+    if (fs.nents >= fs.cap) return false;
+    const p = arenaPut(fs, std.mem.sliceTo(path_z, 0)) orelse return false;
+    const e = &fs.ents[fs.nents];
+    e.* = .{
+        .path = p, .parent = NIL, .ino = 0, .kind = .dir,
+        .mode = 0o040755, .uid = 0, .gid = 0, .mtime = 0, .rdev = 0,
+        .nlink = 2, .data = null, .size = 0, .link = null,
+    };
+    fs.nents += 1;
+    return true;
+}
+
+// ensureAncestors: every proper prefix of path must name a dir —
+// synthesize the misses (explicit archive entries always win because
+// real entries are inserted before this pass runs; a synthesized
+// dir's own ancestors were ensured by the call that created it).
+fn ensureAncestors(fs: *Ramfs, path_z: [*:0]const u8) bool {
+    const p = std.mem.sliceTo(path_z, 0);
+    if (p.len <= 1) return true; // root or empty
+    var i: usize = 1; // skip leading '/'
+    while (i < p.len) : (i += 1) {
+        const j = std.mem.indexOfScalarPos(u8, p, i, '/') orelse p.len;
+        if (j < p.len) {
+            var pb: [300]u8 = undefined;
+            if (j >= pb.len) return false;
+            @memcpy(pb[0..j], p[0..j]);
+            pb[j] = 0;
+            const pz: [*:0]const u8 = @ptrCast(&pb);
+            if (findEnt(fs, pz) == null and findAlias(fs, pz) == null) {
+                if (!synthDir(fs, pz)) return false;
+            }
+        }
+        i = j;
+    }
+    return true;
+}
+
+fn addEnt(fs: *Ramfs, h: *const CpioEnt, path_z: [*:0]const u8) bool {
+    if (fs.nents >= fs.cap) return false;
+    const p = arenaPut(fs, std.mem.sliceTo(path_z, 0)) orelse return false;
+    const k = kindOf(h.mode);
+    var data: ?[*]const u8 = null;
+    var size: u64 = 0;
+    var link: ?[*:0]const u8 = null;
+    if (k == .reg) {
+        data = h.data.ptr; // already a phys pointer into the module
+        size = h.size;
+    } else if (k == .link) {
+        link = arenaPut(fs, h.data) orelse return false;
+        size = h.data.len;
+    }
+    const e = &fs.ents[fs.nents];
+    e.* = .{
+        .path = p, .parent = NIL, .ino = 0, .kind = k,
+        .mode = h.mode & 0o177777, .uid = h.uid, .gid = h.gid,
+        .mtime = h.mtime, .rdev = makedev(h.rdevmaj, h.rdevmin),
+        .nlink = 1, .data = data, .size = size, .link = link,
+    };
+    fs.nents += 1;
+    return true;
+}
+
+fn build(fs: *Ramfs, mod_phys: u64, mod_size: u64) bool {
+    const buf: [*]const u8 = @ptrFromInt(@as(usize, @intCast(mod_phys)));
+    const total: usize = @intCast(mod_size);
+    // pass 1: count entries, size arena (paths + link targets + every
+    // possible synthesized prefix — over-count is safe, under-count
+    // refuses), capacity for ents + aliases.
+    var nent: usize = 0;
+    var nalias: usize = 0;
+    var arena_need: usize = 16; // root "/" + slack
+    var comps_total: usize = 0;
+    var off: usize = 0;
+    var saw_trailer = false;
+    while (true) {
+        switch (cpioNext(buf, total, off)) {
+            .end => break,
+            .bad => return false,
+            .ent => |h| {
+                if (std.mem.eql(u8, h.name, "TRAILER!!!")) {
+                    saw_trailer = true;
+                    break;
+                }
+                var cb: [512]u8 = undefined;
+                const cn = canonPath(h.name, &cb) orelse return false;
+                cb[cn] = 0;
+                const cpath: [*:0]const u8 = @ptrCast(&cb);
+                var nc: usize = 0;
+                var ci: usize = 0;
+                while (nextComp(cpath, &ci)) |_| nc += 1;
+                comps_total += nc;
+                nent += 1;
+                arena_need += cn + 1;
+                // ancestor prefix bytes (over-counted across entries — safe)
+                const cs = std.mem.sliceTo(cpath, 0);
+                var pi: usize = 1;
+                while (pi < cs.len) {
+                    const pj = std.mem.indexOfScalarPos(u8, cs, pi, '/') orelse cs.len;
+                    if (pj < cs.len) arena_need += pj + 1;
+                    pi = pj + 1;
+                }
+                if (kindOf(h.mode) == .link) arena_need += h.data.len + 1;
+                if (h.nlink >= 2) nalias += 1;
+                off = h.next;
+            },
+        }
+        if (saw_trailer) break;
+    }
+    if (!saw_trailer) return false; // truncated archive — refuse, don't half-mount
+    const entcap = nent + comps_total + 8;
+    const em = malloc(entcap * @sizeOf(Ent)) orelse return false;
+    const am = malloc(@max(nalias, 1) * @sizeOf(Alias)) orelse {
+        free(em);
+        return false;
+    };
+    const nm = malloc(arena_need) orelse {
+        free(am);
+        free(em);
+        return false;
+    };
+    fs.ents = @ptrCast(@alignCast(em));
+    fs.cap = entcap;
+    fs.nents = 0;
+    fs.aliases = @ptrCast(@alignCast(am));
+    fs.alias_cap = @max(nalias, 1);
+    fs.naliases = 0;
+    fs.arena = @ptrCast(nm);
+    fs.arena_len = arena_need;
+    fs.arena_used = 0;
+    if (!synthDir(fs, "/")) return false; // root first — every path resolves through it
+    // pass 2: real entries first (explicit dir modes win), then aliases,
+    // then synthesized ancestors over everything.
+    off = 0;
+    var seen: [256]SeenKey = undefined;
+    var nseen: usize = 0;
+    while (true) {
+        switch (cpioNext(buf, total, off)) {
+            .end, .bad => return false,
+            .ent => |h| {
+                if (std.mem.eql(u8, h.name, "TRAILER!!!")) break;
+                var cb: [512]u8 = undefined;
+                const cn = canonPath(h.name, &cb) orelse return false;
+                cb[cn] = 0;
+                const cpath: [*:0]const u8 = @ptrCast(&cb);
+                const k = kindOf(h.mode);
+                // duplicate canonical path — malformed archive, refuse
+                if (findEnt(fs, cpath) != null or findAlias(fs, cpath) != null) return false;
+                // hardlink dedup: nlink>=2 + seen (dmaj,dmin,ino) + same
+                // kind + different name -> alias of the canonical ent
+                if (h.nlink >= 2 and k != .dir) {
+                    var dup: ?u32 = null;
+                    for (seen[0..nseen]) |s| {
+                        if (s.ino == h.ino and s.dmaj == h.dmaj and s.dmin == h.dmin and
+                            fs.ents[s.ent].kind == k and
+                            !std.mem.eql(u8, std.mem.sliceTo(fs.ents[s.ent].path, 0), std.mem.sliceTo(cpath, 0)))
+                        {
+                            dup = s.ent;
+                            break;
+                        }
+                    }
+                    if (dup) |canon| {
+                        if (fs.naliases >= fs.alias_cap) return false;
+                        const ap = arenaPut(fs, std.mem.sliceTo(cpath, 0)) orelse return false;
+                        fs.aliases[fs.naliases] = .{ .path = ap, .canon = canon };
+                        fs.naliases += 1;
+                        off = h.next;
+                        continue;
+                    }
+                    if (nseen < seen.len) {
+                        seen[nseen] = .{ .ino = h.ino, .dmaj = h.dmaj, .dmin = h.dmin, .ent = @intCast(fs.nents) };
+                        nseen += 1;
+                    }
+                }
+                if (!addEnt(fs, &h, cpath)) return false;
+                off = h.next;
+            },
+        }
+    }
+    return finishBuild(fs);
+}
+
+fn finishBuild(fs: *Ramfs) bool {
+    // synthesized ancestors over every real path AND alias path
+    for (fs.ents[1..fs.nents]) |*e| {
+        if (!ensureAncestors(fs, e.path)) return false;
+    }
+    for (fs.aliases[0..fs.naliases]) |a| {
+        if (!ensureAncestors(fs, a.path)) return false;
+    }
+    // freeze: parent indices, inos, nlink counts
+    for (fs.ents[0..fs.nents], 0..) |*e, i| {
+        e.ino = @intCast(i + 1);
+        if (i == 0) {
+            e.parent = NIL;
+            continue;
+        }
+        const p = std.mem.sliceTo(e.path, 0);
+        const lastSlash = std.mem.lastIndexOfScalar(u8, p, '/') orelse 0;
+        if (lastSlash == 0) {
+            e.parent = 0; // "/x" -> root
+        } else {
+            var pb: [300]u8 = undefined;
+            if (lastSlash >= pb.len) return false;
+            @memcpy(pb[0..lastSlash], p[0..lastSlash]);
+            pb[lastSlash] = 0;
+            e.parent = findEnt(fs, @ptrCast(&pb)) orelse return false;
+        }
+    }
+    // nlink: files = 1 + alias count; dirs = 2 + subdir count
+    for (fs.ents[0..fs.nents], 0..) |*e, i| {
+        const ei: u32 = @intCast(i);
+        if (e.kind == .dir) {
+            var sub: u32 = 0;
+            for (fs.ents[0..fs.nents]) |*c| {
+                if (c.kind == .dir and c.parent == ei) sub += 1;
+            }
+            e.nlink = 2 + sub;
+        } else {
+            var al: u32 = 1;
+            for (fs.aliases[0..fs.naliases]) |a| {
+                if (a.canon == ei) al += 1;
+            }
+            e.nlink = al;
+        }
+    }
+    return true;
+}
+
+// ---- ChildFsOps verbs ---------------------------------------------------------
+
+fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const r = resolveZ(fs, path, 0);
+    const ei = switch (r) {
+        .ent => |x| x,
+        .err => |e| {
+            if (e == -2 and (flags & 0o100) != 0) return -30; // O_CREAT on ROFS
+            return e;
+        },
+    };
+    if ((flags & 0o200) != 0 and (flags & 0o100) != 0) return -17; // O_EXCL|O_CREAT
+    const e = &fs.ents[ei];
+    if (e.kind == .dir) return -21; // EISDIR
+    if (e.kind != .reg) return -6;  // ENODEV — no device layer
+    // write intent on a read-only fs: accmode W/RW, O_TRUNC, O_APPEND
+    if ((flags & 3) != 0 or (flags & 0o1000) != 0 or (flags & 0o2000) != 0)
+        return -30; // EROFS
+    const h = malloc(@sizeOf(OpenFile)) orelse return -12;
+    const fp: *OpenFile = @ptrCast(@alignCast(h));
+    fp.* = .{
+        .ent = ei, .pos = if ((flags & 0o2000) != 0) e.size else 0,
+        .refs = 1, .append = (flags & 0o2000) != 0,
+    };
+    return @intCast(@intFromPtr(fp));
+}
+
+fn cfRead(ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    const e = &fs.ents[fp.ent];
+    const d = e.data orelse return 0;
+    const off: usize = @intCast(fp.pos);
+    if (fp.pos >= e.size) return 0;
+    const n: usize = @intCast(@min(e.size - fp.pos, @as(u64, @intCast(len))));
+    @memcpy(dst[0..n], d[off..][0..n]);
+    fp.pos += n;
+    return @intCast(n);
+}
+
+fn cfReadAt(ctx: ?*anyopaque, h: u64, off: u64, dst: [*]u8, len: usize) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    const e = &fs.ents[fp.ent];
+    const d = e.data orelse return 0;
+    if (off >= e.size) return 0;
+    const n: usize = @intCast(@min(e.size - off, @as(u64, @intCast(len))));
+    @memcpy(dst[0..n], d[@intCast(off)..][0..n]);
+    return @intCast(n);
+}
+
+fn cfSeek(ctx: ?*anyopaque, h: u64, off: i64, whence: u32) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    const e = &fs.ents[fp.ent];
+    const base: i64 = switch (whence) {
+        0 => 0,
+        1 => @intCast(fp.pos),
+        2 => @intCast(e.size),
+        else => return -22, // EINVAL
+    };
+    const np = base + off;
+    if (np < 0) return -22;
+    fp.pos = @intCast(np);
+    return np;
+}
+
+fn cfStat(ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    fillStat(fs, &fs.ents[fp.ent], dst);
+    return 0;
+}
+
+fn cfClose(ctx: ?*anyopaque, h: u64) callconv(.c) void {
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    _ = ctx;
+    if (fp.refs > 0) fp.refs -= 1;
+    if (fp.refs == 0) free(fp);
+}
+
+fn cfDup(ctx: ?*anyopaque, h: u64) callconv(.c) i64 {
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    _ = ctx;
+    fp.refs += 1;
+    return @bitCast(h);
+}
+
+fn cfKey(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const r = resolveZ(fs, path, 0);
+    const ei = switch (r) {
+        .ent => |x| x,
+        .err => |e| return e,
+    };
+    return @bitCast((@as(u64, fs.dev_id) << 32) | fs.ents[ei].ino);
+}
+
+fn cfOpenKey(ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    if (key >> 32 != fs.dev_id) return -18; // EXDEV
+    const want_ino: u32 = @intCast(key & 0xFFFFFFFF);
+    var found: ?u32 = null;
+    for (fs.ents[0..fs.nents], 0..) |*e, i| {
+        if (e.ino == want_ino) {
+            found = @intCast(i);
+            break;
+        }
+    }
+    const ei = found orelse return -2; // ENOENT
+    const e = &fs.ents[ei];
+    if (e.kind == .dir) return -21;
+    if (e.kind != .reg) return -6;
+    if ((flags & 3) != 0 or (flags & 0o1000) != 0 or (flags & 0o2000) != 0 or (flags & 0o100) != 0)
+        return -30; // EROFS — openobj never creates
+    const h = malloc(@sizeOf(OpenFile)) orelse return -12;
+    const fp: *OpenFile = @ptrCast(@alignCast(h));
+    fp.* = .{ .ent = ei, .pos = 0, .refs = 1, .append = false };
+    return @intCast(@intFromPtr(fp));
+}
+
+fn cfWrite(ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) i64 {
+    _ = ctx;
+    _ = h;
+    _ = src;
+    _ = len;
+    return -30; // EROFS
+}
+
+fn cfRename(ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    // honest errno order: resolve what exists first, then EROFS
+    _ = new;
+    const r = resolveZ(fs, old, 0);
+    switch (r) {
+        .ent => return -30,
+        .err => |e| return e,
+    }
+}
+
+fn cfUnlink(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const r = resolveZ(fs, path, 0);
+    switch (r) {
+        .ent => return -30,
+        .err => |e| return e,
+    }
+}
+
+fn cfMkdir(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const r = resolveZ(fs, path, 0);
+    switch (r) {
+        .ent => return -17, // EEXIST
+        .err => |e| return if (e == -2) -30 else e, // missing -> EROFS (can't create)
+    }
+}
+
+fn cfRmdir(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const r = resolveZ(fs, path, 0);
+    switch (r) {
+        .ent => return -30,
+        .err => |e| return e,
+    }
+}
+
+fn cfLink(ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    _ = new;
+    const r = resolveZ(fs, old, 0);
+    switch (r) {
+        .ent => return -30,
+        .err => |e| return e,
+    }
+}
+
+fn cfMknod(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const r = resolveZ(fs, path, 0);
+    switch (r) {
+        .ent => return -17,
+        .err => |e| return if (e == -2) -30 else e,
+    }
+}
+
+fn cfStatPath(ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const r = resolveZ(fs, path, 0);
+    const ei = switch (r) {
+        .ent => |x| x,
+        .err => |e| return e,
+    };
+    fillStat(fs, &fs.ents[ei], dst);
+    return 0;
+}
+
+fn childFs(fs: *Ramfs) ChildFsOps {
+    return .{
+        .ctx = @ptrCast(fs),
+        .open = cfOpen, .read = cfRead, .read_at = cfReadAt,
+        .seek = cfSeek, .stat = cfStat, .close = cfClose,
+        .dup = cfDup, .key = cfKey, .write = cfWrite,
+        .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey,
+        .mkdir = cfMkdir, .rmdir = cfRmdir, .link = cfLink,
+        .mknod = cfMknod, .stat_path = cfStatPath,
+    };
+}
+
+// ---- module lookup ------------------------------------------------------------
+
+fn findModule(name: []const u8) ?Mb2Module {
+    const n = koruos_mb2_module_count();
+    var i: c_uint = 0;
+    while (i < n) : (i += 1) {
+        var m = Mb2Module{ .phys = 0, .size = 0, .name = undefined };
+        if (koruos_mb2_module(i, &m) != 0) continue;
+        const mname = std.mem.sliceTo(m.name, 0);
+        const base = if (std.mem.lastIndexOfScalar(u8, mname, '/')) |s| mname[s + 1 ..] else mname;
+        if (std.mem.eql(u8, mname, name) or std.mem.eql(u8, base, name)) return m;
+    }
+    return null;
+}
+
+// ---- tors -----------------------------------------------------------------------
+
+// A byte buffer handed back across a tor boundary (same shape as ext2's).
+pub const Buf = extern struct { ptr: [*]u8, len: usize };
+
+~pub tor open { module: string }
+| ok { fs: *Ramfs, entries: u32 }
+| refused string
+
+~proc open|zig {
+    const m = findModule(module) orelse
+        return .{ .refused = "no module by that name" };
+    const mraw = malloc(@sizeOf(Ramfs)) orelse return .{ .refused = "out of memory (fs)" };
+    const fs: *Ramfs = @ptrCast(@alignCast(mraw));
+    fs.* = .{
+        .dev_id = DEV_BASE + dev_seq, .ents = undefined, .nents = 0,
+        .cap = 0, .aliases = undefined, .naliases = 0, .alias_cap = 0,
+        .arena = undefined, .arena_len = 0, .arena_used = 0,
+        .vfs = undefined,
+    };
+    dev_seq += 1;
+    if (!build(fs, m.phys, m.size)) {
+        free(mraw);
+        return .{ .refused = "cpio-newc parse failed or archive malformed" };
+    }
+    fs.vfs = childFs(fs);
+    return .{ .ok = .{ .fs = fs, .entries = @intCast(fs.nents) } };
+}
+
+~[retain]pub tor stat { fs: *Ramfs, path: string }
+| ok { fs: *Ramfs, ino: u32, mode: u32, size: u64, nlink: u32 }
+| refused string
+
+~proc stat|zig {
+    const r = resolveSlice(fs, path);
+    const ei = switch (r) {
+        .ent => |x| x,
+        .err => |e| return .{ .refused = blkErr(e) },
+    };
+    const en = &fs.ents[ei];
+    return .{ .ok = .{ .fs = fs, .ino = en.ino, .mode = en.mode, .size = en.size, .nlink = en.nlink } };
+}
+
+~[retain]pub tor lookup { fs: *Ramfs, path: string }
+| ok { fs: *Ramfs, ino: u32 }
+| refused string
+
+~proc lookup|zig {
+    const r = resolveSlice(fs, path);
+    return switch (r) {
+        .ent => |ei| .{ .ok = .{ .fs = fs, .ino = fs.ents[ei].ino } },
+        .err => |e| .{ .refused = blkErr(e) },
+    };
+}
+
+// read: path → bytes. The Buf points INTO the reserved module —
+// boot-stable, borrowed, never freed by the caller.
+~[retain]pub tor read { fs: *Ramfs, path: string }
+| ok { fs: *Ramfs, buf: *Buf }
+| refused string
+
+~proc read|zig {
+    const r = resolveSlice(fs, path);
+    const ei = switch (r) {
+        .ent => |x| x,
+        .err => |e| return .{ .refused = blkErr(e) },
+    };
+    const en = &fs.ents[ei];
+    if (en.kind != .reg) return .{ .refused = "not a regular file" };
+    const bp = malloc(@sizeOf(Buf)) orelse return .{ .refused = "out of memory" };
+    const b: *Buf = @ptrCast(@alignCast(bp));
+    b.* = .{ .ptr = @constCast(en.data orelse return .{ .refused = "no file data" }), .len = @intCast(en.size) };
+    return .{ .ok = .{ .fs = fs, .buf = b } };
+}
+
+fn blkErr(e: i64) []const u8 {
+    return switch (e) {
+        -2 => "no such path",
+        -20 => "not a directory",
+        -21 => "is a directory",
+        -36 => "name too long",
+        -40 => "too many links",
+        else => "resolve failed",
+    };
+}
+
+// exec: path → entry bytes → rung-2 spawn with THIS fs as the child's
+// view. The image pointer is the module's own phys range — the same
+// trick koruos/module's exec proved; child_arg0 gets the basename.
+~[retain]pub tor exec { fs: *Ramfs, path: string, rights: u64 }
+| ok { fs: *Ramfs, status: i64, ino: u32 }
+| refused string
+
+~proc exec|zig {
+    const r = resolveSlice(fs, path);
+    const ei = switch (r) {
+        .ent => |x| x,
+        .err => |e| return .{ .refused = blkErr(e) },
+    };
+    const en = &fs.ents[ei];
+    if (en.kind == .dir) return .{ .refused = "is a directory" };
+    if (en.kind != .reg) return .{ .refused = "not a regular file" };
+    const img: [*]const u8 = en.data orelse return .{ .refused = "no file data" };
+    // argv[0] = basename of the requested path — POSIX convention.
+    const base = if (std.mem.lastIndexOfScalar(u8, path, '/')) |s| path[s + 1 ..] else path;
+    @memset(&child_arg0, 0);
+    @memcpy(child_arg0[0..@min(base.len, 63)], base[0..@min(base.len, 63)]);
+    const st = koru_spawn_elf(img, @intCast(en.size), rights, &fs.vfs);
+    if (st < 0) return .{ .refused = "spawn provider refused the image" };
+    return .{ .ok = .{ .fs = fs, .status = st, .ino = en.ino } };
+}

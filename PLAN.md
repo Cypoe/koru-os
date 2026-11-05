@@ -800,7 +800,19 @@ Also open, smaller:
   refuses "you need to load the kernel first"), and the tag's string
   field is a cmdline, not the path — pass the basename as the arg.
   iso-mod gate row: GRUB module2 → tag3 → reserved payload → real
-  CPL=3 child ran, exit status 42 through the seam. Still open
+  CPL=3 child ran, exit status 42 through the seam. ~~initramfs
+  payload~~ — landed: `koru/initramfs` parses cpio-newc off a named
+  mb2 module into a RAM-backed `ChildFsOps` view — file bytes alias
+  the loader-reserved pages (zero copy), hardlinks dedup to one
+  object/ino, symlinks resolve at open (absolute + `..` relative
+  through synthesized parent dirs), mkfs-side writes refuse
+  -EROFS by name; device nodes keep mode but open ENODEV.
+  `scripts/mkcpio.py` mints fixtures
+  (dirs/symlinks/hardlinks/modes). iso-initramfs gate row: cpio
+  module → child `/bin/fsread` resolved 5 paths through the view
+  (plain, abs+rel symlink, hardlink, synth dir), status=0. This is
+  the storage-independent userland path a flash stick needs before
+  any disk driver exists. Still open
   inside the cell: init that doesn't halt-on-exit
   ~~shutdown/reboot~~ — landed:
   `koruos_powerctl` door, S5 payload AML-decoded off FADT+DSDT, reboot

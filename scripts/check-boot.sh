@@ -234,6 +234,48 @@ else
     bad "iso-mod: build failed"; tail -6 "$WORK/muslmod.build" "$WORK/isomod.build" 2>/dev/null
 fi
 
+# iso-initramfs: the cpio-newc rung — GRUB module2 carries a whole
+# archive, koruos/initramfs unpacks it into a RAM-backed ChildFsOps
+# view (file bytes point into the pmm-reserved module, zero copy), and
+# exec spawns /bin/fsread whose open/read resolve THROUGH the view:
+# plain file, absolute + relative symlinks, hardlink alias, and a
+# synthesized parent dir. This is the storage-independent userland
+# path a flash stick needs before any disk driver exists.
+WORKW="$(cygpath -m "$WORK" 2>/dev/null || echo "$WORK")"
+if command -v python >/dev/null 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/fsread.elf" "$ROOT/koru/native/tests/fsread.c" > "$WORK/fsread.build" 2>&1 \
+   && printf 'initramfs says hi\n' > "$WORK/hello.txt" \
+   && printf 'motd from synthesized /etc\n' > "$WORK/motd.txt" \
+   && python "$ROOT/scripts/mkcpio.py" "$WORKW/initramfs.cpio" \
+        "hello.txt=$WORKW/hello.txt#hl" \
+        "hello2.txt=$WORKW/hello.txt#hl" \
+        "etc/motd.txt=$WORKW/motd.txt" \
+        "etc/alias.txt=->../hello.txt" \
+        "link.txt=->/hello.txt" \
+        "bin/fsread=$WORKW/fsread.elf|755" > "$WORK/mkcpio.log" 2>&1 \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/initramfs/tests/boot_initramfs.k" > "$WORK/boot_initramfs.k" \
+   && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_initramfs.k" "$WORK/koru-ramfs.iso" "$WORKW/initramfs.cpio" > "$WORK/isorf.build" 2>&1; then
+    timeout 60 "$QEMU" -cdrom "$WORK/koru-ramfs.iso" -boot d -serial stdio \
+        -display none -m 128M -no-reboot > "$WORK/boot_isorf.serial" 2>&1 || true
+    hino=$(grep -aoE 'ramfs: /hello\.txt ino=[0-9]+' "$WORK/boot_isorf.serial" | grep -oE '[0-9]+$')
+    lino=$(grep -aoE 'ramfs: /hello2\.txt hardlink ino=[0-9]+' "$WORK/boot_isorf.serial" | grep -oE '[0-9]+$')
+    if grep -qF 'pmm: mb2 module "initramfs.cpio"' "$WORK/boot_isorf.serial" \
+       && grep -qF "ramfs: entries=" "$WORK/boot_isorf.serial" \
+       && grep -qF "ramfs: /etc (synthesized)" "$WORK/boot_isorf.serial" \
+       && [ -n "$hino" ] && [ "$hino" = "$lino" ] \
+       && grep -qF "FSREAD /etc/alias.txt -> initramfs says hi" "$WORK/boot_isorf.serial" \
+       && grep -qF "FSREAD COMPLETE" "$WORK/boot_isorf.serial" \
+       && grep -qF "ramfs: exec /bin/fsread" "$WORK/boot_isorf.serial" \
+       && grep -qF "status=0" "$WORK/boot_isorf.serial" \
+       && grep -qF "RAMFS COMPLETE" "$WORK/boot_isorf.serial"; then
+        ok "iso-initramfs: cpio module -> RAM ChildFsOps -> child resolved 5 paths (sym/hardlink/synthdir), status=0"
+    else
+        bad "iso-initramfs: $(grep -aE 'GRUB|pmm:|ramfs:|FSREAD|FAIL' "$WORK/boot_isorf.serial" | tail -12 | tr '\n' '|') hino=$hino lino=$lino"
+    fi
+else
+    bad "iso-initramfs: build failed (python/fsread/mkcpio/iso)"; tail -4 "$WORK/fsread.build" "$WORK/mkcpio.log" "$WORK/isorf.build" 2>/dev/null
+fi
+
 # disk: installable media — a partitioned MBR image whose ext2 root
 # holds /boot/koru.elf + grub.cfg, GRUB i386-pc written into the MBR
 # and post-MBR gap by grub-install. The chain SeaBIOS -> boot.img ->
