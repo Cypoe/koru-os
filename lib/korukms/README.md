@@ -15,3 +15,15 @@ Unikraft 0.21 needs two patches for this (`experiments/m6-kms/patches/`):
 **Why native and not DS3 (decision, DESIGN-0001 §0.4 "M6 decision").** The provider is koru-os code behind the same `kms.*` rows a GPU driver silo will export. DS3 (LKL `virtio_gpu` in a silo) is not dropped; it re-binds `kms_rows.h` to a silo instead of `bochs.c`, and the personality and tests stay as they are.
 
 Not done: atomic KMS and properties (M9 needs them for aquamarine), page-flip events and vblank (`read()` on the fd), PRIME, cursor planes, more than one client, a writable `dumb` lifetime model (a destroyed buffer still backs a live fb, as on Linux, but without refcounts), virtio-gpu (the Unikraft 0.21 virtio-pci driver is legacy-only; virtio-gpu is a virtio 1.0 device).
+
+## virtio-gpu provider (virtio_gpu.c)
+
+Binds `kms.*` for QEMU `virtio-gpu-pci` (virtio 1.0, 2D scanout — no virgl).
+`kms.vram` is a page-allocated guest pool attached as a host 2D resource:
+`scanout` is CREATE_2D (per pitch) + SET_SCANOUT + TRANSFER_TO_HOST_2D +
+FLUSH; `disable` is SET_SCANOUT with no resource. Two QEMU model lessons
+are baked in: `dma_map` refuses phys ranges spanning the ISA hole
+(0xa0000–0xfffff), so the pool is allocated above 1 MiB; and ATTACH_BACKING
+entries are emitted per contiguous *physical* run because a VA-contiguous
+pool is not phys-contiguous under paging — one entry for the whole pool
+truncates the display at the first phys discontinuity.
