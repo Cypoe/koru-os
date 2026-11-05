@@ -1,0 +1,18 @@
+--- a/lib/posix-process/signal/deliver.c
++++ b/lib/posix-process/signal/deliver.c
+@@ -423,6 +423,11 @@
+ 	return;
+ 
+ err_panic:
+-	/* FIXME: Cascading faulting */
+-	UK_CRASH("Cannot deliver SIGSEGV for pf at 0x%lx\n", error->vaddr);
++	/* A general-purpose OS would terminate the application. Do the
++	 * same here: kill the faulting process instead of cascading a
++	 * second fault through the delivery path, which overflows the
++	 * exception stack and takes the kernel down.
++	 */
++	uk_pr_err("Cannot deliver signal %d for pf at 0x%lx; terminating\n",
++		  error->signum, error->vaddr);
++	uk_sigact_term(error->signum);
++	UK_BUG(); /* noreturn */
+ }
