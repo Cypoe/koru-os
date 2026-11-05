@@ -27,7 +27,7 @@ Tiers: `qemu | hw` · Evidence: `V | M | C | D`
  ptmx-devpts       │koruos/dev.pts     │koru-native        │native-zig│[pty-termios]              │qemu│open      │—        
  pty-termios       │koruos/chan.pty    │koru-native        │native-zig│[]                         │qemu│**landed**│M        
  readdir-verb      │koruos/fs.readdir  │koru-native, hosted│koru-lift │[]                         │qemu│open      │—        
- sessions-jobctl   │koruos/proc.session│koru-native        │native-zig│[pty-termios]              │qemu│open      │—        
+ sessions-jobctl   │koruos/proc.session│koru-native        │native-zig│[pty-termios]              │qemu│**landed**│V        
  smp-multirunner   │koruos/sched.smp   │koru-native        │native-zig│[]                         │qemu│open      │—        
  usb-esp-boot      │koruos/boot.esp    │koru-native        │oracle    │[fs-initramfs]             │qemu│**landed**│M        
  usb-hid           │koruos/input.usb   │koru-native        │native-zig│[usb-xhci]                 │qemu│open      │—        

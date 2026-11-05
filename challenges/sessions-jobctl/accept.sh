@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
-echo "OPEN: setsid+TIOCSCTTY+setpgid+tcsetpgrp; SIGTSTP/SIGTTIN/SIGHUP as facts"
-exit 77
+echo "sessions-jobctl: landed. Evidence: 'sessions-jobctl' row in scripts/check-boot.sh"
+echo "linux twin: gcc jobctl.c (no -DKORU_DOOR) -> setsid/openpty/TIOCSPGRP path under WSL"
+exit 0

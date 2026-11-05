@@ -321,6 +321,41 @@ else
     bad "pty-termios: build failed (ptytest/mkcpio/iso)"; tail -4 "$WORK/ptytest.build" "$WORK/mkcpiopty.log" "$WORK/isopty.build" 2>/dev/null
 fi
 
+# sessions-jobctl: process groups + sessions + the controlling tty.
+# A musl child forks under pid-1 (init-shaped: a pgrp leader cannot
+# setsid), makes its own session, claims the pty (TIOCSCTTY), then
+# drives the whole job-control arc through real syscalls: TIOCSPGRP
+# foreground, ^Z -> SIGTSTP -> WUNTRACED stop report, kill(-pg,CONT)
+# resume, ^C -> WIFSIGNALED, a background reader's SIGTTIN stop, and
+# the TTOU-ignored reclaim real shells ride. The same source runs as
+# a linux twin under WSL — the oracle this rung was measured against.
+if command -v python >/dev/null 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -DKORU_DOOR -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/jobctl.elf" "$ROOT/koruos/native/tests/jobctl.c" > "$WORK/jobctl.build" 2>&1 \
+   && python "$ROOT/scripts/mkcpio.py" "$WORKW/jobctl.cpio" \
+        "bin/jobctl=$WORKW/jobctl.elf|755" > "$WORK/mkcpiojc.log" 2>&1 \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_jobctl.k" > "$WORK/boot_jobctl.k" \
+   && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_jobctl.k" "$WORK/koru-jc.iso" "$WORKW/jobctl.cpio" > "$WORK/isojc.build" 2>&1; then
+    timeout 60 "$QEMU" -cdrom "$WORK/koru-jc.iso" -boot d -serial stdio \
+        -display none -m 128M -no-reboot > "$WORK/boot_jobctl.serial" 2>&1 || true
+    if grep -qF 'JC setsid got=0' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'JC tcsetpgrp-job1 got=0' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'JC stopsig got=20' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'JC bg-cont got=0' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'JC termsig got=2' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'JC ttin-sig got=21' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'JC kill-sig got=9' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'JC dead-pgrp-esrch got=3' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'JC COMPLETE fails=0' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'JOBCTL GATE COMPLETE' "$WORK/boot_jobctl.serial" \
+       && grep -qF 'status=0' "$WORK/boot_jobctl.serial"; then
+        ok "sessions-jobctl: setsid + ctty + fg-pgrp + TSTP/CONT + INT/TTIN kills, status=0"
+    else
+        bad "sessions-jobctl: $(grep -aE 'JC|jobctl:|FAIL' "$WORK/boot_jobctl.serial" | tail -14 | tr '\n' '|')"
+    fi
+else
+    bad "sessions-jobctl: build failed (jobctl/mkcpio/iso)"; tail -4 "$WORK/jobctl.build" "$WORK/mkcpiojc.log" "$WORK/isojc.build" 2>/dev/null
+fi
+
 # usb-esp: the flash-stick rung — a raw GPT image whose FAT32 ESP
 # carries a standalone GRUB-EFI (modules+cfg embedded) plus the kernel
 # and the cpio module. QEMU attaches it as USB mass-storage behind

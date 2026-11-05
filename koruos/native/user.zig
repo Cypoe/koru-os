@@ -902,6 +902,253 @@ fn sigQueue(c: *Child, e: SigEnt) void {
     }
 }
 
+// ---- dispositions: kernel-owned bookkeeping on the fact stream --------
+// The stored-metadata ruling stands — a handler registered through
+// rt_sigaction fires never. What changes is what the fact DOES: linux's
+// default dispositions are kernel bookkeeping, the same category as
+// reap and wait, so the kernel applies them itself. SIG_IGN drops the
+// fact, a caught handler queues it untouched (the process chose to
+// handle; we just never run its code), and an unhandled, unblocked
+// fact runs the kernel's own table: STOP/TSTP/TTIN/TTOU stop the child,
+// CONT resumes it, CHLD/URG/WINCH/IO/PWR are facts only, everything
+// else terminates. A blocked fact pends — the action waits for
+// unblock, which is why SIGKILL/SIGSTOP can't be blocked or caught
+// (sigaction refuses 9/19 like linux).
+const CLD_KILLED: i16 = 2;
+const CLD_STOPPED: i16 = 5; // linux's ssi_code values — STOPPED is 5
+const CLD_CONTINUED: i16 = 6;
+
+// Queue the fact and run its default action. The kill path mutates the
+// roster — a sigSend that terminates the CALLER never returns
+// (childDie is noreturn on the self path).
+fn sigSend(vs: usize, e: SigEnt) void {
+    const v = &children[vs];
+    // a zombie is already dead — linux drops signals to it silently;
+    // our bookkeeping would double-reap a slot that already died.
+    if (v.state == .zombie or v.state == .dead or
+        v.state == .empty) return;
+    const bit = @as(u64, 1) << @intCast(e.signo - 1);
+    if (v.sig_ign & bit != 0) return;      // ignored: the fact drops
+    sigQueue(v, e);                         // the fact lands first
+    if (v.sig_blocked & bit != 0) return;   // pending — the action waits
+    if (v.sig_caught & bit != 0) return;    // handled: facts only
+    switch (e.signo) {
+        19, 20, 21, 22 => { // STOP/TSTP/TTIN/TTOU
+            // an orphaned pgrp is immune to the JOB-CONTROL stops —
+            // linux's rule; a lone process's ^Z would strand it
+            // otherwise (nobody left to fg it). SIGSTOP stops anyway.
+            if (e.signo != 19 and pgrpOrphaned(v)) return;
+            v.stopped = true;
+            v.stop_signo = e.signo;
+            // the stop is a waitable event like a death — WUNTRACED
+            // waiters wake; the parent also gets the CLD_STOPPED fact.
+            for (0..nchildren) |i| {
+                const p = &children[i];
+                if (p.state == .blocked and p.wait_kind == .exit and
+                    (p.wait_pid == ANY_PID or p.wait_pid == vs)) {
+                    p.state = .runnable;
+                }
+            }
+            const ps = v.spawned_by;
+            if (ps < nchildren) {
+                const p = &children[ps];
+                if (p.state == .runnable or p.state == .blocked or
+                    p.state == .zombie)
+                    sigQueue(p, .{ .signo = SIGCHLD, .code = CLD_STOPPED,
+                        .pid = @intCast(vs + 1), .status = e.signo });
+            }
+        },
+        18 => { // CONT — resume, and the parent's queue takes the
+                // CLD_CONTINUED fact linux emits alongside. A parked
+                // caller un-stops and runs: its kblock continuation
+                // re-questions the wait (a still-background reader
+                // re-takes SIGTTIN — linux's restarted-syscall shape).
+            v.stopped = false;
+            v.stop_signo = 0;
+            if (v.state == .blocked) v.state = .runnable;
+            const cps = v.spawned_by;
+            if (cps < nchildren) {
+                const p = &children[cps];
+                if (p.state == .runnable or p.state == .blocked or
+                    p.state == .zombie)
+                    sigQueue(p, .{ .signo = SIGCHLD, .code = CLD_CONTINUED,
+                        .pid = @intCast(vs + 1), .status = 0 });
+            }
+        },
+        17, 23, 28, 29, 30 => {}, // CHLD/URG/WINCH/IO/PWR — facts only
+        else => childKill(vs, e.signo), // terminate — kernel bookkeeping
+    }
+}
+
+// The effective pgrp: an explicit pgid, else the child's own pid —
+// a process is always in a group, its own by default (linux's shape:
+// the bootstrap pgid IS the pid until setpgid says otherwise).
+fn effPgid(i: usize) usize {
+    const g = children[i].pgid;
+    return if (g == 0) i + 1 else g;
+}
+
+// Does a live pgrp named `pgid` exist inside session `sid`?
+// setpgid's foreign-group check asks exactly this.
+fn pgrpLiveIn(pgid: usize, sid: usize) bool {
+    for (0..nchildren) |i| {
+        const m = &children[i];
+        if (m.state != .runnable and m.state != .blocked and
+            m.state != .zombie) continue;
+        // effPgid: a member that never setpgid'd is still its own
+        // group's one member — the group exists either way.
+        if (effPgid(i) == pgid and m.sid == sid) return true;
+    }
+    return false;
+}
+
+// Is v's pgrp orphaned? Linux's test: no member has a live parent in
+// the same session but a different pgrp. Children with no session
+// bookkeeping (pgid 0) count as not-orphaned — kernel children have
+// nobody to strand them.
+fn pgrpOrphaned(v: *Child) bool {
+    if (v.pgid == 0) return false;
+    for (0..nchildren) |i| {
+        const m = &children[i];
+        if (m.pgid != v.pgid) continue;
+        if (m.state != .runnable and m.state != .blocked and
+            m.state != .zombie) continue;
+        const ps = m.spawned_by;
+        if (ps >= nchildren or ps == i) continue;
+        const p = &children[ps];
+        if (p.sid == v.sid and p.sid != 0 and p.pgid != v.pgid and
+            (p.state == .runnable or p.state == .blocked or
+            p.state == .zombie)) return false;
+    }
+    return true;
+}
+
+// Signal-death for a victim that ISN'T the running child: same
+// bookkeeping the exit arm does — fds discharge (waking peers), waiters
+// get the signo as the status, the spawner's queue takes CLD_KILLED,
+// the frames go back. The victim can only be .runnable or .blocked
+// (the user claim is ours — nobody runs user code mid-syscall), so
+// flipping its state is safe; a parked kctx is simply never resumed.
+fn childReap(ds: usize, signo: u8) void {
+    releaseFds(&children[ds]);
+    for (0..nchildren) |i| {
+        const p = &children[i];
+        if (p.state == .blocked and p.wait_kind == .exit and
+            (p.wait_pid == ds or p.wait_pid == ANY_PID)) {
+            p.spawn_ret = signo;
+            p.state = .runnable;
+        }
+    }
+    const db = children[ds].spawned_by;
+    if (db < nchildren and db != ds) {
+        const p = &children[db];
+        if (p.state == .runnable or p.state == .blocked or
+            p.state == .zombie)
+            sigQueue(p, .{ .signo = SIGCHLD, .code = CLD_KILLED,
+                .pid = @intCast(ds + 1), .status = signo });
+    }
+    const dead = &children[ds];
+    dead.exit_status = signo;
+    dead.exit_signo = signo;
+    dead.state = if (dead.waitable) .zombie else .dead;
+    _ = freeChild(dead);
+    // the leader's death hangs up its ctty: SIGHUP to the fg pgrp,
+    // then the session's members lose the terminal like linux
+    cttyHangup(ds);
+    fgSweep();
+}
+
+// A process group is an identity, not a number: when its last live
+// member dies the group is gone, and a terminal holding its id as the
+// foreground must release it — a slot reissued later may land on the
+// same id, and a stale foreground would let a stranger read the tty
+// unchallenged (linux clears the tty's pgrp backref with the pid).
+fn fgSweep() void {
+    for (&ptys) |*t| {
+        if (t.fg_pgrp == 0) continue;
+        var live = false;
+        for (0..nchildren) |i| {
+            const m = &children[i];
+            if (m.state != .runnable and m.state != .blocked and
+                m.state != .zombie) continue;
+            if (effPgid(i) == t.fg_pgrp) { live = true; break; }
+        }
+        if (!live) t.fg_pgrp = 0;
+    }
+}
+
+// Dispatch on the victim: self-death can't return to user — the exit
+// arm's own path takes over; a foreign slot reaps in place.
+fn childKill(vs: usize, signo: u8) void {
+    if (vs == cur_child) childDie(@intCast(signo), signo) else childReap(vs, signo);
+}
+
+// The exit arm and the kill-self arm share this: status/signo recorded,
+// everything else identical. Signo!=0 marks a signal death — wait()
+// reports it raw (WIFSIGNALED) instead of the <<8 exit word.
+fn childDie(raw_status: i64, signo: u8) noreturn {
+    last_exit = @bitCast(raw_status);
+    const dead_slot = cur_child;
+    releaseFds(&children[dead_slot]);
+    for (0..nchildren) |i| {
+        const p = &children[i];
+        if (p.state == .blocked and p.wait_kind == .exit and
+            (p.wait_pid == dead_slot or p.wait_pid == ANY_PID)) {
+            p.spawn_ret = @bitCast(last_exit);
+            p.state = .runnable;
+        }
+    }
+    {
+        const db = children[dead_slot].spawned_by;
+        if (db < nchildren and db != dead_slot) {
+            const p = &children[db];
+            if (p.state == .runnable or p.state == .blocked or
+                p.state == .zombie) {
+                sigQueue(p, .{ .signo = SIGCHLD,
+                    .code = if (signo != 0) CLD_KILLED else CLD_EXITED,
+                    .pid = @intCast(dead_slot + 1),
+                    .status = if (signo != 0) signo else @intCast(last_exit) });
+                wakeKind(.poll);
+            }
+        }
+    }
+    const dead = &children[cur_child];
+    dead.exit_status = if (signo != 0) signo else @bitCast(last_exit);
+    dead.exit_signo = signo;
+    dead.state = if (dead.waitable) .zombie else .dead;
+    const nf = freeChild(dead);
+    say("pmm: reap freed=");
+    puthex(nf);
+    say("\n");
+    cttyHangup(dead_slot);
+    fgSweep();
+    schedEnter(&exitTail);
+    unreachable;
+}
+
+// Session-leader exit hangs up its controlling pty the way linux's
+// do_exit does: SIGHUP to the foreground pgrp, then every remaining
+// member of the session loses the ctty.
+fn cttyHangup(ds: usize) void {
+    const dead = &children[ds];
+    if (dead.sid != ds + 1 or dead.ctty == 0) return;
+    const pi = dead.ctty - 1;
+    const fg = ptys[pi].fg_pgrp;
+    for (0..nchildren) |i| {
+        const m = &children[i];
+        if (m.sid == dead.sid) m.ctty = 0;
+    }
+    ptys[pi].fg_pgrp = 0;
+    if (fg != 0) {
+        for (0..nchildren) |i| {
+            const m = &children[i];
+            if (effPgid(i) == fg and i != ds and
+                (m.state == .runnable or m.state == .blocked or
+                m.state == .zombie)) sigSend(i, .{ .signo = 1 });
+        }
+    }
+}
+
 // ---- the bag: class grants + nid-scoped object grants ------------------
 // DESIGN-0001 §8.6's grant {handle, verbs, as} distilled to the syscall
 // edge: obj is the object key in the pin keyspace (dev<<32|ino — the same
@@ -972,6 +1219,22 @@ const Child = struct {
     sig_pending: u64 = 0,           // bitmask of queued signos
     sigs: [NSIGQ]SigEnt = .{SigEnt{}} ** NSIGQ, // per-signo payload queue
     nsigs: u8 = 0,
+    sig_ign: u64 = 0,               // rt_sigaction SIG_IGN bits — a fact
+                                    // ignored is a fact dropped, not queued
+    sig_caught: u64 = 0,            // registered-handler bits — queue the
+                                    // fact, no kernel lifecycle action
+    // sessions + job control: pid-domain ids (slot+1, 0 = unset/kernel
+    // child). The session is implicit — the set of children sharing a
+    // sid; the ctty is the session's controlling pty (index+1).
+    pgid: usize = 0,                // process-group leader pid; 0 = own group
+    sid: usize = 0,                 // session leader pid; 0 = no session
+    ctty: usize = 0,                // controlling pty index+1; 0 = none
+    stopped: bool = false,          // job-control stop — gates the
+                                    // scheduler, never rewrites .state
+    stop_signo: u8 = 0,             // signo that stopped it — WUNTRACED's
+                                    // payload, cleared once reported
+    exit_signo: u8 = 0,             // !=0: killed by signal — wait reports
+                                    // the raw signo, not status<<8
 };
 
 var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{} };
@@ -1616,6 +1879,10 @@ fn canonNr(nr: u64) u64 {
         32, 33, 292 => 62, // dup family — fd-table ops on own handles
         228 => 62, // clock_gettime — a self-time query, same describe class
         186 => 39, // gettid folds to getpid — one thread per child exists
+        // session/pgrp verbs are process self-metadata like the rest of
+        // cap 62; kill(62) lands here through the else-arm already —
+        // these nrs just can't carry their own bit (the domain is <64).
+        109, 111, 112, 121, 124 => 62,
         // koru's own ABI lives at 512+, out of musl's namespace — nr57 is
         // REAL fork now (musl _Fork sends it with zero args); clone(56)
         // folds to the same "create a child" cap — the flag-shape refusal
@@ -1653,6 +1920,10 @@ fn canonNr(nr: u64) u64 {
         // a pty pair is two channels with a line discipline — same
         // class. ioctl(16) on a tty is the channel's own config verb.
         521, 16 => 22,
+        // pipe2 is pipe + flags — the same channel-mint verb; musl's
+        // pipe() sends 293, and an unmapped nr lands outside the bag's
+        // 64-bit domain entirely.
+        293 => 22,
         // fchmod mutates an object's mode bits — same class as
         // ftruncate's shape mutation.
         91 => 2,
@@ -2409,8 +2680,10 @@ const Pty = struct {
     used: bool = false,
     mrefs: u8 = 0,
     srefs: u8 = 0,
-    owner: usize = 0,       // last child to hold a slave end — ISIG/
-                            // SIGWINCH destination; sessions refine it
+    owner: usize = 0,       // last child to hold a slave end — signal
+                            // fallback before any session claims the pty
+    fg_pgrp: usize = 0,     // pid-domain pgrp owning the terminal — ISIG/
+                            // SIGWINCH/TTIN route here; 0 = no session yet
     ih: usize = 0, it: usize = 0, ic: usize = 0,
     in: [4096]u8 = undefined,   // master->slave, post-ldisc (cooked)
     oh: usize = 0, ot: usize = 0, oc: usize = 0,
@@ -2542,10 +2815,26 @@ fn ptySignal(t: *Pty, idx: usize, signo: u8, ch: u8) void {
             ptyEcho(t, ch); // ECHOCTL off: the raw control char echoes
         }
     }
-    if (t.owner < nchildren) {
+    // Signal routing: the foreground pgrp owns the terminal when a
+    // session claimed it (TIOCSPGRP); before that, the owner's slot is
+    // the fallback the pty rung shipped with. Facts route through
+    // sigSend — dispositions are kernel bookkeeping.
+    var sent = false;
+    if (t.fg_pgrp != 0) {
+        for (0..nchildren) |i| {
+            const m = &children[i];
+            if (effPgid(i) == t.fg_pgrp and
+                (m.state == .runnable or m.state == .blocked or
+                m.state == .zombie)) {
+                sigSend(i, .{ .signo = signo });
+                sent = true;
+            }
+        }
+    }
+    if (!sent and t.owner < nchildren) {
         const o = &children[t.owner];
         if (o.state == .runnable or o.state == .blocked or
-            o.state == .zombie) sigQueue(o, .{ .signo = signo });
+            o.state == .zombie) sigSend(t.owner, .{ .signo = signo });
     }
     _ = idx;
 }
@@ -2796,6 +3085,22 @@ fn ptySlaveRead(c: *Child, idx: usize, bva: u64, want: u64) i64 {
     const t = &ptys[idx];
     const canon = tioF(t, T_LF) & ICANON != 0;
     while (true) {
+        // TTIN: a background pgrp reading the ctty stops on linux —
+        // the SIGTTIN fact stops us here (sigSend runs the default);
+        // blocked/ignored/orphaned facts answer EIO (linux's own
+        // tty-check table), and a resumed reader re-questions on the
+        // next loop like a fresh call.
+        if (t.fg_pgrp != 0 and c.ctty == idx + 1 and
+            effPgid(cur_child) != t.fg_pgrp) {
+            sigSend(cur_child, .{ .signo = 21 });
+            if (!c.stopped) return -5; // EIO — blocked, ignored, orphaned
+            // stopped means stopped: park on the channel — CONT's
+            // un-block puts us back at the top of the check, which is
+            // linux's restarted-syscall shape exactly.
+            c.wait_pipe = idx * 2 + 1;
+            kblock(.pty);
+            continue;
+        }
         if (canon) {
             if (t.lc > 0) {
                 if (t.lines[t.lh] == 0) { // VEOF line — read()=0, pop it
@@ -2887,6 +3192,29 @@ fn ptyMasterRead(c: *Child, idx: usize, bva: u64, want: u64) i64 {
     }
 }
 
+// tty_check_change's shape for the write-side ioctls: a background
+// caller touching its own ctty takes SIGTTOU. Linux's table: an
+// ignored or blocked TTOU fact lets the verb proceed, an orphaned
+// caller answers EIO, and a stopped caller parks until CONT — after
+// which the call re-questions, exactly like a restarted syscall.
+fn ptyCheckTTOU(c: *Child, t: *Pty, idx: usize) i64 {
+    const ttou_bit = @as(u64, 1) << (22 - 1);
+    while (t.fg_pgrp != 0 and c.ctty == idx + 1 and
+        effPgid(cur_child) != t.fg_pgrp) {
+        // linux's is_ignored first: a masked or SIG_IGN'd TTOU lets the
+        // verb proceed — the shell's reclaim path runs exactly on this.
+        if (c.sig_ign & ttou_bit != 0 or c.sig_blocked & ttou_bit != 0 or
+            c.sig_caught & ttou_bit != 0) break;
+        if (pgrpOrphaned(c)) return -5; // EIO — linux's orphaned answer
+        sigSend(cur_child, .{ .signo = 22 });
+        if (c.stopped) {
+            c.wait_pipe = idx * 2 + 1;
+            kblock(.pty); // parked on the stop — CONT re-runs the check
+        } else break;
+    }
+    return 0;
+}
+
 // ioctl(16) on a pty fd — the termios/winsz/ptn/lock surface musl's
 // tty door already speaks. cmd numbers are the linux values: that IS
 // the ABI musl wraps.
@@ -2897,12 +3225,16 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
             return if (copyToUser(c, @intCast(arg), &t.tio) < 36) -14 else 0;
         },
         0x5402, 0x5403 => { // TCSETS / TCSETSW (output drains instantly)
+            const ttou = ptyCheckTTOU(c, t, idx);
+            if (ttou != 0) return ttou;
             var buf: [36]u8 = undefined;
             if (copyFromUser(c, @intCast(arg), &buf) < 36) return -14;
             t.tio = buf;
             return 0;
         },
         0x5404 => { // TCSETSF — set + flush pending input
+            const ttou = ptyCheckTTOU(c, t, idx);
+            if (ttou != 0) return ttou;
             var buf: [36]u8 = undefined;
             if (copyFromUser(c, @intCast(arg), &buf) < 36) return -14;
             t.tio = buf;
@@ -2912,14 +3244,88 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
         0x5413 => { // TIOCGWINSZ
             return if (copyToUser(c, @intCast(arg), &t.ws) < 8) -14 else 0;
         },
-        0x5414 => { // TIOCSWINSZ — the fact lands as SIGWINCH
+        0x5414 => { // TIOCSWINSZ — the fact lands as SIGWINCH on the
+                    // foreground pgrp (owner as the pre-session fallback)
             var buf: [8]u8 = undefined;
             if (copyFromUser(c, @intCast(arg), &buf) < 8) return -14;
             t.ws = buf;
-            if (t.owner < nchildren) {
+            var sent = false;
+            if (t.fg_pgrp != 0) {
+                for (0..nchildren) |i| {
+                    const m = &children[i];
+                    if (effPgid(i) == t.fg_pgrp and
+                        (m.state == .runnable or m.state == .blocked or
+                        m.state == .zombie)) {
+                        sigSend(i, .{ .signo = 28 });
+                        sent = true;
+                    }
+                }
+            }
+            if (!sent and t.owner < nchildren) {
                 const o = &children[t.owner];
                 if (o.state == .runnable or o.state == .blocked or
-                    o.state == .zombie) sigQueue(o, .{ .signo = 28 });
+                    o.state == .zombie) sigSend(t.owner, .{ .signo = 28 });
+            }
+            return 0;
+        },
+        0x540F => { // TIOCGPGRP — the terminal's foreground pgrp, as a
+                    // pid-domain int like linux writes it
+            var buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf, @intCast(t.fg_pgrp), .little);
+            return if (copyToUser(c, @intCast(arg), &buf) < 4) -14 else 0;
+        },
+        0x5410 => { // TIOCSPGRP — give the terminal to a pgrp IN THE
+                    // CALLER'S SESSION (linux's edge; anything else is
+                    // EPERM — a pty never crosses sessions sideways).
+                    // A background caller checks like every write-side
+                    // verb: TTOU first.
+            const ttou = ptyCheckTTOU(c, t, idx);
+            if (ttou != 0) return ttou;
+            var buf: [4]u8 = undefined;
+            if (copyFromUser(c, @intCast(arg), &buf) < 4) return -14;
+            const pg = std.mem.readInt(u32, &buf, .little);
+            if (pg == 0 or pg > MAXCHILDREN) return -22; // EINVAL
+            // the named group must be a LIVE pgrp inside the caller's
+            // own session — a leader's death doesn't dissolve the group
+            // while members remain, and a foreign session is EPERM.
+            if (!pgrpLiveIn(pg, c.sid)) return -1;
+            t.fg_pgrp = pg;
+            return 0;
+        },
+        0x540E => { // TIOCSCTTY — only a session leader claims, and only
+                    // a pty no session owns. Steal (arg==1) refuses —
+                    // hangup, not force, is the honest transfer.
+            if (c.sid != cur_child + 1) return -1; // EPERM — not a leader
+            if (c.ctty != 0) return -1;            // already has one
+            for (0..nchildren) |i| {
+                if (i != cur_child and children[i].ctty == idx + 1 and
+                    children[i].sid != c.sid)
+                    return -1; // EPERM — another session holds it
+            }
+            c.ctty = idx + 1;
+            if (t.fg_pgrp == 0) t.fg_pgrp = effPgid(cur_child);
+            return 0;
+        },
+        0x5422 => { // TIOCNOTTY — the leader hangs its session's ctty up
+                    // (SIGHUP to the fg pgrp, members lose the link);
+                    // a non-leader just releases its own association.
+            if (c.sid == cur_child + 1) {
+                const fg = t.fg_pgrp;
+                for (0..nchildren) |i| {
+                    if (children[i].sid == c.sid) children[i].ctty = 0;
+                }
+                t.fg_pgrp = 0;
+                if (fg != 0) {
+                    for (0..nchildren) |i| {
+                        const m = &children[i];
+                        if (effPgid(i) == fg and i != cur_child and
+                            (m.state == .runnable or m.state == .blocked or
+                            m.state == .zombie))
+                            sigSend(i, .{ .signo = 1 }); // SIGHUP
+                    }
+                }
+            } else if (c.ctty == idx + 1) {
+                c.ctty = 0;
             }
             return 0;
         },
@@ -4783,36 +5189,71 @@ fn childFtruncate(c: *Child, fdu: u64, len: u64) i64 {
 // for ANY zombie. Reaping marks the slot .dead: the status is claimed
 // once and a reused slot can never serve it twice.
 const ANY_PID: usize = ~@as(usize, 0);
-fn childWait(c: *Child, pid: i64, stva: u64) i64 {
+fn childWait(c: *Child, pid: i64, stva: u64, opts: u64) i64 {
+    // wait4 opts: WNOHANG(1) never parks, WUNTRACED(2) also reports stops
+    // as 0x7f|signo<<8 — the fact a WIFSIGNALED reader distinguishes by
+    // the low byte. pid<-1 waits on the pgrp |pid| like linux.
+    const nohang = opts & 1 != 0;
+    const untraced = opts & 2 != 0;
+    // pid=0 waits the CALLER's pgrp like linux; pid<-1 names |pid|.
+    const want_pgrp = pid <= -1 and pid != -1;
+    const pgrp: usize = if (pid == 0)
+        c.pgid
+    else if (want_pgrp)
+        @intCast(-pid)
+    else
+        0;
     while (true) {
         var slot: ?usize = null;
         var live = false;
-        if (pid == -1) {
-            for (0..nchildren) |i| {
-                const st = children[i].state;
-                if (st == .zombie and slot == null) slot = i;
-                if (st == .runnable or st == .blocked) live = true;
-            }
-        } else {
-            if (pid < 1 or pid > MAXCHILDREN) {
-                return -10; // ECHILD — no such pid
-            }
-            const s: usize = @intCast(pid - 1);
-            const st = children[s].state;
-            if (st == .zombie) slot = s;
-            live = st == .runnable or st == .blocked;
+        var member = false;
+        for (0..nchildren) |i| {
+            const st = children[i].state;
+            if (st != .runnable and st != .blocked and
+                st != .zombie) continue;
+            // wait only ever sees the CALLER's children — a pid that
+            // names somebody else's child is ECHILD, never a target.
+            if (children[i].spawned_by != cur_child) continue;
+            const matches = if (want_pgrp or pid == 0)
+                (effPgid(i) == pgrp)
+            else if (pid == -1)
+                true
+            else
+                (i == @as(usize, @intCast(pid - 1)));
+            if (!matches) continue;
+            member = true;
+            if (st == .runnable or st == .blocked) live = true;
+            if (untraced and slot == null and children[i].stopped and
+                children[i].stop_signo != 0) slot = i;
+            if (st == .zombie and slot == null) slot = i;
         }
+        if (pid > 0 and (pid > MAXCHILDREN or
+            (@as(usize, @intCast(pid - 1)) >= nchildren or
+            children[@intCast(pid - 1)].state == .empty)))
+            return -10; // ECHILD — no such pid
+        if (!member and (want_pgrp or pid == 0))
+            return -10; // no children in the pgrp
+        if (!member and pid == -1) return -10; // ECHILD — no children
         if (slot) |g| {
-            const status = children[g].exit_status;
-            children[g].state = .dead;
-            children[g].waitable = false;
+            const k = &children[g];
+            // stopped vs exited: a stop REPORTS (status word) and the
+            // child keeps living; a death encodes the word differently.
+            var sv: u32 = undefined;
+            if (k.stopped and k.stop_signo != 0 and
+                k.state != .zombie) {
+                sv = 0x7f | (@as(u32, k.stop_signo) << 8);
+                k.stop_signo = 0; // reported once — linux's shape
+            } else {
+                sv = if (k.exit_signo != 0)
+                    @as(u32, k.exit_signo) // WIFSIGNALED: raw signo
+                else
+                    @truncate(@as(u64, @bitCast(k.exit_status)) << 8);
+                k.state = .dead;
+                k.waitable = false;
+                fgSweep(); // the reaped pgrp releases its fg claim
+            }
             if (stva != 0) {
-                // the wait4 status word is ENCODED — exit code in the
-                // high byte (WIFEXITED tests the low 7 bits for signals,
-                // WEXITSTATUS reads the code back out). A raw code would
-                // misreport a clean exit as a signal death.
                 var stb: [4]u8 = undefined;
-                const sv: u32 = @truncate(@as(u64, @bitCast(status)) << 8);
                 stb[0] = @truncate(sv);
                 stb[1] = @truncate(sv >> 8);
                 stb[2] = @truncate(sv >> 16);
@@ -4824,8 +5265,9 @@ fn childWait(c: *Child, pid: i64, stva: u64) i64 {
         if (!live) {
             return -10; // ECHILD — nobody left that could still die
         }
-        c.wait_pid = if (pid == -1) ANY_PID else @intCast(pid - 1); // slot
-        kblock(.exit); // a death mark wakes us; the loop re-questions
+        if (nohang) return 0; // live members, nothing reportable yet
+        c.wait_pid = if (pid == -1 or want_pgrp) ANY_PID else @intCast(pid - 1);
+        kblock(.exit); // a death or a stop mark wakes us; loop re-questions
     }
 }
 
@@ -4939,6 +5381,11 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
     if (!buildTables(nc)) return -12; // ENOMEM
     nc.fsv = c.fsv; // spawned inside the same view the caller names paths through
     nc.spawned_by = cur_child; // the spawner is the SIGCHLD parent
+    // spawn lands in the caller's session like a fork does — the shell
+    // model: children start in the spawner's pgrp until setpgid moves them
+    nc.pgid = effPgid(cur_child);
+    nc.sid = c.sid;
+    nc.ctty = c.ctty;
     // stdio is a projection too: conin/conout entries by default, the
     // caller's in_src/out_src entries cloned in when wiring is asked for.
     nc.fdkinds[0] = .conin;
@@ -5110,6 +5557,13 @@ fn childFork(c: *Child, f: *TrapFrame) i64 {
     nc.waitable = true;   // the status holds in a zombie for nr61 wait
     nc.sig_blocked = c.sig_blocked; // posix: the mask inherits, pending
                                   // does not — sigs stay empty
+    nc.sig_ign = c.sig_ign;         // dispositions inherit across fork
+    nc.sig_caught = c.sig_caught;
+    // session bookkeeping inherits: the child starts in the caller's
+    // pgrp/session/ctty; setpgid/setsid is how a job steps out.
+    nc.pgid = effPgid(cur_child);
+    nc.sid = c.sid;
+    nc.ctty = c.ctty;
     nc.fsbase = c.fsbase;
     nc.brk = c.brk;
     nc.brk_base = c.brk_base;
@@ -5548,8 +6002,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             const r = spawnBuild(c, f, true, f.r8, f.r9);
             f.rax = @bitCast(if (r < 0) r else r + 1); // slot → pid domain
         },
-        61 => { // wait(pid, status) — pid is a slot nid, -1 any zombie
-            f.rax = @bitCast(childWait(c, @bitCast(f.rdi), f.rsi));
+        61 => { // wait4(pid, status, options, rusage) — pid domain is
+                // slot+1; -1 any, <-1 a pgrp, 0 the caller's own pgrp.
+                // rdx carries WNOHANG/WUNTRACED like linux; r10's rusage
+                // is a pointer we don't fill (musl tolerates null here —
+                // its waitpid passes NULL).
+            f.rax = @bitCast(childWait(c, @bitCast(f.rdi), f.rsi, f.rdx));
         },
         3 => { // close(fd) — discharge whatever the slot projects; a
                // conin/conout close just detaches.
@@ -5683,17 +6141,148 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             }
             f.rax = @bitCast(ret);
         },
-        13 => { // rt_sigaction — wl_shm's SIGBUS guard installs/restores a
-                // handler around each shm access. No kill, no SIGBUS (our
-                // eager map faults at copy time) — a registered handler
-                // that can never fire is the truthful shape. oldact gets
-                // SIG_DFL, the honest current disposition.
-            if (f.rdx != 0) _ = copyToUser(c, @intCast(f.rdx), &[_]u8{0} ** 32);
-            f.rax = 0;
+        13 => { // rt_sigaction(signo, act, oldact, size) — the handler
+                // fires never (the stored-metadata ruling), but the
+                // DISPOSITION is real state now: SIG_IGN drops facts,
+                // a registered handler suppresses the kernel's default
+                // action (stop/cont/term), SIG_DFL restores it. 9/19
+                // refuse like linux — KILL and STOP take no act.
+            const signo: u32 = @truncate(f.rdi);
+            if (signo == 0 or signo > 31 or signo == 9 or signo == 19) {
+                f.rax = @bitCast(@as(i64, -22)); // EINVAL
+            } else {
+                const bit = @as(u64, 1) << @intCast(signo - 1);
+                // oldact first: the stored disposition, truthfully
+                if (f.rdx != 0) {
+                    var ob: [32]u8 = @splat(0);
+                    if (c.sig_ign & bit != 0) {
+                        std.mem.writeInt(u64, ob[0..8], 1, .little); // SIG_IGN
+                    } else if (c.sig_caught & bit != 0) {
+                        std.mem.writeInt(u64, ob[0..8], 2, .little); // a handler
+                    }
+                    _ = copyToUser(c, @intCast(f.rdx), &ob);
+                }
+                if (f.rsi != 0) {
+                    var ib: [8]u8 = undefined;
+                    if (copyFromUser(c, @intCast(f.rsi), &ib) < 8) {
+                        f.rax = @bitCast(@as(i64, -14)); // EFAULT
+                    } else {
+                        const h = std.mem.readInt(u64, &ib, .little);
+                        if (h == 1) { // SIG_IGN
+                            c.sig_ign |= bit;
+                            c.sig_caught &= ~bit;
+                        } else if (h == 0) { // SIG_DFL
+                            c.sig_ign &= ~bit;
+                            c.sig_caught &= ~bit;
+                        } else { // a handler address — caught, never fires
+                            c.sig_ign &= ~bit;
+                            c.sig_caught |= bit;
+                        }
+                        f.rax = 0;
+                    }
+                } else f.rax = 0;
+            }
         },
         39, 186 => { // getpid / gettid — the pid domain is slot+1; one
                      // thread per child exists, so tid IS pid here.
             f.rax = @intCast(cur_child + 1);
+        },
+        62 => { // kill(pid, signo) — the fact lands on the target; the
+                // disposition runs as kernel bookkeeping (a TERM victim
+                // dies here, a TSTP one stops). pid 0 = caller's pgrp,
+                // <-1 = the pgrp |pid|, -1 = every live child but self
+                // (linux's own rule — init/self exempt).
+            const pid: i64 = @bitCast(f.rdi);
+            const sig: u32 = @truncate(f.rsi);
+            if (sig > 31) {
+                f.rax = @bitCast(@as(i64, -22)); // EINVAL
+            } else {
+                var found = false;
+                for (0..nchildren) |i| {
+                    const t = &children[i];
+                    if (t.state != .runnable and t.state != .blocked and
+                        t.state != .zombie) continue;
+                    const hit = if (pid > 0)
+                        (i == @as(usize, @intCast(pid - 1)))
+                    else if (pid == 0)
+                        (effPgid(i) == effPgid(cur_child))
+                    else if (pid == -1)
+                        (i != cur_child)
+                    else
+                        (effPgid(i) == @as(usize, @intCast(-pid)));
+                    if (!hit) continue;
+                    found = true;
+                    if (sig != 0) sigSend(i, .{ .signo = @intCast(sig) });
+                    // sigSend that killed SELF never returns — the loop
+                    // is unreachable past that point, like linux.
+                }
+                f.rax = @bitCast(if (found) @as(i64, 0) else -3); // ESRCH
+            }
+        },
+        109 => { // setpgid(pid, pgid) — pid 0 self, pgid 0 = the target's
+                 // own pid. The linux edges we honor: target is self or
+                 // a spawned child, same session, not a session leader,
+                 // and a foreign pgid must name a live pgrp in it.
+            const pid: i64 = @bitCast(f.rdi);
+            const pg: i64 = @bitCast(f.rsi);
+            if (pid < 0 or pg < 0 or pid > MAXCHILDREN or pg > MAXCHILDREN) {
+                f.rax = @bitCast(@as(i64, -22)); // EINVAL
+            } else {
+                const ts: usize = if (pid == 0) cur_child else @intCast(pid - 1);
+                const t = &children[ts];
+                const newpg: usize = if (pg == 0) ts + 1 else @intCast(pg);
+                var ret: i64 = 0;
+                if (t.state != .runnable and t.state != .blocked and
+                    t.state != .zombie) {
+                    ret = -3; // ESRCH
+                } else if (ts != cur_child and t.spawned_by != cur_child) {
+                    ret = -3; // ESRCH — not our child (linux's wording)
+                } else if (t.sid == ts + 1) {
+                    ret = -1; // EPERM — a session leader can't regroup
+                } else if (t.sid != c.sid) {
+                    ret = -1; // EPERM — different session
+                } else if (newpg != ts + 1 and !pgrpLiveIn(newpg, t.sid)) {
+                    ret = -1; // EPERM — no such pgrp in the session
+                } else {
+                    t.pgid = newpg;
+                }
+                f.rax = @bitCast(ret);
+            }
+        },
+        111, 121 => { // getpgrp / getpgid(pid) — the group's pid-domain id
+            const pid: i64 = @bitCast(f.rdi);
+            if (pid == 0) {
+                f.rax = @intCast(effPgid(cur_child));
+            } else if (pid < 0 or pid > MAXCHILDREN or
+                children[@intCast(pid - 1)].state == .empty) {
+                f.rax = @bitCast(@as(i64, -3)); // ESRCH
+            } else {
+                f.rax = @intCast(effPgid(@intCast(pid - 1)));
+            }
+        },
+        112 => { // setsid() — the caller becomes a session leader:
+                 // new sid+pgid = own pid, ctty drops. EPERM if it is
+                 // already a pgrp leader, like linux.
+            if (effPgid(cur_child) == cur_child + 1) {
+                f.rax = @bitCast(@as(i64, -1)); // EPERM
+            } else {
+                c.sid = cur_child + 1;
+                c.pgid = cur_child + 1;
+                c.ctty = 0;
+                f.rax = @intCast(c.sid);
+            }
+        },
+        124 => { // getsid(pid) — 0 self; the leader's pid, 0 if the child
+                 // never joined a session (our kernel children).
+            const pid: i64 = @bitCast(f.rdi);
+            if (pid == 0) {
+                f.rax = @intCast(c.sid);
+            } else if (pid < 0 or pid > MAXCHILDREN or
+                children[@intCast(pid - 1)].state == .empty) {
+                f.rax = @bitCast(@as(i64, -3)); // ESRCH
+            } else {
+                f.rax = @intCast(children[@intCast(pid - 1)].sid);
+            }
         },
         72 => { // fcntl(fd, cmd, arg) — flag ops are honest no-ops (no
                 // exec exists for CLOEXEC to matter, O_NONBLOCK rides
@@ -5919,62 +6508,9 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             }
             f.rax = f.rsi;
         },
-        60, 231 => { // exit/exit_group(code) — child dies, frames go back
-            last_exit = f.rdi;
-            const dead_slot = cur_child;
-            // The fd projection dies with the child — endpoint refs drop
-            // here, which is what wakes a peer blocked on this pipe.
-            releaseFds(&children[dead_slot]);
-            // Wake spawn/wait-waiters with the status already in hand: a
-            // parent's loop breaks on observing this slot .dead/.zombie,
-            // then reads its OWN spawn_ret — the value can't be clobbered
-            // by the dead slot's reuse because it lives in the waiter.
-            // ANY_PID is nr61's wait-any mark.
-            for (0..nchildren) |i| {
-                const p = &children[i];
-                if (p.state == .blocked and p.wait_kind == .exit and
-                    (p.wait_pid == dead_slot or p.wait_pid == ANY_PID)) {
-                    p.spawn_ret = @bitCast(last_exit);
-                    p.state = .runnable;
-                }
-            }
-            // SIGCHLD — the first honest producer: the spawner's queue
-            // gets the death fact whether or not it ever reads it. Only
-            // a live slot carries a queue (runnable/blocked/zombie —
-            // .dead is free for reuse, .empty never ran).
-            {
-                const db = children[dead_slot].spawned_by;
-                if (db < nchildren and db != dead_slot) {
-                    const p = &children[db];
-                    if (p.state == .runnable or p.state == .blocked or
-                        p.state == .zombie) {
-                        sigQueue(p, .{ .signo = SIGCHLD,
-                            .code = CLD_EXITED,
-                            .pid = @intCast(dead_slot + 1),
-                            .status = @intCast(last_exit) });
-                        wakeKind(.poll); // the fact lands while a reader
-                                         // parks on the queue's fd
-                    }
-                }
-            }
-            const dead = &children[cur_child];
-            dead.exit_status = @bitCast(last_exit);
-            // .waitable (nr513/fork) parks the status in a .zombie for
-            // wait to claim; a fused nr512 child has no claimant — .dead.
-            dead.state = if (dead.waitable) .zombie else .dead;
-            const nf = freeChild(dead);
-            say("pmm: reap freed=");
-            puthex(nf);
-            say("\n");
-            // The dead child's claim lapses — whichever cpu's schedLoop
-            // the rotation names next picks up the roster; if the roster
-            // drained, THIS cpu escapes back into the spawn caller (the
-            // saved stack is shared memory — the continuation is
-            // cpu-agnostic, so last-exit-on-AP is a lawful migration).
-            // Hop off the dead child's kstack first — releaseExec's kick
-            // wakes a designee that may reuse this slot's stack.
-            schedEnter(&exitTail);
-            unreachable;
+        60, 231 => { // exit/exit_group(code) — child dies, frames go back.
+                   // The body is childDie's: kill()'s self-path shares it.
+            childDie(@bitCast(f.rdi), 0);
         },
         else => {
             say("SEAM ENOSYS nr=");
@@ -5991,7 +6527,9 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
 fn nextRunnable() ?usize {
     for (0..nchildren) |k| {
         const j = (cur_child + 1 + k) % nchildren;
-        if (children[j].state == .runnable) return j;
+        // a stopped child stays in the epoch — runnable but gated; the
+        // CONT fact flips it back without touching .state
+        if (children[j].state == .runnable and !children[j].stopped) return j;
     }
     return null;
 }
