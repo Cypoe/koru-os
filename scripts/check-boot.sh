@@ -276,6 +276,42 @@ else
     bad "iso-initramfs: build failed (python/fsread/mkcpio/iso)"; tail -4 "$WORK/fsread.build" "$WORK/mkcpio.log" "$WORK/isorf.build" 2>/dev/null
 fi
 
+# pty-termios: the terminal primitive — a musl child mints a
+# master/slave pair through nr521 and drives the whole ldisc through
+# real syscalls: canonical echo/erase/kill (echo bytes asserted),
+# ISIG ^C -> pending SIGINT fact consumed through musl signalfd4
+# (nr327 alias), TIOCSWINSZ -> SIGWINCH, ICRNL, OPOST|ONLCR, raw mode,
+# TIOCGPTN, EIO on the dead end. The same source compiles into a
+# linux twin (posix_openpt) — WSL is the measured oracle this rung
+# was built against.
+if command -v python >/dev/null 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -DKORU_DOOR -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/ptytest.elf" "$ROOT/koru/native/tests/ptytest.c" > "$WORK/ptytest.build" 2>&1 \
+   && python "$ROOT/scripts/mkcpio.py" "$WORKW/pty.cpio" \
+        "bin/ptytest=$WORKW/ptytest.elf|755" > "$WORK/mkcpiopty.log" 2>&1 \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koru/native/tests/boot_pty.k" > "$WORK/boot_pty.k" \
+   && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_pty.k" "$WORK/koru-pty.iso" "$WORKW/pty.cpio" > "$WORK/isopty.build" 2>&1; then
+    timeout 60 "$QEMU" -cdrom "$WORK/koru-pty.iso" -boot d -serial stdio \
+        -display none -m 128M -no-reboot > "$WORK/boot_pty.serial" 2>&1 || true
+    if grep -qF 'PTY openpty got=0' "$WORK/boot_pty.serial" \
+       && grep -qF "PTY lflag=00008a3b" "$WORK/boot_pty.serial" \
+       && grep -qF "PTY canon-echo hex=6865650820086c6c6f0d0a" "$WORK/boot_pty.serial" \
+       && grep -qF "PTY kill-echo hex=616208200808200863640d0a" "$WORK/boot_pty.serial" \
+       && grep -qF "PTY sig-signo got=2" "$WORK/boot_pty.serial" \
+       && grep -qF "PTY winch-signo got=28" "$WORK/boot_pty.serial" \
+       && grep -qF "PTY getptn got=0" "$WORK/boot_pty.serial" \
+       && grep -qF "PTY onlcr hex=780d0a790d0a" "$WORK/boot_pty.serial" \
+       && grep -qF "PTY m-eio-read got=5" "$WORK/boot_pty.serial" \
+       && grep -qF "PTY COMPLETE fails=0" "$WORK/boot_pty.serial" \
+       && grep -qF "pty: exec /bin/ptytest" "$WORK/boot_pty.serial" \
+       && grep -qF "status=0" "$WORK/boot_pty.serial"; then
+        ok "pty-termios: openpty + ldisc (echo/erase/kill/ISIG/winsz/ICRNL/ONLCR/EIO) + musl signalfd, status=0"
+    else
+        bad "pty-termios: $(grep -aE 'PTY|pty:|FAIL' "$WORK/boot_pty.serial" | tail -14 | tr '\n' '|')"
+    fi
+else
+    bad "pty-termios: build failed (ptytest/mkcpio/iso)"; tail -4 "$WORK/ptytest.build" "$WORK/mkcpiopty.log" "$WORK/isopty.build" 2>/dev/null
+fi
+
 # usb-esp: the flash-stick rung — a raw GPT image whose FAT32 ESP
 # carries a standalone GRUB-EFI (modules+cfg embedded) plus the kernel
 # and the cpio module. QEMU attaches it as USB mass-storage behind

@@ -858,13 +858,13 @@ const ChildFsOps = extern struct {
     stat_path: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64,
 };
 
-const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd };
+const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd, pty };
 
 // fd slots are projections over typed seam endpoints, not bare provider
 // handles: stdio are real entries (conin/conout), fs a view handle,
 // pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
 // kind, never on the number — closing fd0 detaches like any discharge.
-const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input, epoll, efd, tfd, sfd };
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input, epoll, efd, tfd, sfd, ptym, ptys };
 
 // ---- signals: queueable kernel facts, not interruptions -------------------
 // This arm delivers NO asynchronous invocation — a handler registered
@@ -1647,8 +1647,12 @@ fn canonNr(nr: u64) u64 {
         // scheduling, seat repeat).
         283, 286, 287 => 22,
         // signalfd is the same class again: the pending-signal queue is
-        // a channel — wl_event_loop_add_signal rides it.
-        282, 289 => 22,
+        // a channel — wl_event_loop_add_signal rides it. 74/327 are
+        // linux's own signalfd/signalfd4 nrs — real musl speaks them.
+        282, 289, 74, 327 => 22,
+        // a pty pair is two channels with a line discipline — same
+        // class. ioctl(16) on a tty is the channel's own config verb.
+        521, 16 => 22,
         // fchmod mutates an object's mode bits — same class as
         // ftruncate's shape mutation.
         91 => 2,
@@ -2203,6 +2207,12 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             stw(&st, 24, 0o10600);
             stw(&st, 16, 1);
         },
+        .ptym, .ptys => {
+            // a char device — S_IFCHR|0620 is what a pts is; musl's
+            // isatty probes chrdev then TCGETS, and TCGETS answers.
+            stw(&st, 24, 0o20620);
+            stw(&st, 16, 1);
+        },
         .sock, .slisten => {
             // S_IFSOCK|0600 — musl's socket probing names it correctly
             stw(&st, 24, 0o140600);
@@ -2376,6 +2386,573 @@ fn pipeWriteEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
     }
 }
 
+// ---- pty: a channel pair with a line discipline ----------------------
+// nr521 openpty(sv[2]) mints master+slave endpoints (cap folds to the
+// channel class — a pty IS two rings plus a termios-shaped ldisc on the
+// master->slave direction). The ldisc does what a real terminal needs:
+// canonical editing (echo/erase/werase/kill/VEOF line pushes), ISIG
+// (^C/^\/^Z queue facts on the slave's owner — the fg-pgrp stand-in
+// until sessions exist), ICRNL/INLCR/IGNCR input maps, IXON/IXOFF
+// output pause. The slave->master direction carries OPOST/ONLCR.
+// ioctl(16) on a pty fd serves the termios/winsz/ptn/lock set; every
+// other fd still answers ENOTTY honestly. termios is the kernel
+// 36-byte shape (4 u32 flags + line + cc[19]) — the 60-byte libc
+// struct reads its first 36 fine, which is exactly what Linux's own
+// TCGETS fills. c_cc indices are the kernel's (VINTR=0..VEOL2=16).
+// EOS is linux's answer: master gone -> slave ioctls/reads EIO; slave
+// gone -> master EIO. Signals queue as facts — no async delivery —
+// consumed through signalfd like everything else on this arm.
+const NPTYS = 4;
+const PTY_LINES = 32; // pending canonical line queue — a bounded queue
+                    // like every other channel bound on this arm
+const Pty = struct {
+    used: bool = false,
+    mrefs: u8 = 0,
+    srefs: u8 = 0,
+    owner: usize = 0,       // last child to hold a slave end — ISIG/
+                            // SIGWINCH destination; sessions refine it
+    ih: usize = 0, it: usize = 0, ic: usize = 0,
+    in: [4096]u8 = undefined,   // master->slave, post-ldisc (cooked)
+    oh: usize = 0, ot: usize = 0, oc: usize = 0,
+    out: [4096]u8 = undefined,  // slave->master, post-OPOST
+    line: [4096]u8 = undefined, // canonical edit buffer (pre-flush)
+    line_len: usize = 0,
+    lines: [PTY_LINES]u32 = .{0} ** PTY_LINES, // cooked line lengths —
+                                // a zero entry IS a VEOF line: read()=0
+    lh: usize = 0, lc: usize = 0,
+    out_stop: bool = false,     // IXON/IXOFF VSTOP held
+    tio: [36]u8 = undefined,
+    ws: [8]u8 = .{0} ** 8,
+    locked: bool = false,
+};
+var ptys: [NPTYS]Pty = .{Pty{}} ** NPTYS;
+
+// termios offsets: iflag oflag cflag lflag | line | cc[19]
+const T_IF = 0;
+const T_OF = 4;
+const T_LF = 12;
+const T_CC = 17;
+const ISIG: u32 = 0x1;
+const ICANON: u32 = 0x2;
+const ECHO: u32 = 0x8;
+const ECHOE: u32 = 0x10;
+const ECHOK: u32 = 0x20;
+const ECHONL: u32 = 0x40;
+const ECHOCTL: u32 = 0x200;
+const ECHOKE: u32 = 0x800;
+const IEXTEN: u32 = 0x8000;
+const INLCR: u32 = 0x40;
+const IGNCR: u32 = 0x80;
+const ICRNL: u32 = 0x100;
+const IXON: u32 = 0x400;
+const OPOST: u32 = 0x1;
+const ONLCR: u32 = 0x4;
+const VINTR = 0;
+const VQUIT = 1;
+const VERASE = 2;
+const VKILL = 3;
+const VEOF = 4;
+const VSTART = 8;
+const VSTOP = 9;
+const VSUSP = 10;
+const VEOL = 11;
+const VWERASE = 14;
+
+// Kernel defaults a fresh ptmx serves — linux's own ptmx termios,
+// measured (WSL oracle, lflag=8a3b iflag=0500): ICRNL|IXON in,
+// OPOST|ONLCR out, B38400|CS8|CREAD, ISIG|ICANON|ECHO|ECHOE|ECHOK|
+// ECHOCTL|ECHOKE|IEXTEN, N_TTY, stock c_cc.
+const PTY_TIO_INIT = [36]u8{
+    0x00, 0x05, 0, 0, // iflag = ICRNL|IXON
+    0x05, 0, 0, 0,    // oflag = OPOST|ONLCR
+    0xBF, 0, 0, 0,    // cflag = B38400|CS8|CREAD
+    0x3B, 0x8A, 0, 0, // lflag = linux ptmx default 0x8a3b
+    0,                // line = N_TTY
+    3, 0x1c, 0x7f, 0x15, 4, 0, 1, 0, 0x11, 0x13, 0x1a, 0, 0x12, 0x0f,
+    0x17, 0x16, 0, 0, 0,
+};
+
+fn tioF(t: *const Pty, off: usize) u32 {
+    return std.mem.readInt(u32, t.tio[off..][0..4], .little);
+}
+
+fn ptyInPush(t: *Pty, b: u8) bool {
+    if (t.ic >= t.in.len) return false;
+    t.in[t.ih] = b;
+    t.ih = (t.ih + 1) % t.in.len;
+    t.ic += 1;
+    return true;
+}
+
+fn ptyOutPush(t: *Pty, b: u8) bool {
+    if (t.oc >= t.out.len) return false;
+    t.out[t.oh] = b;
+    t.oh = (t.oh + 1) % t.out.len;
+    t.oc += 1;
+    return true;
+}
+
+// Echo rides the output transform — a '\n' echoes as \r\n under
+// OPOST|ONLCR, which is why the visible line sits right on a real tty.
+fn ptyEcho(t: *Pty, b: u8) void {
+    if (b == '\n' and (tioF(t, T_OF) & (OPOST | ONLCR)) == (OPOST | ONLCR))
+        _ = ptyOutPush(t, '\r');
+    _ = ptyOutPush(t, b);
+}
+
+fn ptyFlushInput(t: *Pty) void {
+    t.ic = 0;
+    t.ih = 0;
+    t.it = 0;
+    t.line_len = 0;
+    t.lh = 0;
+    t.lc = 0;
+}
+
+// Canonical line -> cooked ring + a line-length entry. The queue full
+// case merges into the previous line rather than dropping bytes —
+// bounded, honest, never silent data loss for the reader.
+fn ptyFlushLine(t: *Pty) void {
+    var n: u32 = 0;
+    while (n < t.line_len) : (n += 1) {
+        if (!ptyInPush(t, t.line[n])) break;
+    }
+    if (t.lc < PTY_LINES) {
+        t.lines[(t.lh + t.lc) % PTY_LINES] = n;
+        t.lc += 1;
+    } else {
+        t.lines[(t.lh + t.lc - 1) % PTY_LINES] += n;
+    }
+    t.line_len = 0;
+}
+
+// ISIG char: the fact queues on the slave's owner; the input queue
+// flushes (NOFLSH unset — the default); ECHO shows the caret glyph the
+// same way a linux tty makes ^C visible.
+fn ptySignal(t: *Pty, idx: usize, signo: u8, ch: u8) void {
+    ptyFlushInput(t);
+    const lfl = tioF(t, T_LF);
+    if (lfl & ECHO != 0) {
+        if (lfl & ECHOCTL != 0) {
+            // ECHOCTL shape measured on linux: the caret glyph pair
+            // ONLY — "^C" two bytes, no newline (n_tty emits none).
+            ptyEcho(t, '^');
+            ptyEcho(t, switch (signo) { 2 => 'C', 3 => '\\', else => 'Z' });
+        } else {
+            ptyEcho(t, ch); // ECHOCTL off: the raw control char echoes
+        }
+    }
+    if (t.owner < nchildren) {
+        const o = &children[t.owner];
+        if (o.state == .runnable or o.state == .blocked or
+            o.state == .zombie) sigQueue(o, .{ .signo = signo });
+    }
+    _ = idx;
+}
+
+// Feed one byte from the master side through the ldisc. false means the
+// byte needed queue space that did not exist — the writer parks and
+// retries; every other outcome (queued, consumed, echoed, signalled)
+// consumes the byte.
+fn ptyFeedInput(t: *Pty, idx: usize, b0: u8) bool {
+    var b = b0;
+    const ifl = tioF(t, T_IF);
+    const lfl = tioF(t, T_LF);
+    if (ifl & IGNCR != 0 and b == '\r') return true;
+    if (ifl & INLCR != 0 and b == '\n') b = '\r';
+    if (ifl & ICRNL != 0 and b == '\r') b = '\n';
+    if (ifl & IXON != 0) {
+        if (b == t.tio[T_CC + VSTART]) {
+            t.out_stop = false;
+            wakePty(idx, 1); // output resumes — prod parked slave writes
+            return true;
+        }
+        if (b == t.tio[T_CC + VSTOP]) {
+            t.out_stop = true;
+            return true;
+        }
+    }
+    if (lfl & ISIG != 0) {
+        if (b == t.tio[T_CC + VINTR]) {
+            ptySignal(t, idx, 2, b); // SIGINT
+            wakePty(idx, 0); // the flush may have freed a line read
+            return true;
+        }
+        if (b == t.tio[T_CC + VQUIT]) {
+            ptySignal(t, idx, 3, b); // SIGQUIT
+            wakePty(idx, 0);
+            return true;
+        }
+        if (b == t.tio[T_CC + VSUSP]) {
+            ptySignal(t, idx, 20, b); // SIGTSTP
+            wakePty(idx, 0);
+            return true;
+        }
+    }
+    if (lfl & ICANON != 0) {
+        if (b == t.tio[T_CC + VERASE]) {
+            if (t.line_len > 0) {
+                t.line_len -= 1;
+                if (lfl & ECHOE != 0) {
+                    ptyEcho(t, 0x08);
+                    ptyEcho(t, ' ');
+                    ptyEcho(t, 0x08);
+                }
+            }
+            return true;
+        }
+        if (b == t.tio[T_CC + VWERASE]) {
+            if (lfl & IEXTEN != 0) {
+                while (t.line_len > 0 and t.line[t.line_len - 1] == ' ') {
+                    t.line_len -= 1;
+                    if (lfl & ECHOE != 0) {
+                        ptyEcho(t, 0x08);
+                        ptyEcho(t, ' ');
+                        ptyEcho(t, 0x08);
+                    }
+                }
+                while (t.line_len > 0 and t.line[t.line_len - 1] != ' ') {
+                    t.line_len -= 1;
+                    if (lfl & ECHOE != 0) {
+                        ptyEcho(t, 0x08);
+                        ptyEcho(t, ' ');
+                        ptyEcho(t, 0x08);
+                    }
+                }
+            }
+            return true;
+        }
+        if (b == t.tio[T_CC + VKILL]) {
+            // linux n_tty, measured: ECHOKE erases the line visually
+            // (BS SP BS per char, no glyph, no newline); the ECHOK
+            // newline only fires when nothing was erased visually.
+            if (lfl & ECHOKE != 0) {
+                while (t.line_len > 0) {
+                    t.line_len -= 1;
+                    ptyEcho(t, 0x08);
+                    ptyEcho(t, ' ');
+                    ptyEcho(t, 0x08);
+                }
+            } else if (lfl & ECHOK != 0) {
+                t.line_len = 0;
+                ptyEcho(t, '\n');
+            } else {
+                t.line_len = 0;
+            }
+            return true;
+        }
+        if (b == t.tio[T_CC + VEOF]) {
+            ptyFlushLine(t); // the queued entry may be empty — read()=0
+            wakePty(idx, 0);
+            return true;
+        }
+        if (b == '\n' or b == t.tio[T_CC + VEOL]) {
+            if (t.line_len >= t.line.len) return false;
+            t.line[t.line_len] = b;
+            t.line_len += 1;
+            ptyFlushLine(t);
+            if (lfl & ECHONL != 0 or lfl & ECHO != 0) ptyEcho(t, '\n');
+            return true;
+        }
+        if (t.line_len >= t.line.len) return false;
+        t.line[t.line_len] = b;
+        t.line_len += 1;
+        if (lfl & ECHO != 0) ptyEcho(t, b);
+        return true;
+    }
+    // non-canonical: bytes straight to the cooked ring; VMIN>=1,VTIME=0
+    // is the honored shape — read returns what arrived, or parks.
+    if (lfl & ECHO != 0) ptyEcho(t, b);
+    return ptyInPush(t, b);
+}
+
+// Mark-only wake for every .pty waiter on this channel — called after
+// any queue/ref/state change; the woken call rechecks. .poll waiters
+// ride every wake like wakeKind grants them: any readiness change is
+// potentially theirs.
+fn wakePty(idx: usize, dir: usize) void {
+    const key = idx * 2 + dir;
+    for (0..nchildren) |i| {
+        const p = &children[i];
+        if (p.state == .blocked and
+            ((p.wait_kind == .pty and p.wait_pipe == key) or
+                p.wait_kind == .poll)) p.state = .runnable;
+    }
+}
+
+fn ptyCloseEnd(idx: usize, kind: FdKind) void {
+    const t = &ptys[idx];
+    if (kind == .ptym) {
+        if (t.mrefs > 0) t.mrefs -= 1;
+        wakePty(idx, 0); // a dead master is the slave's EIO wake
+    } else {
+        if (t.srefs > 0) t.srefs -= 1;
+        wakePty(idx, 1); // a dead slave is the master's EIO wake
+    }
+    if (t.mrefs == 0 and t.srefs == 0) t.* = .{};
+}
+
+// nr521 — openpty(sv[2]): mint the pair, master+slave both R/W. Minted
+// unlocked (this is openpty, not bare ptmx); TIOCSPTLCK still honored
+// so musl's unlockpt() round-trips for free.
+fn childOpenpty(c: *Child, svva: u64) i64 {
+    var slots: [2]usize = undefined;
+    var sn: usize = 0;
+    for (0..c.fds.len) |i| {
+        if (c.fdkinds[i] == .none) {
+            slots[sn] = i;
+            sn += 1;
+            if (sn == 2) break;
+        }
+    }
+    if (sn < 2) return -24; // EMFILE
+    var pi: usize = NPTYS;
+    for (0..NPTYS) |i| {
+        if (!ptys[i].used) {
+            pi = i;
+            break;
+        }
+    }
+    if (pi == NPTYS) return -24;
+    ptys[pi] = .{
+        .used = true,
+        .mrefs = 1,
+        .srefs = 1,
+        .owner = cur_child,
+        .tio = PTY_TIO_INIT,
+    };
+    var out: [8]u8 = undefined;
+    for (0..2) |i| {
+        const v: u32 = @intCast(slots[i]);
+        std.mem.writeInt(u32, out[i * 4 ..][0..4], v, .little);
+    }
+    if (copyToUser(c, @intCast(svva), &out) < 8) {
+        ptys[pi] = .{};
+        return -14;
+    }
+    c.fdkinds[slots[0]] = .ptym;
+    c.fds[slots[0]] = pi;
+    c.fdverbs[slots[0]] = V_READ | V_WRITE;
+    c.fdkinds[slots[1]] = .ptys;
+    c.fds[slots[1]] = pi;
+    c.fdverbs[slots[1]] = V_READ | V_WRITE;
+    return 0;
+}
+
+// Master -> slave: bytes through the ldisc. Slave-side queue space is
+// what parks the writer — erase/signal/special bytes always consume
+// (they free room or queue facts), only a queued byte can stall.
+fn ptyMasterWrite(c: *Child, idx: usize, bva: u64, want: u64) i64 {
+    if (want == 0) return 0;
+    const t = &ptys[idx];
+    if (t.srefs == 0) return -5; // EIO — linux's dead-slave answer
+    var n: usize = 0;
+    while (n < want) : (n += 1) {
+        const va: usize = @intCast(bva + n);
+        if (userEntry(c, va) & 1 == 0)
+            return if (n != 0) @intCast(n) else -14;
+        while (!ptyFeedInput(t, idx, userByte(c, va))) {
+            c.wait_pipe = idx * 2; // master->slave channel full
+            kblock(.pty);
+            if (t.srefs == 0) return -5; // slave died while we parked
+        }
+    }
+    wakePty(idx, 0); // cooked bytes landed — prod parked slave readers
+    return @intCast(n);
+}
+
+// Slave -> master: bytes through OPOST/ONLCR. The ring fills or IXON's
+// VSTOP holds output — either way the writer parks on the channel and
+// the recheck is what actually sees room.
+fn ptySlaveWrite(c: *Child, idx: usize, bva: u64, want: u64) i64 {
+    if (want == 0) return 0;
+    const t = &ptys[idx];
+    if (t.mrefs == 0) return -5; // EIO — master gone
+    var n: usize = 0;
+    while (n < want) : (n += 1) {
+        const va: usize = @intCast(bva + n);
+        if (userEntry(c, va) & 1 == 0)
+            return if (n != 0) @intCast(n) else -14;
+        while (t.out_stop or t.oc >= t.out.len) {
+            c.wait_pipe = idx * 2 + 1; // slave->master channel
+            kblock(.pty);
+            if (t.mrefs == 0) return -5;
+        }
+        const b = userByte(c, va);
+        if (b == '\n' and (tioF(t, T_OF) & (OPOST | ONLCR)) == (OPOST | ONLCR))
+            _ = ptyOutPush(t, '\r');
+        _ = ptyOutPush(t, b);
+    }
+    wakePty(idx, 1); // output landed — prod parked master readers
+    return @intCast(n);
+}
+
+// Slave read: canonical gives one cooked line per read (partial reads
+// consume line bytes in place; a zero-length entry is a VEOF -> 0);
+// non-canonical drains the cooked ring. Master gone -> EIO, which is
+// linux's answer — not a fake EOF.
+fn ptySlaveRead(c: *Child, idx: usize, bva: u64, want: u64) i64 {
+    if (want == 0) return 0;
+    const t = &ptys[idx];
+    const canon = tioF(t, T_LF) & ICANON != 0;
+    while (true) {
+        if (canon) {
+            if (t.lc > 0) {
+                if (t.lines[t.lh] == 0) { // VEOF line — read()=0, pop it
+                    t.lh = (t.lh + 1) % PTY_LINES;
+                    t.lc -= 1;
+                    return 0;
+                }
+                var n: usize = 0;
+                while (n < want and t.lines[t.lh] != 0 and t.ic > 0) {
+                    const va: usize = @intCast(bva + n);
+                    if (userEntry(c, va) & 1 == 0) break;
+                    const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
+                    ub[0] = t.in[t.it];
+                    t.it = (t.it + 1) % t.in.len;
+                    t.ic -= 1;
+                    t.lines[t.lh] -= 1;
+                    n += 1;
+                }
+                if (t.lines[t.lh] == 0) {
+                    t.lh = (t.lh + 1) % PTY_LINES;
+                    t.lc -= 1;
+                }
+                if (n != 0) {
+                    wakePty(idx, 0);
+                    return @intCast(n);
+                }
+                if (userEntry(c, @intCast(bva)) & 1 == 0) return -14;
+            } else if (t.mrefs == 0) {
+                return -5; // EIO
+            } else {
+                c.wait_pipe = idx * 2;
+                kblock(.pty); // wake = a line flush, VEOF, or master gone
+            }
+        } else {
+            if (t.ic > 0) {
+                var n: usize = 0;
+                while (n < want and t.ic > 0) {
+                    const va: usize = @intCast(bva + n);
+                    if (userEntry(c, va) & 1 == 0) break;
+                    const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
+                    ub[0] = t.in[t.it];
+                    t.it = (t.it + 1) % t.in.len;
+                    t.ic -= 1;
+                    n += 1;
+                }
+                if (n != 0) {
+                    wakePty(idx, 0);
+                    return @intCast(n);
+                }
+                if (userEntry(c, @intCast(bva)) & 1 == 0) return -14;
+            } else if (t.mrefs == 0) {
+                return -5; // EIO
+            } else {
+                c.wait_pipe = idx * 2;
+                kblock(.pty);
+            }
+        }
+    }
+}
+
+// Master read: drain the output ring; slave gone -> EIO after drain,
+// linux's shape (bytes already written stay readable).
+fn ptyMasterRead(c: *Child, idx: usize, bva: u64, want: u64) i64 {
+    if (want == 0) return 0;
+    const t = &ptys[idx];
+    while (true) {
+        if (t.oc > 0) {
+            var n: usize = 0;
+            while (n < want and t.oc > 0) {
+                const va: usize = @intCast(bva + n);
+                if (userEntry(c, va) & 1 == 0) break;
+                const ub: [*]u8 = @ptrFromInt(userPhys(c, va) + (va & 0xFFF));
+                ub[0] = t.out[t.ot];
+                t.ot = (t.ot + 1) % t.out.len;
+                t.oc -= 1;
+                n += 1;
+            }
+            if (n != 0) {
+                wakePty(idx, 1);
+                return @intCast(n);
+            }
+            if (userEntry(c, @intCast(bva)) & 1 == 0) return -14;
+        } else if (t.srefs == 0) {
+            return -5; // EIO — linux's dead-slave answer, not EOF
+        } else {
+            c.wait_pipe = idx * 2 + 1;
+            kblock(.pty);
+        }
+    }
+}
+
+// ioctl(16) on a pty fd — the termios/winsz/ptn/lock surface musl's
+// tty door already speaks. cmd numbers are the linux values: that IS
+// the ABI musl wraps.
+fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
+    const t = &ptys[idx];
+    switch (cmd) {
+        0x5401 => { // TCGETS
+            return if (copyToUser(c, @intCast(arg), &t.tio) < 36) -14 else 0;
+        },
+        0x5402, 0x5403 => { // TCSETS / TCSETSW (output drains instantly)
+            var buf: [36]u8 = undefined;
+            if (copyFromUser(c, @intCast(arg), &buf) < 36) return -14;
+            t.tio = buf;
+            return 0;
+        },
+        0x5404 => { // TCSETSF — set + flush pending input
+            var buf: [36]u8 = undefined;
+            if (copyFromUser(c, @intCast(arg), &buf) < 36) return -14;
+            t.tio = buf;
+            ptyFlushInput(t);
+            return 0;
+        },
+        0x5413 => { // TIOCGWINSZ
+            return if (copyToUser(c, @intCast(arg), &t.ws) < 8) -14 else 0;
+        },
+        0x5414 => { // TIOCSWINSZ — the fact lands as SIGWINCH
+            var buf: [8]u8 = undefined;
+            if (copyFromUser(c, @intCast(arg), &buf) < 8) return -14;
+            t.ws = buf;
+            if (t.owner < nchildren) {
+                const o = &children[t.owner];
+                if (o.state == .runnable or o.state == .blocked or
+                    o.state == .zombie) sigQueue(o, .{ .signo = 28 });
+            }
+            return 0;
+        },
+        0x80045430 => { // TIOCGPTN — musl ptsname's read of the number
+            var buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf, @intCast(idx), .little);
+            return if (copyToUser(c, @intCast(arg), &buf) < 4) -14 else 0;
+        },
+        0x40045431 => { // TIOCSPTLCK — unlockpt's door
+            t.locked = arg != 0;
+            return 0;
+        },
+        0x541B => { // FIONREAD — bytes THIS end's read could take now:
+                    // master reads the out-ring; slave reads cooked
+                    // lines (canonical) or the raw queue (noncanon).
+            var v: usize = undefined;
+            if (master) {
+                v = t.oc;
+            } else if (tioF(t, T_LF) & ICANON != 0) {
+                v = 0;
+                for (0..t.lc) |i| v += t.lines[(t.lh + i) % PTY_LINES];
+            } else {
+                v = t.ic;
+            }
+            const v32: u32 = @intCast(@min(v, @as(usize, std.math.maxInt(u32))));
+            var buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf, v32, .little);
+            return if (copyToUser(c, @intCast(arg), &buf) < 4) -14 else 0;
+        },
+        else => return -25, // ENOTTY — the ioctl we don't speak refuses
+    }
+}
+
 // ---- unix sockets: two rings + an fd-ref queue per direction ----------
 // A SOCK_STREAM pair is a pair of kernel rings (bytes each way) PLUS the
 // ancillary channel real unix semantics demand: SCM_RIGHTS fd passing —
@@ -2480,6 +3057,8 @@ fn fdDupRef(c: *Child, fd: usize, out: *FdRef) bool {
     switch (kind) {
         .pipe_r => pipes[@intCast(c.fds[fd])].rrefs += 1,
         .pipe_w => pipes[@intCast(c.fds[fd])].wrefs += 1,
+        .ptym => ptys[@intCast(c.fds[fd])].mrefs += 1,
+        .ptys => ptys[@intCast(c.fds[fd])].srefs += 1,
         .sock => {
             const v = c.fds[fd] - 1;
             socks[@intCast(v >> 1)].refs[@intCast(v & 1)] += 1;
@@ -2510,6 +3089,7 @@ fn fdFreeRef(r: FdRef) void {
     switch (r.kind) {
         .pipe_r => pipeCloseEnd(@intCast(r.h), .pipe_r),
         .pipe_w => pipeCloseEnd(@intCast(r.h), .pipe_w),
+        .ptym, .ptys => ptyCloseEnd(@intCast(r.h), r.kind),
         .sock => sockCloseEnd(@intCast((r.h - 1) >> 1), @intCast((r.h - 1) & 1)),
         .slisten => listenerRelease(@intCast(r.h - 1)),
         .shm => shmRelease(@intCast(r.h - 1)),
@@ -3457,6 +4037,7 @@ fn releaseFd(c: *Child, i: usize) void {
             if (c.fsv) |ops| _ = ops.close(ops.ctx, c.fds[i]);
         },
         .pipe_r, .pipe_w => pipeCloseEnd(@intCast(c.fds[i]), c.fdkinds[i]),
+        .ptym, .ptys => ptyCloseEnd(@intCast(c.fds[i]), c.fdkinds[i]),
         .sock => sockCloseEnd(@intCast((c.fds[i] - 1) >> 1), @intCast((c.fds[i] - 1) & 1)),
         .slisten => listenerRelease(@intCast(c.fds[i] - 1)),
         .shm => shmRelease(@intCast(c.fds[i] - 1)),
@@ -3489,6 +4070,15 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
     switch (kind) {
         .pipe_r => pipes[@intCast(src.fds[sfd])].rrefs += 1,
         .pipe_w => pipes[@intCast(src.fds[sfd])].wrefs += 1,
+        .ptym => ptys[@intCast(src.fds[sfd])].mrefs += 1,
+        .ptys => {
+            // a new slave holder is the ISIG/winsch destination —
+            // the fg-pgrp stand-in: the spawned child inherits the
+            // terminal, facts follow the holder.
+            const t = &ptys[@intCast(src.fds[sfd])];
+            t.srefs += 1;
+            for (0..nchildren) |i| if (&children[i] == dst) { t.owner = i; };
+        },
         .sock => {
             const v = src.fds[sfd] - 1;
             socks[@intCast(v >> 1)].refs[@intCast(v & 1)] += 1;
@@ -3833,6 +4423,23 @@ fn fdPollRev(c: *Child, fdi: usize, ev: u16) u16 {
                     (d.count < d.buf.len or s.refs[side ^ 1] == 0)) r |= POLLOUT;
                 if (s.refs[side ^ 1] == 0) r |= POLLRDHUP | POLLERR;
             }
+        },
+        .ptym => {
+            const t = &ptys[@intCast(c.fds[fdi])];
+            if (ev & POLLIN != 0 and (t.oc > 0 or t.srefs == 0)) r |= POLLIN;
+            if (ev & POLLOUT != 0 and (t.line_len < t.line.len or t.srefs == 0))
+                r |= POLLOUT;
+            if (t.srefs == 0) r |= POLLERR | POLLHUP;
+        },
+        .ptys => {
+            const t = &ptys[@intCast(c.fds[fdi])];
+            const canon = tioF(t, T_LF) & ICANON != 0;
+            const rd = if (canon) t.lc > 0 else t.ic > 0;
+            if (ev & POLLIN != 0 and (rd or t.mrefs == 0)) r |= POLLIN;
+            if (ev & POLLOUT != 0 and
+                ((t.oc < t.out.len and !t.out_stop) or t.mrefs == 0))
+                r |= POLLOUT;
+            if (t.mrefs == 0) r |= POLLERR | POLLHUP;
         },
         .slisten => {
             const l = &listeners[@intCast(c.fds[fdi] - 1)];
@@ -4589,6 +5196,8 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         f.rax = f.rdx;
                     },
                     .pipe_w => f.rax = @bitCast(pipeWriteEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
+                    .ptym => f.rax = @bitCast(ptyMasterWrite(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
+                    .ptys => f.rax = @bitCast(ptySlaveWrite(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
                     .sock => f.rax = @bitCast(sockWrite(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast(((c.fds[fdi] - 1) & 1) ^ 1), f.rsi, f.rdx, false)),
                     // The fd is the grant: a write verb was minted at
                     // open or this projection never carried one — EBADF,
@@ -4635,6 +5244,18 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         },
                         .pipe_w => {
                             const n = pipeWriteEnd(c, @intCast(c.fds[fdi]), @intCast(base), @intCast(len));
+                            if (n < 0) { fail = n; break; }
+                            total += n;
+                            if (n < len) break;
+                        },
+                        .ptym => {
+                            const n = ptyMasterWrite(c, @intCast(c.fds[fdi]), @intCast(base), @intCast(len));
+                            if (n < 0) { fail = n; break; }
+                            total += n;
+                            if (n < len) break;
+                        },
+                        .ptys => {
+                            const n = ptySlaveWrite(c, @intCast(c.fds[fdi]), @intCast(base), @intCast(len));
                             if (n < 0) { fail = n; break; }
                             total += n;
                             if (n < len) break;
@@ -4761,6 +5382,8 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     .fs => if (c.fdverbs[fdi] & V_READ != 0)
                         childRead(c, f.rdi, f.rsi, f.rdx) else -9,
                     .pipe_r => pipeReadEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
+                    .ptym => ptyMasterRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
+                    .ptys => ptySlaveRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
                     .sock => sockRead(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast((c.fds[fdi] - 1) & 1), f.rsi, f.rdx, false),
                     else => @as(i64, -9),
                 });
@@ -4870,15 +5493,19 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         287 => { // timerfd_gettime(fd, cur) — remaining + interval
             f.rax = @bitCast(childTimerfdGettime(c, f.rdi, f.rsi));
         },
-        282, 289 => { // signalfd/signalfd4(fd, mask, sizemask, flags) —
-                      // the pending queue as a channel; 282 has no size/
-                      // flags words; the 4-arg form's sizemask must be
-                      // the honest 8 like linux validates.
+        282, 289, 74, 327 => { // signalfd/signalfd4 — the pending queue
+                      // as a channel. 282/289 are koru's door numbers;
+                      // 74/327 are linux's — real musl signalfd() sends
+                      // 327 with sizemask=8, and 74 is its 3-arg cousin
+                      // (fd,mask,flags in rdx). The 4-arg form's
+                      // sizemask must be the honest 8.
             f.rax = @bitCast(if (f.rax == 289 and f.rdx != 8)
+                @as(i64, -22)
+            else if (f.rax == 327 and f.rdx != 8)
                 @as(i64, -22)
             else
                 childSignalfd(c, f.rdi, f.rsi,
-                    if (f.rax == 289) f.r10 else 0));
+                    if (f.rax == 289 or f.rax == 327) f.r10 else if (f.rax == 74) f.rdx else 0));
         },
         91 => { // fchmod(fd, mode) — mode bits on objects that carry them
             f.rax = @bitCast(childFchmod(c, f.rdi, f.rsi));
@@ -4946,6 +5573,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     },
                     .pipe_r, .pipe_w => {
                         pipeCloseEnd(@intCast(c.fds[fd]), had);
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .ptym, .ptys => {
+                        ptyCloseEnd(@intCast(c.fds[fd]), had);
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
                         f.rax = 0;
@@ -5156,8 +5789,25 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             const n = copyToUser(c, @intCast(f.rdi), &uts);
             f.rax = if (n < 390) @bitCast(@as(i64, -14)) else 0;
         },
-        16 => { // ioctl — no ttys exist; ENOTTY is the honest answer
-            f.rax = @bitCast(@as(i64, -25));
+        16 => { // ioctl — ttys exist now: the termios/winsz/ptn/lock set
+                // answers on pty fds; every other kind still ENOTTYs.
+            if (f.rdi >= c.fds.len) {
+                f.rax = @bitCast(@as(i64, -9));
+            } else {
+                const fdi: usize = @intCast(f.rdi);
+                f.rax = @bitCast(switch (c.fdkinds[fdi]) {
+                    // cmd is `unsigned int` on the wire: musl sign-
+                    // extends constants like 0x80045430 (TIOCGPTN) —
+                    // linux's own sys_ioctl truncates, so do we.
+                    .ptym, .ptys => ptyIoctl(c, @intCast(c.fds[fdi]), c.fdkinds[fdi] == .ptym, @as(u32, @truncate(f.rsi)), f.rdx),
+                    else => @as(i64, -25),
+                });
+            }
+        },
+        521 => { // openpty(sv[2]) — mint master+slave of one pair. The
+                 // ptmx/pts file view (open("/dev/ptmx"), devpts names)
+                 // is a provider-cell door on top of this same ABI.
+            f.rax = @bitCast(childOpenpty(c, f.rdi));
         },
         12 => { // brk(addr) -> current break; 0 queries
             const want: usize = @intCast(f.rdi);

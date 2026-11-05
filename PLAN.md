@@ -561,6 +561,24 @@ the `cyberboot` path — with virtio-gpu later for damage/3D).
   IRQ1's `wakeConin` completes the read into the parked buffer, count in
   saved rax. Epoch drains on all-dead (`anyLive`), not all-runnable —
   a parked child holds the roster open
+- pty + termios + line discipline: nr521 openpty mints a master/slave
+  pair (kernel rings + termios/winsz state); canonical ldisc (echo,
+  VERASE/VWERASE BS-SP-BS, VKILL under ECHOKE, VEOL/VEOF pushes),
+  ISIG queues VINTR/VQUIT/VSUSP as pending facts on the slave's
+  owner (the fg-pgrp stand-in until sessions land), TIOCSWINSZ ->
+  SIGWINCH, ICRNL/INLCR/IGNCR + IXON VSTART/VSTOP flow, OPOST|ONLCR
+  output transform, EIO on the dead end; linux termios ABI on the
+  wire (TCGETS/TCSETS[T?F]/TIOCGWINSZ/TIOCSWINSZ/TIOCGPTN/
+  TIOCSPTLCK/FIONREAD) so real musl ioctl() + signalfd() (nr 74/327
+  folds) drive it unmodified. The same C source is a linux
+  posix_openpt twin — the differential oracle measured: ioctl cmd
+  is `unsigned int` (musl sign-extends >=0x80000000 requests),
+  n_tty's signal flush discards *uncommitted* echo (koru echoes
+  eagerly), ECHOKE suppresses the ECHOK newline, signalfd only
+  claims blocked signals, ISIG needs a ctty on linux (koru: the
+  pair's owner). pty-termios gate row: 47 checks green, status=0.
+  Still open: ptmx/devpts file view, sessions/ctty/fg-pgrp
+  (TIOCGPGRP/TIOCSPGRP, SIGTTIN/SIGTTOU), VTIME
 - ext2: mount/create/verify/fetch — **path as projection over inode
   identity** (`dirFind`/`lookupPath`/`lookup`); `exec(path)` folds
   walk→inode→ELF→spawn; `pin`/`exec-nid` run a child *by identity*
