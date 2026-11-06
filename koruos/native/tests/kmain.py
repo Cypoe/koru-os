@@ -78,11 +78,19 @@ try:
 except Exception as e:
     print("KL thread refused", type(e).__name__, e)
 
-# a real turn — harness→provider→AF_INET is the expected named wall
+# a real turn — install_overlay writes a RAM-backed home; measured wall
+# is now klanker's own provider config: "LLM_BASE_URL required (or
+# provider manifest url)". The budget is generous: generate_overlays
+# execs python -m <module> --help-json per installed agent module — real
+# interpreter startups under emulation.
+# ground truth for the kernel's E2BIG: report the env block python would marshal.
+_envsz = sum(len(k) + len(v) + 2 for k, v in os.environ.items())
+_envbig = max(os.environ.items(), key=lambda kv: len(kv[1]), default=("-", "-"))
+print("KL envsz", _envsz, "envn", len(os.environ), "biggest", _envbig[0], len(_envbig[1]))
 try:
     r = subprocess.run(
         [PYBIN, "-m", "klanker", "chat", "ping"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, timeout=150)
     print("KL chat rc", r.returncode)
     if r.returncode != 0:
         print("KL chat err", (r.stderr or r.stdout)[-400:].replace("\n", " | "))

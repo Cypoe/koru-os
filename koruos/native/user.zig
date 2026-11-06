@@ -872,6 +872,15 @@ const ChildFsOps = extern struct {
     // -errno; a non-dir handle gets -20 ENOTDIR, a provider without a
     // dir model gets -38 ENOSYS — the gap stays named, never silent.
     dent: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
+    // chmod(path, mode): permission-bit setattr on the resolved object
+    // (type bits are the kind's, never writable). The grant names the
+    // OBJECT — chmod mutates it, not its parent dir.
+    chmod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, mode: u32) callconv(.c) i64,
+    // utimens(path, mask, a_ns, m_ns): timestamp setattr — mask bit0
+    // applies atime, bit1 applies mtime, in nanoseconds. UTIME_NOW /
+    // UTIME_OMIT / NULL-times were folded to concrete values here at
+    // the syscall arm; the provider sees only "set these fields".
+    utimens: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, mask: u32, a_ns: u64, m_ns: u64) callconv(.c) i64,
 };
 
 const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd, pty, pause };
@@ -1492,6 +1501,12 @@ fn unmapUserSpace(c: *Child) void {
 // NUL-separated blob — the same layout the KGRB argv section carries.
 // NULL vector or NULL first entry yields an empty blob; an over-long
 // vector or string is E2BIG, a bad pointer EFAULT — never truncation.
+// vecbuf is static scratch (128KiB total): argv/envp marshal targets
+// outgrew every kstack-resident size tried (measured: LLM prompts as
+// argv entries). execve is not reentrant inside one syscall, so a
+// shared buffer is safe; the bound still refuses honestly.
+const VEC_HALF = 65536;
+var vecbuf: [2 * VEC_HALF]u8 align(16) = undefined;
 fn marshalVec(c: *Child, vva: u64, blob: []u8) i64 {
     if (vva == 0) return 0;
     var pos: usize = 0;
@@ -1501,21 +1516,30 @@ fn marshalVec(c: *Child, vva: u64, blob: []u8) i64 {
         if (copyFromUser(c, @intCast(vva + i * 8), &p) < 8) return -14;
         const sva = readU64(&p, 0);
         if (sva == 0) return @intCast(pos); // vector terminator
-        // copy the C string — bounded by both the blob left and the
-        // per-string cap; userEntry validates each page as it comes.
+        // copy the C string — the blob left is the bound, like linux's
+        // ARG_MAX bounding the whole block rather than a per-string cap
+        // (measured: klanker sets LOOP_CMD into env — >128 chars is a
+        // legitimate entry); userEntry validates each page as it comes.
         var si: usize = 0;
-        while (si < 128) : (si += 1) {
+        while (true) : (si += 1) {
             const va: usize = @intCast(sva + si);
             if (userEntry(c, va) & 1 == 0) return -14;
             const ch = userByte(c, va);
-            if (pos >= blob.len) return -7;
+            if (pos >= blob.len) {
+                say("MVEC blob-full i="); puthex(i); say(" pos="); puthex(pos);
+                say(" si="); puthex(si); say(" sva="); puthex(sva); say(" head=");
+                var hb: usize = 0;
+                while (hb < 8) : (hb += 1) puthex(userByte(c, @intCast(sva + hb)));
+                say("\n");
+                return -7; // E2BIG — block budget
+            }
             blob[pos] = ch;
             pos += 1;
             if (ch == 0) break;
         }
-        if (si == 128) return -7; // unterminated string — E2BIG
     }
-    return -7; // vector past MAXARGS
+    say("MVEC vec-long i="); puthex(i); say(" pos="); puthex(pos); say("\n");
+    return -7; // vector past MAXARGS — E2BIG
 }
 
 fn buildTables(c: *Child) bool {
@@ -1699,7 +1723,9 @@ noinline fn copyChunk(c: *Child, va: usize, dst: [*]u8, len: usize) usize {
 // MAXARGS bounds the argv vector a spawn blob may mint — argv[] lives on
 // the child's own stack, but argc past the cap is a malformed request,
 // refused loudly as -E2BIG before any loading happens.
-const MAXARGS = 16;
+const MAXARGS = 32; // vector entry cap — env vectors grow past 16
+                    // under real apps (klanker accumulates ~11 exports);
+                    // the blob budget is the real bound, this is sanity
 
 // Lay out the ELF-ABI entry vector: `ablob` is the argument block —
 // argv strings packed back-to-back, each NUL-terminated (a trailing
@@ -2056,8 +2082,11 @@ fn canonNr(nr: u64) u64 {
         435 => 57, // clone3 — the create family's wider verb
         // fs-object verbs/queries: cwd + chdir family, link/readlink,
         // chmod/chown, umask, mknod, statfs, *at variants, fallocate,
-        // name_to_handle/open_by_handle, copy_file_range, statx, openat2.
+        // name_to_handle/open_by_handle, copy_file_range, statx, openat2,
+        // and the xattr family — object-attribute verbs whose answers
+        // are the arms' to give honestly.
         79, 80, 81, 88, 89, 90, 92, 93, 94, 95, 133, 137, 138, 217,
+        188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
         260, 261, 266, 267, 268, 280, 285, 303, 304, 326, 332, 437 => 2,
         // pselect6 multiplexes channels like poll; futex is the
         // channel class's wait-on-a-word primitive.
@@ -2439,6 +2468,84 @@ fn childLink(c: *Child, ova: usize, nva: usize) i64 {
         }
     }
     return ops.link(ops.ctx, @ptrCast(&ob), @ptrCast(&nb));
+}
+
+// chmod mutates the OBJECT's own mode word — the grant names the object
+// (not the parent dir that create/unlink/rename touch). RO providers
+// answer EROFS through the verb; the seam's job is only the W grant.
+fn childChmod(c: *Child, pva: usize, mode: u64) i64 {
+    const ops = c.fsv orelse return -38;
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    pb[p.len] = 0;
+    if ((c.rights >> 2) & 1 == 0) {
+        const k = ops.key(ops.ctx, @ptrCast(&pb));
+        if (k < 0) return k;
+        if (!grantCovers(c, 2, @bitCast(k), V_WRITE)) {
+            say("SEAM REFUSE chmod obj=");
+            puthex(@bitCast(k));
+            say(" (no W grant)\n");
+            return -13;
+        }
+    }
+    return ops.chmod(ops.ctx, @ptrCast(&pb), @intCast(mode));
+}
+
+// utimensat folds its two-sentinel timespec ABI down to (mask, ns pairs)
+// here — UTIME_OMIT drops the mask bit, UTIME_NOW and NULL-times read
+// the boot clock (the only "now" we hold — no RTC epoch exists). The
+// provider applies the masked fields; unmasked/unmodeled fields aren't
+// claimed.
+fn childUtimens(c: *Child, pva: usize, tva: u64) i64 {
+    const ops = c.fsv orelse return -38;
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    pb[p.len] = 0;
+    const UTIME_NOW: i64 = 0x3fffffff;
+    const UTIME_OMIT: i64 = 0x3ffffffe;
+    var mask: u32 = 3;
+    var a_ns: u64 = 0;
+    var m_ns: u64 = 0;
+    if (tva == 0) {
+        m_ns = ukplat_monotonic_clock();
+        a_ns = m_ns;
+    } else {
+        var ts: [32]u8 = undefined;
+        if (copyFromUser(c, @intCast(tva), &ts) < 32) return -14;
+        const asec = std.mem.readInt(i64, ts[0..8], .little);
+        const ansec = std.mem.readInt(i64, ts[8..16], .little);
+        const msec = std.mem.readInt(i64, ts[16..24], .little);
+        const mnsec = std.mem.readInt(i64, ts[24..32], .little);
+        // nsec is 0..1e9 or one of the two sentinels — nothing else
+        // is a legal timespec.
+        const abad = ansec != UTIME_OMIT and ansec != UTIME_NOW and
+            (ansec < 0 or ansec >= 1_000_000_000);
+        const mbad = mnsec != UTIME_OMIT and mnsec != UTIME_NOW and
+            (mnsec < 0 or mnsec >= 1_000_000_000);
+        if (abad or mbad) return -22;
+        mask = 0;
+        if (ansec != UTIME_OMIT) {
+            mask |= 1;
+            a_ns = if (ansec == UTIME_NOW) ukplat_monotonic_clock()
+                else @intCast(asec * 1_000_000_000 + ansec);
+        }
+        if (mnsec != UTIME_OMIT) {
+            mask |= 2;
+            m_ns = if (mnsec == UTIME_NOW) ukplat_monotonic_clock()
+                else @intCast(msec * 1_000_000_000 + mnsec);
+        }
+    }
+    if ((c.rights >> 2) & 1 == 0) {
+        const k = ops.key(ops.ctx, @ptrCast(&pb));
+        if (k < 0) return k;
+        if (!grantCovers(c, 2, @bitCast(k), V_WRITE)) {
+            say("SEAM REFUSE utimens obj=");
+            puthex(@bitCast(k));
+            say(" (no W grant)\n");
+            return -13;
+        }
+    }
+    return ops.utimens(ops.ctx, @ptrCast(&pb), mask, a_ns, m_ns);
 }
 
 fn childRead(c: *Child, fdu: u64, buva: u64, want: u64) i64 {
@@ -5864,11 +5971,16 @@ fn childExec(c: *Child, f: *TrapFrame) i64 {
     const ops = c.fsv orelse return -38; // ENOSYS — no view, no images
     var pb: [256]u8 = undefined;
     const path = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
-    var ablob: [512]u8 = undefined;
-    var eblob: [512]u8 = undefined;
-    const alen = marshalVec(c, f.rsi, &ablob);
+    // argv/envp blocks. linux's real contract bounds the whole block
+    // (ARG_MAX ~2MB, 128KiB/string): 512B refused a legit ~11-entry env,
+    // then argv's blob-filled on a multi-KB "You are a …" LLM prompt
+    // passed as an argv entry — no kstack-resident blob can hold it, so
+    // the marshal target is a static scratch (BSS), still bounded.
+    const ablob = vecbuf[0..VEC_HALF];
+    const eblob = vecbuf[VEC_HALF..];
+    const alen = marshalVec(c, f.rsi, ablob);
     if (alen < 0) return alen;
-    const elen = marshalVec(c, f.rdx, &eblob);
+    const elen = marshalVec(c, f.rdx, eblob);
     if (elen < 0) return elen;
     // sanity before teardown: the view must open the target and the
     // header must be ELF64/x86_64 — a refusal leaves the image ALIVE,
@@ -6252,6 +6364,49 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         },
         84 => { // rmdir — removes an EMPTY directory name
             f.rax = @bitCast(childRmdir(c, @intCast(f.rdi)));
+        },
+        90, 268 => { // chmod / fchmodat — mode setattr on the resolved
+                     // object. flags=0 only: AT_SYMLINK_NOFOLLOW would
+                     // need an lsetattr the model doesn't have — resolve
+                     // always follows links, so arming the flag would lie.
+            if (f.rax == 268 and f.rdi != @as(u64, @bitCast(@as(i64, -100)))) {
+                f.rax = @bitCast(@as(i64, -9)); // only AT_FDCWD has meaning
+            } else if (f.rax == 268 and f.r10 != 0) {
+                f.rax = @bitCast(@as(i64, -38)); // ENOSYS — no lchmod arm
+            } else {
+                const pva: usize = if (f.rax == 90) @intCast(f.rdi) else @intCast(f.rsi);
+                f.rax = @bitCast(childChmod(c, pva, f.rdx));
+            }
+        },
+        280 => { // utimensat(dirfd, path, times[2], flags) — timestamp
+                 // setattr; NULL times = now. Same flag/limits as chmod.
+            if (f.rdi != @as(u64, @bitCast(@as(i64, -100)))) {
+                f.rax = @bitCast(@as(i64, -9));
+            } else if (f.r10 != 0) {
+                f.rax = @bitCast(@as(i64, -38)); // ENOSYS — no lutimens arm
+            } else {
+                f.rax = @bitCast(childUtimens(c, @intCast(f.rsi), f.rdx));
+            }
+        },
+        194, 195, 196 => { // listxattr/llistxattr/flistxattr — no
+                           // provider's view carries an xattr model, so
+                           // the attribute list on every object is
+                           // literally empty: 0 is the TRUE answer, not
+                           // a stub. A provider gaining xattrs moves
+                           // this behind an op — never a faked list.
+            f.rax = @bitCast(@as(i64, 0));
+        },
+        191, 192, 193, 197, 198, 199 => { // getxattr + removexattr
+                                        // families — every attribute is
+                                        // one the view doesn't carry:
+                                        // ENODATA is linux's own word
+                                        // for "attribute not found".
+            f.rax = @bitCast(@as(i64, -61));
+        },
+        188, 189, 190 => { // setxattr family — cannot write attributes
+                           // the model lacks; ENOTSUP is the honest
+                           // word (the object exists, the op doesn't).
+            f.rax = @bitCast(@as(i64, -95));
         },
         86, 265 => { // link / linkat — a second name on the same inode;
                      // flags must be 0 (no AT_SYMLINK_FOLLOW/EMPTY_PATH).
@@ -7563,6 +7718,15 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
     nchildren = 0;
     for (0..n) |i| {
         const c = &children[i];
+        // Slot hygiene — the same reset the nr512/nr57 slot paths run:
+        // a re-primed slot carries NOTHING from the last tenant. kctx is
+        // the landmine: a child killed while kblock'd leaves a live kctx
+        // naming a stale continuation on its own kstack — resuming that
+        // instead of the fresh frame jumps to wherever the old chain's
+        // top-of-stack pointed (observed: #UD at rip=3 after a reap'd-
+        // blocked python subprocess's slot reissued into a later epoch).
+        if (c.upd != 0) _ = freeChild(c); // pages a dead slot still holds
+        c.* = .{};
         if (!buildTables(c)) {
             say("RING3 FAIL: page alloc\n");
             unlockBkl();

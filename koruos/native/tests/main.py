@@ -1,7 +1,8 @@
 # main.py — the CPython probe on the koru arm: every PY line is a
 # syscall surface the interpreter exercised; a traceback names the
-# gap that refused it. The initramfs view is read-only by design —
-# the write attempt below asserts EROFS is the honest refusal.
+# gap that refused it. The initramfs view is now archive-RO + a RAM
+# upper layer: the two write attempts below pin BOTH contracts —
+# frozen archive ents still refuse EROFS, minted RAM ents write.
 import os, sys
 
 print("PY hello", sys.version.split()[0])
@@ -12,12 +13,21 @@ print("PY argv", sys.argv[-1])
 with open("/main.py") as f:
     print("PY read", len(f.read()), "bytes")
 
-# write intent on the read-only initramfs view: the honest refusal is EROFS(30)
+# write intent on an ARCHIVE ent: the frozen layer's honest refusal is
+# EROFS(30). (/main.py exists in the cpio — an O_TRUNC on it must fail.)
 try:
-    open("/pyx.txt", "w").close()
+    open("/main.py", "w").close()
     print("PY write unexpected-success")
 except OSError as e:
     print("PY write refused errno", e.errno)
+
+# the RAM upper layer: a new path mints on O_CREAT and reads back
+try:
+    with open("/ram-probe.txt", "w") as f:
+        f.write("ram-ok")
+    print("PY ramwrite", open("/ram-probe.txt").read())
+except OSError as e:
+    print("PY ramwrite refused errno", e.errno)
 
 # fork + waitpid — the create family
 pid = os.fork()

@@ -40,13 +40,37 @@ fetch-pyroot + klanker/agents-* sources flattened into the stdlib dir
 - **`KL thread refused RuntimeError can't start new thread`** — the
   clone-thread shape (`0x7d0f00`) — `clone-threads` stands as the
   rung, now proven by klanker's own demand.
-- **`KL chat rc 1` → `OSError: EROFS` on `mkdir /.agents/modules`** —
-  `install_overlay()` wants a writable home dir before the provider
-  path; the initramfs view is read-only by contract. The wall is a
-  **writable-fs view** (ext2 child or RAM-dir mint), not a syscall.
+- **`KL chat rc 1` → `Turn error: LLM_BASE_URL required`** — after
+  the writable-RAM layer and the marshal-budget rulings below, `chat`'s
+  wall is klanker's own provider config (no model endpoint in the
+  payload) — the application-provider gap, not a kernel/fs gap.
 - `getcwd` returns `/` (the view root is the cwd model); `readlink`
   ENOSYS — survived, named.
 - `nr=0x19 readv` refused in the bag → python fell back cleanly.
+
+## Kernel changes the chat path forced (second pass)
+
+- **initramfs writable RAM upper layer** — `Ent.ram` + a generalized
+  `mintEnt` (socket node, dir, regular file): `cfMkdir` mints dirs,
+  `cfOpen` honors `O_CREAT`/write-intent/`O_TRUNC` on RAM ents,
+  `cfWrite` grows malloc'd buffers, `cfOpenKey` admits RAM regular
+  files, `chmod`/`utimens` became provider verbs (ext2 writes inode
+  mode/timestamps back; `ChildFsOps` extended in all three mirrors).
+  RAM unlink/rename stay named ENOSYS gaps — no tombstone pass.
+- **xattr family is honest at the kernel tier** — `listxattr`→empty,
+  `getxattr`→ENODATA, `setxattr`→ENOTSUP; folded to the fs class so
+  `copystat` proceeds. No provider models xattrs — the empty answer
+  is literally true of every current view.
+- **argv/envp marshal budget is a real contract** — the 512B blob +
+  128-char string cap refused klanker's env (LOOP_CMD chain), and
+  LLM system prompts ride argv entries (`"You are a …"`, multi-KB):
+  marshal now writes into a static 128KiB scratch (`vecbuf`), bounded
+  but off the kstack. `MAXARGS` 16→32.
+- **a re-primed child slot carries nothing** — `koru_spawn_run` was
+  the one slot path missing the `c.* = .{}` reset: a killed-while-
+  blocked tenant left a stale `kctx` naming an old continuation on its
+  own kstack; a later epoch's `switchInto` resumed it → `#UD rip=3`.
+  Full reset (+ defensive `freeChild` for live upd) before reissue.
 
 ## Kernel changes this rung forced
 

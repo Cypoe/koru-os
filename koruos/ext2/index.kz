@@ -1017,6 +1017,14 @@ const ChildFsOps = extern struct {
     // cursor lives inside the handle (pos = byte offset into the dir's
     // dirent stream). Returns 1 filled / 0 end / -errno.
     dent: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
+    // chmod(path, mode): permission-bit setattr — the inode's mode
+    // word mutates (type bits are the kind's, never writable); ctime
+    // moves with the change like linux's own.
+    chmod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, mode: u32) callconv(.c) i64,
+    // utimens(path, mask, a_ns, m_ns): timestamp setattr — mask bit0
+    // applies atime, bit1 applies mtime; nanoseconds pre-resolved by
+    // the caller (UTIME_NOW/OMIT folded kernel-side).
+    utimens: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, mask: u32, a_ns: u64, m_ns: u64) callconv(.c) i64,
 };
 
 // readAt: inode + byte-range → bytes, reading only the blocks covered —
@@ -1511,13 +1519,37 @@ fn cfDup(ctx: ?*anyopaque, h: u64) callconv(.c) i64 {
     return @bitCast(h);
 }
 
+fn cfChmod(ctx: ?*anyopaque, path: [*:0]const u8, mode: u32) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    var dir: [BS]u8 = undefined;
+    const ino = lookupPath(fs, std.mem.span(path), &dir) orelse return -2;
+    const loc = inodeLoc(fs, ino) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    wr16(&it, loc.off, (rd16(&it, loc.off) & 0o170000) | @as(u16, @intCast(mode & 0o7777)));
+    return if (writeBlock(fs, loc.block, &it)) 0 else -5;
+}
+
+fn cfUtimens(ctx: ?*anyopaque, path: [*:0]const u8, mask: u32, a_ns: u64, m_ns: u64) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    var dir: [BS]u8 = undefined;
+    const ino = lookupPath(fs, std.mem.span(path), &dir) orelse return -2;
+    const loc = inodeLoc(fs, ino) orelse return -5;
+    var it: [BS]u8 = undefined;
+    if (!readBlock(fs, loc.block, &it)) return -5;
+    if (mask & 1 != 0) wr32(&it, loc.off + 8, @truncate(a_ns / 1_000_000_000));  // i_atime
+    if (mask & 2 != 0) wr32(&it, loc.off + 16, @truncate(m_ns / 1_000_000_000)); // i_mtime
+    return if (writeBlock(fs, loc.block, &it)) 0 else -5;
+}
+
 fn childFs(fs: *Fs) ChildFsOps {
     return .{ .ctx = @ptrCast(fs), .open = cfOpen, .read = cfRead,
               .read_at = cfReadAt, .seek = cfSeek, .stat = cfStat, .close = cfClose,
               .dup = cfDup, .key = cfKey, .write = cfWrite,
               .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey,
               .mkdir = cfMkdir, .rmdir = cfRmdir, .link = cfLink,
-              .mknod = cfMknod, .stat_path = cfStatPath, .dent = cfDent };
+              .mknod = cfMknod, .stat_path = cfStatPath, .dent = cfDent,
+              .chmod = cfChmod, .utimens = cfUtimens };
 }
 
 ~proc fetch|zig {

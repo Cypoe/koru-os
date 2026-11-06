@@ -83,6 +83,16 @@ const ChildFsOps = extern struct {
     // cursor lives inside the handle (pos). Returns 1 filled / 0 end /
     // -errno; a non-dir handle gets -20 ENOTDIR.
     dent: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
+    // chmod(path, mode): permission-bit setattr — the object's own mode
+    // word mutates (type bits are the kind's, never writable). A frozen
+    // archive ent answers EROFS; a ram ent takes the write.
+    chmod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, mode: u32) callconv(.c) i64,
+    // utimens(path, mask, a_ns, m_ns): timestamp setattr — mask bit0
+    // applies atime, bit1 applies mtime; nanoseconds pre-resolved by
+    // the caller (UTIME_NOW/OMIT were folded kernel-side). A field the
+    // model doesn't keep (atime here) is silently skipped by mask, not
+    // faked — the same RO/RAM split as chmod.
+    utimens: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, mask: u32, a_ns: u64, m_ns: u64) callconv(.c) i64,
 };
 
 // ---- object model ---------------------------------------------------------
@@ -103,9 +113,15 @@ const Ent = struct {
     mtime: u32,
     rdev: u32,           // encoded device numbers for kind=other
     nlink: u32,          // computed post-build: 1+aliases for files, 2+subdirs for dirs
-    data: ?[*]const u8,  // reg bytes — phys ptr into the reserved module
+    data: ?[*]const u8,  // reg bytes — archive: phys ptr into the module;
+                         // ram: a malloc'd buffer the ent owns
     size: u64,
     link: ?[*:0]const u8, // symlink target, arena NUL-terminated
+    // ram: the entry was minted at runtime (mkdir/O_CREAT/mknod), not
+    // parsed from the archive. Archive ents are frozen — path, mode,
+    // bytes immutable; a ram ent is the mount's own mutable upper layer:
+    // writes allocate, chmod/utimens apply, the bytes die with the boot.
+    ram: bool,
 };
 
 const Alias = struct { path: [*:0]const u8, canon: u32 }; // hardlink name -> canonical ent
@@ -450,7 +466,7 @@ fn synthDir(fs: *Ramfs, path_z: [*:0]const u8) bool {
     e.* = .{
         .path = p, .parent = NIL, .ino = 0, .kind = .dir,
         .mode = 0o040755, .uid = 0, .gid = 0, .mtime = 0, .rdev = 0,
-        .nlink = 2, .data = null, .size = 0, .link = null,
+        .nlink = 2, .data = null, .size = 0, .link = null, .ram = false,
     };
     fs.nents += 1;
     return true;
@@ -500,7 +516,7 @@ fn addEnt(fs: *Ramfs, h: *const CpioEnt, path_z: [*:0]const u8) bool {
         .path = p, .parent = NIL, .ino = 0, .kind = k,
         .mode = h.mode & 0o177777, .uid = h.uid, .gid = h.gid,
         .mtime = h.mtime, .rdev = makedev(h.rdevmaj, h.rdevmin),
-        .nlink = 1, .data = data, .size = size, .link = link,
+        .nlink = 1, .data = data, .size = size, .link = link, .ram = false,
     };
     fs.nents += 1;
     return true;
@@ -553,8 +569,12 @@ fn build(fs: *Ramfs, mod_phys: u64, mod_size: u64) bool {
         if (saw_trailer) break;
     }
     if (!saw_trailer) return false; // truncated archive — refuse, don't half-mount
-    const entcap = nent + comps_total + 24; // 8 synth slack + 16 runtime
-        // mknod slots — socket names mint ents at bind time
+    arena_need += 8192; // runtime mint slack — mkdir/O_CREAT/mknod all
+        // pay canonical-path bytes out of the same arena as archive
+        // names; the pass-1 count covered the archive's names only.
+    const entcap = nent + comps_total + 288; // 8 synth slack + 280
+        // runtime mint slots — socket names, mkdir'd dirs, O_CREAT
+        // files: the writable upper layer shares the one ent table.
     const em = malloc(entcap * @sizeOf(Ent)) orelse return false;
     const am = malloc(@max(nalias, 1) * @sizeOf(Alias)) orelse {
         free(em);
@@ -680,8 +700,15 @@ fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64 
     const r = resolveZ(fs, path, 0);
     const ei = switch (r) {
         .ent => |x| x,
-        .err => |e| {
-            if (e == -2 and (flags & 0o100) != 0) return -30; // O_CREAT on ROFS
+        .err => |e| blk: {
+            // ENOENT + O_CREAT — mint a ram reg ent. The seam already
+            // named the parent dir's W grant; the file is runtime-owned
+            // and its bytes are the mount's, never the archive's.
+            if (e == -2 and (flags & 0o100) != 0) {
+                const m = mintEnt(fs, path, .reg, 0o100644);
+                if (m < 0) return m;
+                break :blk @as(u32, @intCast(m));
+            }
             return e;
         },
     };
@@ -691,9 +718,17 @@ fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64 
     // on it answers EISDIR like linux — write intent still refuses.
     if (e.kind == .dir and (flags & 3) != 0) return -21; // EISDIR
     if (e.kind != .reg and e.kind != .dir) return -6;  // ENODEV — no device layer
-    // write intent on a read-only fs: accmode W/RW, O_TRUNC, O_APPEND
-    if ((flags & 3) != 0 or (flags & 0o1000) != 0 or (flags & 0o2000) != 0)
-        return -30; // EROFS
+    // write intent: ram ents take it (accmode W/RW, O_TRUNC, O_APPEND);
+    // archive ents stay frozen — EROFS is their contract, not a missing
+    // verb.
+    if ((flags & 3) != 0 or (flags & 0o1000) != 0 or (flags & 0o2000) != 0) {
+        if (!e.ram) return -30; // EROFS
+        if ((flags & 0o1000) != 0) { // O_TRUNC — drop the buffer wholesale
+            if (e.data) |d| free(@ptrCast(@constCast(d)));
+            e.data = null;
+            e.size = 0;
+        }
+    }
     const h = malloc(@sizeOf(OpenFile)) orelse return -12;
     const fp: *OpenFile = @ptrCast(@alignCast(h));
     fp.* = .{
@@ -836,29 +871,68 @@ fn cfOpenKey(ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64 {
     const e = &fs.ents[ei];
     if (e.kind == .dir) return -21;
     if (e.kind != .reg) return -6;
-    if ((flags & 3) != 0 or (flags & 0o1000) != 0 or (flags & 0o2000) != 0 or (flags & 0o100) != 0)
-        return -30; // EROFS — openobj never creates
+    if ((flags & 0o100) != 0) return -30; // openobj never creates — no path
+    if ((flags & 3) != 0 or (flags & 0o1000) != 0 or (flags & 0o2000) != 0) {
+        if (!e.ram) return -30; // EROFS
+        if ((flags & 0o1000) != 0) {
+            if (e.data) |d| free(@ptrCast(@constCast(d)));
+            e.data = null;
+            e.size = 0;
+        }
+    }
     const h = malloc(@sizeOf(OpenFile)) orelse return -12;
     const fp: *OpenFile = @ptrCast(@alignCast(h));
-    fp.* = .{ .ent = ei, .pos = 0, .refs = 1, .append = false };
+    fp.* = .{ .ent = ei, .pos = if ((flags & 0o2000) != 0) e.size else 0,
+        .refs = 1, .append = (flags & 0o2000) != 0 };
     return @intCast(@intFromPtr(fp));
 }
 
+// A ram file's byte ceiling — the upper layer is bound for overlay
+// payloads and sockets-adjacent state, not bulk data; runaway writers
+// get a real ENOSPC rather than an unbounded kernel malloc.
+const RAM_FILE_MAX: u64 = 16 << 20;
+
 fn cfWrite(ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) i64 {
-    _ = ctx;
-    _ = h;
-    _ = src;
-    _ = len;
-    return -30; // EROFS
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    const e = &fs.ents[fp.ent];
+    if (e.kind == .dir) return -21; // EISDIR
+    if (e.kind != .reg) return -22; // EINVAL — socket nodes carry no bytes
+    if (!e.ram) return -30; // archive bytes are frozen by contract
+    const at = if (fp.append) e.size else fp.pos;
+    const need = at + len;
+    if (need > RAM_FILE_MAX) return -28; // ENOSPC — the upper's own bound
+    if (need > e.size) {
+        const nb = malloc(@intCast(need)) orelse return -12;
+        const nbuf: [*]u8 = @ptrCast(nb);
+        if (e.data) |d| @memcpy(nbuf[0..@intCast(e.size)], d[0..@intCast(e.size)]);
+        if (at > e.size) @memset(nbuf[@intCast(e.size)..@intCast(at)], 0); // sparse gap reads zero
+        if (e.data) |d| free(@ptrCast(@constCast(d)));
+        e.data = nbuf;
+        e.size = need;
+    }
+    const d: [*]u8 = @ptrCast(@constCast(e.data.?));
+    @memcpy(d[@intCast(at)..][0..len], src[0..len]);
+    fp.pos = at + len;
+    return @intCast(len);
+}
+
+// Removal/move of a RAM mint is NOT "read-only" — the mint is writable
+// state; what doesn't exist yet is the tombstone pass over the index-
+// keyed ent table. -38 (ENOSYS) names that gap honestly; archive ents
+// keep EROFS, which is their real contract.
+fn mintMutErr(fs: *Ramfs, ei: u32) i64 {
+    return if (fs.ents[ei].ram) -38 else -30;
 }
 
 fn cfRename(ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64 {
     const fs: *Ramfs = @ptrCast(@alignCast(ctx));
-    // honest errno order: resolve what exists first, then EROFS
+    // honest errno order: resolve what exists first, then the verb's own
+    // word
     _ = new;
     const r = resolveZ(fs, old, 0);
     switch (r) {
-        .ent => return -30,
+        .ent => |ei| return mintMutErr(fs, ei),
         .err => |e| return e,
     }
 }
@@ -867,7 +941,7 @@ fn cfUnlink(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     const fs: *Ramfs = @ptrCast(@alignCast(ctx));
     const r = resolveZ(fs, path, 0);
     switch (r) {
-        .ent => return -30,
+        .ent => |ei| return mintMutErr(fs, ei),
         .err => |e| return e,
     }
 }
@@ -877,7 +951,13 @@ fn cfMkdir(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     const r = resolveZ(fs, path, 0);
     switch (r) {
         .ent => return -17, // EEXIST
-        .err => |e| return if (e == -2) -30 else e, // missing -> EROFS (can't create)
+        .err => |e| {
+            if (e != -2) return e;
+            // ENOENT — mint a ram dir: recursive os.mkdir() calls land
+            // one level at a time; each is its own mint.
+            const ei = mintEnt(fs, path, .dir, 0o040755);
+            return if (ei < 0) ei else 0;
+        },
     }
 }
 
@@ -885,7 +965,7 @@ fn cfRmdir(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     const fs: *Ramfs = @ptrCast(@alignCast(ctx));
     const r = resolveZ(fs, path, 0);
     switch (r) {
-        .ent => return -30,
+        .ent => |ei| return mintMutErr(fs, ei),
         .err => |e| return e,
     }
 }
@@ -895,9 +975,51 @@ fn cfLink(ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c)
     _ = new;
     const r = resolveZ(fs, old, 0);
     switch (r) {
-        .ent => return -30,
+        .ent => |ei| return mintMutErr(fs, ei),
         .err => |e| return e,
     }
+}
+
+// mintEnt: append a RUNTIME entry — ram=true, mutable, owned by the
+// mount, dead at shutdown. The caller already resolved the full path
+// to ENOENT; the parent must resolve to a dir, the leaf must not be
+// "." / "..". Returns the new entry index or -errno. Archive ents stay
+// frozen — this is the ONLY door that appends, the contract mknod
+// established and mkdir/O_CREAT now share: the ent table is RAM anyway,
+// so runtime names ride it while the archive's bytes stay frozen.
+fn mintEnt(fs: *Ramfs, path: [*:0]const u8, kind: Kind, mode: u32) i64 {
+    const p = std.mem.sliceTo(path, 0);
+    const slash = std.mem.lastIndexOfScalar(u8, p, '/') orelse return -22;
+    const leaf = p[slash + 1 ..];
+    if (leaf.len == 0 or compEq(leaf, ".") or compEq(leaf, "..")) return -22;
+    var pb: [640]u8 = undefined;
+    const plen = if (slash == 0) 1 else slash;
+    if (plen + 1 > pb.len) return -36;
+    @memcpy(pb[0..plen], p[0..plen]);
+    pb[plen] = 0;
+    const pr = resolveZ(fs, @ptrCast(&pb), 0);
+    const par = switch (pr) {
+        .ent => |x| x,
+        .err => |ee| return ee,
+    };
+    if (fs.ents[par].kind != .dir) return -20;
+    if (fs.nents >= fs.cap) return -28; // ENOSPC — the mint ceiling
+    var cp: [320]u8 = undefined;
+    const clen = joinChild(std.mem.sliceTo(fs.ents[par].path, 0), leaf, &cp) orelse return -36;
+    const np = arenaPut(fs, cp[0..clen]) orelse return -12;
+    const e2 = &fs.ents[fs.nents];
+    e2.* = .{
+        .path = np, .parent = @intCast(par), .ino = @intCast(fs.nents + 1),
+        .kind = kind, .mode = mode, .uid = 0, .gid = 0,
+        .mtime = 0, .rdev = 0, .nlink = 1, .data = null,
+        .size = 0, .link = null, .ram = true,
+    };
+    const ei = fs.nents;
+    fs.nents += 1;
+    // nlink was frozen post-build — a minted subdir is a new name on
+    // its parent, so the parent's count moves with it.
+    if (kind == .dir) fs.ents[par].nlink += 1;
+    return @intCast(ei);
 }
 
 fn cfMknod(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
@@ -907,40 +1029,12 @@ fn cfMknod(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
         .ent => return -17, // EEXIST — the name is taken
         .err => |e| {
             if (e != -2) return e;
-            // ENOENT — mint a S_IFSOCK node in RAM. A unix socket name
-            // is a runtime registration, not archive data: the ent
-            // table lives in RAM already, so this is the ONE mutation
-            // the view allows — file bytes stay EROFS, the archive is
-            // frozen. Same shape as ext2's "this rung only S_IFSOCK".
-            const p = std.mem.sliceTo(path, 0);
-            const slash = std.mem.lastIndexOfScalar(u8, p, '/') orelse return -22;
-            const leaf = p[slash + 1 ..];
-            if (leaf.len == 0 or compEq(leaf, ".") or compEq(leaf, "..")) return -22;
-            var pb: [640]u8 = undefined;
-            const plen = if (slash == 0) 1 else slash;
-            if (plen + 1 > pb.len) return -36;
-            @memcpy(pb[0..plen], p[0..plen]);
-            pb[plen] = 0;
-            const pr = resolveZ(fs, @ptrCast(&pb), 0);
-            const par = switch (pr) {
-                .ent => |x| x,
-                .err => |ee| return ee,
-            };
-            if (fs.ents[par].kind != .dir) return -20;
-            if (fs.nents >= fs.cap) return -28;
-            var cp: [320]u8 = undefined;
-            const clen = joinChild(std.mem.sliceTo(fs.ents[par].path, 0), leaf, &cp) orelse return -36;
-            const np = arenaPut(fs, cp[0..clen]) orelse return -12;
-            const e2 = &fs.ents[fs.nents];
-            e2.* = .{
-                .path = np, .parent = @intCast(par), .ino = @intCast(fs.nents + 1),
-                .kind = .other, .mode = 0o140755, .uid = 0, .gid = 0,
-                .mtime = 0, .rdev = 0, .nlink = 1, .data = null,
-                .size = 0, .link = null,
-            };
-            const ei = fs.nents;
-            fs.nents += 1;
-            return @bitCast((@as(u64, fs.dev_id) << 32) | fs.ents[ei].ino);
+            // ENOENT — mint a S_IFSOCK node. A unix socket name is a
+            // runtime registration, not archive data — same shape as
+            // ext2's "this rung only S_IFSOCK".
+            const ei = mintEnt(fs, path, .other, 0o140755);
+            if (ei < 0) return ei;
+            return @bitCast((@as(u64, fs.dev_id) << 32) | fs.ents[@intCast(ei)].ino);
         },
     }
 }
@@ -956,6 +1050,34 @@ fn cfStatPath(ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i6
     return 0;
 }
 
+fn cfChmod(ctx: ?*anyopaque, path: [*:0]const u8, mode: u32) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const r = resolveZ(fs, path, 0);
+    const ei = switch (r) {
+        .ent => |x| x,
+        .err => |e| return e,
+    };
+    const e = &fs.ents[ei];
+    if (!e.ram) return -30; // archive modes freeze with the bytes
+    e.mode = (e.mode & 0o170000) | (mode & 0o7777); // kind bits aren't writable
+    return 0;
+}
+
+fn cfUtimens(ctx: ?*anyopaque, path: [*:0]const u8, mask: u32, a_ns: u64, m_ns: u64) callconv(.c) i64 {
+    _ = a_ns; // the Ent model keeps mtime only — mask bit0 is honestly
+              // skipped, never faked into a field that isn't there
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const r = resolveZ(fs, path, 0);
+    const ei = switch (r) {
+        .ent => |x| x,
+        .err => |e| return e,
+    };
+    const e = &fs.ents[ei];
+    if (!e.ram) return -30;
+    if (mask & 2 != 0) e.mtime = @truncate(m_ns / 1_000_000_000);
+    return 0;
+}
+
 fn childFs(fs: *Ramfs) ChildFsOps {
     return .{
         .ctx = @ptrCast(fs),
@@ -965,6 +1087,7 @@ fn childFs(fs: *Ramfs) ChildFsOps {
         .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey,
         .mkdir = cfMkdir, .rmdir = cfRmdir, .link = cfLink,
         .mknod = cfMknod, .stat_path = cfStatPath, .dent = cfDent,
+        .chmod = cfChmod, .utimens = cfUtimens,
     };
 }
 
