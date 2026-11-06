@@ -189,6 +189,12 @@ static int korusysfs_mount(struct uk_init_ctx *ictx __unused)
 	long rc;
 	int i;
 
+	/* The initrd may leave no empty /sys dir behind; create it. */
+	rc = uk_syscall_r_mkdir((long)"/sys", 0755);
+	if (rc < 0 && rc != -EEXIST) {
+		uk_pr_err("koru-os: sysfs: mkdir /sys failed (%ld); no /sys view\n", rc);
+		return 0;
+	}
 	rc = uk_syscall_r_mount((long)"", (long)"/sys", (long)"ramfs", 0, 0);
 	if (rc < 0) {
 		uk_pr_err("koru-os: sysfs: mount ramfs on /sys failed (%ld); no /sys view\n", rc);
