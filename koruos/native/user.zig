@@ -1442,6 +1442,53 @@ fn userPhys(c: *Child, vaddr: usize) usize {
     return @intCast(pt[(vaddr >> 12) & 0x1FF] & ~@as(u64, 0xFFF));
 }
 
+// Unmap every user page the child owns: leaf frames and the pt frames
+// go back to pmm; the upd frame itself stays (the identity survives
+// exec — only the image dies). Callers MUST have marshaled anything
+// they still need out of user memory first — the strings die here.
+fn unmapUserSpace(c: *Child) void {
+    const upd: *[512]u64 = @ptrFromInt(c.upd);
+    for (upd, 0..) |*pde, i| {
+        if (pde.* & 1 == 0) continue;
+        const pt: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(pde.* & ~@as(u64, 0xFFF))));
+        for (pt) |e| {
+            if (e & 1 != 0) _ = pmm.free(e & ~@as(u64, 0xFFF));
+        }
+        _ = pmm.free(pde.* & ~@as(u64, 0xFFF));
+        upd[i] = 0;
+    }
+}
+
+// Marshal a user `char **` vector (argv/envp wire shape) into a
+// NUL-separated blob — the same layout the KGRB argv section carries.
+// NULL vector or NULL first entry yields an empty blob; an over-long
+// vector or string is E2BIG, a bad pointer EFAULT — never truncation.
+fn marshalVec(c: *Child, vva: u64, blob: []u8) i64 {
+    if (vva == 0) return 0;
+    var pos: usize = 0;
+    var i: usize = 0;
+    while (i < MAXARGS) : (i += 1) {
+        var p: [8]u8 = undefined;
+        if (copyFromUser(c, @intCast(vva + i * 8), &p) < 8) return -14;
+        const sva = readU64(&p, 0);
+        if (sva == 0) return @intCast(pos); // vector terminator
+        // copy the C string — bounded by both the blob left and the
+        // per-string cap; userEntry validates each page as it comes.
+        var si: usize = 0;
+        while (si < 128) : (si += 1) {
+            const va: usize = @intCast(sva + si);
+            if (userEntry(c, va) & 1 == 0) return -14;
+            const ch = userByte(c, va);
+            if (pos >= blob.len) return -7;
+            blob[pos] = ch;
+            pos += 1;
+            if (ch == 0) break;
+        }
+        if (si == 128) return -7; // unterminated string — E2BIG
+    }
+    return -7; // vector past MAXARGS
+}
+
 fn buildTables(c: *Child) bool {
     c.pml4 = @intFromPtr(allocPage() orelse return false);
     c.pdpt = @intFromPtr(allocPage() orelse return false);
@@ -1630,14 +1677,15 @@ const MAXARGS = 16;
 // non-terminated tail counts as the last arg; consecutive NULs mint
 // empty args, honestly). argc/argv[]/NULL/envp-NULL/auxv is the musl
 // _start contract; strings sit at the very top of the stack window.
-fn buildStack(c: *Child, info: ElfInfo, at_base: u64, ablob: []const u8) ?usize {
+fn buildStack(c: *Child, info: ElfInfo, at_base: u64, ablob: []const u8, eblob: []const u8) ?usize {
     var i: usize = 0;
     const sbase = USER_STACK_TOP - USER_STACK_PAGES * 0x1000;
     while (i < USER_STACK_PAGES) : (i += 1) {
         _ = mapUserPage(c, sbase + i * 0x1000) orelse return null;
     }
     // the arg block: copy it down from the top, then walk NUL boundaries
-    // for segment starts — argv[i] = blob_base + start[i].
+    // for segment starts — argv[i] = blob_base + start[i]. env strings
+    // land right behind argv's in the same block, offset by ablob.len.
     var starts: [MAXARGS]usize = undefined;
     var argc: usize = 0;
     var bi: usize = 0;
@@ -1648,19 +1696,30 @@ fn buildStack(c: *Child, info: ElfInfo, at_base: u64, ablob: []const u8) ?usize 
         bi += 1;
     }
     if (bi < ablob.len) return null; // more than MAXARGS — refused upstream
+    var estarts: [MAXARGS]usize = undefined;
+    var nenv: usize = 0;
+    var ei: usize = 0;
+    while (ei < eblob.len and nenv < MAXARGS) {
+        estarts[nenv] = ei;
+        nenv += 1;
+        while (ei < eblob.len and eblob[ei] != 0) ei += 1;
+        ei += 1;
+    }
+    if (ei < eblob.len) return null;
     // The on-stack block always ends NUL-terminated: an unterminated
     // tail is a legal last arg by the blob contract, but the child reads
     // strings with %s — without the terminator it walks one byte past
     // the top of the mapped window and faults at USER_STACK_TOP itself.
-    var blen = ablob.len;
-    if (blen == 0 or ablob[blen - 1] != 0) blen += 1;
+    var blen = ablob.len + eblob.len;
+    const last: u8 = if (eblob.len > 0) eblob[eblob.len - 1] else if (ablob.len > 0) ablob[ablob.len - 1] else 0;
+    if (last != 0) blen += 1;
     var top = USER_STACK_TOP;
     var n: usize = 0;
     while (n < blen) : (n += 1) {
         const va = top - blen + n;
         const phys = userPhys(c, va);
         const dst: *u8 = @ptrFromInt(phys + (va & 0xFFF));
-        dst.* = if (n < ablob.len) ablob[n] else 0;
+        dst.* = if (n < ablob.len) ablob[n] else if (n - ablob.len < eblob.len) eblob[n - ablob.len] else 0;
     }
     top -= blen;
     const blob_base = top;
@@ -1699,7 +1758,7 @@ fn buildStack(c: *Child, info: ElfInfo, at_base: u64, ablob: []const u8) ?usize 
     for (fixed) |p| { auxv[na] = p; na += 1; }
     if (at_base != 0) { auxv[na] = .{ 7, at_base }; na += 1; }
     auxv[na] = .{ 0, 0 }; na += 1;
-    const vec_slots = 1 + argc + 1 + 1 + na * 2; // argc argv[] NUL envpNUL pairs
+    const vec_slots = 1 + argc + 1 + nenv + 1 + na * 2;
     const sp = (top - vec_slots * 8) & ~@as(usize, 0xF);
     var at = sp;
     userWrite(c, at, argc); at += 8;        // argc
@@ -1707,6 +1766,9 @@ fn buildStack(c: *Child, info: ElfInfo, at_base: u64, ablob: []const u8) ?usize 
         userWrite(c, at, blob_base + starts[k]); at += 8;
     }
     userWrite(c, at, 0); at += 8;          // argv NULL
+    for (0..nenv) |k| {
+        userWrite(c, at, blob_base + ablob.len + estarts[k]); at += 8;
+    }
     userWrite(c, at, 0); at += 8;          // envp NULL
     for (auxv[0..na]) |pair| {
         userWrite(c, at, pair[0]); at += 8;
@@ -1895,7 +1957,9 @@ fn canonNr(nr: u64) u64 {
         // REAL fork now (musl _Fork sends it with zero args); clone(56)
         // folds to the same "create a child" cap — the flag-shape refusal
         // is the arm's job, not the bag's. Bits 57/58 name the caps.
-        56 => 57,
+        // execve(59) folds here too — replacing the image IS the create
+        // family's rebirth; nr59's own bit is already the scene class.
+        56, 59 => 57,
         512 => 57,
         513 => 58,
         514 => 2, // openobj — the object axis' open; folds to the fs-object
@@ -5558,7 +5622,7 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
     nc.frame.cs = 0x23;
     nc.frame.rflags = 0x202;
     nc.frame.ss = 0x1B;
-    nc.frame.rsp = buildStack(nc, info, at_base, ablob[0..ablen]) orelse {
+    nc.frame.rsp = buildStack(nc, info, at_base, ablob[0..ablen], &.{}) orelse {
         releaseFds(nc);
         _ = freeChild(nc);
         return -12;
@@ -5596,6 +5660,79 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
     }
     c.wait_pid = 0;
     return c.spawn_ret;
+}
+
+// nr 59 — execve(path, argv, envp): the calling child's IMAGE is
+// replaced — pid, slot, session, pgrp, rights bag, grants, and the fd
+// projection survive the swap (no CLOEXEC tracking on this arm; POSIX
+// ignored-sig dispositions persist, caught ones drop to DFL). Order is
+// load-bearing: argv/envp marshal into KERNEL blobs first — the user
+// pages carrying them die in the teardown — then a header sanity read
+// (a bad target refuses BEFORE the old image burns), then unmap, load,
+// rebuild. A failure past the unmap is the point of no return — linux
+// kills the process there too; we die by the same bookkeeping.
+fn childExec(c: *Child, f: *TrapFrame) i64 {
+    const ops = c.fsv orelse return -38; // ENOSYS — no view, no images
+    var pb: [256]u8 = undefined;
+    const path = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
+    var ablob: [512]u8 = undefined;
+    var eblob: [512]u8 = undefined;
+    const alen = marshalVec(c, f.rsi, &ablob);
+    if (alen < 0) return alen;
+    const elen = marshalVec(c, f.rdx, &eblob);
+    if (elen < 0) return elen;
+    // sanity before teardown: the view must open the target and the
+    // header must be ELF64/x86_64 — a refusal leaves the image ALIVE,
+    // linux's own pre-point-of-no-return contract.
+    const oh = ops.open(ops.ctx, @ptrCast(path.ptr), 0);
+    if (oh < 0) return -2; // ENOENT — the view refused the path
+    var hdr: [64]u8 = undefined;
+    const hn = ops.read(ops.ctx, @intCast(oh), &hdr, hdr.len);
+    ops.close(ops.ctx, @intCast(oh));
+    if (hn < 64 or hdr[0] != 0x7F or hdr[1] != 'E' or hdr[2] != 'L' or
+        hdr[3] != 'F' or hdr[4] != 2 or hdr[18] != 0x3E)
+        return -8; // ENOEXEC — not a loadable image
+    // point of no return: the address space dies; the identity lives.
+    unmapUserSpace(c);
+    var ipath: [256]u8 = undefined;
+    var ilen: usize = 0;
+    const info = loadElfViaFs(c, path, USER_VA_BASE, &ipath, &ilen) orelse {
+        childDie(9, 9); // SIGKILL — post-teardown failure
+    };
+    var entry = info.entry;
+    var at_base: u64 = 0;
+    if (ilen > 0) { // PT_INTERP — the loader resolves through the view
+        const iname = std.mem.sliceTo(ipath[0..ilen], 0);
+        const iinfo = loadElfViaFs(c, iname, INTERP_BASE, null, null) orelse {
+            childDie(9, 9);
+        };
+        at_base = INTERP_BASE;
+        entry = iinfo.entry;
+    }
+    const sp = buildStack(c, info, at_base, ablob[0..@intCast(alen)],
+        eblob[0..@intCast(elen)]) orelse {
+        childDie(9, 9);
+    };
+    // bookkeeping the swap resets vs keeps: a fresh break/mmap cursor,
+    // pending signal facts dropped (POSIX: pending does not carry),
+    // caught dispositions back to default; the mask, the ignored set,
+    // the stop state, pgid/sid/ctty, and every fd ride through.
+    c.brk_base = info.brk_base;
+    c.brk = info.brk_base;
+    c.mmap_top = MMAP_BASE;
+    c.sig_pending = 0;
+    c.nsigs = 0;
+    c.sig_caught = 0;
+    // the live frame is THIS syscall's return — repoint it at the new
+    // image: rcx is sysret's user rip, ursp publishes through the
+    // dispatcher's defer back to the sysret epilogue.
+    f.rcx = @intCast(entry);
+    c.ursp = @intCast(sp);
+    asm volatile ( // same-CR3 TLB flush — the pte set was rebuilt
+        \\ mov %%cr3, %%rax
+        \\ mov %%rax, %%cr3
+        ::: .{ .memory = true });
+    return 0; // dead code — the frame now returns into the new image
 }
 
 // Clone the caller's whole user space into `dst`: walk the parent's upd
@@ -6531,6 +6668,10 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                  // "who runs, with which bag" as data.
             f.rax = @bitCast(childProcview(c));
         },
+        59 => { // execve(path, argv, envp) — the image swap; return only
+                // on refusal (the frame repoints at the new entry).
+            f.rax = @bitCast(childExec(c, f));
+        },
         12 => { // brk(addr) -> current break; 0 queries
             const want: usize = @intCast(f.rdi);
             if (want == 0 or want < c.brk_base or
@@ -7138,7 +7279,7 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         c.frame.rip = entry;
         c.frame.cs = 0x23; // user code64
         c.frame.rflags = 0x202; // IF=1 — the child may be ticked mid-flight
-        c.frame.rsp = buildStack(c, info, at_base, std.mem.sliceTo(child_arg0[0..], 0)) orelse {
+        c.frame.rsp = buildStack(c, info, at_base, std.mem.sliceTo(child_arg0[0..], 0), &.{}) orelse {
             unlockBkl();
             return -1;
         };

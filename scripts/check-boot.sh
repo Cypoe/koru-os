@@ -382,6 +382,33 @@ else
     bad "proc-roster-view: build failed (roster/mkcpio/iso)"; tail -4 "$WORK/roster.build" "$WORK/mkcpiorv.log" "$WORK/isorv.build" 2>/dev/null
 fi
 
+# exec-verb: nr59 execve — the calling child's image is replaced in
+# place: pid/pgrp/sid/bag/fd projection survive, argv/env land fresh.
+# Stage 1 execl()s itself; stage 2 checks the POSIX contract as data.
+if command -v python >/dev/null 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -DKORU_DOOR -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/exec.elf" "$ROOT/koruos/native/tests/exec.c" > "$WORK/exec.build" 2>&1 \
+   && printf 'K' > "$WORK/marker.txt" \
+   && python "$ROOT/scripts/mkcpio.py" "$WORKW/exec.cpio" \
+        "bin/exec=$WORKW/exec.elf|755" "marker.txt=$WORKW/marker.txt|644" > "$WORK/mkcpioex.log" 2>&1 \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_exec.k" > "$WORK/boot_exec.k" \
+   && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_exec.k" "$WORK/koru-ex.iso" "$WORKW/exec.cpio" > "$WORK/isoex.build" 2>&1; then
+    timeout 60 "$QEMU" -cdrom "$WORK/koru-ex.iso" -boot d -serial stdio \
+        -display none -m 128M -no-reboot > "$WORK/boot_exec.serial" 2>&1 || true
+    if grep -qF 'EX argv-swap got=1' "$WORK/boot_exec.serial" \
+       && grep -qF 'EX pid-survives got=1' "$WORK/boot_exec.serial" \
+       && grep -qF 'EX fd-survives got=1' "$WORK/boot_exec.serial" \
+       && grep -qF 'EX bag-survives got=1' "$WORK/boot_exec.serial" \
+       && grep -qF 'EX COMPLETE fails=0' "$WORK/boot_exec.serial" \
+       && grep -qF 'EXEC GATE COMPLETE' "$WORK/boot_exec.serial" \
+       && grep -qF 'status=0' "$WORK/boot_exec.serial"; then
+        ok "exec-verb: execve swaps image in place — pid/session/bag/fd survive, argv fresh, status=0"
+    else
+        bad "exec-verb: $(grep -aE 'EX|exec:|FAIL' "$WORK/boot_exec.serial" | tail -14 | tr '\n' '|')"
+    fi
+else
+    bad "exec-verb: build failed (exec/mkcpio/iso)"; tail -4 "$WORK/exec.build" "$WORK/mkcpioex.log" "$WORK/isoex.build" 2>/dev/null
+fi
+
 # usb-esp: the flash-stick rung — a raw GPT image whose FAT32 ESP
 # carries a standalone GRUB-EFI (modules+cfg embedded) plus the kernel
 # and the cpio module. QEMU attaches it as USB mass-storage behind

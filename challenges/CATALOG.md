@@ -20,7 +20,7 @@ Tiers: `qemu | hw` · Evidence: `V | M | C | D`
  clone-threads     │koruos/proc.thread    │koru-native        │native-zig│[]                         │qemu│open      │—        
  did-identity      │koruos/id.did         │koru-native        │native-zig│[]                         │qemu│open      │—        
  drm-virtio-gpu    │koruos/kms.drm        │koru-native        │native-zig│[virtio-pci-modern]        │qemu│open      │—        
- exec-verb         │koruos/proc.exec      │koru-native        │native-zig│[sessions-jobctl]          │qemu│open      │—        
+ exec-verb         │koruos/proc.exec      │koru-native        │native-zig│[sessions-jobctl]          │qemu│**landed**│V        
  fs-initramfs      │koruos/fs.initramfs   │koru-native        │koru-lift │[module-transport]         │qemu│**landed**│M        
  glibc-shim        │koruos/abi.libc       │koru-native        │koru-lift │[]                         │qemu│waived    │—        
  gpu-virgl-3d      │koruos/kms.gpu3d      │koru-native        │native-zig│[drm-virtio-gpu]           │qemu│open      │—        
