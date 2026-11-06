@@ -10,7 +10,7 @@ int main(void) {
     const char *script = "/main.py";
     execve("/usr/bin/python3",
            (char *[]){ "python3", "-S", (char *)script, (char *)0 },
-           (char *[]){ 0 });
+           (char *[]){ "HOME=/", "PATH=/usr/bin:/bin", (char *)0 });
     // exec only returns on failure — the view refused or the image
     // wouldn't load; name it on the way out.
     perror("pyrun: execve");

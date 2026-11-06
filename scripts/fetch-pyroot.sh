@@ -43,6 +43,17 @@ echo "fetch-pyroot: apks ready"
 cd "$STAGE/root"
 for a in "$STAGE"/apks/*.apk; do tar xzf "$a" 2>/dev/null || true; done
 find . -name '.PKGINFO' -delete
+# .so whitelist: libpython + musl are the only LOAD-TIME needs; every
+# other library is pulled by an extension. Extensions not in the keep
+# list make their libs dead weight — and the payload lives or dies by
+# GRUB's module-placement threshold (~24MiB). _ssl's 5.3MB libssl+
+# libcrypto, libmpdec's C++ stack, readline/ncurses, lzma/bz2/expat/
+# gdbm all stay out. Kept: libsqlite3+_sqlite3 (klanker's locking
+# probe), libz+zlib, libffi.
+find lib usr/lib -mindepth 1 -maxdepth 1 -name '*.so*' \( \
+  ! -name 'libpython3.12*' ! -name 'ld-musl*' ! -name 'libc.musl*' \
+  ! -name 'libsqlite3*' ! -name 'libz.so*' ! -name 'libffi*' \
+  \) -delete 2>/dev/null || true
 PY=usr/lib/python3.12
 rm -rf "$STAGE/keep" && mkdir -p "$STAGE/keep"
 for p in encodings codecs.py io.py abc.py _collections_abc.py \
@@ -56,8 +67,20 @@ for p in encodings codecs.py io.py abc.py _collections_abc.py \
          locale.py concurrent re logging queue.py inspect.py \
          reprlib.py types.py signal.py string.py dataclasses.py \
          ast.py dis.py opcode.py importlib contextvars.py typing.py \
-         bisect.py random.py hashlib.py copy.py tempfile.py; do
+         argparse.py uuid.py platform.py shutil.py pathlib.py json \
+         gettext.py datetime.py glob.py __future__.py shlex.py \
+         base64.py getpass.py pprint.py urllib ipaddress.py \
+         bisect.py random.py hashlib.py copy.py tempfile.py \
+         struct.py zoneinfo _zoneinfo _compat_pickle.py pickle.py \
+         email mimetypes.py quopri.py uu.py calendar.py \
+         http ftplib.py nntplib.py sysconfig.py \
+         _aix_support.py _osx_support.py _bootsubprocess.py socketserver.py; do
   [ -e "$PY/$p" ] && mkdir -p "$STAGE/keep/$(dirname "$p")" && cp -r "$PY/$p" "$STAGE/keep/$p"
+done
+# _sysconfigdata's name is build-stamped (_sysconfigdata__linux_x86_64-linux-musl) —
+# a glob inside the loop expands against CWD, not $PY, so it must be matched here.
+for f in "$PY"/_sysconfigdata*.py; do
+  [ -e "$f" ] && cp "$f" "$STAGE/keep/" # flat — keep entries land at $PY/<name>
 done
 # lib-dynload: only the extensions the interpreter/probe can name —
 # posix_spawn, selectors, sockets, asyncio core, sqlite/ssl for the
@@ -65,9 +88,9 @@ done
 # a 26MiB cpio module crashes GRUB's module placement pre-serial.
 mkdir -p "$STAGE/keep/lib-dynload"
 for so in _posixsubprocess select _socket _asyncio _queue _contextvars \
-          fcntl termios zlib array math _struct _sqlite3 _ssl _json \
+          fcntl termios zlib array math _struct _sqlite3 _json \
           _datetime _bisect _heapq _random _opcode _multiprocessing \
-          mmap binascii unicodedata _ast; do
+          mmap binascii unicodedata _ast _sha2 _md5 _sha1 _sha3 _blake2; do
   f=$(ls "$PY/lib-dynload/${so}.cpython-312"*.so 2>/dev/null | head -1)
   [ -n "$f" ] && cp "$f" "$STAGE/keep/lib-dynload/"
 done

@@ -538,6 +538,12 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
     puthex(f.cs);
     say(" va=");
     puthex(rdcr2());
+    say(" fs=");
+    puthex(rdmsr(0xC0000100));
+    say(" cur=");
+    puthex(cur_child);
+    say(" nr=");
+    puthex(children[cur_child].last_nr);
     if (f.vec == 3) {
         say(" (continued)\n");
         if (!nested) unlockBkl();
@@ -1212,8 +1218,17 @@ const Child = struct {
                                     // minted; read/write dispatch checks
                                     // the verb, not just the kind
     fdnb: [32]u8 = .{0} ** 32,      // O_NONBLOCK per fd — FIONBIO/F_SETFL
+    fdcx: [32]u8 = .{0} ** 32,      // FD_CLOEXEC per fd — fork_exec's
+                                    // errpipe EOF IS the parent unblock;
+                                    // without it every CLOEXEC pipe outlives
+                                    // the exec it was meant to die on
                                     // state; read/write dispatch ORs it
                                     // into the channel functions' nb arm
+    dent_pending: [264]u8 = .{0} ** 264, // one-record pushback for
+                                    // getdents: a fetched record that
+                                    // didn't fit is held, not dropped
+    dent_plen: u8 = 0,
+    dent_pfd: i64 = -1,             // the fd the pending record came from
     // blocking is a kernel continuation, not a rebuilt user frame: kblock
     // pushes callee-saved on this child's own kstack and stores the rsp
     // here; a waker just flips .runnable and the next switchInto pops the
@@ -1222,6 +1237,7 @@ const Child = struct {
     wait_kind: WaitKind = .none,    // what the .blocked child waits on
     wait_pid: usize = 0,            // .exit: roster slot of the awaited child
     wait_pipe: usize = 0,           // .pipe: which ring the child waits on
+    last_nr: u64 = 0,               // debug: last syscall nr dispatched
     kctx: u64 = 0,                  // saved kernel rsp while blocked mid-call
     spawn_ret: i64 = 0,             // .exit wake: the dead child's status
     waitable: bool = false,         // detached spawn: hold status in a
@@ -2188,6 +2204,8 @@ fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
         1 => V_WRITE,
         else => V_READ | V_WRITE,
     };
+    c.fdnb[fd] = @intFromBool(flags & 0x800 != 0);       // O_NONBLOCK
+    c.fdcx[fd] = @intFromBool(flags & 0x80000 != 0);     // O_CLOEXEC
     return @intCast(fd);
 }
 
@@ -2456,13 +2474,31 @@ fn childGetdents(c: *Child, fdu: u64, buva: u64, count: u64) i64 {
     var out: usize = 0;
     var cookie: u64 = 0;
     while (true) {
-        const r = ops.dent(ops.ctx, c.fds[fd], &rec);
-        if (r <= 0) return if (r < 0 and out == 0) r else @intCast(out);
+        var have = false;
+        if (c.dent_plen != 0 and c.dent_pfd == @as(i64, @intCast(fd))) {
+            // a prior call fetched a record that didn't fit — it rides
+            // the pushback slot until the caller's buffer takes it.
+            @memcpy(rec[0..c.dent_plen], c.dent_pending[0..c.dent_plen]);
+            c.dent_plen = 0;
+            have = true;
+        }
+        if (!have) {
+            const r = ops.dent(ops.ctx, c.fds[fd], &rec);
+            if (r <= 0) return if (r < 0 and out == 0) r else @intCast(out);
+        }
         const ino = std.mem.readInt(u64, rec[0..8], .little);
         const dtyp = rec[8];
         const nl: usize = rec[9];
         const reclen = (19 + nl + 1 + 7) & ~@as(usize, 7);
-        if (out + reclen > @as(usize, @intCast(count))) break;
+        if (out + reclen > @as(usize, @intCast(count))) {
+            // doesn't fit — push it back for the NEXT call; linux holds
+            // the cursor, dropping the record skips a name forever
+            // (measured: 95th dir entry vanished -> ModuleNotFoundError).
+            c.dent_plen = @intCast(10 + nl);
+            c.dent_pfd = @intCast(fd);
+            @memcpy(c.dent_pending[0..c.dent_plen], rec[0..c.dent_plen]);
+            break;
+        }
         var de: [280]u8 = undefined;
         @memset(&de, 0);
         std.mem.writeInt(u64, de[0..8], ino, .little);
@@ -4083,7 +4119,7 @@ fn epollFree(idx: usize) void {
     if (e.refs == 0) e.nent = 0;
 }
 
-fn childEpollCreate(c: *Child) i64 {
+fn childEpollCreate(c: *Child, flags: u64) i64 {
     var fd: ?usize = null;
     for (c.fds, 0..) |v, i| if (v == 0 and c.fdkinds[i] == .none) {
         fd = i;
@@ -4095,6 +4131,7 @@ fn childEpollCreate(c: *Child) i64 {
         c.fds[fdi] = i + 1;
         c.fdkinds[fdi] = .epoll;
         c.fdverbs[fdi] = V_READ;
+        c.fdcx[fdi] = @intFromBool(flags & 0x80000 != 0); // EPOLL_CLOEXEC
         return @intCast(fdi);
     };
     return -24;
@@ -4235,6 +4272,7 @@ fn childEventfd(c: *Child, initval: u64, flags: u64) i64 {
         c.fds[fdi] = i + 1;
         c.fdkinds[fdi] = .efd;
         c.fdverbs[fdi] = V_READ | V_WRITE;
+        c.fdcx[fdi] = @intFromBool(flags & 0x80000 != 0); // EFD_CLOEXEC
         return @intCast(fdi);
     };
     return -24;
@@ -4345,6 +4383,7 @@ fn childTimerfdCreate(c: *Child, clockid: u64, flags: u64) i64 {
         c.fds[fdi] = i + 1;
         c.fdkinds[fdi] = .tfd;
         c.fdverbs[fdi] = V_READ;
+        c.fdcx[fdi] = @intFromBool(flags & 0x80000 != 0); // TFD_CLOEXEC
         return @intCast(fdi);
     };
     return -24;
@@ -4484,6 +4523,7 @@ fn childSignalfd(c: *Child, fdu: u64, maskva: u64, flags: u64) i64 {
         c.fds[fdi] = i + 1;
         c.fdkinds[fdi] = .sfd;
         c.fdverbs[fdi] = V_READ;
+        c.fdcx[fdi] = @intFromBool(flags & 0x80000 != 0); // SFD_CLOEXEC
         return @intCast(fdi);
     };
     return -24;
@@ -4715,6 +4755,9 @@ fn releaseFd(c: *Child, i: usize) void {
     c.fds[i] = 0;
     c.fdkinds[i] = .none;
     c.fdverbs[i] = 0;
+    c.fdcx[i] = 0;
+    if (c.dent_pfd == @as(i64, @intCast(i))) c.dent_plen = 0; // drop the
+        // pushback — a reused slot must not eat another listing's record
     flockDropIfOrphaned(c, ofd);
 }
 
@@ -4763,6 +4806,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
             dst.fds[dfd] = @intCast(nh);
             dst.fdverbs[dfd] = src.fdverbs[sfd];
             dst.fdnb[dfd] = src.fdnb[sfd];
+            dst.fdcx[dfd] = src.fdcx[sfd];
             return true;
         },
         else => {},
@@ -4771,12 +4815,17 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
     dst.fds[dfd] = src.fds[sfd];
     dst.fdverbs[dfd] = src.fdverbs[sfd]; // the verbs ride the projection
     dst.fdnb[dfd] = src.fdnb[sfd];     // O_NONBLOCK rides it too
+    dst.fdcx[dfd] = src.fdcx[sfd];     // CLOEXEC too — the caller clears it
+                                     // for dup-family projections (POSIX:
+                                     // dup never carries the flag)
     return true;
 }
 
-// nr 22 — pipe(fds[2]): mint a ring, write the two NEW fd numbers into
-// the caller's two-int array. Refuses EMFILE on a full table or pool.
-fn childPipe(c: *Child, pva: u64) i64 {
+// nr 22/293 — pipe(fds[2])/pipe2(fds[2], flags): mint a ring, write the
+// two NEW fd numbers into the caller's two-int array. Refuses EMFILE on
+// a full table or pool. flags carry O_NONBLOCK|O_CLOEXEC — both are real
+// projection state now (fork_exec's errpipe depends on the latter).
+fn childPipe(c: *Child, pva: u64, flags: u64) i64 {
     var slots: [2]usize = undefined;
     var sn: usize = 0;
     for (0..c.fds.len) |i| {
@@ -4803,6 +4852,10 @@ fn childPipe(c: *Child, pva: u64) i64 {
     c.fdkinds[slots[1]] = .pipe_w;
     c.fds[slots[1]] = pi;
     c.fdverbs[slots[1]] = V_WRITE;
+    for (slots) |si| {
+        c.fdnb[si] = @intFromBool(flags & 0x800 != 0);    // O_NONBLOCK
+        c.fdcx[si] = @intFromBool(flags & 0x80000 != 0);  // O_CLOEXEC
+    }
     return 0;
 }
 
@@ -4833,6 +4886,7 @@ fn childSocketpair(c: *Child, svva: u64, flags: u64) i64 {
         c.fds[slots[i]] = pi * 2 + i + 1;
         c.fdverbs[slots[i]] = V_READ | V_WRITE;
         c.fdnb[slots[i]] = @intFromBool(flags & 0x800 != 0); // SOCK_NONBLOCK
+        c.fdcx[slots[i]] = @intFromBool(flags & 0x80000 != 0); // SOCK_CLOEXEC
     }
     return 0;
 }
@@ -4875,6 +4929,7 @@ fn childSocket(c: *Child, f: *TrapFrame) i64 {
     c.fds[slot] = pi * 2 + 1;
     c.fdverbs[slot] = V_READ | V_WRITE;
     c.fdnb[slot] = @intFromBool(f.rsi & 0x800 != 0); // SOCK_NONBLOCK
+    c.fdcx[slot] = @intFromBool(f.rsi & 0x80000 != 0); // SOCK_CLOEXEC
     return @intCast(slot);
 }
 
@@ -5044,6 +5099,12 @@ fn childAccept(c: *Child, f: *TrapFrame) i64 {
             c.fdkinds[slot] = .sock;
             c.fds[slot] = v + 1;
             c.fdverbs[slot] = V_READ | V_WRITE;
+            // accept4 flags ride r10 — SOCK_NONBLOCK|SOCK_CLOEXEC are
+            // real projection state, plain accept mints neither.
+            if (f.rax == 288) {
+                c.fdnb[slot] = @intFromBool(f.r10 & 0x800 != 0);
+                c.fdcx[slot] = @intFromBool(f.r10 & 0x80000 != 0);
+            }
             return @intCast(slot);
         }
         c.wait_pipe = ACCEPT_KEY + li;
@@ -5704,6 +5765,7 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
             _ = freeChild(nc);
             return -12; // ENOMEM — provider refused the dup
         }
+        nc.fdcx[0] = 0; // spawn wiring is a dup — CLOEXEC does not carry
     }
     if (out_src != SPAWN_NO_FD) {
         if (out_src >= c.fds.len or c.fdkinds[@intCast(out_src)] == .none) {
@@ -5714,6 +5776,7 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
             _ = freeChild(nc);
             return -12;
         }
+        nc.fdcx[1] = 0;
     }
     var ipath: [256]u8 = undefined;
     var ilen: usize = 0;
@@ -5788,8 +5851,10 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
 
 // nr 59 — execve(path, argv, envp): the calling child's IMAGE is
 // replaced — pid, slot, session, pgrp, rights bag, grants, and the fd
-// projection survive the swap (no CLOEXEC tracking on this arm; POSIX
-// ignored-sig dispositions persist, caught ones drop to DFL). Order is
+// projection survive the swap MINUS every FD_CLOEXEC handle — POSIX
+// drops them at the image swap, and fork_exec's errpipe protocol
+// (CPython subprocess) hangs the parent without the close. POSIX
+// ignored-sig dispositions persist, caught ones drop to DFL. Order is
 // load-bearing: argv/envp marshal into KERNEL blobs first — the user
 // pages carrying them die in the teardown — then a header sanity read
 // (a bad target refuses BEFORE the old image burns), then unmap, load,
@@ -5818,6 +5883,11 @@ fn childExec(c: *Child, f: *TrapFrame) i64 {
         return -8; // ENOEXEC — not a loadable image
     // point of no return: the address space dies; the identity lives.
     unmapUserSpace(c);
+    // FD_CLOEXEC discharge — every flagged projection dies with the old
+    // image; endpoint refcounts drop through releaseFd like any close.
+    for (0..c.fds.len) |fi| {
+        if (c.fdkinds[fi] != .none and c.fdcx[fi] != 0) releaseFd(c, fi);
+    }
     var ipath: [256]u8 = undefined;
     var ilen: usize = 0;
     const info = loadElfViaFs(c, path, USER_VA_BASE, &ipath, &ilen) orelse {
@@ -6001,6 +6071,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         return;
     }
     const c = &children[cur_child];
+    c.last_nr = f.rax;
     switch (f.rax) {
         1 => { // write(fd, buf, len) — kind dispatch: conout sinks to
                // serial, pipe_w feeds the ring (blocks on full, EPIPE on
@@ -6218,9 +6289,11 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 });
             }
         },
-        22 => { // pipe(fds[2]) — mints a ring; endpoints land as pipe_r/
-                // pipe_w entries in the caller's projection.
-            f.rax = @bitCast(childPipe(c, f.rdi));
+        22, 293 => { // pipe(fds[2])/pipe2(fds[2], flags) — mints a ring;
+                     // endpoints land as pipe_r/pipe_w in the caller's
+                     // projection. CPython's errpipe speaks pipe2 and
+                     // accepts the pipe+fcntl pair as its only fallback.
+            f.rax = @bitCast(childPipe(c, f.rdi, if (f.rax == 293) f.rsi else 0));
         },
         53 => { // socketpair(domain, type, protocol, sv[2]) — AF_UNIX
                 // SOCK_STREAM only: the stream shape wayland's wire needs.
@@ -6325,9 +6398,9 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             }
         },
         213, 291 => { // epoll_create(size)/epoll_create1(flags) — the
-                      // interest-list object; flags carry CLOEXEC which
-                      // means nothing until an exec keeps the table
-            f.rax = @bitCast(childEpollCreate(c));
+                      // interest-list object; EPOLL_CLOEXEC rides the
+                      // flag word like every other mint site.
+            f.rax = @bitCast(childEpollCreate(c, if (f.rax == 291) f.rdi else 0));
         },
         233 => { // epoll_ctl(epfd, op, fd, event) — interest-list verbs
             f.rax = @bitCast(childEpollCtl(c, f.rdi, f.rsi, f.rdx, f.r10));
@@ -6735,6 +6808,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     }
                     if (slot) |si| {
                         _ = cloneFd(c, si, c, @intCast(f.rdi));
+                        c.fdcx[si] = @intFromBool(f.rsi == 1030);
                         f.rax = @intCast(si);
                     } else {
                         f.rax = @bitCast(@as(i64, -24)); // EMFILE
@@ -6751,7 +6825,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 // the rest of the flag word stays unmodeled.
                 c.fdnb[@intCast(f.rdi)] = @intFromBool(f.rdx & 0x800 != 0);
                 f.rax = 0;
-            } else if (f.rsi <= 4) { // F_GETFD/F_SETFD — success
+            } else if (f.rsi == 1) { // F_GETFD — FD_CLOEXEC is real state:
+                // fork_exec's errpipe EOF IS the parent's unblock, so the
+                // flag's truth lives in the projection like O_NONBLOCK.
+                f.rax = @bitCast(@as(i64, @intCast(c.fdcx[@intCast(f.rdi)] & 1)));
+            } else if (f.rsi == 2) { // F_SETFD
+                c.fdcx[@intCast(f.rdi)] = @intFromBool(f.rdx & 1 != 0);
                 f.rax = 0;
             } else {
                 f.rax = @bitCast(@as(i64, -22)); // EINVAL — unknown cmd
@@ -6767,6 +6846,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 }
                 if (slot) |si| {
                     _ = cloneFd(c, si, c, @intCast(f.rdi));
+                    c.fdcx[si] = 0; // dup never carries CLOEXEC
                     f.rax = @intCast(si);
                 } else {
                     f.rax = @bitCast(@as(i64, -24));
@@ -6790,6 +6870,9 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     if (c.fdkinds[@intCast(newfd)] != .none)
                         releaseFd(c, @intCast(newfd));
                     _ = cloneFd(c, @intCast(newfd), c, @intCast(oldfd));
+                    // dup2 always clears; dup3 honors O_CLOEXEC in rdx.
+                    c.fdcx[@intCast(newfd)] =
+                        @intFromBool(f.rax == 292 and f.rdx & 0x80000 != 0);
                     f.rax = @intCast(newfd);
                 }
             }
@@ -6896,7 +6979,44 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             if (len == 0) {
                 f.rax = @bitCast(@as(i64, -22));
             } else if (f.r10 & 0x20 != 0) { // MAP_ANONYMOUS
-                const base = c.mmap_top;
+                var base: usize = 0;
+                if (f.r10 & 0x10 != 0 and f.rdi != 0) { // MAP_FIXED: the
+                    // caller's VA is the contract — ld.so's BSS-tail overlay
+                    // (PROT_NONE reserve, then fixed-anon on top) breaks
+                    // silently if we bump-allocate elsewhere and lie.
+                    base = @intCast(f.rdi);
+                    if (base & 0xFFF != 0 or base < USER_VA_BASE or
+                        base + len > USER_VA_END) {
+                        f.rax = @bitCast(@as(i64, -22)); // EINVAL
+                        return;
+                    }
+                    // replace live mappings: their frames go back like
+                    // munmap's, else the reserved pages leak AND stay live
+                    // under the new PTE (mapUserPage overwrites the entry).
+                    var q: usize = 0;
+                    while (q < len) : (q += 0x1000) {
+                        const e = userEntry(c, base + q);
+                        if (e & 1 == 0) continue;
+                        _ = pmm.free(e & ~@as(u64, 0xFFF));
+                        const upd: *[512]u64 = @ptrFromInt(c.upd);
+                        const pt: *[512]u64 = @ptrFromInt(@as(usize, @intCast(upd[(base + q - USER_VA_BASE) >> 21] & ~@as(u64, 0xFFF))));
+                        pt[((base + q) >> 12) & 0x1FF] = 0;
+                    }
+                } else {
+                    // bump cursor — skip past any span the fixed path left
+                    // live, else a later bump collides with a fixed map.
+                    base = c.mmap_top;
+                    while (true) {
+                        var live = false;
+                        var q: usize = 0;
+                        while (q < len) : (q += 0x1000) {
+                            if (userEntry(c, base + q) & 1 != 0) { live = true; break; }
+                        }
+                        if (!live) break;
+                        base += (len + 0xFFF) & ~@as(usize, 0xFFF);
+                    }
+                    c.mmap_top = base + ((len + 0xFFF) & ~@as(usize, 0xFFF));
+                }
                 var p: usize = 0;
                 var ok = true;
                 while (p < len) : (p += 0x1000) {
@@ -6906,7 +7026,6 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     f.rax = @bitCast(@as(i64, -12)); // ENOMEM
                 } else {
                     if (f.rdx & 2 == 0) setUserWritable(c, base, len, false); // !PROT_WRITE
-                    c.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
                     f.rax = base;
                 }
             } else {
@@ -7012,6 +7131,15 @@ fn anyLive() bool {
         if (s == .runnable or s == .blocked) return true;
     }
     return false;
+}
+
+fn rdmsr(msr: u32) u64 {
+    var lo: u32 = undefined;
+    var hi: u32 = undefined;
+    asm volatile ("rdmsr"
+        : [l] "={eax}" (lo), [h] "={edx}" (hi)
+        : [c] "{ecx}" (msr));
+    return (@as(u64, hi) << 32) | lo;
 }
 
 fn wrmsr(msr: u32, v: u64) void {

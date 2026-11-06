@@ -553,7 +553,8 @@ fn build(fs: *Ramfs, mod_phys: u64, mod_size: u64) bool {
         if (saw_trailer) break;
     }
     if (!saw_trailer) return false; // truncated archive — refuse, don't half-mount
-    const entcap = nent + comps_total + 8;
+    const entcap = nent + comps_total + 24; // 8 synth slack + 16 runtime
+        // mknod slots — socket names mint ents at bind time
     const em = malloc(entcap * @sizeOf(Ent)) orelse return false;
     const am = malloc(@max(nalias, 1) * @sizeOf(Alias)) orelse {
         free(em);
@@ -903,8 +904,44 @@ fn cfMknod(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     const fs: *Ramfs = @ptrCast(@alignCast(ctx));
     const r = resolveZ(fs, path, 0);
     switch (r) {
-        .ent => return -17,
-        .err => |e| return if (e == -2) -30 else e,
+        .ent => return -17, // EEXIST — the name is taken
+        .err => |e| {
+            if (e != -2) return e;
+            // ENOENT — mint a S_IFSOCK node in RAM. A unix socket name
+            // is a runtime registration, not archive data: the ent
+            // table lives in RAM already, so this is the ONE mutation
+            // the view allows — file bytes stay EROFS, the archive is
+            // frozen. Same shape as ext2's "this rung only S_IFSOCK".
+            const p = std.mem.sliceTo(path, 0);
+            const slash = std.mem.lastIndexOfScalar(u8, p, '/') orelse return -22;
+            const leaf = p[slash + 1 ..];
+            if (leaf.len == 0 or compEq(leaf, ".") or compEq(leaf, "..")) return -22;
+            var pb: [640]u8 = undefined;
+            const plen = if (slash == 0) 1 else slash;
+            if (plen + 1 > pb.len) return -36;
+            @memcpy(pb[0..plen], p[0..plen]);
+            pb[plen] = 0;
+            const pr = resolveZ(fs, @ptrCast(&pb), 0);
+            const par = switch (pr) {
+                .ent => |x| x,
+                .err => |ee| return ee,
+            };
+            if (fs.ents[par].kind != .dir) return -20;
+            if (fs.nents >= fs.cap) return -28;
+            var cp: [320]u8 = undefined;
+            const clen = joinChild(std.mem.sliceTo(fs.ents[par].path, 0), leaf, &cp) orelse return -36;
+            const np = arenaPut(fs, cp[0..clen]) orelse return -12;
+            const e2 = &fs.ents[fs.nents];
+            e2.* = .{
+                .path = np, .parent = @intCast(par), .ino = @intCast(fs.nents + 1),
+                .kind = .other, .mode = 0o140755, .uid = 0, .gid = 0,
+                .mtime = 0, .rdev = 0, .nlink = 1, .data = null,
+                .size = 0, .link = null,
+            };
+            const ei = fs.nents;
+            fs.nents += 1;
+            return @bitCast((@as(u64, fs.dev_id) << 32) | fs.ents[ei].ino);
+        },
     }
 }
 
