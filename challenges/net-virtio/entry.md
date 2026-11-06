@@ -26,8 +26,10 @@ whatever stack the entry lands.
 
 ## Notes
 
-- Lars' catalog has net-virtio-lwip landed (compose lane) — their
-  lwIP integration facts transfer; whether the kernel borrows the
-  stack or owns it is a genuine fork to decide at start.
+- Lars' rig landed net-virtio-lwip with HOST-VERIFIED evidence
+  (efff0b3): Unikraft booted on bare metal, lwip init -> IPv4
+  10.0.2.15 on user-net -> connect -> recv rc=0, and the host
+  listener saw "guest-says-hi". The virtio-net + lwip shape is
+  proven; whether we borrow the stack or own it is still the fork.
 - No socket ABI exists yet — AF_INET endpoints need an FdKind +
   the poll/epoll wiring pipes/socks already set the shape for.
