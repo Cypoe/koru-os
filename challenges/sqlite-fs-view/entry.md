@@ -35,3 +35,7 @@ Rename lands as a row move. Serial evidence lines, status=0.
   slice: one table, real verbs, real refusal where POSIX can't map.
 - deltadb (zed) is the alternative backend CC mentioned — file under
   Notes, not a separate slot until measured.
+- Sibling lane: `notes/agents-fs-store-backed-fs.md` — agents-store as
+  the semantic-rich backing (datoms + PROV + meaning-links) vs this
+  slot's flat `files(path, blob, meta)` slice. Decide `fs.store` vs
+  widened `fs.sqlite` at card time.

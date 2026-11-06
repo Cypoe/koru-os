@@ -27,7 +27,7 @@ Tiers: `qemu | hw` · Evidence: `V | M | C | D`
  hw-tier-validation│koruos/oracle.hw      │koru-native        │oracle    │[usb-xhci, usb-hid]         │hw  │open      │—        
  irq-msix          │koruos/irq            │koru-native        │native-zig│[pci-enumeration]           │qemu│**landed**│M        
  kernel-profile    │koruos/kernel.profile │koru-native        │native-zig│[]                          │qemu│open      │—        
- klanker-child     │koruos/oracle.klanker │koru-native        │oracle    │[py-cpython-child]          │qemu│open      │—        
+ klanker-child     │koruos/oracle.klanker │koru-native        │oracle    │[py-cpython-child]          │qemu│**landed**│V        
  kmod-loader       │koruos/kernel.kmod    │koru-native        │native-zig│[module-transport]          │qemu│open      │—        
  koru-repl         │koruos/repl           │koru-native        │oracle    │[exec-verb]                 │qemu│open      │—        
  module-transport  │koruos/module         │koru-native        │native-zig│[]                          │qemu│**landed**│M        
