@@ -14,7 +14,14 @@ Unikraft 0.21 needs two patches for this (`experiments/m6-kms/patches/`):
 
 **Why native and not DS3 (decision, DESIGN-0001 §0.4 "M6 decision").** The provider is koru-os code behind the same `kms.*` rows a GPU driver silo will export. DS3 (LKL `virtio_gpu` in a silo) is not dropped; it re-binds `kms_rows.h` to a silo instead of `bochs.c`, and the personality and tests stay as they are.
 
-Not done: atomic KMS and properties (M9 needs them for aquamarine), page-flip events and vblank (`read()` on the fd), PRIME, cursor planes, more than one client, a writable `dumb` lifetime model (a destroyed buffer still backs a live fb, as on Linux, but without refcounts), virtio-gpu (the Unikraft 0.21 virtio-pci driver is legacy-only; virtio-gpu is a virtio 1.0 device).
+Not done: atomic KMS and properties (M9 needs them for aquamarine), page-flip events and vblank (`read()` on the fd), PRIME, cursor planes, more than one client, a writable `dumb` lifetime model (a destroyed buffer still backs a live fb, as on Linux, but without refcounts), virgl/3D.
+
+M2 upstream-lane join measured (evidence/m2-join/): unmodified
+Debian modetest opens `/dev/dri/card0` served by `virtio_gpu.c`,
+enumerates `Virtual-1` 640x480, and a real modeset paints — host
+screendump shows the color band. The provider does manual virtio
+over raw PCI because the Unikraft 0.21 virtio-pci driver is
+legacy-only (virtio-gpu is a virtio 1.0 device).
 
 ## virtio-gpu provider (virtio_gpu.c)
 
