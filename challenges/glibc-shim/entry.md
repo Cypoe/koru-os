@@ -32,3 +32,8 @@ that is genuinely a libc-shape gap and not a syscall gap.
 - Distinguish syscall gaps (our problem) from libc-internal gaps
   (shim's problem) — most "glibc needed" reports are actually the
   former in disguise.
+- CPython does NOT reopen this: python:alpine proves CPython on musl
+  is a shipping product, and klanker's agents-* tree is pure stdlib.
+  The measured gap names itself `py-cpython-child` — revisit only if
+  a glibc-only C extension (manylinux wheel without a musllinux
+  build) ever enters the dependency graph.
