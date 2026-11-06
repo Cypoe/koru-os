@@ -963,7 +963,7 @@ fn readFile(fs: *Fs, ino: u32) ReadResult {
 
 // A handle is refcounted: fork and spawn fd-wiring dup it (share the
 // offset — POSIX), so close frees only when the last reference drops.
-const OpenFile = struct { ino: u32, size: u32, pos: u64, refs: u32, mode: u8, append: bool };
+const OpenFile = struct { ino: u32, size: u32, pos: u64, refs: u32, mode: u8, append: bool, dir: bool };
 
 const ChildFsOps = extern struct {
     ctx: ?*anyopaque,
@@ -1012,6 +1012,11 @@ const ChildFsOps = extern struct {
     // objects open() refuses (directories, socket nodes). The inode
     // carries the truth: mode is read, never synthesized.
     stat_path: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64,
+    // dent(h, dst): fill dst with the NEXT entry of an open directory
+    // handle — {ino:u64, type:u8(DT_*), namelen:u8, name[255]} — the
+    // cursor lives inside the handle (pos = byte offset into the dir's
+    // dirent stream). Returns 1 filled / 0 end / -errno.
+    dent: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
 };
 
 // readAt: inode + byte-range → bytes, reading only the blocks covered —
@@ -1102,7 +1107,10 @@ fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64 
     const loc = inodeLoc(fs, ino.?) orelse return -5;
     var it: [BS]u8 = undefined;
     if (!readBlock(fs, loc.block, &it)) return -5;
-    if (rd16(&it, loc.off) & 0o170000 != 0o100000) return -21; // EISDIR
+    const ikind = rd16(&it, loc.off) & 0o170000;
+    // directories open READ-ONLY: getdents64 rides the handle and
+    // read() answers EISDIR like linux — write intent still refuses.
+    if (ikind != 0o100000 and (ikind != 0o040000 or mode != 0)) return -21; // EISDIR
     if ((flags & O_TRUNC) != 0 and mode != 0) {
         if (!truncateFile(fs, loc, &it)) return -38; // ENOSYS-class bound (double-ind)
     }
@@ -1111,7 +1119,8 @@ fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64 
     const size = if ((flags & O_TRUNC) != 0 and mode != 0) 0 else rd32(&it, loc.off + 4);
     fp.* = .{ .ino = ino.?, .size = size,
                .pos = if ((flags & O_APPEND) != 0) size else 0,
-               .refs = 1, .mode = mode, .append = (flags & O_APPEND) != 0 };
+               .refs = 1, .mode = mode, .append = (flags & O_APPEND) != 0,
+               .dir = ikind == 0o040000 };
     return @intCast(@intFromPtr(fp));
 }
 
@@ -1119,6 +1128,7 @@ fn cfRead(ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64 {
     const fs: *Fs = @ptrCast(@alignCast(ctx));
     const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
     if (fp.mode == 1) return -9; // EBADF — a write-only handle has no read verb
+    if (fp.dir) return -21;      // EISDIR — linux's read on a dir handle
     const n = readAt(fs, fp.ino, fp.pos, dst, len);
     if (n > 0) fp.pos += @intCast(n);
     return n;
@@ -1150,6 +1160,42 @@ fn cfWrite(ctx: ?*anyopaque, h: u64, src: [*]const u8, len: usize) callconv(.c) 
     return n;
 }
 
+// cfDent: the next entry of an open DIR handle — fp.pos is the byte
+// cursor into the inode's dirent stream {inode u32, rec_len u16,
+// name_len u8, file_type u8, name[]}; ino==0 records are holes to
+// skip. ext2's file_type values differ from linux DT_*: 1→8, 2→4,
+// 7→10. Record: {ino u64, type u8, namelen u8, name[255]}.
+fn cfDent(ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64 {
+    const fs: *Fs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    if (!fp.dir) return -20; // ENOTDIR
+    var hdr: [8]u8 = undefined;
+    while (fp.pos + 8 <= fp.size) {
+        if (readAt(fs, fp.ino, fp.pos, &hdr, 8) < 8) return -5; // EIO
+        const dino = rd32(&hdr, 0);
+        const reclen = rd16(&hdr, 4);
+        const namelen = hdr[6];
+        if (reclen < 8 or reclen > fp.size - fp.pos) return -5; // corrupt rec
+        const rec_off = fp.pos;
+        fp.pos += reclen;
+        if (dino == 0) continue; // hole — rec_len real, inode dead
+        if (namelen > 0 and rec_off + 8 + namelen <= fp.size) {
+            var nm: [256]u8 = undefined;
+            if (readAt(fs, fp.ino, rec_off + 8, &nm, namelen) < namelen) return -5;
+            const t: u8 = switch (hdr[7]) {
+                1 => 8, 2 => 4, 7 => 10, else => 0,
+            };
+            std.mem.writeInt(u64, dst[0..8], dino, .little);
+            dst[8] = t;
+            dst[9] = namelen;
+            @memcpy(dst[10..][0..namelen], nm[0..namelen]);
+            return 1;
+        }
+        return -5;
+    }
+    return 0;
+}
+
 fn cfKey(ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64 {
     const fs: *Fs = @ptrCast(@alignCast(ctx));
     var dir: [BS]u8 = undefined;
@@ -1176,7 +1222,8 @@ fn cfOpenKey(ctx: ?*anyopaque, key: u64, flags: c_int) callconv(.c) i64 {
     const amode: u8 = @intCast(flags & 3);
     fp.* = .{ .ino = ino, .size = rd32(&it, loc.off + 4),
                .pos = if ((flags & O_APPEND) != 0) rd32(&it, loc.off + 4) else 0,
-               .refs = 1, .mode = amode, .append = (flags & O_APPEND) != 0 };
+               .refs = 1, .mode = amode, .append = (flags & O_APPEND) != 0,
+               .dir = false };
     return @intCast(@intFromPtr(fp));
 }
 
@@ -1470,7 +1517,7 @@ fn childFs(fs: *Fs) ChildFsOps {
               .dup = cfDup, .key = cfKey, .write = cfWrite,
               .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey,
               .mkdir = cfMkdir, .rmdir = cfRmdir, .link = cfLink,
-              .mknod = cfMknod, .stat_path = cfStatPath };
+              .mknod = cfMknod, .stat_path = cfStatPath, .dent = cfDent };
 }
 
 ~proc fetch|zig {

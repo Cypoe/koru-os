@@ -78,6 +78,11 @@ const ChildFsOps = extern struct {
     link: *const fn (ctx: ?*anyopaque, old: [*:0]const u8, new: [*:0]const u8) callconv(.c) i64,
     mknod: *const fn (ctx: ?*anyopaque, path: [*:0]const u8) callconv(.c) i64,
     stat_path: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64,
+    // dent(h, dst): fill dst with the NEXT entry of an open directory
+    // handle — {ino:u64, type:u8(DT_*), namelen:u8, name[255]} — the
+    // cursor lives inside the handle (pos). Returns 1 filled / 0 end /
+    // -errno; a non-dir handle gets -20 ENOTDIR.
+    dent: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
 };
 
 // ---- object model ---------------------------------------------------------
@@ -681,8 +686,10 @@ fn cfOpen(ctx: ?*anyopaque, path: [*:0]const u8, flags: c_int) callconv(.c) i64 
     };
     if ((flags & 0o200) != 0 and (flags & 0o100) != 0) return -17; // O_EXCL|O_CREAT
     const e = &fs.ents[ei];
-    if (e.kind == .dir) return -21; // EISDIR
-    if (e.kind != .reg) return -6;  // ENODEV — no device layer
+    // directories open READ-ONLY: getdents64 rides the handle, read()
+    // on it answers EISDIR like linux — write intent still refuses.
+    if (e.kind == .dir and (flags & 3) != 0) return -21; // EISDIR
+    if (e.kind != .reg and e.kind != .dir) return -6;  // ENODEV — no device layer
     // write intent on a read-only fs: accmode W/RW, O_TRUNC, O_APPEND
     if ((flags & 3) != 0 or (flags & 0o1000) != 0 or (flags & 0o2000) != 0)
         return -30; // EROFS
@@ -699,6 +706,7 @@ fn cfRead(ctx: ?*anyopaque, h: u64, dst: [*]u8, len: usize) callconv(.c) i64 {
     const fs: *Ramfs = @ptrCast(@alignCast(ctx));
     const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
     const e = &fs.ents[fp.ent];
+    if (e.kind == .dir) return -21; // EISDIR — linux's read on a dir handle
     const d = e.data orelse return 0;
     const off: usize = @intCast(fp.pos);
     if (fp.pos >= e.size) return 0;
@@ -740,6 +748,52 @@ fn cfStat(ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64 {
     const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
     fillStat(fs, &fs.ents[fp.ent], dst);
     return 0;
+}
+
+// cfDent: the next entry of an open DIR handle — cursor is fp.pos in
+// entry-sequence order: 0 = ".", 1 = "..", 2.. = children (parent idx
+// == this ent) in table order. Record: {ino u64, type u8, namelen u8,
+// name[255]}. Root's ".." names itself, matching linux.
+fn cfDent(ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64 {
+    const fs: *Ramfs = @ptrCast(@alignCast(ctx));
+    const fp: *OpenFile = @ptrFromInt(@as(usize, @intCast(h)));
+    const e = &fs.ents[fp.ent];
+    if (e.kind != .dir) return -20; // ENOTDIR
+    const DT_DIR: u8 = 4;
+    const DT_REG: u8 = 8;
+    const DT_LNK: u8 = 10;
+    var ei: u32 = 0;
+    var name: []const u8 = "";
+    if (fp.pos == 0) {
+        ei = fp.ent; name = ".";
+    } else if (fp.pos == 1) {
+        ei = if (e.parent == NIL) fp.ent else e.parent; name = "..";
+    } else {
+        // the (pos-2)-th ent whose parent is this dir
+        var seen: u64 = 0;
+        var found = false;
+        for (0..fs.nents) |i| {
+            if (fs.ents[i].parent == fp.ent and i != fp.ent) {
+                if (seen == fp.pos - 2) { ei = @intCast(i); found = true; break; }
+                seen += 1;
+            }
+        }
+        if (!found) return 0;
+        const leaf = std.mem.sliceTo(fs.ents[ei].path, 0);
+        const slash = std.mem.lastIndexOfScalar(u8, leaf, '/') orelse 0;
+        name = leaf[slash + 1 ..];
+        if (name.len > 255) return -5; // EIO — a name too long is malformed
+    }
+    const c = &fs.ents[ei];
+    const t: u8 = switch (c.kind) {
+        .dir => DT_DIR, .reg => DT_REG, .link => DT_LNK, .other => 0,
+    };
+    std.mem.writeInt(u64, dst[0..8], c.ino, .little);
+    dst[8] = t;
+    dst[9] = @intCast(name.len);
+    @memcpy(dst[10..][0..name.len], name);
+    fp.pos += 1;
+    return 1;
 }
 
 fn cfClose(ctx: ?*anyopaque, h: u64) callconv(.c) void {
@@ -873,7 +927,7 @@ fn childFs(fs: *Ramfs) ChildFsOps {
         .dup = cfDup, .key = cfKey, .write = cfWrite,
         .rename = cfRename, .unlink = cfUnlink, .open_key = cfOpenKey,
         .mkdir = cfMkdir, .rmdir = cfRmdir, .link = cfLink,
-        .mknod = cfMknod, .stat_path = cfStatPath,
+        .mknod = cfMknod, .stat_path = cfStatPath, .dent = cfDent,
     };
 }
 

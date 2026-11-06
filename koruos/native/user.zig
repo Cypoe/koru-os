@@ -70,7 +70,11 @@ const US: u64 = 0x4; // user-accessible
 const USER_VA_BASE: usize = 0x4000_0000; // pdpt[1] -> upd -> user pages
 const USER_VA_END: usize = 0x7FE0_0000;  // ~1 GiB of user space
 const USER_STACK_TOP: usize = 0x7FE0_0000; // stack pages map just below
-const USER_STACK_PAGES: usize = 16;
+// 16 pages (64 KiB) was measured insufficient: CPython 3.12 init overflowed
+// it (fault at va 0x7fdefcc8, one page below the window). No demand-grow
+// exists — the whole window is mapped at spawn — so the fixed window must
+// be big enough up front. 256 pages = 1 MiB per child.
+const USER_STACK_PAGES: usize = 256;
 const MMAP_BASE: usize = 0x6000_0000; // mmap arena — between image and stack
 const INTERP_BASE: usize = 0x7000_0000; // PT_INTERP loader's ET_DYN bias — clear of mains AND the mmap arena
 
@@ -856,6 +860,12 @@ const ChildFsOps = extern struct {
     // it's the only way to see objects open() refuses (directories,
     // socket nodes). Mode comes off the inode, never synthesized.
     stat_path: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64,
+    // dent(h, dst): fill dst with the NEXT entry of an open directory
+    // handle — {ino:u64, type:u8(DT_*), namelen:u8, name[255]} — the
+    // cursor lives inside the handle (pos). Returns 1 filled / 0 end /
+    // -errno; a non-dir handle gets -20 ENOTDIR, a provider without a
+    // dir model gets -38 ENOSYS — the gap stays named, never silent.
+    dent: *const fn (ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64,
 };
 
 const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd, pty, pause };
@@ -2010,6 +2020,27 @@ fn canonNr(nr: u64) u64 {
         4, 6 => 2,
         // access family — an fs-object permission query; same class.
         21, 269, 439 => 2,
+        // interpreter-surface folds: every nr >=64 that a real
+        // libc/language runtime speaks has to land on a named class —
+        // an unmapped high nr is ungrantable by construction (the bag
+        // domain is <64 bits), so the fold IS the capability story.
+        // proc-self metadata/identity: uname, time/rlimit/rusage/sysinfo
+        // facts, uid/gid/pgrp/ppid queries and set-id verbs, scheduler
+        // affinity facts, tgkill, rseq registration, close_range on
+        // the own fd table.
+        63, 96, 97, 98, 99, 100, 102, 104, 105, 106, 107, 108, 110,
+        113, 114, 115, 116, 117, 118, 119, 120, 122, 123, 125, 126,
+        203, 204, 234, 334, 436 => 62,
+        247 => 61, // waitid — the wait family's extended query
+        435 => 57, // clone3 — the create family's wider verb
+        // fs-object verbs/queries: cwd + chdir family, link/readlink,
+        // chmod/chown, umask, mknod, statfs, *at variants, fallocate,
+        // name_to_handle/open_by_handle, copy_file_range, statx, openat2.
+        79, 80, 81, 88, 89, 90, 92, 93, 94, 95, 133, 137, 138, 217,
+        260, 261, 266, 267, 268, 280, 285, 303, 304, 326, 332, 437 => 2,
+        // pselect6 multiplexes channels like poll; futex is the
+        // channel class's wait-on-a-word primitive.
+        270, 202 => 22,
         // scene class (bit 59): a child minting a display surface is a
         // compositor's cap, not a client's — mint/blit/present/move/info
         // ride one bag bit; close is ordinary fd lifetime.
@@ -2404,6 +2435,42 @@ fn childRead(c: *Child, fdu: u64, buva: u64, want: u64) i64 {
         if (got < n or n < chunk) break; // EFAULT mid-copy or EOF/short
     }
     return total;
+}
+
+// childGetdents — nr217 getdents64(fd, buf, count): a directory LISTING
+// over the scoped view. The provider's dent op answers one entry per
+// call (cursor inside the handle); the kernel packs linux dirent64
+// records — {ino u64, off u64, reclen u16, type u8, name NUL} — until
+// count runs out. ENOTDIR/ENOSYS come back from the provider named.
+fn childGetdents(c: *Child, fdu: u64, buva: u64, count: u64) i64 {
+    const ops = c.fsv orelse return -38;
+    if (fdu >= c.fds.len) return -9;
+    const fd: usize = @intCast(fdu);
+    if (fd < 3 or c.fds[fd] == 0 or c.fdkinds[fd] != .fs) return -9;
+    var rec: [264]u8 = undefined;
+    var out: usize = 0;
+    var cookie: u64 = 0;
+    while (true) {
+        const r = ops.dent(ops.ctx, c.fds[fd], &rec);
+        if (r <= 0) return if (r < 0 and out == 0) r else @intCast(out);
+        const ino = std.mem.readInt(u64, rec[0..8], .little);
+        const dtyp = rec[8];
+        const nl: usize = rec[9];
+        const reclen = (19 + nl + 1 + 7) & ~@as(usize, 7);
+        if (out + reclen > @as(usize, @intCast(count))) break;
+        var de: [280]u8 = undefined;
+        @memset(&de, 0);
+        std.mem.writeInt(u64, de[0..8], ino, .little);
+        std.mem.writeInt(u64, de[8..16], cookie + 1, .little);
+        std.mem.writeInt(u16, de[16..18], @intCast(reclen), .little);
+        de[18] = dtyp;
+        @memcpy(de[19..][0..nl], rec[10..][0..nl]);
+        const got = copyToUser(c, @intCast(buva + out), de[0..reclen]);
+        if (got < reclen) return if (out > 0) @intCast(out) else -14;
+        out += reclen;
+        cookie += 1;
+    }
+    return @intCast(out);
 }
 
 fn childPread(c: *Child, fdu: u64, buva: u64, want: u64, pos: u64) i64 {
@@ -6238,6 +6305,17 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         77 => { // ftruncate(fd, len) — sizes shm objects (grow, zero)
             f.rax = @bitCast(childFtruncate(c, f.rdi, f.rsi));
         },
+        79 => { // getcwd(buf, size) — the view root is the child's cwd:
+                // every relative path resolves from "/" inside its scoped
+                // fs (no chdir state exists to track — the honest answer).
+            const size: usize = @intCast(f.rsi);
+            if (size < 2) {
+                f.rax = @bitCast(@as(i64, -34)); // ERANGE
+            } else {
+                const got = copyToUser(c, @intCast(f.rdi), "/\x00");
+                f.rax = @bitCast(@as(i64, if (got < 2) -14 else 2));
+            }
+        },
         56 => { // clone(flags,...) — only the fork shape (SIGCHLD) this rung
             f.rax = @bitCast(childClone(c, f));
         },
@@ -6371,6 +6449,10 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         },
         8 => { // lseek(fd, off, whence)
             f.rax = @bitCast(childSeek(c, f.rdi, @bitCast(f.rsi), @intCast(f.rdx)));
+        },
+        217 => { // getdents64(fd, buf, count) — directory listing over
+                 // the scoped view; dent cursor lives in the handle.
+            f.rax = @bitCast(childGetdents(c, f.rdi, f.rsi, f.rdx));
         },
         5 => { // fstat(fd, st) — 144B linux stat, statx is a different nr
             f.rax = @bitCast(childFstat(c, f.rdi, f.rsi));

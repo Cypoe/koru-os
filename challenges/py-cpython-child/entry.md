@@ -3,38 +3,51 @@ name: py-cpython-child
 iface: koruos/oracle.cpython
 arms: [koru-native]
 lane: oracle
-needs: [sessions-jobctl]
-accept: alpine/musl python3 ELF runs as a child; print + asyncio.selectors + sqlite3 smoke
+needs: [sessions-jobctl, exec-verb]
+accept: alpine/musl python3 ELF + full .so closure runs as a child via execve; print + fs read/write-refusal + fork/waitpid + pipe
 tier: qemu
-status: open
-evidence: —
+status: landed
+evidence: V
 peer: —
-provenance: CPython is PSF-2.0; alpine/musl build is a shipping product
+provenance: CPython is PSF-2.0; alpine/musl build is a shipping product (v3.20 main/x86_64)
 ---
 
 # py-cpython-child
 
-An unmodified CPython interpreter — the alpine/musl `python3` ELF plus
-its `.so` closure — running as a real child on the native kernel.
-Every missing nr surfaces as a named refusal; the rung lands when
-`python3 -c` prints, `selectors` arms an event loop, and `sqlite3`
-persists through the scoped fs view.
+An unmodified CPython interpreter — alpine v3.20 `python3` 3.12.13
+(PIE, musl) + its 17-apk dependency closure — running as a real child
+on the native kernel. `/bin/pyrun` (musl stub) execve()s
+`/usr/bin/python3 -S /main.py` through the exec-verb arm; PT_INTERP
+(ld-musl) + the 8-NEEDED lib closure resolve through the initramfs
+view. `scripts/fetch-pyroot.sh` rebuilds the ~21MB cpio on demand —
+it is never committed.
 
-## Acceptance
+## Acceptance — MET (QEMU serial)
 
-cpio carries `bin/python3` + lib closure + a `smoke.py`; boot fixture
-execs it under a bag and the child's own output is the evidence:
-`PY OK`, `PY LOOP`, `PY SQLITE`, status=0.
+`boot_py` → `pyroot.cpio` module, bag = named interpreter classes.
+Serial: `PY hello 3.12.13`, `PY pid 1`, `PY argv /main.py`,
+`PY read 1114 bytes`, `PY write refused errno 30` (EROFS on the
+read-only view — asserted), `PY fork True status 7` (real fork +
+waitpid + exit code), `PY pipe pipe-bytes`, `PY COMPLETE`, status=0.
 
-## Notes
+## Measured gaps (all loud, all survived)
 
-- Already in hand: mmap-file/anonymous (busybox 1.37), PT_INTERP +
-  dlopen closure (dynamic-gnu row), epoll/timerfd/eventfd/signalfd
-  (asyncio's selector stack), unix sockets + SCM_RIGHTS, pty/termios/
-  sessions/job-control.
-- Known gaps to measure, not guess: `pthread` (stub shim vs real
-  `clone-threads` — measure what CPython actually calls at startup),
-  `execve` (nr59 arm — spawn is fused today), `setjmp`/`ucontext`
-  edges, `socket(AF_INET)` (no net stack — unix sockets first).
-- This is the substrate `klanker-child` rides; it is also the
-  runtime an `arm-python-emit` dialect would target.
+- `nr=89 readlink` ENOSYS — getpath/zipimport coped.
+- `nr=19 readv` ENOSYS — bit granted, no arm; python continued.
+- `nr=293 pipe2` ENOSYS — musl fell back to pipe(22).
+- No AF_INET, pthread, or futex demand surfaced for this probe —
+  `clone-threads`/`net-*` stay gated on a consumer that names them.
+
+## Kernel changes this rung forced
+
+- `canonNr` interpreter-surface folds: uname/rlimit/rusage/sysinfo/
+  id-family/rseq/close_range→62, waitid→61, clone3→57, cwd/chdir/
+  link/readlink/chmod/chown/umask/mknod/statfs/*at/statx/openat2→2,
+  pselect6+futex→22 — an unmapped nr≥64 is ungrantable by design.
+- `getcwd`(79) arm — the view root IS the child's cwd, returns "/".
+- `getdents64`(217) arm + `ChildFsOps.dent` — dir listing over the
+  view; initramfs + ext2 implement it (read-only dir open, EISDIR on
+  read, `.`/`..` synthesized for ramfs).
+- `USER_STACK_PAGES` 16→256: CPython init overflowed the 64KiB stack
+  (fault at va 0x7fdefcc8, one page below the window). No demand-grow
+  exists — 1MiB fixed window per child.

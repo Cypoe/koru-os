@@ -409,6 +409,38 @@ else
     bad "exec-verb: build failed (exec/mkcpio/iso)"; tail -4 "$WORK/exec.build" "$WORK/mkcpioex.log" "$WORK/isoex.build" 2>/dev/null
 fi
 
+# py-cpython-child: a REAL unmodified CPython — alpine/musl python3.12
+# (PIE) + its full .so closure — runs as a child of the native kernel.
+# /bin/pyrun execve()s /usr/bin/python3 -S /main.py through the
+# exec-verb arm; the interpreter's own PY lines are the evidence.
+# pyroot.cpio is regenerated on demand by scripts/fetch-pyroot.sh
+# (apk fetch over WSL) — it is never committed.
+if command -v python >/dev/null 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/pyrun.elf" "$ROOT/koruos/native/tests/pyrun.c" > "$WORK/pyrun.build" 2>&1 \
+   && cp "$WORK/pyrun.elf" "$ROOT/koruos/native/tests/pyrun.elf" \
+   && ( [ -s "$ROOT/koruos/native/tests/pyroot.cpio" ] \
+        || { WROOT="/mnt/$(cygpath -m "$ROOT" | sed 's|^\(.\):|\L\1|')"; MSYS_NO_PATHCONV=1 wsl bash "$WROOT/scripts/fetch-pyroot.sh" "$WROOT/koruos/native/tests/pyroot.cpio" > "$WORK/fetchpy.log" 2>&1; } ) \
+   && cp "$ROOT/koruos/native/tests/pyroot.cpio" "$WORKW/pyroot.cpio" \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_py.k" > "$WORK/boot_py.k" \
+   && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_py.k" "$WORK/koru-py.iso" "$WORKW/pyroot.cpio" > "$WORK/isopy.build" 2>&1; then
+    timeout 150 "$QEMU" -cdrom "$WORK/koru-py.iso" -boot d -serial stdio \
+        -display none -m 512M -no-reboot > "$WORK/boot_py.serial" 2>&1 || true
+    if grep -qF 'PY hello 3.12' "$WORK/boot_py.serial" \
+       && grep -qF 'PY read ' "$WORK/boot_py.serial" \
+       && grep -qF 'PY write refused errno 30' "$WORK/boot_py.serial" \
+       && grep -qF 'PY fork True status 7' "$WORK/boot_py.serial" \
+       && grep -qF 'PY pipe pipe-bytes' "$WORK/boot_py.serial" \
+       && grep -qF 'PY COMPLETE' "$WORK/boot_py.serial" \
+       && grep -qF 'PY GATE COMPLETE' "$WORK/boot_py.serial" \
+       && grep -qF 'status=0' "$WORK/boot_py.serial"; then
+        ok "py-cpython-child: unmodified alpine CPython 3.12 exec'd via execve — print/fs-read/EROFS/fork+waitpid/pipe, status=0"
+    else
+        bad "py-cpython-child: $(grep -aE 'PY|SEAM|FAIL|EXC' "$WORK/boot_py.serial" | tail -14 | tr '\n' '|')"
+    fi
+else
+    bad "py-cpython-child: build failed (pyrun/fetch/iso)"; tail -4 "$WORK/pyrun.build" "$WORK/fetchpy.log" "$WORK/isopy.build" 2>/dev/null
+fi
+
 # usb-esp: the flash-stick rung — a raw GPT image whose FAT32 ESP
 # carries a standalone GRUB-EFI (modules+cfg embedded) plus the kernel
 # and the cpio module. QEMU attaches it as USB mass-storage behind
