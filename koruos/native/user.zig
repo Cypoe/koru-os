@@ -858,13 +858,13 @@ const ChildFsOps = extern struct {
     stat_path: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, dst: [*]u8) callconv(.c) i64,
 };
 
-const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd, pty };
+const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd, pty, pause };
 
 // fd slots are projections over typed seam endpoints, not bare provider
 // handles: stdio are real entries (conin/conout), fs a view handle,
 // pipe_r/pipe_w ends of a kernel ring. read/write/close dispatch on the
 // kind, never on the number — closing fd0 detaches like any discharge.
-const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input, epoll, efd, tfd, sfd, ptym, ptys };
+const FdKind = enum { none, conin, conout, fs, pipe_r, pipe_w, sock, shm, slisten, surf, input, epoll, efd, tfd, sfd, ptym, ptys, roster };
 
 // ---- signals: queueable kernel facts, not interruptions -------------------
 // This arm delivers NO asynchronous invocation — a handler registered
@@ -931,6 +931,10 @@ fn sigSend(vs: usize, e: SigEnt) void {
     if (v.sig_ign & bit != 0) return;      // ignored: the fact drops
     sigQueue(v, e);                         // the fact lands first
     if (v.sig_blocked & bit != 0) return;   // pending — the action waits
+    // a deliverable fact interrupts pause(): placed before the
+    // disposition switch so stop-class facts wake it too (the stop
+    // flag then holds it until CONT re-questions — linux's order).
+    if (v.state == .blocked and v.wait_kind == .pause) v.state = .runnable;
     if (v.sig_caught & bit != 0) return;    // handled: facts only
     switch (e.signo) {
         19, 20, 21, 22 => { // STOP/TSTP/TTIN/TTOU
@@ -1016,7 +1020,11 @@ fn pgrpOrphaned(v: *Child) bool {
         const ps = m.spawned_by;
         if (ps >= nchildren or ps == i) continue;
         const p = &children[ps];
-        if (p.sid == v.sid and p.sid != 0 and p.pgid != v.pgid and
+        // sid==0 is the bootstrap session — a real session-shaped set,
+        // not "no session": a child whose parent lives in it is not
+        // orphaned. Requiring sid!=0 suppressed every job-control stop
+        // before anyone called setsid.
+        if (p.sid == v.sid and p.pgid != v.pgid and
             (p.state == .runnable or p.state == .blocked or
             p.state == .zombie)) return false;
     }
@@ -1924,6 +1932,9 @@ fn canonNr(nr: u64) u64 {
         // pipe() sends 293, and an unmapped nr lands outside the bag's
         // 64-bit domain entirely.
         293 => 22,
+        // procview is the proc class's read half — roster observation is
+        // metadata about processes, /proc's world-readable contract.
+        522 => 62,
         // fchmod mutates an object's mode bits — same class as
         // ftruncate's shape mutation.
         91 => 2,
@@ -2513,6 +2524,13 @@ fn childFstat(c: *Child, fdu: u64, stva: u64) i64 {
             // (anon_inode); same answer
             stw(&st, 24, 0o10600);
             stw(&st, 16, 1);
+        },
+        .roster => {
+            // a generated regular file, read-only — linux's /proc
+            // answer is S_IFREG|0444; st_size names the snapshot.
+            stw(&st, 24, 0o100444);
+            stw(&st, 16, 1);
+            stw(&st, 48, rosts[@intCast(c.fds[fd])].len);
         },
         .fs => {
             const ops = c.fsv orelse return -38;
@@ -3370,6 +3388,95 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
 // is .sock + wait_pipe = pair*2+dir — mark-only wakes like every kind.
 const NSOCKS = 4;
 const SOCKQ = 8; // queued fd refs per direction — a bound, like the ring
+// ---- the roster view ------------------------------------------------------
+// nr522 procview(): mint a read-only fd whose bytes are a generated
+// snapshot of the child roster — one line per live slot carrying the
+// fields that ARE the kernel's knowledge: pid/ppid/pgid/sid/state/
+// stop/bag/nfd/ctty. This is our shape, not a procfs clone — a top-
+// like child reads it as data, and a snapshot-at-open answers "what
+// was true when you asked" instead of pretending liveness. Cap folds
+// to 62: observing the roster is the proc class's read half, /proc's
+// own world-readable contract. Dup shares the cursor — one open file
+// description, linux's semantics for a minted fd.
+const NROST = 4;
+const ROST_CAP = 1024; // 4 slots * ~90B/line — bounded like every pool
+const Rost = struct {
+    used: bool = false,
+    refs: u8 = 0,
+    len: u32 = 0,
+    off: u32 = 0,
+    buf: [ROST_CAP]u8 = undefined,
+};
+var rosts: [NROST]Rost = .{Rost{}} ** NROST;
+
+fn rosterFill(r: *Rost) void {
+    var w = std.io.Writer.fixed(&r.buf);
+    for (0..nchildren) |i| {
+        const p = &children[i];
+        const st: u8 = if (p.stopped) 'T' else switch (p.state) {
+            .runnable => 'R',
+            .blocked => 'S',
+            .zombie => 'Z',
+            else => continue,
+        };
+        var nfd: u8 = 0;
+        for (p.fdkinds) |k| if (k != .none) { nfd += 1; };
+        w.print("pid={d} ppid={d} pgid={d} sid={d} st={c} stop={d} " ++
+            "bag=0x{x} ctty={d} nfd={d}\n", .{
+            i + 1,
+            if (p.spawned_by == NO_PARENT) 0 else p.spawned_by + 1,
+            effPgid(i),
+            p.sid,
+            st,
+            p.stop_signo,
+            p.rights,
+            p.ctty,
+            nfd,
+        }) catch break; // a line that doesn't fit simply isn't said
+    }
+    r.len = @intCast(w.end);
+}
+
+fn childProcview(c: *Child) i64 {
+    var fdi: usize = c.fds.len;
+    for (0..c.fds.len) |i| {
+        if (c.fdkinds[i] == .none) {
+            fdi = i;
+            break;
+        }
+    }
+    if (fdi == c.fds.len) return -24; // EMFILE
+    var ri: usize = NROST;
+    for (0..NROST) |i| {
+        if (!rosts[i].used) {
+            ri = i;
+            break;
+        }
+    }
+    if (ri == NROST) return -24;
+    rosts[ri] = .{ .used = true, .refs = 1 };
+    rosterFill(&rosts[ri]);
+    c.fdkinds[fdi] = .roster;
+    c.fds[fdi] = ri;
+    c.fdverbs[fdi] = V_READ;
+    return @intCast(fdi);
+}
+
+fn rosterRead(c: *Child, idx: usize, buva: u64, want: u64) i64 {
+    const r = &rosts[idx];
+    if (r.off >= r.len) return 0; // EOF
+    const n: usize = @intCast(@min(want, r.len - r.off));
+    const got = copyToUser(c, @intCast(buva), r.buf[r.off..][0..n]);
+    r.off += @intCast(got);
+    return @intCast(got);
+}
+
+fn rosterClose(idx: usize) void {
+    const r = &rosts[idx];
+    if (r.refs > 0) r.refs -= 1;
+    if (r.refs == 0) r.* = .{};
+}
+
 const FdRef = struct { kind: FdKind = .none, h: u64 = 0, verbs: u8 = 0 };
 const SockDir = struct {
     head: usize = 0,
@@ -3476,6 +3583,7 @@ fn fdDupRef(c: *Child, fd: usize, out: *FdRef) bool {
         .epoll => epolls[@intCast(c.fds[fd] - 1)].refs += 1,
         .efd => efds[@intCast(c.fds[fd] - 1)].refs += 1,
         .tfd => tfds[@intCast(c.fds[fd] - 1)].refs += 1,
+        .roster => rosts[@intCast(c.fds[fd])].refs += 1,
         .fs => {
             const ops = c.fsv orelse return false;
             const nh = ops.dup(ops.ctx, c.fds[fd]);
@@ -3497,6 +3605,7 @@ fn fdFreeRef(r: FdRef) void {
         .pipe_w => pipeCloseEnd(@intCast(r.h), .pipe_w),
         .ptym, .ptys => ptyCloseEnd(@intCast(r.h), r.kind),
         .sock => sockCloseEnd(@intCast((r.h - 1) >> 1), @intCast((r.h - 1) & 1)),
+        .roster => rosterClose(@intCast(r.h)),
         .slisten => listenerRelease(@intCast(r.h - 1)),
         .shm => shmRelease(@intCast(r.h - 1)),
         .surf => surfRefFree(@intCast(r.h - 1)),
@@ -4453,6 +4562,7 @@ fn releaseFd(c: *Child, i: usize) void {
         .efd => efdFree(@intCast(c.fds[i] - 1)),
         .tfd => tfdFree(@intCast(c.fds[i] - 1)),
         .sfd => sfdFree(@intCast(c.fds[i] - 1)),
+        .roster => rosterClose(@intCast(c.fds[i])),
         .conin, .conout => {},
     }
     c.fds[i] = 0;
@@ -4497,6 +4607,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
         .efd => efds[@intCast(src.fds[sfd] - 1)].refs += 1,
         .tfd => tfds[@intCast(src.fds[sfd] - 1)].refs += 1,
         .sfd => sfds[@intCast(src.fds[sfd] - 1)].refs += 1,
+        .roster => rosts[@intCast(src.fds[sfd])].refs += 1,
         .fs => {
             const ops = src.fsv orelse return false;
             const nh = ops.dup(ops.ctx, src.fds[sfd]);
@@ -4804,8 +4915,10 @@ fn fdPollRev(c: *Child, fdi: usize, ev: u16) u16 {
             if (ev & POLLOUT != 0) r |= POLLOUT;
         },
         // regular objects are always read/write-ready — linux's answer
-        // for files; seeking/EOF is the read's own business.
+        // for files; seeking/EOF is the read's own business. A roster
+        // snapshot is a regular object in the same sense: always IN.
         .fs, .shm => r |= ev & (POLLIN | POLLOUT),
+        .roster => r |= ev & POLLIN,
         .pipe_r => {
             const p = &pipes[@intCast(c.fds[fdi])];
             if (ev & POLLIN != 0 and (p.count > 0 or p.wrefs == 0)) r |= POLLIN;
@@ -5839,6 +5952,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     .ptym => ptyMasterRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
                     .ptys => ptySlaveRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
                     .sock => sockRead(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast((c.fds[fdi] - 1) & 1), f.rsi, f.rdx, false),
+                    .roster => rosterRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
                     else => @as(i64, -9),
                 });
             }
@@ -6009,6 +6123,14 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 // its waitpid passes NULL).
             f.rax = @bitCast(childWait(c, @bitCast(f.rdi), f.rsi, f.rdx));
         },
+        34 => { // pause() — park until a deliverable signal fact lands;
+                // the only return is EINTR. A masked fact stays pending
+                // and never wakes it — a masked signal hasn't arrived.
+            while (c.sig_pending & ~c.sig_blocked == 0) {
+                kblock(.pause);
+            }
+            f.rax = @bitCast(@as(i64, -4)); // EINTR
+        },
         3 => { // close(fd) — discharge whatever the slot projects; a
                // conin/conout close just detaches.
             if (f.rdi < c.fds.len) {
@@ -6095,6 +6217,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     },
                     .sfd => {
                         sfdFree(@intCast(c.fds[fd] - 1));
+                        c.fds[fd] = 0;
+                        c.fdkinds[fd] = .none;
+                        f.rax = 0;
+                    },
+                    .roster => {
+                        rosterClose(@intCast(c.fds[fd]));
                         c.fds[fd] = 0;
                         c.fdkinds[fd] = .none;
                         f.rax = 0;
@@ -6397,6 +6525,11 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                  // ptmx/pts file view (open("/dev/ptmx"), devpts names)
                  // is a provider-cell door on top of this same ABI.
             f.rax = @bitCast(childOpenpty(c, f.rdi));
+        },
+        522 => { // procview() — mint a read-only fd over a roster
+                 // snapshot. Our shape, not /proc: the kernel answers
+                 // "who runs, with which bag" as data.
+            f.rax = @bitCast(childProcview(c));
         },
         12 => { // brk(addr) -> current break; 0 queries
             const want: usize = @intCast(f.rdi);

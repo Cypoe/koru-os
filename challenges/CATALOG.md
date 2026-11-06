@@ -34,7 +34,7 @@ Tiers: `qemu | hw` · Evidence: `V | M | C | D`
  net-virtio        │koruos/net.stack      │koru-native        │native-zig│[virtio-pci-modern]        │qemu│open      │—        
  net-wifi          │koruos/net.wifi       │koru-native        │native-zig│[net-virtio]               │hw  │open      │—        
  pci-enumeration   │koruos/pci            │koru-native        │native-zig│[]                         │qemu│**landed**│M        
- proc-roster-view  │koruos/proc.view      │koru-native        │native-zig│[]                         │qemu│open      │—        
+ proc-roster-view  │koruos/proc.view      │koru-native        │native-zig│[]                         │qemu│**landed**│V        
  ptmx-devpts       │koruos/dev.pts        │koru-native        │native-zig│[pty-termios]              │qemu│open      │—        
  pty-termios       │koruos/chan.pty       │koru-native        │native-zig│[]                         │qemu│**landed**│M        
  py-cpython-child  │koruos/oracle.cpython │koru-native        │oracle    │[sessions-jobctl]          │qemu│open      │—        

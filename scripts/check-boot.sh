@@ -356,6 +356,32 @@ else
     bad "sessions-jobctl: build failed (jobctl/mkcpio/iso)"; tail -4 "$WORK/jobctl.build" "$WORK/mkcpiojc.log" "$WORK/isojc.build" 2>/dev/null
 fi
 
+# proc-roster-view: nr522 procview() — a read-only snapshot fd over the
+# child roster: pid/ppid/pgid/sid/state/stop/bag/nfd per live slot. The
+# musl child synchronizes THROUGH the view (S=paused, Z=zombie, T=stop)
+# — the kernel's own knowledge readable as data, incl. pause()'s arm.
+if command -v python >/dev/null 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -DKORU_DOOR -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/roster.elf" "$ROOT/koruos/native/tests/roster.c" > "$WORK/roster.build" 2>&1 \
+   && python "$ROOT/scripts/mkcpio.py" "$WORKW/roster.cpio" \
+        "bin/roster=$WORKW/roster.elf|755" > "$WORK/mkcpiorv.log" 2>&1 \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_roster.k" > "$WORK/boot_roster.k" \
+   && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_roster.k" "$WORK/koru-rv.iso" "$WORKW/roster.cpio" > "$WORK/isorv.build" 2>&1; then
+    timeout 60 "$QEMU" -cdrom "$WORK/koru-rv.iso" -boot d -serial stdio \
+        -display none -m 128M -no-reboot > "$WORK/boot_roster.serial" 2>&1 || true
+    if grep -qF 'RV c1-sleeps got=1' "$WORK/boot_roster.serial" \
+       && grep -qF 'RV stop-signo got=1' "$WORK/boot_roster.serial" \
+       && grep -qF 'RV dup-shared got=1' "$WORK/boot_roster.serial" \
+       && grep -qF 'RV COMPLETE fails=0' "$WORK/boot_roster.serial" \
+       && grep -qF 'ROSTER GATE COMPLETE' "$WORK/boot_roster.serial" \
+       && grep -qF 'status=0' "$WORK/boot_roster.serial"; then
+        ok "proc-roster-view: nr522 snapshot fd — self/peer/zombie/stop states + shared cursor, status=0"
+    else
+        bad "proc-roster-view: $(grep -aE 'RV|roster:|FAIL' "$WORK/boot_roster.serial" | tail -14 | tr '\n' '|')"
+    fi
+else
+    bad "proc-roster-view: build failed (roster/mkcpio/iso)"; tail -4 "$WORK/roster.build" "$WORK/mkcpiorv.log" "$WORK/isorv.build" 2>/dev/null
+fi
+
 # usb-esp: the flash-stick rung — a raw GPT image whose FAT32 ESP
 # carries a standalone GRUB-EFI (modules+cfg embedded) plus the kernel
 # and the cpio module. QEMU attaches it as USB mass-storage behind
