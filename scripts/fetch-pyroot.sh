@@ -49,8 +49,27 @@ for p in encodings codecs.py io.py abc.py _collections_abc.py \
          collections os.py stat.py posixpath.py genericpath.py \
          _bootlocale.py types.py warnings.py keyword.py reprlib.py \
          enum.py functools.py operator.py _weakrefset.py weakref.py \
-         copyreg.py heapq.py; do
+         copyreg.py heapq.py \
+         threading.py subprocess.py selectors.py \
+         asyncio socket.py ssl.py contextlib.py traceback.py \
+         linecache.py tokenize.py token.py textwrap.py fnmatch.py \
+         locale.py concurrent re logging queue.py inspect.py \
+         reprlib.py types.py signal.py string.py dataclasses.py \
+         ast.py dis.py opcode.py importlib contextvars.py typing.py \
+         bisect.py random.py hashlib.py copy.py tempfile.py; do
   [ -e "$PY/$p" ] && mkdir -p "$STAGE/keep/$(dirname "$p")" && cp -r "$PY/$p" "$STAGE/keep/$p"
+done
+# lib-dynload: only the extensions the interpreter/probe can name —
+# posix_spawn, selectors, sockets, asyncio core, sqlite/ssl for the
+# klanker rung. The fat (codecs_*/unicodedata/tests) stays out —
+# a 26MiB cpio module crashes GRUB's module placement pre-serial.
+mkdir -p "$STAGE/keep/lib-dynload"
+for so in _posixsubprocess select _socket _asyncio _queue _contextvars \
+          fcntl termios zlib array math _struct _sqlite3 _ssl _json \
+          _datetime _bisect _heapq _random _opcode _multiprocessing \
+          mmap binascii unicodedata _ast; do
+  f=$(ls "$PY/lib-dynload/${so}.cpython-312"*.so 2>/dev/null | head -1)
+  [ -n "$f" ] && cp "$f" "$STAGE/keep/lib-dynload/"
 done
 rm -rf "$PY" && mkdir -p "$PY" && cp -r "$STAGE/keep/." "$PY/" && rm -rf "$STAGE/keep"
 mkdir -p bin

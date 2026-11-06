@@ -34,4 +34,43 @@ print("PY pipe", os.read(r, 10).decode())
 os.close(r)
 os.close(w)
 
+# threading — clone-threads probe: either it runs or names the gap
+try:
+    import threading
+    box = {}
+    t = threading.Thread(target=lambda: box.__setitem__("x", 41))
+    t.start()
+    t.join()
+    print("PY thread", box.get("x", "missing"))
+except Exception as e:
+    print("PY thread refused", type(e).__name__, e)
+
+# subprocess — fork+exec(+posix_spawn) through the real pipeline
+try:
+    import subprocess
+    r = subprocess.run(["/usr/bin/python3", "-S", "-c", "print('sub-ok')"],
+                       capture_output=True, text=True)
+    print("PY subprocess", r.returncode, r.stdout.strip())
+except Exception as e:
+    print("PY subprocess refused", type(e).__name__, e)
+
+# asyncio — selectors/epoll event loop on our channel class: call_soon
+# alone never reaches epoll_wait, so the probe also sleeps (a timed
+# epoll) and pushes real bytes through a loop-managed socketpair.
+try:
+    import asyncio, socket
+    async def go():
+        loop = asyncio.get_event_loop()
+        f = asyncio.Future()
+        loop.call_soon(f.set_result, 99)
+        v = await f
+        await asyncio.sleep(0.01)  # the timed epoll_wait path
+        a, b = socket.socketpair()
+        a.setblocking(False); b.setblocking(False)
+        await loop.sock_sendall(a, b"loop-bytes")
+        return v, (await loop.sock_recv(b, 10)).decode()
+    print("PY asyncio", *asyncio.get_event_loop().run_until_complete(go()))
+except Exception as e:
+    print("PY asyncio refused", type(e).__name__, e)
+
 print("PY COMPLETE")

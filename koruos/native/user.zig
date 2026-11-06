@@ -1211,6 +1211,9 @@ const Child = struct {
                                     // recorded when the projection was
                                     // minted; read/write dispatch checks
                                     // the verb, not just the kind
+    fdnb: [32]u8 = .{0} ** 32,      // O_NONBLOCK per fd — FIONBIO/F_SETFL
+                                    // state; read/write dispatch ORs it
+                                    // into the channel functions' nb arm
     // blocking is a kernel continuation, not a rebuilt user frame: kblock
     // pushes callee-saved on this child's own kstack and stores the rsp
     // here; a waker just flips .runnable and the next switchInto pops the
@@ -1957,7 +1960,8 @@ fn canonNr(nr: u64) u64 {
                   // stored where nothing can deliver it fires exactly never
         72 => 62, // fcntl folds to the proc-self group — our handles carry no flag state
         32, 33, 292 => 62, // dup family — fd-table ops on own handles
-        228 => 62, // clock_gettime — a self-time query, same describe class
+        228, 229 => 62, // clock_gettime/getres — self-time queries, same describe class
+        230 => 62, // clock_nanosleep — self-time's wait half; the arm decides honesty
         186 => 39, // gettid folds to getpid — one thread per child exists
         // session/pgrp verbs are process self-metadata like the rest of
         // cap 62; kill(62) lands here through the else-arm already —
@@ -1982,8 +1986,9 @@ fn canonNr(nr: u64) u64 {
         // namespace half: same class, the name is an fs object the arm
         // resolves. poll/ppoll multiplex those same channels — the
         // class question is "may this child wait on channels".
-        41, 42, 43, 288, 46, 47, 49, 50, 53, 319, 7, 271 => 22,
+        41, 42, 43, 288, 44, 45, 46, 47, 49, 50, 53, 319, 7, 271 => 22,
         55 => 22, // getsockopt — a channel-fact query on the same class
+        51, 52 => 22, // getsockname/getpeername — same channel-fact class
         // epoll is the same class: an interest list is another way to
         // wait on channels — create/ctl/wait share the bit.
         213, 232, 233, 281, 291 => 22,
@@ -2493,10 +2498,15 @@ fn childPread(c: *Child, fdu: u64, buva: u64, want: u64, pos: u64) i64 {
 }
 
 fn childSeek(c: *Child, fdu: u64, off: i64, whence: u32) i64 {
-    const ops = c.fsv orelse return -38;
     if (fdu >= c.fds.len) return -9;
     const fd: usize = @intCast(fdu);
     if (fd < 3 or c.fds[fd] == 0) return -9;
+    // Only fs handles carry a provider cursor — pipes/sockets/stdio/
+    // roster etc. are streams: ESPIPE is linux's own answer, and
+    // passing a kernel handle to the provider as *OpenFile would be
+    // a type confusion (measured: subprocess lseek'd a pipe -> ud2).
+    if (c.fdkinds[fd] != .fs) return -29; // ESPIPE
+    const ops = c.fsv orelse return -38;
     return ops.seek(ops.ctx, c.fds[fd], off, whence);
 }
 
@@ -2746,7 +2756,7 @@ fn pipeCreate() ?usize {
     return null;
 }
 
-fn pipeReadEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
+fn pipeReadEnd(c: *Child, idx: usize, buva: u64, want: u64, nb: bool) i64 {
     if (want == 0) return 0;
     const p = &pipes[idx];
     while (true) {
@@ -2768,6 +2778,8 @@ fn pipeReadEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
             if (userEntry(c, @intCast(buva)) & 1 == 0) return -14;
         } else if (p.wrefs == 0) {
             return 0; // last writer gone and drained — this read IS the EOS
+        } else if (nb) {
+            return -11; // EAGAIN — O_NONBLOCK's answer for an empty ring
         } else {
             c.wait_pipe = idx;
             pipe_rwaits += 1;
@@ -2776,7 +2788,7 @@ fn pipeReadEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
     }
 }
 
-fn pipeWriteEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
+fn pipeWriteEnd(c: *Child, idx: usize, buva: u64, want: u64, nb: bool) i64 {
     if (want == 0) return 0;
     const p = &pipes[idx];
     while (true) {
@@ -2798,6 +2810,8 @@ fn pipeWriteEnd(c: *Child, idx: usize, buva: u64, want: u64) i64 {
                 return @intCast(n);
             }
             if (userEntry(c, @intCast(buva)) & 1 == 0) return -14;
+        } else if (nb) {
+            return -11; // EAGAIN — O_NONBLOCK's answer for a full ring
         } else {
             c.wait_pipe = idx;
             pipe_wwaits += 1;
@@ -3641,6 +3655,8 @@ const SockListener = struct {
     fsv_ctx: usize = 0,     // ops.ctx — the view identity half of the key
     key: u64 = 0,           // dev<<32|ino — the socket node's object key
     refs: u8 = 0,
+    path: [108]u8 = .{0} ** 108, // sun_path — getsockname answers it
+    plen: u8 = 0,
     pend: [SOKPEND]u8 = .{0} ** SOKPEND, // pair*2+side+1 of queued ends
     npend: u8 = 0,
 };
@@ -4746,6 +4762,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
             dst.fdkinds[dfd] = kind;
             dst.fds[dfd] = @intCast(nh);
             dst.fdverbs[dfd] = src.fdverbs[sfd];
+            dst.fdnb[dfd] = src.fdnb[sfd];
             return true;
         },
         else => {},
@@ -4753,6 +4770,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
     dst.fdkinds[dfd] = kind;
     dst.fds[dfd] = src.fds[sfd];
     dst.fdverbs[dfd] = src.fdverbs[sfd]; // the verbs ride the projection
+    dst.fdnb[dfd] = src.fdnb[sfd];     // O_NONBLOCK rides it too
     return true;
 }
 
@@ -4791,7 +4809,7 @@ fn childPipe(c: *Child, pva: u64) i64 {
 // nr 53 — socketpair(AF_UNIX, SOCK_STREAM, 0, sv[2]): mint the pair and
 // land both ends in the caller's table. An fd entry's value is
 // pair*2+side — side s reads dir[s] and writes dir[1-s].
-fn childSocketpair(c: *Child, svva: u64) i64 {
+fn childSocketpair(c: *Child, svva: u64, flags: u64) i64 {
     var slots: [2]usize = undefined;
     var sn: usize = 0;
     for (0..c.fds.len) |i| {
@@ -4814,6 +4832,7 @@ fn childSocketpair(c: *Child, svva: u64) i64 {
         c.fdkinds[slots[i]] = .sock;
         c.fds[slots[i]] = pi * 2 + i + 1;
         c.fdverbs[slots[i]] = V_READ | V_WRITE;
+        c.fdnb[slots[i]] = @intFromBool(flags & 0x800 != 0); // SOCK_NONBLOCK
     }
     return 0;
 }
@@ -4855,6 +4874,7 @@ fn childSocket(c: *Child, f: *TrapFrame) i64 {
     c.fdkinds[slot] = .sock;
     c.fds[slot] = pi * 2 + 1;
     c.fdverbs[slot] = V_READ | V_WRITE;
+    c.fdnb[slot] = @intFromBool(f.rsi & 0x800 != 0); // SOCK_NONBLOCK
     return @intCast(slot);
 }
 
@@ -4886,6 +4906,9 @@ fn childBind(c: *Child, f: *TrapFrame) i64 {
     sockCloseEnd(@intCast(v >> 1), @intCast(v & 1));
     listeners[li] = .{ .used = true, .fsv_ctx = @intFromPtr(ops.ctx),
                        .key = @bitCast(key), .refs = 1 };
+    const plen: u8 = @intCast(@min(path.len, 108));
+    @memcpy(listeners[li].path[0..plen], path[0..plen]);
+    listeners[li].plen = plen;
     c.fdkinds[fd] = .slisten;
     c.fds[fd] = li + 1;
     return 0;
@@ -4900,6 +4923,40 @@ fn childListen(c: *Child, f: *TrapFrame) i64 {
     if (c.fdkinds[fd] != .slisten) return -95; // EOPNOTSUPP
     listeners[@intCast(c.fds[fd] - 1)].live = true;
     return 0;
+}
+
+// nr 51/52 — getsockname/getpeername(fd, addr, *addrlen): every socket
+// here is AF_UNIX. getsockname answers the bound path (listeners carry
+// it; data ends are anonymous -> family + empty path). getpeername
+// answers the peer's bound path — our sessions never bind their peer
+// ends, so a connected end's peer name is empty; unconnected is
+// ENOTCONN, linux's own word.
+fn childSockName(c: *Child, f: *TrapFrame, peer: bool) i64 {
+    if (f.rdi >= c.fds.len) return -9;
+    const fd: usize = @intCast(f.rdi);
+    if (f.rsi == 0 or f.rdx == 0) return -22;
+    var ava: [8]u8 = undefined;
+    if (copyFromUser(c, @intCast(f.rdx), &ava) < 8) return -14;
+    const cap: usize = @intCast(std.mem.readInt(u64, &ava, .little));
+    var name: [112]u8 = std.mem.zeroes([112]u8);
+    var nlen: usize = 2;
+    std.mem.writeInt(u16, name[0..2], 1, .little); // AF_UNIX
+    switch (c.fdkinds[fd]) {
+        .sock => {
+            const v = c.fds[fd] - 1;
+            if (peer and !socks[@intCast(v >> 1)].conn) return -107;
+        },
+        .slisten => {
+            if (peer) return -107; // a listener has no session peer
+            const l = &listeners[@intCast(c.fds[fd] - 1)];
+            @memcpy(name[2 .. 2 + l.plen], l.path[0..l.plen]);
+            nlen += l.plen;
+        },
+        else => return -88, // ENOTSOCK
+    }
+    std.mem.writeInt(u64, &ava, @intCast(nlen), .little);
+    if (copyToUser(c, @intCast(f.rdx), &ava) < 8) return -14;
+    return if (copyToUser(c, @intCast(f.rsi), name[0..@min(nlen, cap)]) > 0) 0 else -14;
 }
 
 // nr 42 — connect(fd, sockaddr_un, len): resolve the node's object key
@@ -5966,10 +6023,10 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         }
                         f.rax = f.rdx;
                     },
-                    .pipe_w => f.rax = @bitCast(pipeWriteEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
+                    .pipe_w => f.rax = @bitCast(pipeWriteEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx, c.fdnb[fdi] != 0)),
                     .ptym => f.rax = @bitCast(ptyMasterWrite(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
                     .ptys => f.rax = @bitCast(ptySlaveWrite(c, @intCast(c.fds[fdi]), f.rsi, f.rdx)),
-                    .sock => f.rax = @bitCast(sockWrite(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast(((c.fds[fdi] - 1) & 1) ^ 1), f.rsi, f.rdx, false)),
+                    .sock => f.rax = @bitCast(sockWrite(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast(((c.fds[fdi] - 1) & 1) ^ 1), f.rsi, f.rdx, c.fdnb[fdi] != 0)),
                     // The fd is the grant: a write verb was minted at
                     // open or this projection never carried one — EBADF,
                     // the POSIX refusal for a bad-mode write.
@@ -6014,7 +6071,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                             if (n < len) break; // short write — stop
                         },
                         .pipe_w => {
-                            const n = pipeWriteEnd(c, @intCast(c.fds[fdi]), @intCast(base), @intCast(len));
+                            const n = pipeWriteEnd(c, @intCast(c.fds[fdi]), @intCast(base), @intCast(len), c.fdnb[fdi] != 0);
                             if (n < 0) { fail = n; break; }
                             total += n;
                             if (n < len) break;
@@ -6033,7 +6090,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         },
                         .sock => {
                             const v = c.fds[fdi] - 1;
-                            const n = sockWrite(c, @intCast(v >> 1), @intCast((v & 1) ^ 1), @intCast(base), @intCast(len), false);
+                            const n = sockWrite(c, @intCast(v >> 1), @intCast((v & 1) ^ 1), @intCast(base), @intCast(len), c.fdnb[fdi] != 0);
                             if (n < 0) { fail = n; break; }
                             total += n;
                             if (n < len) break;
@@ -6152,10 +6209,10 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     .conin => coninRead(c, f),
                     .fs => if (c.fdverbs[fdi] & V_READ != 0)
                         childRead(c, f.rdi, f.rsi, f.rdx) else -9,
-                    .pipe_r => pipeReadEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
+                    .pipe_r => pipeReadEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx, c.fdnb[fdi] != 0),
                     .ptym => ptyMasterRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
                     .ptys => ptySlaveRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
-                    .sock => sockRead(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast((c.fds[fdi] - 1) & 1), f.rsi, f.rdx, false),
+                    .sock => sockRead(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast((c.fds[fdi] - 1) & 1), f.rsi, f.rdx, c.fdnb[fdi] != 0),
                     .roster => rosterRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
                     else => @as(i64, -9),
                 });
@@ -6171,7 +6228,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             if (f.rdi != 1 or (f.rsi & 0xF) != 1) {
                 f.rax = @bitCast(@as(i64, -97)); // EAFNOSUPPORT
             } else {
-                f.rax = @bitCast(childSocketpair(c, f.r10));
+                f.rax = @bitCast(childSocketpair(c, f.r10, f.rsi));
             }
         },
         41 => { // socket(domain, type, protocol) — an unconnected end
@@ -6179,6 +6236,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         },
         49 => { // bind(fd, sockaddr_un, len) — name the end in the fs view
             f.rax = @bitCast(childBind(c, f));
+        },
+        51 => { // getsockname — this end's bound name (empty if unnamed)
+            f.rax = @bitCast(childSockName(c, f, false));
+        },
+        52 => { // getpeername — the connected peer's name, ENOTCONN else
+            f.rax = @bitCast(childSockName(c, f, true));
         },
         50 => { // listen(fd, backlog) — open the node's session queue
             f.rax = @bitCast(childListen(c, f));
@@ -6200,6 +6263,30 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         47 => { // recvmsg(fd, msghdr, flags) — bytes + queued fd install;
                 // MSG_DONTWAIT reads EAGAIN rather than parking.
             f.rax = @bitCast(childRecvmsg(c, f.rdi, f.rsi, f.rdx));
+        },
+        44 => { // sendto(fd, buf, len, flags[, addr, alen]) — datagrams
+                // don't exist here; a connected stream ignores the name
+                // like linux does. loop.sock_sendall rides this verb.
+            if (f.rdi >= c.fds.len or c.fdkinds[@intCast(f.rdi)] != .sock) {
+                f.rax = @bitCast(@as(i64, -88));
+            } else {
+                const fdi: usize = @intCast(f.rdi);
+                const v = c.fds[fdi] - 1;
+                f.rax = @bitCast(sockWrite(c, @intCast(v >> 1), @intCast((v & 1) ^ 1),
+                    f.rsi, f.rdx, c.fdnb[fdi] != 0 or f.r10 & 0x40 != 0));
+            }
+        },
+        45 => { // recvfrom(fd, buf, len, flags[, addr, alen]) — the
+                // stream answer; addr out-params ignored (peer is
+                // anonymous, matching getpeername).
+            if (f.rdi >= c.fds.len or c.fdkinds[@intCast(f.rdi)] != .sock) {
+                f.rax = @bitCast(@as(i64, -88));
+            } else {
+                const fdi: usize = @intCast(f.rdi);
+                const v = c.fds[fdi] - 1;
+                f.rax = @bitCast(sockRead(c, @intCast(v >> 1), @intCast(v & 1),
+                    f.rsi, f.rdx, c.fdnb[fdi] != 0 or f.r10 & 0x40 != 0));
+            }
         },
         319 => { // memfd_create(name, flags) — an anonymous shm object;
                  // the pool fd wl_shm sends. name is diagnostic only.
@@ -6654,11 +6741,17 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     }
                 }
             } else if (f.rsi == 3) { // F_GETFL — access mode from the
-                // projection's verbs; status flags don't exist here.
+                // projection's verbs, plus O_NONBLOCK which IS state.
                 const v = c.fdverbs[@intCast(f.rdi)];
-                f.rax = @bitCast(@as(i64, if (v & V_READ != 0 and v & V_WRITE != 0) 2
-                    else if (v & V_WRITE != 0) 1 else 0));
-            } else if (f.rsi <= 4) { // F_GETFD/F_SETFD/F_SETFL — success
+                var fl: i64 = if (v & V_READ != 0 and v & V_WRITE != 0) 2
+                    else if (v & V_WRITE != 0) 1 else 0;
+                if (c.fdnb[@intCast(f.rdi)] != 0) fl |= 0x800;
+                f.rax = @bitCast(fl);
+            } else if (f.rsi == 4) { // F_SETFL — O_NONBLOCK is real state;
+                // the rest of the flag word stays unmodeled.
+                c.fdnb[@intCast(f.rdi)] = @intFromBool(f.rdx & 0x800 != 0);
+                f.rax = 0;
+            } else if (f.rsi <= 4) { // F_GETFD/F_SETFD — success
                 f.rax = 0;
             } else {
                 f.rax = @bitCast(@as(i64, -22)); // EINVAL — unknown cmd
@@ -6717,6 +6810,18 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     @as(i64, -14) else 0);
             }
         },
+        229 => { // clock_getres(id, res) — the tick is our granularity:
+                 // report the timer period, same clocks as gettime.
+            const resva = f.rsi;
+            if (f.rdi > 7 or resva == 0) {
+                f.rax = @bitCast(@as(i64, -22));
+            } else {
+                var resb: [16]u8 = std.mem.zeroes([16]u8);
+                std.mem.writeInt(i64, resb[8..16], 1, .little); // ns ticks
+                f.rax = @bitCast(if (copyToUser(c, @intCast(resva), &resb) < 16)
+                    @as(i64, -14) else 0);
+            }
+        },
         63 => { // uname(buf) — the kernel's own identity, honestly named:
             // a real GNU uname prints what we are, not a Linux costume.
             var uts: [390]u8 = std.mem.zeroes([390]u8);
@@ -6731,7 +6836,16 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @bitCast(@as(i64, -9));
             } else {
                 const fdi: usize = @intCast(f.rdi);
-                f.rax = @bitCast(switch (c.fdkinds[fdi]) {
+                const cmd: u32 = @truncate(f.rsi);
+                // FIONBIO is fd-wide, not tty-shaped: it flips the same
+                // O_NONBLOCK bit F_SETFL owns — CPython's setblocking
+                // rides this verb (socketpair ends, the asyncio pipe).
+                f.rax = if (cmd == 0x5421) blk: {
+                    var nbv: [4]u8 = undefined;
+                    if (copyFromUser(c, @intCast(f.rdx), &nbv) < 4) break :blk @bitCast(@as(i64, -14));
+                    c.fdnb[fdi] = @intFromBool(std.mem.readInt(u32, &nbv, .little) != 0);
+                    break :blk 0;
+                } else @bitCast(switch (c.fdkinds[fdi]) {
                     // cmd is `unsigned int` on the wire: musl sign-
                     // extends constants like 0x80045430 (TIOCGPTN) —
                     // linux's own sys_ioctl truncates, so do we.
