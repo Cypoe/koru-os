@@ -79,9 +79,11 @@ fn setupHiresPlane(fb: *const types.Framebuffer) void {
     mmio.wr(R.DSPASURF, @as(u32, @intCast(fb.offset)) & ~@as(u32, 0xfff));
     mmio.wr(R.DSPACNTR, PLANE_CTL_ENABLE | DSPCNTR_FORMAT);
     // readback-verify: which plane writes actually commit
-    mmio.say("  rb DSPACNTR="); mmio.sayHex(mmio.rd(R.DSPACNTR));
-    mmio.say(" STRIDE="); mmio.sayHex(mmio.rd(R.DSPASTRIDE));
-    mmio.say(" SURF="); mmio.sayHex(mmio.rd(R.DSPASURF)); mmio.say("\n");
+    mmio.say("  rb[A] DSPACNTR="); mmio.sayHex(mmio.rd(R.DSPACNTR));
+    mmio.say(" DSPASTRIDE="); mmio.sayHex(mmio.rd(R.DSPASTRIDE));
+    mmio.say(" DSPASURF="); mmio.sayHex(mmio.rd(R.DSPASURF));
+    mmio.say(" DSPALINOFF="); mmio.sayHex(mmio.rd(R.DSPALINOFF));
+    mmio.say(" DSPATILEOFF="); mmio.sayHex(mmio.rd(R.DSPATILEOFF)); mmio.say("\n");
 }
 
 // Panel_Fitter_Off (Has_Plane_Control): disable scaler on pipe A.
@@ -110,7 +112,7 @@ fn setupDisplay(fb: *const types.Framebuffer, mode: *const dp.Mode, dither: bool
 
 // Pipe_Setup.On for Primary + Trans_EDP (fb non-VGA path).
 pub fn on(fb: *const types.Framebuffer, mode: *const dp.Mode, link: *const dp.DPLink) void {
-    mmio.say("i915: pipe=A plane=1(hires) transcoder=EDP\n");
+    mmio.say("i915: pipe=A(PIPEA*/DSP A-bank) plane=1(hires) transcoder=EDP\n");
     transcoder.setup(mode.*, link.*);
     cursorOff(); // Update_Cursor(Default_Cursor)
     setupDisplay(fb, mode, fb.bpc != mode.bpc);
