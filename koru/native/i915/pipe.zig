@@ -11,11 +11,13 @@ const types = @import("types.zig");
 
 // ---- constants (pipe_setup.adb) ----------------------------------------------
 const PLANE_CTL_ENABLE: u32 = 1 << 31;
-// DSPCNTR (pipe_setup.adb): FORMAT_MASK=15<<26, value 6<<26 for the
-// hires plane; PIPE_SEL 3<<24 (0=Primary/A), TRICKLE 1<<14, TILED_X 1<<10.
-const DSPCNTR_FORMAT: u32 = 6 << 26;
-const DSPCNTR_MASK: u32 = PLANE_CTL_ENABLE | (1 << 30) | (15 << 26) |
-    (3 << 24) | (1 << 14) | (1 << 10);
+// SKL DSPCNTR: format field is bits 27:24 (Linux
+// PLANE_CTL_FORMAT_MASK_SKL=GENMASK(27,24)); XRGB8888=4 -> 4<<24.
+// libgfxinit's 6<<26 is a FIXME hardcode on a different field layout —
+// it decoded as a 16bpp format and produced the pink-fringe garble.
+const DSPCNTR_FORMAT: u32 = 4 << 24;
+const DSPCNTR_MASK: u32 = PLANE_CTL_ENABLE | (0xF << 24) |
+    (1 << 14) | (1 << 10);
 
 const PLANE_WM_ENABLE: u32 = 1 << 31;
 const PLANE_WM_LINES_SHIFT: u6 = 14;
@@ -67,7 +69,9 @@ fn setupWatermarks() void {
 fn setupHiresPlane(fb: *const types.Framebuffer) void {
     mmio.wr(R.PLANE_AUX_DIST_1_A, 0);
     mmio.unsetAndSet(R.DSPACNTR, DSPCNTR_MASK, DSPCNTR_FORMAT); // no enable
-    mmio.wr(R.DSPASTRIDE, @intCast(pixelToBytes(fb.stride, fb)));
+    const strideB = pixelToBytes(fb.stride, fb);
+    mmio.say("i915: plane stride="); mmio.sayDec(strideB); mmio.say("B fmt=XRGB8888\n");
+    mmio.wr(R.DSPASTRIDE, @intCast(strideB));
     mmio.wr(R.DSPALINOFF, 0);  // Has_DSP_Linoff + Linear: linoff = bytes(0,0)
     mmio.wr(R.DSPATILEOFF, 0); // Linear: tileoff = 0 (was StartY<<16|StartX)
     mmio.wr(R.PLANE_SIZE_1_A, encodeSize(fb.width, fb.height));
