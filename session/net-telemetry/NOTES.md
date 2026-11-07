@@ -149,3 +149,18 @@ Commands now payload-only for the flaky keyboard: `send <msg>`,
 `frame [msg]` (bare = canned probe), `net` arg-free. Full-arg
 `udp <ip> <port> <msg>` kept as hidden debug variant.
 Current ISO: dist/koru-net-telemetry-payload-20261107-1428.iso
+
+## Checksum bug CONFIRMED on HW wire (2026-11-07 ~14:50)
+
+tcpdump -XX on en8: frame arrives perfect (bcast MAC, real Intel MAC
+00:2b:67:2d:f0:92, 192.168.99.2->192.168.99.1, 47821->47820, len 40/20,
+'HELLO DEVIN!') BUT both checksums bad: IP field=0xf368 correct=0x3ae3,
+UDP field=0x7675 correct=0xdc55. macOS drops pre-socket -> listener flat.
+
+Analysis: Zig algorithm == Python replica == wire field values
+(UDP 0x7675 exact match; IP 0xf368 = canonical+ID8). tcpdump's "correct"
+matches NO ID 0-40 and NO single-byte mutation -> the bytes checksummed
+differ from bytes transmitted in a multi-field way, OR wire bytes differ
+from canonical reconstruction. Next data needed: full tcpdump -XX hex +
+`frame` output (now prints computed ipcsum/udpcsum alongside hex dump).
+ISO: dist/koru-net-telemetry-cksum-20261107-1447.iso

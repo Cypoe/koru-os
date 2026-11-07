@@ -41,6 +41,12 @@ const BCAST_MAC: [6]u8 = .{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 var up: bool = false;
 var tx_seq: u16 = 0;
+var last_ip_csum: u16 = 0;
+var last_udp_csum: u16 = 0;
+
+pub fn lastChecksums() struct { ip: u16, udp: u16 } {
+    return .{ .ip = last_ip_csum, .udp = last_udp_csum };
+}
 
 // staging — one frame at a time is fine: markers are rare and e1000e.tx
 // polls the slot's DD bit before the ring wraps.
@@ -121,7 +127,8 @@ fn buildUdpFrame(dst_ip: [4]u8, dst_port: u16, payload: []const u8) ?usize {
     put16(frame[0..], ip + 10, 0); // csum placeholder
     @memcpy(frame[ip + 12..ip + 16], &OUR_IP);
     @memcpy(frame[ip + 16..ip + 20], &dst_ip);
-    put16(frame[0..], ip + 10, csum(frame[ip .. ip + 20]));
+    last_ip_csum = csum(frame[ip .. ip + 20]);
+    put16(frame[0..], ip + 10, last_ip_csum);
 
     // UDP header
     put16(frame[0..], udp + 0, SRC_PORT);
@@ -141,7 +148,8 @@ fn buildUdpFrame(dst_ip: [4]u8, dst_port: u16, payload: []const u8) ?usize {
     put16(pseudo[0..], 10, udplen);
     @memcpy(pseudo[12 .. 12 + udplen], frame[udp .. udp + udplen]);
     const ucs = csum(pseudo[0 .. 12 + udplen]);
-    put16(frame[0..], udp + 6, if (ucs == 0) 0xFFFF else ucs);
+    last_udp_csum = if (ucs == 0) 0xFFFF else ucs;
+    put16(frame[0..], udp + 6, last_udp_csum);
 
     return pay + payload.len;
 }

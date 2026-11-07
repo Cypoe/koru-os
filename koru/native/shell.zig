@@ -255,6 +255,11 @@ fn cmdFrame() void {
     };
     text.puts("frame len=");
     text.putdec(f.len);
+    const cs = net.lastChecksums();
+    text.puts("  ipcsum=");
+    puthex32(cs.ip);
+    text.puts(" udpcsum=");
+    puthex32(cs.udp);
     text.newline();
     var off: usize = 0;
     while (off < f.len and off < 96) : (off += 1) {
