@@ -212,6 +212,11 @@ pub fn peekFrame(ip: [4]u8, port: u16, msg: []const u8) ?[]const u8 {
     return frame[0..len];
 }
 
+// peekMsg: payload-only frame dump on the fixed P2P path — 'frame <msg>'.
+pub fn peekMsg(msg: []const u8) ?[]const u8 {
+    return peekFrame(DST_IP, DST_PORT, msg);
+}
+
 // mark: emit one "KORU <tag>" datagram. tag is a comptime string.
 pub fn mark(comptime tag: []const u8) void {
     if (!up) return;

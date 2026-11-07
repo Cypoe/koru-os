@@ -61,12 +61,12 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  net\n  udp <ip> <port> <msg>\n  frame <ip> <port> <msg>\n  send <msg>\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  net\n  send <msg>\n  frame [msg]\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
     if (starts("udp ")) { cmdUdp(); return; }
-    if (starts("frame ")) { cmdFrame(); return; }
+    if (eq("frame") or starts("frame ")) { cmdFrame(); return; }
     if (starts("send ")) { cmdSend(); return; }
     if (eq("clear")) { text.clear(); return; }
     if (eq("reboot")) { reboot(); return; }
@@ -241,26 +241,15 @@ fn cmdUdp() void {
     }
     text.newline();
 }
-// frame <ip> <port> <msg> — build the exact TX frame and hex-dump it,
-// no transmit. Byte-for-byte verification on real silicon: dst MAC must
-// read ff:ff:ff:ff:ff:ff, ethertype bytes 12-13 = 08 00, IP proto at
+// frame [msg] — payload-only: fixed P2P path, no args needed. Bare
+// 'frame' dumps a canned probe. Hex-dumps the exact TX frame (no send):
+// dst MAC must read ff:ff:ff:ff:ff:ff, bytes 12-13 = 08 00, IP proto at
 // frame[23] = 11, UDP dport at frame[36..38].
 fn cmdFrame() void {
-    var i: usize = skipSp(6);
-    const ipr = parseIpv4(i) orelse {
-        text.puts("frame: bad ip — usage: frame <a.b.c.d> <port> <msg>\n");
-        return;
-    };
-    const pr = parsePort(ipr.next) orelse {
-        text.puts("frame: bad port\n");
-        return;
-    };
-    i = skipSp(pr.next);
-    if (i >= n) {
-        text.puts("frame: no message\n");
-        return;
-    }
-    const f = net.peekFrame(ipr.ip, pr.port, line[i..n]) orelse {
+    var msg: []const u8 = "probe";
+    const i = skipSp(5); // past "frame"
+    if (i < n) msg = line[i..n];
+    const f = net.peekMsg(msg) orelse {
         text.puts("frame: build refused\n");
         return;
     };

@@ -133,3 +133,19 @@ dump names it, add to DEV_IDS.
 - QEMU tested 82540EM; `-device e1000e` (82574L) is the closer model —
   untested this session.
 - RX ring / ARP cache / DHCP are the obvious N+1 when telemetry earns it.
+
+## Payload-only commands + checksum audit (2026-11-07 ~14:30)
+
+Checksum audit: csum+buildUdpFrame replicated in Python — both IP and
+UDP checksums validate to residue 0000; on-disk Zig matches line-for-
+line. Algorithm is correct; divergence (if any) is Zig-emission vs
+replica — `frame` dump on HW is the check. tcpdump showed the frame
+arrives perfectly (real Intel MAC, broadcast, correct 5-tuple) but
+listener never logs -> pre-socket drop. Need: `frame` hex output +
+`sudo tcpdump -i en8 -e -n -v udp port 47820` (bad cksum flag names
+ip vs udp) + optional `udp 192.168.99.255 47820 x` broadcast-IP test.
+
+Commands now payload-only for the flaky keyboard: `send <msg>`,
+`frame [msg]` (bare = canned probe), `net` arg-free. Full-arg
+`udp <ip> <port> <msg>` kept as hidden debug variant.
+Current ISO: dist/koru-net-telemetry-payload-20261107-1428.iso
