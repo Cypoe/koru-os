@@ -63,7 +63,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  i915\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -72,7 +72,7 @@ fn dispatch() void {
     if (starts("send ")) { cmdSend(); return; }
     if (starts("sendb ")) { cmdSendB(); return; }
     if (eq("clear")) { text.clear(); return; }
-    if (eq("i915")) {
+    if (eq("i915") or eq("modeset")) { // 'modeset' = alphabetic alias (dead '5' key)
         text.puts("i915 modeset — watch last line before death\n");
         i915drv.init();
         text.puts("i915 returned — console still alive\n");
