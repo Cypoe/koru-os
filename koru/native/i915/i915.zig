@@ -159,7 +159,14 @@ fn setupGtt(fbPhys: u64, fbBytes: u64) void {
 fn fillPattern(phys: u64, pitch: u32, w: u32, h: u32) void {
     const px: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(phys)));
     const row = pitch / 4;
-    var y: u32 = 176; // top band reserved for on-screen stage readout
+    // Top band: solid dark (console text renders here post-rebase —
+    // pmm garbage underneath read as 'garbled'). Matches pattern bg.
+    var ty: u32 = 0;
+    while (ty < 176 and ty < h) : (ty += 1) {
+        var tx: u32 = 0;
+        while (tx < w) : (tx += 1) px[ty * row + tx] = 0x001A1A2E;
+    }
+    var y: u32 = 176;
     while (y < h) : (y += 1) {
         var x: u32 = 0;
         while (x < w) : (x += 1) {
@@ -196,6 +203,12 @@ fn dumpDisplayRegs() void {
     dumpReg("PCH_PP_STATUS", R.PCH_PP_STATUS);
     dumpReg("PCH_PP_CONTROL", R.PCH_PP_CONTROL);
     dumpReg("CDCLK_CTL", R.CDCLK_CTL);
+    dumpReg("HTOTAL_EDP", R.HTOTAL_EDP);
+    dumpReg("HBLANK_EDP", R.HBLANK_EDP);
+    dumpReg("HSYNC_EDP", R.HSYNC_EDP);
+    dumpReg("VTOTAL_EDP", R.VTOTAL_EDP);
+    dumpReg("VBLANK_EDP", R.VBLANK_EDP);
+    dumpReg("VSYNC_EDP", R.VSYNC_EDP);
     const pte = mmio.readGtt(0);
     mmio.say("  gtt[0] phys="); mmio.sayHex(pte.phys);
     mmio.say(" valid="); mmio.say(mmio.yn(pte.valid)); mmio.say("\n");

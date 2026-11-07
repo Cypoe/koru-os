@@ -86,6 +86,9 @@ fn setupHiresPlane(fb: *const types.Framebuffer) void {
     mmio.wr(R.DSPATILEOFF, 0); // Linear: tileoff = 0 (was StartY<<16|StartX)
     mmio.wr(R.PLANE_SIZE_1_A, encodeSize(fb.width, fb.height));
     mmio.wr(R.PLANE_POS_1_A, 0);
+    // DSPSURF = GGTT byte offset of the surface (Linux skl_surf_address,
+    // non-DPT path returns offset directly). Our buffer is at GTT offset
+    // 0 (PTE[0]->phys), so offset 0 is correct — NOT a phys address.
     mmio.wr(R.DSPASURF, @as(u32, @intCast(fb.offset)) & ~@as(u32, 0xfff));
     mmio.wr(R.DSPACNTR, PLANE_CTL_ENABLE | DSPCNTR_FORMAT);
     // readback-verify: which plane writes actually commit
