@@ -100,3 +100,46 @@ Compare against `modeset` (M0 path, unchanged) if kms diverges.
 - GTT bump allocator starts at page 0 — same convention as M0
   (DSPASURF=0 on first buffer). If M0 ran first its PTEs are simply
   overwritten; its scanout is replaced by the kms modeset anyway.
+
+## HW flash #1 → CRASH diagnosis + diagnostic ISO (2026-11-07)
+
+`koru-m1-dumb-kms-20261107-2048.iso` flashed on T590: returned to GRUB
+menu, ZERO UDP at listener (listener pid 82425 confirmed bound *:47820
+and alive — oracle was up). Kernel died before net.init.
+
+Exonerated (all checked against artifacts, not assumed):
+- mb2 magic: `d6 50 52 e8` at ELF off 0x1020, wrong order absent.
+- grub.cfg: byte-identical to net-telemetry ISO that reached shell on
+  this HW (15:54:50 UTC listener.log, src 192.168.99.2).
+- ELF phdrs: entry 0x100050, image_end 0x6d9918 (~64KB over proven
+  0x6c9918) — sane.
+- MBR/partition: QEMU `-boot c` raw-disk boot reaches shell; BOTH
+  partition variants (m0's type=0xee/LBA=0x10 and net's type=0x10/LBA=1)
+  have HW precedent — not the blocker.
+- Code diff vs merge base is inert until `kms` typed (kms.zig never
+  runs at boot; i915.zig pub-only; shell dispatch post-shell).
+
+Conclusion: ISO artifact is sound (QEMU -cdrom AND -hda boot to shell).
+Pre-NIC code (_start→faults.install→pmm.init→net.init) is unchanged and
+memory-only until PCI/e1000e — proven on this HW. Failure is either
+environmental (flash/boot-order — kernel may never have run) or a
+real-HW-only hang QEMU can't reproduce. Cannot distinguish without a
+pre-NIC observable channel.
+
+Fix shipped — commit 83c7d75: caps-LED boot-stage oracle in kmain.
+blinkOnce/beepStage/ledSet already existed (used by _start kbled +
+i915 stage); wired as bootStage(1..4) before faults/pmm/net:
+  1 blink = kmain entered   (_start→long-mode survived)
+  2 blinks = faults.install done (IDT live)
+  3 blinks = pmm.init done  (memory map parsed)
+  4 blinks = net.init done  (NIC armed → UDP markers flow)
+Groups separated by ~3 blink-period pauses so counts stay distinct.
+
+New ISO: `dist/koru-m1-dumb-kms-20261107-2102.iso` (7341 sectors,
+MBR 0x1be=0x83 LBA=0x10). QEMU -cdrom verified: reaches net.init +
+"KORU N2 udp telemetry live" — slow under ARM→x86 TCG (~165s for the
+LED timing loops; native HW <1s). Re-flash recipe: watch CAPS LOCK LED
+during boot — count blink groups = furthest stage; UDP listener for
+post-NIC markers. If 0 blinks → kernel never ran (flash/boot-order).
+If N<4 blinks → died at that stage; last UDP marker + LED count
+localize it.
