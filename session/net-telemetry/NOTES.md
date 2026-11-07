@@ -258,3 +258,12 @@ t590-m0 committed 86384b0 on native/i915-m0: plane format XRGB8888
 with checkerboard+text but compressed/wrapped (DSPASTRIDE=0x200) +
 pink fringing (format bits). Merged clean. ISO:
 dist/koru-i915-net-20261107-1759.iso.
+
+## stride+console-unify merge (2026-11-07 ~18:38)
+
+t590-m0 committed 1ffd16f on native/i915-m0: console rebase onto
+scanout (fb.rebase -> text.zig renders into 0xa00000@7680) + plane
+write readback-verify pairs (DSPASTRIDE/DSPASURF/DSPACNTR). Prior:
+stride write not landing (readback 0x200 vs intended 7680) + console
+fb-writes corrupting scanned image ~10s post-modeset. Merged clean.
+ISO: dist/koru-i915-net-20261107-1837.iso.
