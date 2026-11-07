@@ -200,6 +200,20 @@ pub fn scanout() ?Scanout {
     };
 }
 
+// Adopt an already-mapped LFB without minting page tables — the
+// earlyfb oracle identity-maps the GRUB fb with static hi-memory pd
+// tables before pmm/mmio exist, then hands the window here so the
+// shared text renderer draws boot stages pre-NIC. The caller MUST
+// have mapped [phys, phys+pitch*h) already; this only publishes it.
+pub fn adoptRaw(phys: u64, pitch: u32, w: u32, h: u32) void {
+    fb_base = @ptrFromInt(@as(usize, @intCast(phys)));
+    fb_pitch = pitch;
+    fb_width = w;
+    fb_height = h;
+    present = true;
+    backend = .lfb;
+}
+
 extern fn koru_say(s: [*:0]const u8) void;
 extern fn koru_putdec(v: u64) void;
 

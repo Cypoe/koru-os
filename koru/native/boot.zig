@@ -33,6 +33,7 @@ const comp = @import("comp");
 const faults = @import("faults.zig");
 const led = @import("led.zig");
 const text = @import("text.zig");
+const earlyfb = @import("earlyfb.zig");
 const shell = @import("shell.zig");
 const net = @import("net");
 
@@ -282,23 +283,6 @@ fn beepStage(n: usize) void {
     while (i < n) : (i += 1) blinkOnce();
 }
 
-// Pre-NIC boot-stage oracle on the caps LED. This is the only channel that
-// works before net.init brings UDP up: the T590 has no serial adapter and
-// the panel still shows GRUB's framebuffer until i915 modesets, so a boot
-// that dies in faults.install/pmm.init/net.init is otherwise invisible.
-// Each kmain milestone blinks a distinct count followed by a long
-// separator pause (~3 blink periods) so the groups stay countable:
-//   1 blink = kmain entered        (_start -> long mode survived)
-//   2 blinks = faults.install done (IDT live)
-//   3 blinks = pmm.init done       (memory map parsed)
-//   4 blinks = net.init done       (NIC+UDP armed; wire markers flow on)
-// A halted boot leaves the LED off after the last completed group's
-// separator — the count of blinks names the furthest stage reached.
-fn bootStage(n: usize) void {
-    beepStage(n);
-    spinCycles(160_000_000); // separator — caps LED already off
-}
-
 // Force VGA text mode 3 (80x25) — makes 0xB8000 scannable regardless of
 // what graphics mode the firmware/loader left behind. Standard register
 // block; CRTC unlocked before writing, AC flip-flop reset first.
@@ -421,14 +405,14 @@ var fullBoot: bool = false; // DIAG: false = fbDiag/console fast path; true = re
 var consoleMode: bool = true; // DIAG: true = text console after fb.init
 
 export fn kmain(mbi: u32) callconv(.c) noreturn {
-    bootStage(1); // _start -> kmain survived: GDT, page tables, long mode
-    faults.install(); // exceptions freeze with a report instead of resetting
-    bootStage(2); // IDT live
-    pmm.init(mbi); // frames live before anything allocates
-    bootStage(3); // memory map parsed, page tables extended
-    net.init();    // NIC + UDP telemetry — the display-independent oracle;
-                   // runs before every stage that can die blind
-    bootStage(4); // NIC armed — KORU markers now reach the listener
+    earlyfb.init(mbi);   // adopt GRUB fb + draw S0 — earliest kernel-ran proof
+    faults.install();    // exceptions freeze with a report instead of resetting
+    earlyfb.stage(1, "idt-live"); // IDT live — faults freeze w/ on-panel report
+    pmm.init(mbi);       // frames live before anything allocates
+    earlyfb.stage(2, "pmm-ok");   // memory map parsed, page tables extended
+    net.init();          // NIC + UDP telemetry — the display-independent oracle;
+                         // runs before every stage that can die blind
+    earlyfb.stage(3, "nic-ok");   // NIC armed — KORU markers now reach the listener
     text.udpMirror = net.mirror; // every console line streams to the listener
     const doFull = blk: {
         var v = fullBoot;
