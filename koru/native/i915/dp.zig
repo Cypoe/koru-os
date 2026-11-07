@@ -84,6 +84,14 @@ pub fn auxWrite(port: u32, addr: u32, buf: []const u8) bool {
 // ---- DP_Info port -----------------------------------------------------------
 
 // Read_Caps: DPCD 0x00000..0x0000E (15 bytes).
+pub fn dumpDpcd(addr: u32, buf: []const u8) void {
+    mmio.say("dpcd@"); mmio.sayHex(addr); mmio.say("=");
+    for (buf) |b| {
+        mmio.say(" "); mmio.sayHex(b);
+    }
+    mmio.say("\n");
+}
+
 pub fn readCaps(link: *DPLink) bool {
     var data: [15]u8 = undefined;
     if (!auxRead(DP_A, 0x00000, &data)) return false;
@@ -104,6 +112,16 @@ pub fn readCaps(link: *DPLink) bool {
     link.rx.enhancedFraming = (data[2] & 0x80) != 0;
     link.rx.noAuxHandshake = (data[3] & 0x40) != 0;
     link.rx.auxRdInterval = data[14] & 0x7f;
+    dumpDpcd(0x000, &data);
+    mmio.say("dpcd rev="); mmio.sayDec(data[0]);
+    mmio.say(" maxRate=0x"); mmio.sayHex(data[1]);
+    mmio.say(" lanes=0x"); mmio.sayHex(data[2]);
+    mmio.say(" tps3="); mmio.say(mmio.yn(link.rx.tps3Supported));
+    mmio.say(" ef="); mmio.say(mmio.yn(link.rx.enhancedFraming));
+    mmio.say(" noAux="); mmio.say(mmio.yn(link.rx.noAuxHandshake));
+    mmio.say(" auxInt="); mmio.sayDec(link.rx.auxRdInterval); mmio.say("\n");
+    var sink: [16]u8 = undefined;
+    if (auxRead(DP_A, 0x00100, &sink)) dumpDpcd(0x100, &sink);
     return true;
 }
 
