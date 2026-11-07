@@ -61,11 +61,13 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  net\n  udp <ip> <port> <msg>\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  net\n  udp <ip> <port> <msg>\n  frame <ip> <port> <msg>\n  send <msg>\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
     if (starts("udp ")) { cmdUdp(); return; }
+    if (starts("frame ")) { cmdFrame(); return; }
+    if (starts("send ")) { cmdSend(); return; }
     if (eq("clear")) { text.clear(); return; }
     if (eq("reboot")) { reboot(); return; }
     if (eq("about")) {
@@ -236,6 +238,60 @@ fn cmdUdp() void {
         text.puts("udp: tx descriptor COMPLETED (dd) — frame left the MAC\n");
     } else {
         text.puts("udp: TX failed/timeout — see 'net' for counters\n");
+    }
+    text.newline();
+}
+// frame <ip> <port> <msg> — build the exact TX frame and hex-dump it,
+// no transmit. Byte-for-byte verification on real silicon: dst MAC must
+// read ff:ff:ff:ff:ff:ff, ethertype bytes 12-13 = 08 00, IP proto at
+// frame[23] = 11, UDP dport at frame[36..38].
+fn cmdFrame() void {
+    var i: usize = skipSp(6);
+    const ipr = parseIpv4(i) orelse {
+        text.puts("frame: bad ip — usage: frame <a.b.c.d> <port> <msg>\n");
+        return;
+    };
+    const pr = parsePort(ipr.next) orelse {
+        text.puts("frame: bad port\n");
+        return;
+    };
+    i = skipSp(pr.next);
+    if (i >= n) {
+        text.puts("frame: no message\n");
+        return;
+    }
+    const f = net.peekFrame(ipr.ip, pr.port, line[i..n]) orelse {
+        text.puts("frame: build refused\n");
+        return;
+    };
+    text.puts("frame len=");
+    text.putdec(f.len);
+    text.newline();
+    var off: usize = 0;
+    while (off < f.len and off < 96) : (off += 1) {
+        if (off % 16 == 0) {
+            text.puthex(@intCast(off));
+            text.putc(' ');
+        }
+        text.puthex(f[off]);
+        text.putc(' ');
+        if (off % 16 == 15) text.newline();
+    }
+    if (f.len % 16 != 0 and f.len < 96) text.newline();
+}
+// send <msg> — payload-only: fixed P2P path (192.168.99.2 -> .99.1:47820,
+// broadcast MAC, ethertype hardcoded). Short command for the flaky
+// keyboard; 'udp <ip> <port> <msg>' remains for arbitrary targets.
+fn cmdSend() void {
+    const i = skipSp(5);
+    if (i >= n) {
+        text.puts("send: no message\n");
+        return;
+    }
+    if (net.sendMsg(line[i..n])) {
+        text.puts("send: tx descriptor COMPLETED (dd)\n");
+    } else {
+        text.puts("send: TX failed/timeout — see 'net'\n");
     }
     text.newline();
 }

@@ -350,9 +350,9 @@ fn submit(frame: []const u8) ?usize {
     }
     if (tx_prod - tx_cons >= TX_N) {
         // ring full — wait for the oldest descriptor to complete
-        const d = &tx_descs[tx_cons & (TX_N - 1)];
+        const dv: *volatile Desc = @ptrCast(&tx_descs[tx_cons & (TX_N - 1)]);
         const t0 = ukplat_monotonic_clock();
-        while (d.status & DESC_STATUS_DD == 0) {
+        while (dv.status & DESC_STATUS_DD == 0) {
             if (ukplat_monotonic_clock() - t0 > TX_MAX_NS) {
                 say("e1000e: tx ring stuck — descriptor never completed\n");
                 tx_failed += 1;
@@ -360,7 +360,7 @@ fn submit(frame: []const u8) ?usize {
             }
             asm volatile ("pause");
         }
-        d.status = 0;
+        dv.status = 0;
         tx_cons += 1;
         tx_completed += 1;
     }
@@ -387,9 +387,9 @@ fn submit(frame: []const u8) ?usize {
 // completed" (ring/setup broken) from "completed but nothing on wire"
 // (link/L2/cable problem).
 pub fn waitDone(slot: usize, timeoutNs: u64) bool {
-    const d = &tx_descs[slot & (TX_N - 1)];
+    const dv: *volatile Desc = @ptrCast(&tx_descs[slot & (TX_N - 1)]);
     const t0 = ukplat_monotonic_clock();
-    while (d.status & DESC_STATUS_DD == 0) {
+    while (dv.status & DESC_STATUS_DD == 0) {
         if (ukplat_monotonic_clock() - t0 > timeoutNs) return false;
         asm volatile ("pause");
     }

@@ -10,8 +10,9 @@ Topology (updated 2026-11-07 ~14:00): direct P2P link, no router.
 Mac en8 (USB GbE dongle) = 192.168.99.1/24 LIVE 1000baseT;
 ThinkPad src = 192.168.99.2, dst udp/47820, static both ends.
 Listener bound 0.0.0.0:47820 — receives on en8 (NOT en0/192.168.1.5).
-Current ISO: `dist/koru-net-telemetry-diag-20261107-1407.iso`
-(supersedes p2p-1359 and n3-1329 — do not flash those).
+Current ISO: `dist/koru-net-telemetry-send-20261107-1420.iso`
+(supersedes diag-1407, frame-1420, p2p-1359, n3-1329 — do not flash
+those).
 
 ## HW silence postmortem + diagnostics (2026-11-07 ~14:10)
 
@@ -43,6 +44,29 @@ Shell commands added (fb console — the visible surface on HW):
 Diag marker example (QEMU-verified arriving at listener):
 `KORU diag st=6 bar=febc0000 cmd=107 st=80080783 tctl=400fa bal=255000
 len=200 dt=0 mac=52:54:00:12:34:56 msrc=1 link=1`
+
+## HW round 2: TX completes on real I219, wire still silent (2026-11-07 ~14:30)
+
+`udp` on the T590 reports "tx descriptor COMPLETED (dd)" — the TX ring,
+descriptor format, and TDT path are PROVEN on real silicon. But Mac en8
+Ipkts stayed flat — zero frames delivered to IP. Prime suspects now
+L2/wire-level, not the stack: dst MAC not broadcast on the wire, bad
+FCS, bad src MAC (receiver-side discard), or frames never reaching en8.
+
+Eth-header audit result: construction is correct in source —
+dst=ff:ff:ff:ff:ff:ff, src=RAL0/RAH0-or-EEPROM MAC, ethertype 0x0800 BE,
+IPv4+UDP checksums computed (slirp delivered payloads, proving L3
+parse). New `frame <ip> <port> <msg>` shell command hex-dumps the exact
+built frame (no TX) for byte-for-byte verification on the T590.
+New `send <msg>` payload-only command (fixed P2P path) for the flaky
+keyboard. Desc-status polls now volatile.
+
+HW debug recipe v2: flash send ISO → `net` (MAC + link + counters) →
+`frame 192.168.99.1 47820 hi` (verify ff:ff:ff:ff:ff:ff / 0800 / proto
+11 bytes on screen) → `send hello` (dd=ok expected) → meanwhile
+`sudo tcpdump -i en8 -e -n` on the Mac: ARP who-has at boot is the L2
+canary — if tcpdump sees ARP but not UDP, it's IP-layer; if nothing at
+all, frames aren't reaching en8 (FCS/MAC/PHY).
 
 HW debug recipe: flash diag ISO → at shell type `net` (shows exactly
 what init did — stage<6 = where it stopped, st=ffffffff = dead BAR)

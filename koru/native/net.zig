@@ -95,12 +95,12 @@ fn arpAnnounce() bool {
     return e1000e.tx(frame[0 .. p + 28]);
 }
 
-// udpSendTo: payload -> UDP/IPv4/Ethernet-broadcast -> wire, arbitrary
-// destination IP/port (shell 'udp' command uses this for live probes).
-fn udpSendTo(dst_ip: [4]u8, dst_port: u16, payload: []const u8, probe: bool) bool {
+// buildUdpFrame: assemble Ethernet+IPv4+UDP into `frame`, return total
+// length (eth header onward, no FCS — IFCS adds it on the wire).
+fn buildUdpFrame(dst_ip: [4]u8, dst_port: u16, payload: []const u8) ?usize {
     if (payload.len > 400) {
         sayf("net: marker too long ({d}B) — refused", .{payload.len});
-        return false;
+        return null;
     }
     const o = ethHdr(0x0800);
     const ip = o;
@@ -143,7 +143,14 @@ fn udpSendTo(dst_ip: [4]u8, dst_port: u16, payload: []const u8, probe: bool) boo
     const ucs = csum(pseudo[0 .. 12 + udplen]);
     put16(frame[0..], udp + 6, if (ucs == 0) 0xFFFF else ucs);
 
-    const f = frame[0 .. pay + payload.len];
+    return pay + payload.len;
+}
+
+// udpSendTo: payload -> UDP/IPv4/Ethernet-broadcast -> wire, arbitrary
+// destination IP/port (shell 'udp' command uses this for live probes).
+fn udpSendTo(dst_ip: [4]u8, dst_port: u16, payload: []const u8, probe: bool) bool {
+    const len = buildUdpFrame(dst_ip, dst_port, payload) orelse return false;
+    const f = frame[0..len];
     if (probe) return e1000e.txProbe(f, 200 * 1_000_000);
     return e1000e.tx(f);
 }
@@ -188,6 +195,21 @@ pub fn status() Status {
 pub fn sendUdp(ip: [4]u8, port: u16, msg: []const u8) bool {
     if (!up) return false;
     return udpSendTo(ip, port, msg, true);
+}
+
+// sendMsg: payload-only send on the fixed P2P path — the shell 'send'
+// command. One variable (the string) isolates payload vs framing.
+pub fn sendMsg(msg: []const u8) bool {
+    if (!up) return false;
+    return udpSendTo(DST_IP, DST_PORT, msg, true);
+}
+
+// peekFrame: build the exact frame bytes WITHOUT transmitting — the
+// shell 'frame' command hex-dumps these so header construction can be
+// verified byte-for-byte on real silicon.
+pub fn peekFrame(ip: [4]u8, port: u16, msg: []const u8) ?[]const u8 {
+    const len = buildUdpFrame(ip, port, msg) orelse return null;
+    return frame[0..len];
 }
 
 // mark: emit one "KORU <tag>" datagram. tag is a comptime string.
