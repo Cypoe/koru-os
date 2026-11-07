@@ -2,6 +2,7 @@
 // Line editing + dispatch; no IRQs, no runtime — ports + pixels only.
 const text = @import("text.zig");
 const i915drv = @import("i915/i915.zig");
+const kmsdrv = @import("i915/kms.zig");
 const kbd = @import("kbd");
 const net = @import("net");
 
@@ -63,7 +64,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -76,6 +77,18 @@ fn dispatch() void {
         text.puts("i915 modeset — watch last line before death\n");
         i915drv.init();
         text.puts("i915 returned — console still alive\n");
+        return;
+    }
+    if (eq("kms")) { // M1 dumb-KMS: object model + dumb buffer + modeset
+        text.puts("kms: M1 dumb-KMS — watch last line before death\n");
+        kmsdrv.runModeset();
+        text.puts("kms returned — console still alive\n");
+        return;
+    }
+    if (eq("kmsbuf")) { // M1 buffer path only: alloc+map+pattern, no modeset
+        text.puts("kmsbuf: dumb buffer test — panel untouched\n");
+        kmsdrv.runBuffer();
+        text.puts("kmsbuf returned — console still alive\n");
         return;
     }
     if (eq("reboot")) { reboot(); return; }

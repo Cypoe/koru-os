@@ -27,10 +27,10 @@ const fb = @import("../fb.zig");
 const text = @import("../text.zig");
 const led = @import("../led.zig");
 
-fn diagLine(s: [*:0]const u8) void {
+pub fn diagLine(s: [*:0]const u8) void {
     text.puts(s); // putc maps '\n' -> newline; draws into the adopted fb
 }
-fn stage(comptime msg: [*:0]const u8) void {
+pub fn stage(comptime msg: [*:0]const u8) void {
     mmio.say(msg); mmio.say("\n");
     net.mark(std.mem.sliceTo(msg, 0)); // UDP marker — survives display death
     led.blink(); // caps LED — survives display death; count = stages passed
@@ -81,14 +81,14 @@ fn isSkylake(id: u16) bool {
         (id & 0xffcf) == 0x190e;
 }
 
-fn compatibleGpu(id: u16) bool {
+pub fn compatibleGpu(id: u16) bool {
     return isSkylake(id) or isKabyLake(id) or isKabyLakeU(id) or
         isKabyLakeY(id) or isCoffeeLake(id) or isCoffeeLakeU(id);
 }
 
 // Detect_CPU reduced: sets ddi.cpuVar / lastDigitalPort / iboost.
 // Is_LP = ULT or ULX -> Has_DDI_D/E false -> Last_Digital_Port=DIGI_C.
-fn detectCpu(id: u16) bool {
+pub fn detectCpu(id: u16) bool {
     const kbl = isKabyLake(id) or isKabyLakeU(id) or isKabyLakeY(id);
     const cfl = isCoffeeLake(id) or isCoffeeLakeU(id);
     if (!isSkylake(id) and !kbl and !cfl) return false;
@@ -118,7 +118,7 @@ fn detectCpu(id: u16) bool {
 }
 
 // pipe_setup.Legacy_VGA_Off: SR01 screen-off + VGACNTRL display disable.
-fn legacyVgaOff() void {
+pub fn legacyVgaOff() void {
     outb(0x3c4, 0x01); // VGA_SR_INDEX, VGA_SR01
     const sr1 = inb(0x3c5); // VGA_SR_DATA
     outb(0x3c5, sr1 | 0x20); // VGA_SR01_SCREEN_OFF = 1<<5
@@ -129,7 +129,7 @@ fn legacyVgaOff() void {
 
 // ---- PCH RAWCLK ---------------------------------------------------------------
 
-fn pchRawClkFreq(hz: u64) u32 {
+pub fn pchRawClkFreq(hz: u64) u32 {
     const mask: u32 = 0x3fff << 16;
     var v: u32 = @intCast((hz / 1_000_000) << 16);
     const fracK: u64 = (hz / 1000) % 1000;
@@ -183,11 +183,11 @@ fn fillPattern(phys: u64, pitch: u32, w: u32, h: u32) void {
 
 // ---- Enable_Output (gma.adb) ----------------------------------------------------
 
-fn dumpReg(comptime name: [*:0]const u8, off: u32) void {
+pub fn dumpReg(comptime name: [*:0]const u8, off: u32) void {
     mmio.say("  "); mmio.say(name); mmio.say("=");
     mmio.sayHex(mmio.rd(off)); mmio.say("\n");
 }
-fn dumpDisplayRegs() void {
+pub fn dumpDisplayRegs() void {
     mmio.say("i915: regs:\n");
     dumpReg("DPLL_CTRL1", R.DPLL_CTRL1);
     dumpReg("DPLL_CTRL2", R.DPLL_CTRL2);
@@ -221,12 +221,12 @@ fn dumpDisplayRegs() void {
 // Every plane bank on SKL/KBL: pipe A/B/C x plane1(DSP*) + plane2(PLANE_*_2).
 // The bank holding stride=7680 + fmt=XRGB8888 + surf=gtt-offset is the
 // plane the scanout actually uses — labels make any mismatch self-evident.
-fn dumpPlane(comptime tag: [*:0]const u8, cntr: u32, stride: u32, surf: u32) void {
+pub fn dumpPlane(comptime tag: [*:0]const u8, cntr: u32, stride: u32, surf: u32) void {
     mmio.say("  "); mmio.say(tag); mmio.say(" CNTR="); mmio.sayHex(mmio.rd(cntr));
     mmio.say(" STRIDE="); mmio.sayHex(mmio.rd(stride));
     mmio.say(" SURF="); mmio.sayHex(mmio.rd(surf)); mmio.say("\n");
 }
-fn dumpAllPlanes() void {
+pub fn dumpAllPlanes() void {
     mmio.say("i915: all plane banks:\n");
     dumpPlane("A.p1", R.DSPACNTR, R.DSPASTRIDE, R.DSPASURF);
     dumpPlane("A.p2", R.PLANE_CTL_2_A, R.PLANE_STRIDE_2_A, R.PLANE_SURF_2_A);
