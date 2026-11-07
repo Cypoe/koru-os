@@ -32,6 +32,7 @@ const mouse = @import("mouse");
 const comp = @import("comp");
 const text = @import("text.zig");
 const shell = @import("shell.zig");
+const net = @import("net");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -406,6 +407,8 @@ var consoleMode: bool = true; // DIAG: true = text console after fb.init
 
 export fn kmain(mbi: u32) callconv(.c) noreturn {
     pmm.init(mbi); // frames live before anything allocates
+    net.init();    // NIC + UDP telemetry — the display-independent oracle;
+                   // runs before every stage that can die blind
     const doFull = blk: {
         var v = fullBoot;
         asm volatile ("" : [v] "+r" (v)); // opaque — keeps the branch + inits live
@@ -424,17 +427,22 @@ export fn kmain(mbi: u32) callconv(.c) noreturn {
         smp.init();  // INIT-SIPI-SIPI — APs ack + park before userland runs
     }
     fb.init(mbi);
-    if (consoleMode) shell.run(); // DIAG — noreturn
+    net.mark("fb-init");
+    if (consoleMode) { net.mark("shell"); shell.run(); } // DIAG — noreturn
     if (!doFull) { // DIAG fast path only — real boot continues below
         fbDiag();
         while (true) asm volatile ("hlt");
     }
     stageMark(0x00FF0000); // DIAG red — fb adopted, entering comp
+    net.mark("comp-init");
     comp.init(); // nativeCompositor — owns the scanout's scene from here
     stageMark(0x0000FF00); // DIAG green — comp.init returned
+    net.mark("comp-done");
     aspace.selftest();
     stageMark(0x0000FFFF); // DIAG cyan — aspace done
+    net.mark("aspace-done");
     prog.main();
+    net.mark("prog-main");
     user.run();
     while (true) asm volatile ("hlt");
 }

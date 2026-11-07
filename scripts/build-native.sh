@@ -35,7 +35,7 @@ cp "$PROG" "$WORK/program.$EXT"
     -O ReleaseSafe \
     -fno-entry -fno-stack-protector -mno-red-zone \
     -T "$ROOT/koru/native/link.ld" \
-    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm --dep kbd --dep pci --dep mmio --dep virtiopci --dep mouse --dep comp --dep acpi --dep smp --dep ioapic -Mroot="$ROOT/koru/native/boot.zig" \
+    --dep program --dep runtime --dep virtio --dep aspace --dep user --dep pmm --dep kbd --dep pci --dep mmio --dep virtiopci --dep mouse --dep comp --dep acpi --dep smp --dep ioapic --dep net --dep e1000e -Mroot="$ROOT/koru/native/boot.zig" \
     -Macpi="$ROOT/koru/native/acpi.zig" \
     --dep acpi --dep mmio --dep pci -Mioapic="$ROOT/koru/native/ioapic.zig" \
     --dep pmm --dep mmio --dep acpi -Msmp="$ROOT/koru/native/smp.zig" \
@@ -52,6 +52,8 @@ cp "$PROG" "$WORK/program.$EXT"
     --dep mouse --dep comp -Mkbd="$ROOT/koru/native/kbd.zig" \
     --dep kbd -Mmouse="$ROOT/koru/native/mouse.zig" \
     -Mcomp="$ROOT/koru/native/comp.zig" \
+    --dep pci --dep mmio --dep pmm -Me1000e="$ROOT/koru/native/e1000e.zig" \
+    --dep e1000e --dep pci -Mnet="$ROOT/koru/native/net.zig" \
     -femit-bin="$OUT" || {
     echo "build-native: zig link failed"; exit 1;
 }
