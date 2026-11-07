@@ -234,3 +234,11 @@ bytes 2-3 swapped vs correct LE D6 50 52 E8 (0xE85250D6). Checksum was
 right for the real magic. Fixed in boot.zig; verified magic+checksum
 in ELF and -cdrom QEMU boot to 'net: telemetry up'.
 ISO: dist/koru-i915-net-20261107-1705.iso (supersedes 1656).
+
+## scanout-alloc merge (2026-11-07 ~17:29)
+
+t590-m0 committed 59e5d55 on native/i915-m0: real pmm.allocContiguous
+scanout when borrowed fb <1080p (pitch=7680, ~8MB, align 512→1).
+Merged clean into native/i915-net-merge. ISO:
+dist/koru-i915-net-20261107-1728.iso. Expect 'modeset' to pass the
+fb-size check and proceed to modeset/link-train on HW.
