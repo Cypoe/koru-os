@@ -70,8 +70,18 @@ fn setupHiresPlane(fb: *const types.Framebuffer) void {
     mmio.wr(R.PLANE_AUX_DIST_1_A, 0);
     mmio.unsetAndSet(R.DSPACNTR, DSPCNTR_MASK, DSPCNTR_FORMAT); // no enable
     const strideB = pixelToBytes(fb.stride, fb);
-    mmio.say("i915: plane stride="); mmio.sayDec(strideB); mmio.say("B fmt=XRGB8888\n");
-    mmio.wr(R.DSPASTRIDE, @intCast(strideB));
+    // SKL _PLANE_STRIDE_1_A (0x70188): 12-bit field [11:0], units of
+    // 64-byte chunks for linear (Linux skl_plane_stride_mult=64).
+    // libgfxinit's raw Pixel_To_Bytes write overflows the field;
+    // correct value is bytes/64 = 120 for 7680B pitch.
+    const strideReg = strideB / 64;
+    mmio.say("i915: plane stride="); mmio.sayDec(strideB); mmio.say("B reg=");
+    mmio.sayDec(strideReg); mmio.say(" fmt=XRGB8888\n");
+    const rbBefore = mmio.rd(R.DSPASTRIDE);
+    mmio.wr(R.DSPASTRIDE, @intCast(strideReg));
+    const rbAfter = mmio.rd(R.DSPASTRIDE);
+    mmio.say("  stride[1A] rb before="); mmio.sayHex(rbBefore);
+    mmio.say(" after="); mmio.sayHex(rbAfter); mmio.say("\n");
     mmio.wr(R.DSPALINOFF, 0);  // Has_DSP_Linoff + Linear: linoff = bytes(0,0)
     mmio.wr(R.DSPATILEOFF, 0); // Linear: tileoff = 0 (was StartY<<16|StartX)
     mmio.wr(R.PLANE_SIZE_1_A, encodeSize(fb.width, fb.height));
