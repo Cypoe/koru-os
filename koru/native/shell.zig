@@ -14,6 +14,7 @@ pub fn run() noreturn {
     text.puts("type 'help'\n\n");
     prompt();
     while (true) {
+        net.heartbeat();
         if (raw) {
             if (kbd.pollRaw()) |b| {
                 if (b == 0x01) { // Esc make — leave scan mode

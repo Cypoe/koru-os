@@ -187,3 +187,31 @@ New ISO dist/koru-net-telemetry-ab-20261107-1541.iso:
 - 'udp <ip> <port> <msg>' = broadcast MAC + arbitrary IP (debug)
 - boot markers now also unicast-MAC (EN8_MAC) — permanent telemetry path.
 - 'frame'/'peekMsg' match 'send' (unicast). QEMU-verified dstmac=c84d442722c3.
+
+## TELEMETRY LIVE ON HW + hardened ISO (2026-11-07 ~16:00)
+
+CONFIRMED on real T590 I219-LM: listener caught 192.168.99.2:47821 boot
+markers (diag/N2/fb-init/shell) + manual sends. ROOT CAUSE of the whole
+silence saga: macOS drops unicast-IP inside broadcast-MAC frames before
+IP-layer delivery — NOT a checksum bug (wire hex proved both checksums
+valid, residue ffff). Fix = unicast dst-MAC c8:4d:44:27:22:c3 (en8).
+
+ISO: dist/koru-net-telemetry-hb-20261107-1557.iso — heartbeat build.
+
+## Protocol semantics (permanent diagnostic channel)
+
+- TX-only UDP, fire-and-forget: no ACK, no retransmit, no RX path.
+- Listener MUST be up before boot or early markers are lost
+  (python3 session/net-telemetry/listen.py 47820, bound 0.0.0.0).
+- Topology: direct P2P cable, Mac en8=192.168.99.1/24,
+  ThinkPad=192.168.99.2/24 static, no DHCP/router.
+- Frame: unicast dst-MAC en8 + src-MAC NIC + ethertype 0800 +
+  IPv4(20B,no opts) + UDP(47821->47820) + payload 'KORU <tag>'.
+- Checksums: real IP+UDP checksums (both verified valid on wire).
+- 'KORU hb' heartbeat every 10s from shell loop — distinguishes
+  "kernel alive, display dead" from "never reached NIC stage".
+- Boot markers name furthest kmain stage: last marker before silence
+  = crash/hang point. For i915 bring-up this is THE oracle.
+- Shell cmds (flaky-keyboard friendly): 'net' (status), 'send <msg>',
+  'sendb <msg>' (broadcast A/B), 'frame [msg]' (hex dump no-TX),
+  hidden 'udp <ip> <port> <msg>' debug.

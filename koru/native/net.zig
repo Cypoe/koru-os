@@ -20,6 +20,7 @@ const e1000e = @import("e1000e");
 const pci = @import("pci");
 
 extern fn koru_say(s: [*:0]const u8) void;
+extern fn ukplat_monotonic_clock() callconv(.c) u64; // ns — same clock e1000e waits on
 fn say(s: [*:0]const u8) void {
     koru_say(s);
 }
@@ -237,6 +238,18 @@ pub fn peekFrame(ip: [4]u8, port: u16, msg: []const u8) ?[]const u8 {
 pub fn peekMsg(msg: []const u8) ?[]const u8 {
     const len = buildUdpFrame(DST_IP, DST_PORT, &EN8_MAC, msg) orelse return null;
     return frame[0..len];
+}
+
+// heartbeat: "KORU hb" every 10s while the shell loop ticks — distinguishes
+// "kernel alive, display dead" from "never reached NIC" for i915 bring-up.
+var last_hb: u64 = 0;
+const HB_NS: u64 = 10 * 1_000_000_000;
+pub fn heartbeat() void {
+    if (!up) return;
+    const now = ukplat_monotonic_clock();
+    if (now - last_hb < HB_NS) return;
+    last_hb = now;
+    mark("hb");
 }
 
 // mark: emit one "KORU <tag>" datagram. tag is a comptime string.
