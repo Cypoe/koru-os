@@ -292,3 +292,10 @@ units (12-bit field), not raw bytes — 7680B/64=120=0x78 was the
 original correct value; writing raw 7680 overflowed the field ->
 readback 0x200. Merged clean (pipe.zig). ISO:
 dist/koru-i915-net-20261107-1914.iso — stride should now read 0x78.
+
+## surf+timing merge (2026-11-07 ~19:23)
+
+t590-m0 committed 2436c81 on native/i915-m0: surf=GGTT-offset
+confirmed + timing dumps + clean text band (i915.zig+15 pipe.zig+3).
+Prior: stride fixed (0x78=7680B) but DSPASURF=0 suspect + pink bar +
+garbled text. Merged clean. ISO: dist/koru-i915-net-20261107-1922.iso.
