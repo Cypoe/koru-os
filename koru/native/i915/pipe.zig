@@ -11,8 +11,11 @@ const types = @import("types.zig");
 
 // ---- constants (pipe_setup.adb) ----------------------------------------------
 const PLANE_CTL_ENABLE: u32 = 1 << 31;
-const PLANE_CTL_RGB_32B_8888: u32 = 4 << 24;
-const PLANE_CTL_GAMMA_DISABLE: u32 = 1 << 13; // Has_Plane_Color_Control=false
+// DSPCNTR (pipe_setup.adb): FORMAT_MASK=15<<26, value 6<<26 for the
+// hires plane; PIPE_SEL 3<<24 (0=Primary/A), TRICKLE 1<<14, TILED_X 1<<10.
+const DSPCNTR_FORMAT: u32 = 6 << 26;
+const DSPCNTR_MASK: u32 = PLANE_CTL_ENABLE | (1 << 30) | (15 << 26) |
+    (3 << 24) | (1 << 14) | (1 << 10);
 
 const PLANE_WM_ENABLE: u32 = 1 << 31;
 const PLANE_WM_LINES_SHIFT: u6 = 14;
@@ -38,10 +41,9 @@ fn bpcConf(bpc: u64, dither: bool) u32 {
     return bpcBits | (if (dither) @as(u32, 1) << 4 else 0);
 }
 
-// FB_Pitch for Linear: Div_Round_Up(bytes, 64)
-fn fbPitch(pixels: u64, fb: *const types.Framebuffer) u64 {
-    const bytes = pixels * fb.bpc / 2; // Pixel_To_Bytes: *BPC/(8/4)
-    return (bytes + 63) / 64;
+// Pixel_To_Bytes: stride(px) * bpc / 2 — raw bytes for DSPSTRIDE.
+fn pixelToBytes(pixels: u64, fb: *const types.Framebuffer) u64 {
+    return pixels * fb.bpc / 2;
 }
 
 // Setup_Watermarks (Primary): BUF_CFG + WM level 0 for planes 1/2/cur.
@@ -59,16 +61,19 @@ fn setupWatermarks() void {
     mmio.wr(R.CUR_WM_A_0, PLANE_WM_ENABLE | planeWmLines(2) | planeWmBlocks(8));
 }
 
-// Setup_Hires_Plane (Linear, no rotation): plane 1 registers.
+// Setup_Hires_Plane (Linear, no rotation, DSPCNTR branch): libgfxinit
+// order — control WITHOUT enable, stride/linoff/tileoff/surf, geometry,
+// then enable. SKL self-arms plane regs on the enable transition.
 fn setupHiresPlane(fb: *const types.Framebuffer) void {
     mmio.wr(R.PLANE_AUX_DIST_1_A, 0);
-    const ctl = PLANE_CTL_ENABLE | PLANE_CTL_RGB_32B_8888 | PLANE_CTL_GAMMA_DISABLE;
-    mmio.wr(R.DSPACNTR, ctl);
-    mmio.wr(R.DSPATILEOFF, (@as(u32, fb.height) << 16) | fb.width); // StartY<<16|StartX=0
+    mmio.unsetAndSet(R.DSPACNTR, DSPCNTR_MASK, DSPCNTR_FORMAT); // no enable
+    mmio.wr(R.DSPASTRIDE, @intCast(pixelToBytes(fb.stride, fb)));
+    mmio.wr(R.DSPALINOFF, 0);  // Has_DSP_Linoff + Linear: linoff = bytes(0,0)
+    mmio.wr(R.DSPATILEOFF, 0); // Linear: tileoff = 0 (was StartY<<16|StartX)
     mmio.wr(R.PLANE_SIZE_1_A, encodeSize(fb.width, fb.height));
-    mmio.wr(R.DSPASTRIDE, @intCast(fbPitch(fb.stride, fb)));
     mmio.wr(R.PLANE_POS_1_A, 0);
     mmio.wr(R.DSPASURF, @as(u32, @intCast(fb.offset)) & ~@as(u32, 0xfff));
+    mmio.wr(R.DSPACNTR, PLANE_CTL_ENABLE | DSPCNTR_FORMAT);
 }
 
 // Panel_Fitter_Off (Has_Plane_Control): disable scaler on pipe A.
@@ -97,6 +102,7 @@ fn setupDisplay(fb: *const types.Framebuffer, mode: *const dp.Mode, dither: bool
 
 // Pipe_Setup.On for Primary + Trans_EDP (fb non-VGA path).
 pub fn on(fb: *const types.Framebuffer, mode: *const dp.Mode, link: *const dp.DPLink) void {
+    mmio.say("i915: pipe=A plane=1(hires) transcoder=EDP\n");
     transcoder.setup(mode.*, link.*);
     cursorOff(); // Update_Cursor(Default_Cursor)
     setupDisplay(fb, mode, fb.bpc != mode.bpc);
