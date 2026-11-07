@@ -276,3 +276,11 @@ proved stride write not landing: log=7680 but DSPASTRIDE reads
 0x200; log says plane=1(hires) but DSPA*(plane-A) regs dumped —
 plane-index/register-bank mismatch suspect. Merged clean. ISO:
 dist/koru-i915-net-20261107-1856.iso.
+
+## plane-bank enumeration merge (2026-11-07 ~19:08)
+
+t590-m0 committed cbeffb9 on native/i915-m0: dump ALL plane banks
+post-modeset — A/B/C x p1/p2 + pipe configs (i915.zig +22). Bank
+labels proved only [A]-bank regs touched, all defaults — real
+scanning plane is a different bank. Merged clean. ISO:
+dist/koru-i915-net-20261107-1907.iso — dump names the real plane.
