@@ -73,6 +73,7 @@ fn fromMbi(mbi_phys: u32) bool {
         if (t == 8 and s >= @sizeOf(Mb2Fb)) {
             const f: *align(1) const Mb2Fb = @ptrCast(base + off);
             if (f.bpp == 32 and f.fb_type == 1) { // direct-color linear only
+                koru_sayf("fb: mb2 lfb={x} {d}x{d} pitch={d}\n", .{ f.addr, f.width, f.height, f.pitch });
                 if (adopt(f.addr, f.pitch, f.width, f.height)) return true;
                 koru_say("fb: mb2 mode set but LFB unmappable — refused\n");
                 return false;
@@ -166,6 +167,12 @@ pub fn init(mbi_phys: u32) void {
 }
 
 extern fn koru_say(s: [*:0]const u8) void;
+
+fn koru_sayf(comptime f: []const u8, a: anytype) void {
+    var b: [256]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, f, a) catch return;
+    koru_say(s.ptr);
+}
 
 pub const Info = extern struct {
     width: u32,
