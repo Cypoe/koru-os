@@ -143,3 +143,39 @@ during boot — count blink groups = furthest stage; UDP listener for
 post-NIC markers. If 0 blinks → kernel never ran (flash/boot-order).
 If N<4 blinks → died at that stage; last UDP marker + LED count
 localize it.
+
+## HW flash #1 retry → early-fb oracle ISO (2026-11-07, commit 4255f93)
+
+CORRECTION: caps-LED is a DEAD channel on this T590 — the 8042 LED
+path never physically responds on this EC (established earlier; no blink
+ever observed). The 83c7d75 LED oracle was abandoned before shipping.
+
+The ONE pre-NIC observable is the PANEL: GRUB's mb2 tag-8 fb keeps
+scanning until i915 modesets. New `koru/native/earlyfb.zig` adopts it
+at the TOP of kmain — before faults.install/pmm/net — mapping the
+~4 GiB LFB with static `epd[]` pd tables (pmm/mmio don't exist yet),
+then drives text.zig so each stage renders as a panel line. IDT installs
+second so a post-IDT fault FREEZES on "STAGE n" + "!! EXCEPTION vec="
+(isrReport already draws via text.puts once text.dims()!=0) instead of
+triple-faulting to GRUB. `fb.adoptRaw` publishes an already-mapped lfb;
+`fb.init` later re-adopts the SAME phys via mmio.map, which reuses the
+epd tables (pdpt[gb] nonzero) — no conflict, verified in QEMU.
+
+kmain stage order (panel line = milestone reached):
+  S0 kernel-ran  (earlyfb.init — GRUB fb adopted, banner drawn)
+  S1 idt-live    (faults.install done)
+  S2 pmm-ok      (memory map parsed)
+  S3 nic-ok      (NIC armed → UDP markers flow; console takes over)
+
+Outcome table for next flash:
+  GRUB menu persists, no KORU text .... kernel never ran (bad flash/boot)
+  frozen "STAGE n" + "!! EXCEPTION" ... ran, faulted at stage n
+  last "STAGE n" stays, no more ....... ran, hung at stage n
+  S3 + UDP markers .................... healthy to shell
+
+ISO: `dist/koru-m1-earlyfb-20261107-2131.iso` (15,042,560 B, MBR
+0x1be=0x83 LBA=0x10). QEMU -cdrom verified FAST (<35s, no LED delays):
+serial shows efb:live addr=4244635648, efb:S0/S1/S2/S3 in order, then
+fb:init re-adopts phys=4244635648 (same LFB, epd reused) → fb-init/
+shell/hb UDP markers. Flash this one; watch the PANEL for the stage
+log and the listener for post-NIC markers.
