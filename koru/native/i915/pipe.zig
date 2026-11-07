@@ -78,6 +78,10 @@ fn setupHiresPlane(fb: *const types.Framebuffer) void {
     mmio.wr(R.PLANE_POS_1_A, 0);
     mmio.wr(R.DSPASURF, @as(u32, @intCast(fb.offset)) & ~@as(u32, 0xfff));
     mmio.wr(R.DSPACNTR, PLANE_CTL_ENABLE | DSPCNTR_FORMAT);
+    // readback-verify: which plane writes actually commit
+    mmio.say("  rb DSPACNTR="); mmio.sayHex(mmio.rd(R.DSPACNTR));
+    mmio.say(" STRIDE="); mmio.sayHex(mmio.rd(R.DSPASTRIDE));
+    mmio.say(" SURF="); mmio.sayHex(mmio.rd(R.DSPASURF)); mmio.say("\n");
 }
 
 // Panel_Fitter_Off (Has_Plane_Control): disable scaler on pipe A.
