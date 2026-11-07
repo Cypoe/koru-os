@@ -284,3 +284,11 @@ post-modeset — A/B/C x p1/p2 + pipe configs (i915.zig +22). Bank
 labels proved only [A]-bank regs touched, all defaults — real
 scanning plane is a different bank. Merged clean. ISO:
 dist/koru-i915-net-20261107-1907.iso — dump names the real plane.
+
+## stride-unit fix merge (2026-11-07 ~19:15)
+
+t590-m0 committed e84dab3 on native/i915-m0: DSPSTRIDE is in 64-byte
+units (12-bit field), not raw bytes — 7680B/64=120=0x78 was the
+original correct value; writing raw 7680 overflowed the field ->
+readback 0x200. Merged clean (pipe.zig). ISO:
+dist/koru-i915-net-20261107-1914.iso — stride should now read 0x78.
