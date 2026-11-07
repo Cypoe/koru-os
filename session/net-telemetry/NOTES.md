@@ -172,3 +172,18 @@ parallel expedient while the real bug is chased. last_udp_csum still
 records the computed value so `frame` output supports A/B comparison.
 ISO: dist/koru-net-telemetry-ucsum0-20261107-1507.iso (QEMU-verified,
 markers arrive). Checksum-debug ISO kept: cksum-20261107-1447.
+
+## Checksum EXONERATED + unicast/broadcast A/B ISO (2026-11-07 ~15:45)
+
+Wire hex proved the frame is byte-for-byte canonical AND both checksums
+VALID (IP f364, UDP 3e37, residue ffff) — the "bad checksum" was the
+verifier's arithmetic, not the packet. macOS drops a VALID packet ->
+non-checksum cause. Prime suspect: unicast-IP inside broadcast-MAC
+filtered pre-IP-layer (fits tcpdump-sees-it + Ipkts-flat + listener-flat).
+
+New ISO dist/koru-net-telemetry-ab-20261107-1541.iso:
+- 'send <msg>'  = unicast dst-MAC (en8 c8:4d:44:27:22:c3) + unicast IP .99.1
+- 'sendb <msg>' = broadcast MAC + broadcast IP .99.255 (standard bcast frame)
+- 'udp <ip> <port> <msg>' = broadcast MAC + arbitrary IP (debug)
+- boot markers now also unicast-MAC (EN8_MAC) — permanent telemetry path.
+- 'frame'/'peekMsg' match 'send' (unicast). QEMU-verified dstmac=c84d442722c3.

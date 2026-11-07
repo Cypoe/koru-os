@@ -61,13 +61,14 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  net\n  send <msg>\n  frame [msg]\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
     if (starts("udp ")) { cmdUdp(); return; }
     if (eq("frame") or starts("frame ")) { cmdFrame(); return; }
     if (starts("send ")) { cmdSend(); return; }
+    if (starts("sendb ")) { cmdSendB(); return; }
     if (eq("clear")) { text.clear(); return; }
     if (eq("reboot")) { reboot(); return; }
     if (eq("about")) {
@@ -286,6 +287,21 @@ fn cmdSend() void {
         text.puts("send: tx descriptor COMPLETED (dd)\n");
     } else {
         text.puts("send: TX failed/timeout — see 'net'\n");
+    }
+    text.newline();
+}
+// sendb <msg> — broadcast MAC + broadcast IP (192.168.99.255): the
+// standard broadcast frame, A/B against 'send' (unicast MAC+IP).
+fn cmdSendB() void {
+    const i = skipSp(6);
+    if (i >= n) {
+        text.puts("sendb: no message\n");
+        return;
+    }
+    if (net.sendBcast(line[i..n])) {
+        text.puts("sendb: tx descriptor COMPLETED (dd)\n");
+    } else {
+        text.puts("sendb: TX failed/timeout — see 'net'\n");
     }
     text.newline();
 }

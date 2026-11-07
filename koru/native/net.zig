@@ -38,6 +38,9 @@ const DST_IP: [4]u8 = .{ 192, 168, 99, 1 };
 const DST_PORT: u16 = 47820;
 const SRC_PORT: u16 = 47821;
 const BCAST_MAC: [6]u8 = .{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+// Mac en8 (USB GbE) real MAC — unicast dst for normal Ethernet frames.
+const EN8_MAC: [6]u8 = .{ 0xc8, 0x4d, 0x44, 0x27, 0x22, 0xc3 };
+const BCAST_IP: [4]u8 = .{ 192, 168, 99, 255 }; // subnet broadcast — 'sendb'
 
 var up: bool = false;
 var tx_seq: u16 = 0;
@@ -76,12 +79,15 @@ fn put32(b: []u8, off: usize, v: u32) void {
 
 // ethSend: dst/src MAC + ethertype already meaningful per caller via
 // `etype`; frame body starts at offset 14.
-fn ethHdr(etype: u16) usize {
+fn ethHdrMac(dst: *const [6]u8, etype: u16) usize {
     const mac = e1000e.macAddr();
-    @memcpy(frame[0..6], &BCAST_MAC);
+    @memcpy(frame[0..6], dst);
     @memcpy(frame[6..12], mac);
     put16(frame[0..], 12, etype);
     return 14;
+}
+fn ethHdr(etype: u16) usize {
+    return ethHdrMac(&BCAST_MAC, etype);
 }
 
 // arpAnnounce: who-has DST_IP tell OUR_IP — N1 wire proof; a listener's
@@ -103,12 +109,12 @@ fn arpAnnounce() bool {
 
 // buildUdpFrame: assemble Ethernet+IPv4+UDP into `frame`, return total
 // length (eth header onward, no FCS — IFCS adds it on the wire).
-fn buildUdpFrame(dst_ip: [4]u8, dst_port: u16, payload: []const u8) ?usize {
+fn buildUdpFrame(dst_ip: [4]u8, dst_port: u16, dst_mac: *const [6]u8, payload: []const u8) ?usize {
     if (payload.len > 400) {
         sayf("net: marker too long ({d}B) — refused", .{payload.len});
         return null;
     }
-    const o = ethHdr(0x0800);
+    const o = ethHdrMac(dst_mac, 0x0800);
     const ip = o;
     const udp = ip + 20;
     const pay = udp + 8;
@@ -149,25 +155,22 @@ fn buildUdpFrame(dst_ip: [4]u8, dst_port: u16, payload: []const u8) ?usize {
     @memcpy(pseudo[12 .. 12 + udplen], frame[udp .. udp + udplen]);
     const ucs = csum(pseudo[0 .. 12 + udplen]);
     last_udp_csum = if (ucs == 0) 0xFFFF else ucs;
-    // UDP checksum zeroed on the wire — RFC 768 legal over IPv4, expedient
-    // while the real checksum bug is chased (see NOTES.md HW round 3).
-    // last_udp_csum still records what the computation produced for A/B.
-    put16(frame[0..], udp + 6, 0);
+    put16(frame[0..], udp + 6, last_udp_csum);
 
     return pay + payload.len;
 }
 
 // udpSendTo: payload -> UDP/IPv4/Ethernet-broadcast -> wire, arbitrary
 // destination IP/port (shell 'udp' command uses this for live probes).
-fn udpSendTo(dst_ip: [4]u8, dst_port: u16, payload: []const u8, probe: bool) bool {
-    const len = buildUdpFrame(dst_ip, dst_port, payload) orelse return false;
+fn udpSendTo(dst_ip: [4]u8, dst_port: u16, dst_mac: *const [6]u8, payload: []const u8, probe: bool) bool {
+    const len = buildUdpFrame(dst_ip, dst_port, dst_mac, payload) orelse return false;
     const f = frame[0..len];
     if (probe) return e1000e.txProbe(f, 200 * 1_000_000);
     return e1000e.tx(f);
 }
 
 fn udpSend(payload: []const u8) bool {
-    return udpSendTo(DST_IP, DST_PORT, payload, false);
+    return udpSendTo(DST_IP, DST_PORT, &EN8_MAC, payload, false);
 }
 
 // ---- shell-facing surface ----------------------------------------------------
@@ -205,27 +208,35 @@ pub fn status() Status {
 // only TX oracle without RX), not just that we queued it.
 pub fn sendUdp(ip: [4]u8, port: u16, msg: []const u8) bool {
     if (!up) return false;
-    return udpSendTo(ip, port, msg, true);
+    return udpSendTo(ip, port, &BCAST_MAC, msg, true);
 }
 
 // sendMsg: payload-only send on the fixed P2P path — the shell 'send'
 // command. One variable (the string) isolates payload vs framing.
 pub fn sendMsg(msg: []const u8) bool {
     if (!up) return false;
-    return udpSendTo(DST_IP, DST_PORT, msg, true);
+    return udpSendTo(DST_IP, DST_PORT, &EN8_MAC, msg, true);
+}
+
+// sendBcast: broadcast MAC + broadcast IP — the standard broadcast frame,
+// typable as 'sendb <msg>' for the flaky keyboard. A/B vs 'send'.
+pub fn sendBcast(msg: []const u8) bool {
+    if (!up) return false;
+    return udpSendTo(BCAST_IP, DST_PORT, &BCAST_MAC, msg, true);
 }
 
 // peekFrame: build the exact frame bytes WITHOUT transmitting — the
 // shell 'frame' command hex-dumps these so header construction can be
 // verified byte-for-byte on real silicon.
 pub fn peekFrame(ip: [4]u8, port: u16, msg: []const u8) ?[]const u8 {
-    const len = buildUdpFrame(ip, port, msg) orelse return null;
+    const len = buildUdpFrame(ip, port, &BCAST_MAC, msg) orelse return null;
     return frame[0..len];
 }
 
-// peekMsg: payload-only frame dump on the fixed P2P path — 'frame <msg>'.
+// peekMsg: payload-only frame dump matching 'send' — unicast dst-MAC.
 pub fn peekMsg(msg: []const u8) ?[]const u8 {
-    return peekFrame(DST_IP, DST_PORT, msg);
+    const len = buildUdpFrame(DST_IP, DST_PORT, &EN8_MAC, msg) orelse return null;
+    return frame[0..len];
 }
 
 // mark: emit one "KORU <tag>" datagram. tag is a comptime string.
