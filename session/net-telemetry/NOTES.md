@@ -242,3 +242,11 @@ scanout when borrowed fb <1080p (pitch=7680, ~8MB, align 512→1).
 Merged clean into native/i915-net-merge. ISO:
 dist/koru-i915-net-20261107-1728.iso. Expect 'modeset' to pass the
 fb-size check and proceed to modeset/link-train on HW.
+
+## plane-fix merge (2026-11-07 ~17:48)
+
+t590-m0 committed 7eaa102 on native/i915-m0: plane programming fix —
+DSPCNTR format/stride/tileoff corrected vs libgfxinit (pipe.zig +
+i915.zig). Prior state: MODESET DONE + backlight ON but black panel,
+DSPASURF=0 suspect. Merged clean. ISO:
+dist/koru-i915-net-20261107-1747.iso — 'modeset' should now show image.
