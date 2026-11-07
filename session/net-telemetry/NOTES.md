@@ -267,3 +267,12 @@ write readback-verify pairs (DSPASTRIDE/DSPASURF/DSPACNTR). Prior:
 stride write not landing (readback 0x200 vs intended 7680) + console
 fb-writes corrupting scanned image ~10s post-modeset. Merged clean.
 ISO: dist/koru-i915-net-20261107-1837.iso.
+
+## plane-bank diag merge (2026-11-07 ~18:57)
+
+t590-m0 committed c0e0f87 on native/i915-m0: plane-bank labels in
+dumps + full plane readback set (i915.zig + pipe.zig). Readback
+proved stride write not landing: log=7680 but DSPASTRIDE reads
+0x200; log says plane=1(hires) but DSPA*(plane-A) regs dumped —
+plane-index/register-bank mismatch suspect. Merged clean. ISO:
+dist/koru-i915-net-20261107-1856.iso.
