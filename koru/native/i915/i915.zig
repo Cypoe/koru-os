@@ -186,11 +186,19 @@ fn dumpDisplayRegs() void {
     dumpReg("DP_TP_CTL_A", R.DP_TP_CTL_A);
     dumpReg("PIPE_EDP_CONF", R.PIPE_EDP_CONF);
     dumpReg("PIPE_EDP_DDI_FUNC_CTL", R.PIPE_EDP_DDI_FUNC_CTL);
+    dumpReg("DSPACNTR", R.DSPACNTR);
     dumpReg("DSPASURF", R.DSPASURF);
     dumpReg("DSPASTRIDE", R.DSPASTRIDE);
+    dumpReg("DSPALINOFF", R.DSPALINOFF);
+    dumpReg("DSPATILEOFF", R.DSPATILEOFF);
+    dumpReg("PLANE_SIZE_1_A", R.PLANE_SIZE_1_A);
+    dumpReg("PLANE_POS_1_A", R.PLANE_POS_1_A);
     dumpReg("PCH_PP_STATUS", R.PCH_PP_STATUS);
     dumpReg("PCH_PP_CONTROL", R.PCH_PP_CONTROL);
     dumpReg("CDCLK_CTL", R.CDCLK_CTL);
+    const pte = mmio.readGtt(0);
+    mmio.say("  gtt[0] phys="); mmio.sayHex(pte.phys);
+    mmio.say(" valid="); mmio.say(mmio.yn(pte.valid)); mmio.say("\n");
 }
 
 fn enableOutput(cfg: *types.Port_Config) bool {
