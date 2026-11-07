@@ -82,6 +82,22 @@ fn sinkAdjustTraining(
     eqDone.* = dp.allEQDone(st, link);
     success.* = success.* and (crDone.* or !crWasDone);
 
+    mmio.say("trn");
+    var i: usize = 0;
+    const n = laneCount(link);
+    while (i < n) : (i += 1) {
+        const l = st.lanes[i];
+        const a = st.adjust[i];
+        mmio.say(" L"); mmio.sayDec(i); mmio.say("=");
+        mmio.sayDec(@as(u64, @intFromBool(l.crDone)));
+        mmio.sayDec(@as(u64, @intFromBool(l.chEqDone)));
+        mmio.sayDec(@as(u64, @intFromBool(l.symLocked)));
+        mmio.say("v"); mmio.sayDec(a.vs);
+        mmio.say("p"); mmio.sayDec(a.emph);
+    }
+    mmio.say(" ial="); mmio.say(mmio.yn(st.interlaneAlignDone));
+    mmio.say("\n");
+
     // Voltage swing may update during EQ too.
     if (success.* and !eqDone.*) {
         ts.vs = @min(dp.maxRequestedVS(st, link), ddi.maxVSwing());
@@ -105,6 +121,7 @@ pub fn trainDP(link: dp.DPLink) bool {
     ddi.setSignalLevels(link, ts.vs, ts.emph);
     success = sinkInit(link);
     if (success) success = sinkSetTrainingPattern(link, TP1, trainingSetByte(ts.vs, ts.emph));
+    mmio.say("i915: trainDP TP1 sent ok="); mmio.say(mmio.yn(success)); mmio.say("\n");
 
     var crDone = false;
     var eqDone = false;
@@ -141,6 +158,8 @@ pub fn trainDP(link: dp.DPLink) bool {
     if (success) {
         ddi.setTrainingPattern(link, eqPattern);
         success = sinkSetTrainingPattern(link, eqPattern, trainingSetByte(ts.vs, ts.emph));
+        mmio.say("i915: trainDP TP"); mmio.sayDec(eqPattern);
+        mmio.say(" sent ok="); mmio.say(mmio.yn(success)); mmio.say("\n");
     }
     if (success) {
         var tries: usize = 0;

@@ -176,6 +176,26 @@ fn fillPattern(phys: u64, pitch: u32, w: u32, h: u32) void {
 
 // ---- Enable_Output (gma.adb) ----------------------------------------------------
 
+fn dumpReg(comptime name: [*:0]const u8, off: u32) void {
+    mmio.say("  "); mmio.say(name); mmio.say("=");
+    mmio.sayHex(mmio.rd(off)); mmio.say("\n");
+}
+fn dumpDisplayRegs() void {
+    mmio.say("i915: regs:\n");
+    dumpReg("DPLL_CTRL1", R.DPLL_CTRL1);
+    dumpReg("DPLL_CTRL2", R.DPLL_CTRL2);
+    dumpReg("DDI_BUF_CTL_A", R.DDI_BUF_CTL_A);
+    dumpReg("DDI_AUX_CTL_A", R.DDI_AUX_CTL_A);
+    dumpReg("DP_TP_CTL_A", R.DP_TP_CTL_A);
+    dumpReg("PIPE_EDP_CONF", R.PIPE_EDP_CONF);
+    dumpReg("PIPE_EDP_DDI_FUNC_CTL", R.PIPE_EDP_DDI_FUNC_CTL);
+    dumpReg("DSPASURF", R.DSPASURF);
+    dumpReg("DSPASTRIDE", R.DSPASTRIDE);
+    dumpReg("PCH_PP_STATUS", R.PCH_PP_STATUS);
+    dumpReg("PCH_PP_CONTROL", R.PCH_PP_CONTROL);
+    dumpReg("CDCLK_CTL", R.CDCLK_CTL);
+}
+
 fn enableOutput(cfg: *types.Port_Config) bool {
     // Power_Up(Port): eDP panel power via PP sequence + DDI power domain.
     if (!power.powerUpEdp()) {
@@ -193,6 +213,18 @@ fn enableOutput(cfg: *types.Port_Config) bool {
     mmio.say("i915: link bw="); mmio.sayDec(@intFromEnum(cfg.dp.bandwidth));
     mmio.say(" lanes="); mmio.sayDec(dp.laneCountInt(cfg.dp.laneCount));
     mmio.say("\n");
+    // Bandwidth sufficiency: need = pxclk*bpp*10/8; avail = symHz*lanes*8/10.
+    // symHz uses the spec table (1.62/2.7/5.4GHz) — dp.symbolRate is
+    // printed raw too: it returns 162e6 for b1_62, 10x under spec.
+    const needBps = cfg.mode.dotclock * @as(u64, @intCast(cfg.mode.bpc)) * 3 * 10 / 8;
+    const symHz: u64 = switch (cfg.dp.bandwidth) {
+        .b1_62 => 1_620_000_000, .b2_7 => 2_700_000_000, .b5_4 => 5_400_000_000,
+    };
+    const availBps = symHz * dp.laneCountInt(cfg.dp.laneCount) * 8 / 10;
+    mmio.say("i915: need="); mmio.sayDec(needBps / 1_000_000);
+    mmio.say("Mbps avail="); mmio.sayDec(availBps / 1_000_000);
+    mmio.say("Mbps symFn="); mmio.sayDec(dp.symbolRate(cfg.dp.bandwidth));
+    mmio.say(if (availBps >= needBps) " OK\n" else " INSUFFICIENT\n");
 
     const pr = pll.alloc(cfg);
     if (!pr.ok) {
@@ -217,6 +249,7 @@ fn enableOutput(cfg: *types.Port_Config) bool {
         panel.backlightOn();
         success = true;
     }
+    dumpDisplayRegs();
     if (!success) {
         panel.off();
         pll.free(pr.pll);

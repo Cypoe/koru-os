@@ -27,6 +27,9 @@ const RECEIVE_ERROR: u32 = 1 << 25;
 const MESSAGE_SIZE_MASK: u32 = 31 << 20;
 const MESSAGE_SIZE_SHIFT: u32 = 20;
 
+pub var dbgCtl: u32 = 0;   // last AUX_CTL status word (diag)
+pub var dbgReply: u8 = 0;  // last response byte0 (reply code in bits 5:4)
+
 const CTL = R.DDI_AUX_CTL_A;
 const DATA = [5]u32{ R.DDI_AUX_DATA_A_1, R.DDI_AUX_DATA_A_2, R.DDI_AUX_DATA_A_3, R.DDI_AUX_DATA_A_4, R.DDI_AUX_DATA_A_5 };
 
@@ -82,8 +85,12 @@ fn auxRequestLow(
         SEND_BUSY | DONE | TIME_OUT_ERROR | RECEIVE_ERROR |
         TIME_OUT_TIMER_600US | (@as(u32, @intCast(reqLen)) << MESSAGE_SIZE_SHIFT));
 
-    if (!mmio.waitUnset(CTL, SEND_BUSY, mmio.DefaultTimeoutMs)) return false;
+    if (!mmio.waitUnset(CTL, SEND_BUSY, mmio.DefaultTimeoutMs)) {
+        dbgCtl = mmio.rd(CTL); // timeout — still report what the ctl says
+        return false;
+    }
     const status = mmio.rd(CTL);
+    dbgCtl = status;
     if ((status & (TIME_OUT_ERROR | RECEIVE_ERROR)) != 0) return false;
 
     const sizeField = (status & MESSAGE_SIZE_MASK) >> MESSAGE_SIZE_SHIFT;
@@ -102,6 +109,7 @@ fn auxRequestLow(
                 resp[off + j] = @truncate(v >> @intCast((3 - j) * 8));
         }
     }
+    dbgReply = resp[0];
     return true;
 }
 
@@ -130,13 +138,22 @@ fn doAuxRequest(req: *const AuxRequest, reqLen: usize, resp: *AuxResponse, respL
     return ok and isAuxAck(resp);
 }
 
+fn dbgXfer(comptime wr: bool, addr: u32, ok: bool) void {
+    mmio.say("aux "); mmio.say(if (wr) @as([*:0]const u8, "W ") else @as([*:0]const u8, "R "));
+    mmio.sayHex(addr); mmio.say(" ok="); mmio.say(mmio.yn(ok));
+    mmio.say(" reply="); mmio.sayHex(dbgReply);
+    mmio.say(" ctl="); mmio.sayHex(dbgCtl); mmio.say("\n");
+}
+
 pub fn auxRead(addr: u32, buf: []u8) bool {
     const len = buf.len;
     if (len == 0 or len > 16) return false;
     const req = fillAuxRequest(DP_AUX_NATIVE_READ, addr, len);
     var resp: AuxResponse = undefined;
     var respLen: usize = 0;
-    if (!doAuxRequest(&req, 4, &resp, &respLen)) return false;
+    const ok = doAuxRequest(&req, 4, &resp, &respLen);
+    dbgXfer(false, addr, ok);
+    if (!ok) return false;
     if (respLen <= 1) return false;
     const n = @min(respLen - 1, len);
     @memcpy(buf[0..n], resp[1 .. 1 + n]);
@@ -150,7 +167,9 @@ pub fn auxWrite(addr: u32, data: []const u8) bool {
     @memcpy(req[4 .. 4 + len], data);
     var resp: AuxResponse = undefined;
     var respLen: usize = 0;
-    return doAuxRequest(&req, 4 + len, &resp, &respLen);
+    const ok = doAuxRequest(&req, 4 + len, &resp, &respLen);
+    dbgXfer(true, addr, ok);
+    return ok;
 }
 
 // Link-status read used by training: DPCD 0x202, 6 bytes.
