@@ -215,3 +215,13 @@ ISO: dist/koru-net-telemetry-hb-20261107-1557.iso — heartbeat build.
 - Shell cmds (flaky-keyboard friendly): 'net' (status), 'send <msg>',
   'sendb <msg>' (broadcast A/B), 'frame [msg]' (hex dump no-TX),
   hidden 'udp <ip> <port> <msg>' debug.
+
+## COMBINED i915+telemetry ISO (2026-11-07 ~16:57)
+
+Merge native/i915-net-merge = i915-m0 (ce5070a) + net-telemetry.
+Conflicts: boot.zig (kept faults.install + i915 comment + net marks),
+shell.zig (help lists both i915 and net cmds). i915.zig stage() hooked
+to net.mark — every modeset stage emits 'KORU i915: ...' UDP marker.
+ISO: dist/koru-i915-net-20261107-1656.iso. On HW: shell 'i915' command
+runs modeset; last KORU marker = exact death stage. QEMU-verified net
+path; i915 itself is HW-only (no VGA in QEMU -kernel path).
