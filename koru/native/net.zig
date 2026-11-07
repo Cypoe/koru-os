@@ -31,8 +31,10 @@ fn sayf(comptime f: []const u8, a: anytype) void {
 
 // ---- link config ------------------------------------------------------------
 
-const OUR_IP: [4]u8 = .{ 192, 168, 1, 222 };
-const DST_IP: [4]u8 = .{ 192, 168, 1, 5 }; // this Mac's en0
+// Destination (coordinated with orchestrator t1): P2P link Mac en8
+// (USB GbE) 192.168.99.1/24 <-> ThinkPad 192.168.99.2, static both ends.
+const OUR_IP: [4]u8 = .{ 192, 168, 99, 2 };
+const DST_IP: [4]u8 = .{ 192, 168, 99, 1 };
 const DST_PORT: u16 = 47820;
 const SRC_PORT: u16 = 47821;
 const BCAST_MAC: [6]u8 = .{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };

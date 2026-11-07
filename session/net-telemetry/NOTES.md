@@ -6,6 +6,14 @@ dead (i915 bring-up blinds every local output). Milestones N0→N3.
 
 ## Status: N0–N3 PROVEN IN QEMU — ISO SHIPPED, HW FLASH PENDING
 
+Topology (updated 2026-11-07 ~14:00): direct P2P link, no router.
+Mac en8 (USB GbE dongle) = 192.168.99.1/24 LIVE 1000baseT;
+ThinkPad src = 192.168.99.2, dst udp/47820, static both ends.
+Listener bound 0.0.0.0:47820 — receives on en8 (NOT en0/192.168.1.5).
+Current ISO: `dist/koru-net-telemetry-p2p-20261107-1359.iso`
+(supersedes `koru-net-telemetry-n3-20261107-1329.iso`, which targeted
+192.168.1.5 via WiFi — do not flash that one).
+
 - Driver: `koru/native/e1000e.zig` — TX-only port of iPXE
   `src/drivers/net/intel.c` (ref copy `session/net-telemetry/ref/`).
   I219 family (all ~40 PCI IDs, NO_PHY_RST|RST_HANG flags) + 82574L +
@@ -16,7 +24,7 @@ dead (i915 bring-up blinds every local output). Milestones N0→N3.
 - Net: `koru/native/net.zig` — broadcast-MAC Ethernet carrying
   UNICAST-IP UDP (TX-only can't ARP-resolve; only the IP owner accepts
   at L3). ARP who-has emitted at init as wire proof. Real IPv4+UDP
-  checksums. Config: src 192.168.1.222 → dst 192.168.1.5 udp/47820,
+  checksums. Config: src 192.168.99.2 → dst 192.168.99.1 udp/47820,
   payload `KORU <stage>` (coordinated w/ t1).
 - Integration: `boot.zig` kmain calls `net.init()` right after
   `pmm.init` (before anything that can die blind) + `net.mark(...)` at
@@ -29,7 +37,8 @@ dead (i915 bring-up blinds every local output). Milestones N0→N3.
 
 ## QEMU evidence (oracle = Mac listener, pid-bound udp/47820)
 
-`listener.log` received, twice (kernel -kernel path AND -cdrom ISO path):
+`listener.log` received, three times (kernel -kernel path, -cdrom ISO
+path, -cdrom P2P ISO path):
 ```
 KORU N2 udp telemetry live
 KORU fb-init
@@ -48,7 +57,7 @@ GRUB multiboot2 → kmain → net.init → markers → shell.
 
 ## HW flash instructions
 
-Etcher `session/net-telemetry/dist/koru-net-telemetry-n3-20261107-1329.iso`
+Etcher `session/net-telemetry/dist/koru-net-telemetry-p2p-20261107-1359.iso`
 to SD → T590 boots GRUB → kernel → net.init probes PCI for I219-LM.
 Listener MUST be running (`python3 session/net-telemetry/listen.py 47820`).
 Expected markers in order: N2 udp telemetry live → fb-init → shell
