@@ -178,6 +178,18 @@ pub fn init(mbi_phys: u32) void {
 // Linear scanout surface for the i915 M0 modeset: physical address
 // (identity map), pitch bytes, dims. null when no LFB backend adopted.
 pub const Scanout = struct { phys: u64, pitch: u32, w: u32, h: u32 };
+// Rebase the console surface onto the i915 scanout buffer after modeset
+// commits — text.zig then renders INTO the GPU-scanned buffer at the
+// real 1080p geometry instead of corrupting it via the stale GRUB fb.
+pub fn rebase(phys: u64, pitch: u32, w: u32, h: u32) void {
+    fb_base = @ptrFromInt(@as(usize, @intCast(phys)));
+    fb_pitch = pitch;
+    fb_width = w;
+    fb_height = h;
+    koru_say("fb: rebase phys="); koru_putdec(phys);
+    koru_say(" pitch="); koru_putdec(pitch); koru_say("\n");
+}
+
 pub fn scanout() ?Scanout {
     if (!present or backend == .vgpu) return null;
     return .{

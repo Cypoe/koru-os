@@ -76,6 +76,12 @@ var H: u32 = 0;
 pub fn dims() struct { w: u32, h: u32 } {
     return .{ .w = W, .h = H };
 }
+pub fn syncDims() void {
+    var info: fb.Info = undefined;
+    if (fb.koruos_fb_info(&info) == 0) return;
+    W = info.width; H = info.height;
+    cx = 0; cy = 0;
+}
 pub fn init() void {
     var info: fb.Info = undefined;
     if (fb.koruos_fb_info(&info) == 0) return;
