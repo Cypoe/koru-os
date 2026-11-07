@@ -408,6 +408,7 @@ export fn kmain(mbi: u32) callconv(.c) noreturn {
     pmm.init(mbi); // frames live before anything allocates
     net.init();    // NIC + UDP telemetry — the display-independent oracle;
                    // runs before every stage that can die blind
+    text.udpMirror = net.mirror; // every console line streams to the listener
     const doFull = blk: {
         var v = fullBoot;
         asm volatile ("" : [v] "+r" (v)); // opaque — keeps the branch + inits live

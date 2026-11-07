@@ -70,6 +70,16 @@ pub export fn fputs(s: [*:0]const u8, stream: ?*anyopaque) callconv(.c) c_int {
     return @intCast(n);
 }
 
+// fputc — same serial sink; LLVM/std paths emit it for char-wise output.
+pub export fn fputc(c: c_int, stream: ?*anyopaque) callconv(.c) c_int {
+    _ = stream;
+    serInit();
+    const ch: u8 = @intCast(@as(u32, @bitCast(c)) & 0xFF);
+    if (ch == '\n') serPut('\r');
+    serPut(ch);
+    return c;
+}
+
 // write(2) — the fd is a token like stdout's; all fds route to serial.
 pub export fn write(fd: c_int, buf: [*]const u8, n: usize) callconv(.c) isize {
     _ = fd;

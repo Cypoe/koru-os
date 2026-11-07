@@ -100,10 +100,23 @@ fn glyphAt(x: u32, y: u32, g: u8) void {
         }
     }
 }
+// console->udp mirror: every rendered line also streams to the listener —
+// the wire log IS the screen log. Hook set by boot.zig (net.mirror) —
+// text.zig stays dependency-free, no module edge back into net.
+pub var udpMirror: ?*const fn ([]const u8) void = null;
+var mir: [224]u8 = undefined;
+var mir_len: usize = 0;
+fn mirrorFlush() void {
+    if (mir_len == 0) return;
+    if (udpMirror) |f| f(mir[0..mir_len]);
+    mir_len = 0;
+}
 pub fn putc(ch: u8) void {
     if (W == 0) return;
     if (ch == '\n' or ch == '\r') { newline(); return; }
-    if (ch == 0x08) { if (cx >= CW + 8) cx -= CW; return; }
+    if (ch == 0x08) { if (cx >= CW + 8) cx -= CW; if (mir_len > 0) mir_len -= 1; return; }
+    if (mir_len < mir.len) mir[mir_len] = ch;
+    if (mir_len < mir.len) mir_len += 1;
     if (cx + CW >= W) newline();
     glyphAt(cx, cy, ch);
     cx += CW;
@@ -122,6 +135,7 @@ pub fn putdec(v: u64) void {
     putc('0' + @as(u8, @intCast(v % 10)));
 }
 pub fn newline() void {
+    mirrorFlush();
     cx = 8; cy += CH;
     if (cy + CH >= H) cy = H - CH - 8;
 }

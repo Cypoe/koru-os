@@ -240,6 +240,13 @@ pub fn peekMsg(msg: []const u8) ?[]const u8 {
     return frame[0..len];
 }
 
+// mirror: console-line telemetry — text.zig flushes each rendered line
+// here (via its udpMirror hook) so the wire log IS the screen log.
+pub fn mirror(line: []const u8) void {
+    if (!up or line.len == 0) return;
+    _ = udpSendTo(DST_IP, DST_PORT, &EN8_MAC, line, false);
+}
+
 // heartbeat: "KORU hb" every 10s while the shell loop ticks — distinguishes
 // "kernel alive, display dead" from "never reached NIC" for i915 bring-up.
 var last_hb: u64 = 0;
