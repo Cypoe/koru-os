@@ -356,6 +356,54 @@ else
     bad "sessions-jobctl: build failed (jobctl/mkcpio/iso)"; tail -4 "$WORK/jobctl.build" "$WORK/mkcpiojc.log" "$WORK/isojc.build" 2>/dev/null
 fi
 
+# busybox-sh-pty: the shell oracle — UNMODIFIED alpine busybox ash
+# exec'd onto the slave of a koru pty. The driver (ptysh.c) owns the
+# session (setsid + openpty + TIOCSCTTY), forks the shell onto the
+# slave, then plays the master through a scripted job-control session:
+# `sleep &`, `jobs`, `fg`, `^Z`->Stopped, `bg`, `kill %1`, `^C`, and a
+# clean `exit`. The shell is alpine's own busybox + ld-musl — dynamic,
+# same closure the dynamic row stages (the static apk links ET_EXEC
+# below USER_VA_BASE and the loader refuses it honestly).
+if command -v python >/dev/null 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -DKORU_DOOR -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/ptysh.elf" "$ROOT/koruos/native/tests/ptysh.c" > "$WORK/ptysh.build" 2>&1 \
+   && { WROOT="/mnt/$(cygpath -m "$ROOT" | sed 's|^\(.\):|\L\1|')"; \
+        BBOUT="$(wsl -e wslpath -u "$(cygpath -w "$WORK/shpty-bin")" 2>/dev/null)"; \
+        [ -n "$BBOUT" ] && MSYS_NO_PATHCONV=1 wsl bash "$WROOT/scripts/fetch-shpty.sh" "$BBOUT" > "$WORK/fetchshpty.log" 2>&1; } \
+   && python "$ROOT/scripts/mkcpio.py" "$WORKW/shpty.cpio" \
+        "bin/" "lib/" \
+        "bin/ptysh=$WORKW/ptysh.elf|755" \
+        "bin/busybox=$WORKW/shpty-bin/bin/busybox|755" \
+        "bin/sh=->busybox" "bin/sleep=->busybox" \
+        "lib/ld-musl-x86_64.so.1=$WORKW/shpty-bin/lib/ld-musl-x86_64.so.1|755" \
+        "lib/libc.musl-x86_64.so.1=$WORKW/shpty-bin/lib/libc.musl-x86_64.so.1|755" > "$WORK/mkcpioshp.log" 2>&1 \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_shpty.k" > "$WORK/boot_shpty.k" \
+   && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_shpty.k" "$WORK/koru-shpty.iso" "$WORKW/shpty.cpio" > "$WORK/isoshp.build" 2>&1; then
+    timeout 120 "$QEMU" -cdrom "$WORK/koru-shpty.iso" -boot d -serial stdio \
+        -display none -m 128M -no-reboot > "$WORK/boot_shpty.serial" 2>&1 || true
+    if grep -qF 'SHP jobctl-on got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP bg-job got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP jobs-running got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP fg got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP stopped got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP bg-resume got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP kill-job got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP kill-job-wait got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP kill-job-status got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP kill-job-dead got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP shell-alive got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP shell-status got=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP master-eio got=5' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHP COMPLETE fails=0' "$WORK/boot_shpty.serial" \
+       && grep -qF 'SHPTY GATE COMPLETE' "$WORK/boot_shpty.serial" \
+       && grep -qF 'status=0' "$WORK/boot_shpty.serial"; then
+        ok "busybox-sh-pty: unmodified ash — &/jobs/fg/^Z/bg/kill %1/^C through the pty, status=0"
+    else
+        bad "busybox-sh-pty: $(grep -aE 'SHP|shpty:|FAIL' "$WORK/boot_shpty.serial" | tail -14 | tr '\n' '|')"
+    fi
+else
+    bad "busybox-sh-pty: build failed (ptysh/fetch/mkcpio/iso)"; tail -4 "$WORK/ptysh.build" "$WORK/fetchshpty.log" "$WORK/mkcpioshp.log" "$WORK/isoshp.build" 2>/dev/null
+fi
+
 # proc-roster-view: nr522 procview() — a read-only snapshot fd over the
 # child roster: pid/ppid/pgid/sid/state/stop/bag/nfd per live slot. The
 # musl child synchronizes THROUGH the view (S=paused, Z=zombie, T=stop)

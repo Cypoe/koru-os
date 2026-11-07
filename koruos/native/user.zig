@@ -61,6 +61,7 @@ pub export fn koru_input_wake() callconv(.c) void {
 
 const ENT: u64 = 0x3; // present | writable
 const US: u64 = 0x4; // user-accessible
+var dbg_trace: bool = false; // per-child syscall trace — diagnostic, off
 
 // Child user space is its own pdpt slot — [USER_VA_BASE, USER_VA_END)
 // maps through c.upd, kept entirely clear of the shared kernel half
@@ -3595,6 +3596,7 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
             // own session — a leader's death doesn't dissolve the group
             // while members remain, and a foreign session is EPERM.
             if (!pgrpLiveIn(pg, c.sid)) return -1;
+            if (dbg_trace) { say("SPGRP<"); puthex(cur_child); say("="); puthex(pg); say("> "); }
             t.fg_pgrp = pg;
             return 0;
         },
@@ -6184,6 +6186,13 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
     }
     const c = &children[cur_child];
     c.last_nr = f.rax;
+    if (dbg_trace) {
+        say("T"); puthex(cur_child); say("="); puthex(f.rax);
+        if (f.rax == 16 or f.rax == 62) {
+            say(":"); puthex(f.rdi); say(":"); puthex(f.rsi);
+        }
+        say(" ");
+    }
     switch (f.rax) {
         1 => { // write(fd, buf, len) — kind dispatch: conout sinks to
                // serial, pipe_w feeds the ring (blocks on full, EPIPE on
@@ -6652,6 +6661,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 // is a pointer we don't fill (musl tolerates null here —
                 // its waitpid passes NULL).
             f.rax = @bitCast(childWait(c, @bitCast(f.rdi), f.rsi, f.rdx));
+            if (dbg_trace) { say("W"); puthex(cur_child); say("="); puthex(f.rax); say(" "); }
         },
         34 => { // pause() — park until a deliverable signal fact lands;
                 // the only return is EINTR. A masked fact stays pending
@@ -6660,6 +6670,47 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 kblock(.pause);
             }
             f.rax = @bitCast(@as(i64, -4)); // EINTR
+        },
+        35 => { // nanosleep(req, rem) — park to a tick deadline; the
+                // .poll kind rides the tick's wakeKind (the quantum is
+                // TFD_TICK_NS — a deadline is ceil'd into ticks like
+                // poll's). A deliverable signal fact cuts the wait to
+                // EINTR and the residue rides rem, same posture as
+                // pause()'s loop.
+            var tb: [16]u8 = undefined;
+            if (copyFromUser(c, @intCast(f.rdi), &tb) < 16) {
+                f.rax = @bitCast(@as(i64, -14)); // EFAULT
+            } else {
+                const sec = std.mem.readInt(i64, tb[0..8], .little);
+                const nsec = std.mem.readInt(i64, tb[8..16], .little);
+                if (sec < 0 or nsec < 0 or nsec >= 1_000_000_000) {
+                    f.rax = @bitCast(@as(i64, -22)); // EINVAL
+                } else {
+                    const ns: u64 = @as(u64, @intCast(sec)) * 1_000_000_000
+                        + @as(u64, @intCast(nsec));
+                    const deadline: u64 = irq_ticks
+                        + (ns + TFD_TICK_NS - 1) / TFD_TICK_NS;
+                    // EINTR names handler-invoking arrivals only —
+                    // a pending default fact (SIGCONT from fg, SIGCHLD,
+                    // the stop/continue cycle itself) does not cut a
+                    // sleep; only a caught one does.
+                    while (irq_ticks < deadline and
+                           c.sig_pending & ~c.sig_blocked & c.sig_caught == 0) {
+                        kblock(.poll);
+                    }
+                    if (irq_ticks < deadline) {
+                        if (f.rsi != 0) { // rem — linux's residue shape
+                            const remns = (deadline - irq_ticks) * TFD_TICK_NS;
+                            std.mem.writeInt(i64, tb[0..8],
+                                @intCast(remns / 1_000_000_000), .little);
+                            std.mem.writeInt(i64, tb[8..16],
+                                @intCast(remns % 1_000_000_000), .little);
+                            _ = copyToUser(c, @intCast(f.rsi), &tb);
+                        }
+                        f.rax = @bitCast(@as(i64, -4)); // EINTR
+                    } else f.rax = 0;
+                }
+            }
         },
         3 => { // close(fd) — discharge whatever the slot projects; a
                // conin/conout close just detaches.
