@@ -7,7 +7,9 @@
 // Every stage emits a staged serial marker so a blank panel can be
 // localized to the last completed step.
 
+const std = @import("std");
 const mmio = @import("mmio.zig");
+const net = @import("net"); // module root — path import would double-claim the file
 const R = mmio.R;
 const dp = @import("dp.zig");
 const types = @import("types.zig");
@@ -28,6 +30,7 @@ fn diagLine(s: [*:0]const u8) void {
 }
 fn stage(comptime msg: [*:0]const u8) void {
     mmio.say(msg); mmio.say("\n");
+    net.mark(std.mem.sliceTo(msg, 0)); // UDP marker — survives display death
     led.blink(); // caps LED — survives display death; count = stages passed
 }
 

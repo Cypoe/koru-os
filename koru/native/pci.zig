@@ -328,6 +328,7 @@ fn dump(d: *const Device) void {
 }
 
 pub fn init() void {
+    if (count != 0) return; // net.init may have scanned already — one table
     scanBus(0);
     for (devices[0..count]) |*d| dump(d);
     say("pci: ");
