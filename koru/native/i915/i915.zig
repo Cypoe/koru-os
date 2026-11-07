@@ -21,6 +21,8 @@ const pll = @import("pll.zig");
 const pipe = @import("pipe.zig");
 const ddi = @import("ddi.zig");
 const pci = @import("pci"); // module root — path import would double-claim the file
+const pmm = @import("pmm");
+const hostmmio = @import("mmio"); // native page-table mapper (identity VA==PA)
 const fb = @import("../fb.zig");
 const text = @import("../text.zig");
 const led = @import("../led.zig");
@@ -299,11 +301,28 @@ pub fn init() void {
     _ = power.limitDotclocks(mode.dotclock);
     _ = power.updateCdClk(mode.dotclock);
 
-    const stridePx = s.pitch / 4;
-    if (stridePx < 1920 or s.h < 1080) {
-        stage("i915: FAIL fb too small for 1080p mode");
-        return;
+    var surf = s; // borrowed linear fb — swapped for a real alloc if too small
+    if (surf.pitch / 4 < 1920 or surf.h < 1080) {
+        // GRUB handed us <1080p (mb2 header asks 1024x768) — allocate the
+        // scanout for real. 2025 frames = 8294400B = 1920*1080*4.
+        // align_frames 512 = 2MiB leaf alignment, 1 = any page.
+        const need: u64 = 1920 * 1080 * 4;
+        const frames: usize = @intCast((need + 4095) / 4096);
+        const alloc = pmm.allocContiguous(frames, 512) orelse
+            pmm.allocContiguous(frames, 1) orelse {
+            stage("i915: FAIL fb too small + scanout alloc failed");
+            return;
+        };
+        if (!hostmmio.map(alloc, need)) {
+            stage("i915: FAIL scanout alloc unmapped");
+            return;
+        }
+        stage("i915: scanout alloc=");
+        mmio.sayHex(alloc);
+        mmio.say("\n");
+        surf = .{ .phys = alloc, .pitch = 1920 * 4, .w = 1920, .h = 1080 };
     }
+    const stridePx = surf.pitch / 4;
     var cfg = types.Port_Config{
         .port = .DIGI_A,
         .display = .DP,
@@ -320,8 +339,8 @@ pub fn init() void {
     };
     _ = &cfg;
 
-    setupGtt(s.phys, @as(u64, stridePx) * 4 * 1080);
-    fillPattern(s.phys, s.pitch, s.w, s.h);
+    setupGtt(surf.phys, @as(u64, stridePx) * 4 * 1080);
+    fillPattern(surf.phys, surf.pitch, surf.w, surf.h);
 
     if (!enableOutput(&cfg)) return;
     stage("i915: ==== M0 modeset complete ====");
