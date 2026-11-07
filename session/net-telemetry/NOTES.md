@@ -164,3 +164,11 @@ differ from bytes transmitted in a multi-field way, OR wire bytes differ
 from canonical reconstruction. Next data needed: full tcpdump -XX hex +
 `frame` output (now prints computed ipcsum/udpcsum alongside hex dump).
 ISO: dist/koru-net-telemetry-cksum-20261107-1447.iso
+
+## UDP csum=0 expedient build (2026-11-07 ~15:10)
+
+RFC 768: UDP checksum optional over IPv4 — zeroed on the wire as a
+parallel expedient while the real bug is chased. last_udp_csum still
+records the computed value so `frame` output supports A/B comparison.
+ISO: dist/koru-net-telemetry-ucsum0-20261107-1507.iso (QEMU-verified,
+markers arrive). Checksum-debug ISO kept: cksum-20261107-1447.

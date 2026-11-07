@@ -149,7 +149,10 @@ fn buildUdpFrame(dst_ip: [4]u8, dst_port: u16, payload: []const u8) ?usize {
     @memcpy(pseudo[12 .. 12 + udplen], frame[udp .. udp + udplen]);
     const ucs = csum(pseudo[0 .. 12 + udplen]);
     last_udp_csum = if (ucs == 0) 0xFFFF else ucs;
-    put16(frame[0..], udp + 6, last_udp_csum);
+    // UDP checksum zeroed on the wire — RFC 768 legal over IPv4, expedient
+    // while the real checksum bug is chased (see NOTES.md HW round 3).
+    // last_udp_csum still records what the computation produced for A/B.
+    put16(frame[0..], udp + 6, 0);
 
     return pay + payload.len;
 }
