@@ -29,6 +29,13 @@ fn inb(port: u16) u8 {
         : [port] "N{dx}" (port),
         : .{ .memory = true });
 }
+fn outb(port: u16, val: u8) void {
+    asm volatile ("outb %[val], %[port]"
+        :
+        : [val] "{al}" (val),
+          [port] "N{dx}" (port),
+        : .{ .memory = true });
+}
 
 fn say(s: [*:0]const u8) void {
     _ = fputs(s, stdout);
@@ -116,6 +123,109 @@ pub fn conByte() ?u8 {
     const ch = con[ctail];
     ctail = (ctail + 1) % con.len;
     return ch;
+}
+
+// polled console key for the no-IRQ text console — reads the 8042
+// directly and maps set-1 makes through the same tables, without the
+// rings or koru_input_wake (neither is safe before user.init). One
+// scancode byte per call; returns the ASCII char or null.
+pub fn pollChar() ?u8 {
+    const st = inb(STATUS);
+    if (st & 1 == 0) return null;
+    const b = inb(DATA);
+    if (st & 0x20 != 0) return null; // aux/mouse byte — not ours
+    const code = b & 0x7F;
+    if (code == 0x2A or code == 0x36) { // shift make/break updates state
+        shift = (b & 0x80) == 0;
+        return null;
+    }
+    if (b & 0x80 != 0 or code >= SET1.len) return null; // break / unmapped
+    const ch = if (shift) SET1_SHIFT[code] else SET1[code];
+    return if (ch != 0) ch else null;
+}
+
+// every byte the init conversation produces, logged for the screen —
+// the raw dump shows live keys; this shows what the keyboard said while
+// we were configuring it (FA/AA/resets/timeouts all visible).
+var klog: [48]u8 = undefined;
+var klogN: usize = 0;
+fn klogByte(b: u8) void {
+    if (klogN < klog.len) {
+        klog[klogN] = b;
+        klogN += 1;
+    }
+}
+pub fn klogAt(i: usize) u8 {
+    return if (i < klogN) klog[i] else 0;
+}
+pub fn klogLen() usize {
+    return klogN;
+}
+
+// raw 8042 output byte for the scancode-set diagnostic — no filtering,
+// no tables, no aux check. Every byte the controller emits surfaces:
+// kbd make/break, E0 prefixes, aux packets — full transparency.
+pub fn pollRaw() ?u8 {
+    const st = inb(STATUS);
+    if (st & 1 == 0) return null;
+    return inb(DATA);
+}
+pub fn statusRaw() u8 {
+    return inb(STATUS);
+}
+// controller config byte: 0x20 to the command port (0x64), response on
+// 0x60. bit4 = keyboard interface inhibited — the leading suspect for
+// "commands ACK but scan bytes never arrive".
+pub fn ccbRead() u8 {
+    var i: usize = 0;
+    while (inb(STATUS) & 0x02 != 0) : (i += 1) {
+        if (i > 1000000) return 0xEE;
+    }
+    outb(STATUS, 0x20);
+    i = 0;
+    while (i < 200000) : (i += 1) {
+        if (pollRaw()) |b| return b;
+    }
+    return 0xEE;
+}
+
+// console-mode keyboard bring-up — no IRQs, just the 8042 data port.
+// Real init sequence, ACK-synchronized: reset (0xFF) -> FA + AA(BAT ok),
+// then scancode-set, enable-scanning, LEDs. The earlier fire-and-forget
+// version left the keyboard in whatever state the loader left — it ACKed
+// commands (the FA on screen) but never scanned, so keys produced nothing.
+pub fn consoleInit() void {
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        if (inb(STATUS) & 1 == 0) break;
+        _ = inb(DATA);
+    }
+    ksend(0xFF);          // reset — keyboard re-runs its BAT
+    _ = kawait(0xFA);     // ACK
+    _ = kawait(0xAA);     // BAT OK (0xFC = failed self-test)
+    ksend(0xF0); _ = kawait(0xFA); ksend(0x01); _ = kawait(0xFA); // set-1
+    ksend(0xF4); _ = kawait(0xFA); // enable scanning
+    ksend(0xED); _ = kawait(0xFA); ksend(0x00); _ = kawait(0xFA); // LEDs off
+}
+fn ksend(b: u8) void {
+    var i: usize = 0;
+    while (inb(STATUS) & 0x02 != 0) : (i += 1) {
+        if (i > 1000000) return;
+    }
+    outb(DATA, b);
+}
+// read output bytes until `want` shows up or we give up — returns the
+// byte seen (or 0 on timeout) so callers/tests can inspect the stream.
+fn kawait(want: u8) u8 {
+    var i: usize = 0;
+    while (i < 200000) : (i += 1) {
+        if (inb(STATUS) & 1 != 0) {
+            const b = inb(DATA);
+            klogByte(b);
+            if (b == want) return b;
+        }
+    }
+    return 0;
 }
 
 pub fn init() void {

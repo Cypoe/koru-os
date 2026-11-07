@@ -30,6 +30,8 @@ const gpu = @import("gpu.zig");
 const surf = @import("surf.zig");
 const mouse = @import("mouse");
 const comp = @import("comp");
+const text = @import("text.zig");
+const shell = @import("shell.zig");
 
 comptime {
     // force-emission: lazy codegen only emits decls reachable from the
@@ -289,63 +291,149 @@ fn vga_wr(idx_port: u16, data_port: u16, idx: u8, val: u8) void {
     outb(data_port, val);
 }
 fn vga_text_mode() void {
-    const seq = [_]u8{ 0x03, 0x01, 0x0F, 0x00, 0x0E };
+    // Replicates vgabios.c's mode-set sequence exactly (same order, same
+    // writes) — tables from vgatables.h index=0x18 (mode 0x03).
+    const ac = [_]u8{
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
+        0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+        0x0C, 0x00, 0x0F, 0x08,
+    };
+    const seqtab = [_]u8{ 0x00, 0x03, 0x00, 0x02 }; // -> seq idx 1..4
+    const gc = [_]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x0F, 0xFF };
     const crtc = [_]u8{
         0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0xBF, 0x1F,
-        0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x9C, 0x8F,
-        0x28, 0x1F, 0x96, 0xB9, 0xA3, 0xFF,
+        0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0x00,
+        0x9C, 0x8E, 0x8F, 0x28, 0x1F, 0x96, 0xB9, 0xA3,
+        0xFF,
     };
-    const gc = [_]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0F, 0xFF };
-    const ac_tail = [_]u8{ 0x41, 0x00, 0x0F, 0x00, 0x00 };
-    outb(0x3C2, 0x63); // misc output
-    for (seq, 0..) |v, i| vga_wr(0x3C4, 0x3C5, @intCast(i), v);
-    // unlock CRTC: reg3 |= 0x80, reg0x11 &= ~0x80
-    outb(0x3D4, 0x03);
-    outb(0x3D5, inb(0x3D5) | 0x80);
-    outb(0x3D4, 0x11);
-    outb(0x3D5, inb(0x3D5) & ~@as(u8, 0x80));
-    for (crtc, 0..) |v, i| vga_wr(0x3D4, 0x3D5, @intCast(i), v);
-    for (gc, 0..) |v, i| vga_wr(0x3CE, 0x3CF, @intCast(i), v);
     _ = inb(0x3DA); // reset AC flip-flop
-    var ai: u8 = 0;
-    while (ai < 16) : (ai += 1) {
-        outb(0x3C0, ai);
-        outb(0x3C0, ai);
-    }
-    for (ac_tail, 0..) |v, i| {
-        outb(0x3C0, @intCast(16 + i));
+    for (ac, 0..) |v, i| {
+        outb(0x3C0, @intCast(i));
         outb(0x3C0, v);
     }
-    outb(0x3C0, 0x20); // re-enable display
+    outb(0x3C0, 0x14);
+    outb(0x3C0, 0x00);
+    outb(0x3C4, 0x00);
+    outb(0x3C5, 0x03); // sequencer idx0 = 0x03 (BIOS hardcodes this)
+    for (seqtab, 0..) |v, i| vga_wr(0x3C4, 0x3C5, @intCast(i + 1), v);
+    for (gc, 0..) |v, i| vga_wr(0x3CE, 0x3CF, @intCast(i), v);
+    outb(0x3D4, 0x11);
+    outb(0x3D5, 0x00); // CRTC write-protect off
+    for (crtc, 0..) |v, i| vga_wr(0x3D4, 0x3D5, @intCast(i), v);
+    outb(0x3C2, 0x67); // misc output
+    outb(0x3C0, 0x20); // AC idx 0x20 — display enable
+    _ = inb(0x3DA);
 }
 
+// Scanout probe: flood the text buffer with a solid bright attribute and
+// stamp a marker — a colored screen proves 0xB8000 is being scanned in
+// text mode; black means the display never entered it.
+fn vga_debug() void {
+    const vga: [*]volatile u16 = @ptrFromInt(0xB8000);
+    var i: usize = 0;
+    // full-block glyph + bright-white fg: every cell lit regardless of palette
+    while (i < 80 * 25) : (i += 1) vga[i] = (@as(u16, 0x0F) << 8) | 0xDB;
+    const msg = "KORU VGA TEXT OK";
+    var r: usize = 0;
+    while (msg[r] != 0) : (r += 1) vga[r] = (@as(u16, 0x70) << 8) | msg[r];
+}
+
+extern fn koru_say(s: [*:0]const u8) void;
+extern fn koru_putdec(v: u64) void;
+
+// DIAG: prove the adopted linear fb reaches the scanout — solid fill plus
+// a green triangle, then the caller halts so comp can't repaint over it.
+// Serial names the backend + geometry so a black screen stays diagnosable.
+fn fbDiag() void {
+    var info: fb.Info = undefined;
+    if (fb.koruos_fb_info(&info) == 0) {
+        koru_say("fbdiag: no framebuffer\n");
+        return;
+    }
+    koru_say("fbdiag: fb "); koru_putdec(info.width); koru_say("x");
+    koru_putdec(info.height); koru_say("\n");
+    _ = fb.koruos_fb_fill(0, 0, info.width, info.height, 0x00FF0000);
+    // step-2 triangle: quarter the px calls so 1080p stays quick
+    var y: u32 = 0;
+    while (y < info.height) : (y += 2) {
+        const half = y;
+        var x: u32 = 0;
+        while (x < half and x < info.width) : (x += 2)
+            _ = fb.koruos_fb_px(x, y, 0x0000FF00);
+    }
+    koru_say("fbdiag: painted\n");
+}
+
+// DIAG: flood the adopted fb with a stage colour — last colour on screen
+// names the furthest init completed. comp may clear earlier marks; the
+// post-comp marks are what localise a hang in the comp→prog path.
+fn stageMark(rgb: u32) void {
+    var info: fb.Info = undefined;
+    if (fb.koruos_fb_info(&info) != 0)
+        _ = fb.koruos_fb_fill(0, 0, info.width, info.height, rgb);
+}
+
+// DIAG text console — fb.init adopted the surface; render text and echo
+// polled keys. Skips comp/aspace/prog/user.run entirely: no IRQs, no
+// task runtime, just ports + pixels. noreturn.
+fn textConsole() noreturn {
+    koru_say("console: enter\n");
+    text.init();
+    koru_say("console: init ret\n");
+    koru_say("console: text init done\n");
+    text.puts("KORU OS - native text console\n");
+    koru_say("console: banner1\n");
+    text.puts("linear fb up - type to echo\n\n");
+    koru_say("console: banner2\n");
+    text.puts("> ");
+    while (true) {
+        if (kbd.pollChar()) |c| {
+            if (c == '\n') {
+                text.newline();
+                text.puts("> ");
+            } else {
+                text.putc(c);
+            }
+        }
+        // NOT hlt — IF=0 here (no user.init/sti), so hlt halts the CPU
+        // forever on the first iteration and the poll loop never runs.
+        asm volatile ("pause");
+    }
+}
+
+var fullBoot: bool = false; // DIAG: false = fbDiag/console fast path; true = real program
+var consoleMode: bool = true; // DIAG: true = text console after fb.init
+
 export fn kmain(mbi: u32) callconv(.c) noreturn {
-    vga_text_mode();
-    beepStage(1); // kmain entry reached
     pmm.init(mbi); // frames live before anything allocates
-    beepStage(2);
-    acpi.init(mbi); // RSDP + table directory — MADT/FACP names resolved
-    beepStage(3);
-    pci.init();  // config-space scan while IF=0 — the dump can't
-                 // interleave with IRQ prints; providers look up, never
-                 // rescan
-    beepStage(4);
-    ioapic.init(); // GSI routes armed (masked) — every later unmask
-                   // takes the LAPIC door; PIC lines masked for good
-    beepStage(5);
-    user.init(); // IDT + PIC + sti — interrupts live before the program
-    beepStage(6);
-    kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
-    beepStage(7);
-    mouse.init(); // 8042 aux channel — PS/2 mouse, IRQ12
-    beepStage(8);
-    smp.init();  // INIT-SIPI-SIPI — APs ack + park before userland runs
-    beepStage(9);
+    const doFull = blk: {
+        var v = fullBoot;
+        asm volatile ("" : [v] "+r" (v)); // opaque — keeps the branch + inits live
+        break :blk v;
+    };
+    if (doFull) {
+        acpi.init(mbi); // RSDP + table directory — MADT/FACP names resolved
+        pci.init();  // config-space scan while IF=0 — the dump can't
+                     // interleave with IRQ prints; providers look up, never
+                     // rescan
+        ioapic.init(); // GSI routes armed (masked) — every later unmask
+                       // takes the LAPIC door; PIC lines masked for good
+        user.init(); // IDT + PIC + sti — interrupts live before the program
+        kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
+        mouse.init(); // 8042 aux channel — PS/2 mouse, IRQ12
+        smp.init();  // INIT-SIPI-SIPI — APs ack + park before userland runs
+    }
     fb.init(mbi);
-    beepStage(10);
+    if (consoleMode) shell.run(); // DIAG — noreturn
+    if (!doFull) { // DIAG fast path only — real boot continues below
+        fbDiag();
+        while (true) asm volatile ("hlt");
+    }
+    stageMark(0x00FF0000); // DIAG red — fb adopted, entering comp
     comp.init(); // nativeCompositor — owns the scanout's scene from here
-    beepStage(11);
+    stageMark(0x0000FF00); // DIAG green — comp.init returned
     aspace.selftest();
+    stageMark(0x0000FFFF); // DIAG cyan — aspace done
     prog.main();
     user.run();
     while (true) asm volatile ("hlt");
