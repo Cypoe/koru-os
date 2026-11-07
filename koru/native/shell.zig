@@ -2,6 +2,7 @@
 // Line editing + dispatch; no IRQs, no runtime — ports + pixels only.
 const text = @import("text.zig");
 const kbd = @import("kbd");
+const net = @import("net");
 
 var line: [96]u8 = undefined;
 var n: usize = 0;
@@ -60,9 +61,11 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  net\n  udp <ip> <port> <msg>\n");
         return;
     }
+    if (eq("net")) { cmdNet(); return; }
+    if (starts("udp ")) { cmdUdp(); return; }
     if (eq("clear")) { text.clear(); return; }
     if (eq("reboot")) { reboot(); return; }
     if (eq("about")) {
@@ -103,6 +106,138 @@ fn starts(s: [*:0]const u8) bool {
         if (i >= n or line[i] != s[i]) return false;
     }
     return true;
+}
+fn puthex32(v: u32) void {
+    var i: usize = 8;
+    while (i > 0) {
+        i -= 1;
+        const d: u8 = @intCast((v >> @as(u5, @intCast(i * 4))) & 0xF);
+        text.putc(if (d < 10) '0' + d else 'a' + d - 10);
+    }
+}
+fn putip(ip: [4]u8) void {
+    var i: usize = 0;
+    while (i < 4) : (i += 1) {
+        if (i != 0) text.putc('.');
+        text.putdec(ip[i]);
+    }
+}
+// net: NIC/link/diag/counters — the on-screen oracle when serial is dead.
+fn cmdNet() void {
+    const s = net.status();
+    if (!s.active) {
+        text.puts("net: DOWN (no NIC or init refused)\n");
+        return;
+    }
+    text.puts("net: up  link=");
+    text.puts(if (s.link) "UP " else "down ");
+    text.puts("st=");
+    puthex32(s.live_status);
+    text.newline();
+    if (s.mac) |m| {
+        text.puts("  mac ");
+        var i: usize = 0;
+        while (i < 6) : (i += 1) {
+            if (i != 0) text.putc(':');
+            text.puthex(m[i]);
+        }
+        text.newline();
+    }
+    text.puts("  ");
+    putip(s.our_ip);
+    text.puts(" -> ");
+    putip(s.dst_ip);
+    text.putc(':');
+    text.putdec(s.dst_port);
+    text.newline();
+    const d = s.diag;
+    text.puts("  init st=");
+    text.putdec(d.stage);
+    text.puts(" bar=");
+    // bar0 is u64 — print low 32 (phys BARs here are <4GiB)
+    puthex32(@truncate(d.bar0));
+    text.puts(" cmd=");
+    puthex32(d.cmd);
+    text.puts(" tctl=");
+    puthex32(d.tctl);
+    text.newline();
+    text.puts("  ring bal=");
+    puthex32(d.td_bal);
+    text.puts(" len=");
+    puthex32(d.td_len);
+    text.puts(" dh=");
+    puthex32(d.td_h);
+    text.puts(" dt=");
+    puthex32(d.td_t);
+    text.newline();
+    text.puts("  tx sent=");
+    text.putdec(s.stats.sent);
+    text.puts(" done=");
+    text.putdec(s.stats.completed);
+    text.puts(" fail=");
+    text.putdec(s.stats.failed);
+    text.puts(" probe=");
+    text.puts(if (s.last_probe_ok) "ok" else "none/fail");
+    text.newline();
+}
+// skip spaces from index i; returns new index or n
+fn skipSp(i: usize) usize {
+    var j = i;
+    while (j < n and line[j] == ' ') j += 1;
+    return j;
+}
+fn parseIpv4(i: usize) ?struct { ip: [4]u8, next: usize } {
+    var ip: [4]u8 = undefined;
+    var j = i;
+    var k: usize = 0;
+    while (k < 4) : (k += 1) {
+        if (j >= n or line[j] < '0' or line[j] > '9') return null;
+        var v: u32 = 0;
+        while (j < n and line[j] >= '0' and line[j] <= '9') : (j += 1) {
+            v = v * 10 + (line[j] - '0');
+            if (v > 255) return null;
+        }
+        ip[k] = @intCast(v);
+        if (k != 3) {
+            if (j >= n or line[j] != '.') return null;
+            j += 1;
+        }
+    }
+    return .{ .ip = ip, .next = j };
+}
+fn parsePort(i: usize) ?struct { port: u16, next: usize } {
+    var j = skipSp(i);
+    if (j >= n or line[j] < '0' or line[j] > '9') return null;
+    var v: u32 = 0;
+    while (j < n and line[j] >= '0' and line[j] <= '9') : (j += 1) {
+        v = v * 10 + (line[j] - '0');
+        if (v > 65535) return null;
+    }
+    return .{ .port = @intCast(v), .next = j };
+}
+// udp <a.b.c.d> <port> <msg> — arbitrary datagram, synchronous TX probe.
+fn cmdUdp() void {
+    var i: usize = skipSp(4);
+    const ipr = parseIpv4(i) orelse {
+        text.puts("udp: bad ip — usage: udp <a.b.c.d> <port> <msg>\n");
+        return;
+    };
+    const pr = parsePort(ipr.next) orelse {
+        text.puts("udp: bad port\n");
+        return;
+    };
+    i = skipSp(pr.next);
+    if (i >= n) {
+        text.puts("udp: no message\n");
+        return;
+    }
+    const msg = line[i..n];
+    if (net.sendUdp(ipr.ip, pr.port, msg)) {
+        text.puts("udp: tx descriptor COMPLETED (dd) — frame left the MAC\n");
+    } else {
+        text.puts("udp: TX failed/timeout — see 'net' for counters\n");
+    }
+    text.newline();
 }
 fn reboot() noreturn {
     // pulse the 8042 reset line — bit 0 of the output port

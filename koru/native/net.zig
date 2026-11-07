@@ -95,8 +95,9 @@ fn arpAnnounce() bool {
     return e1000e.tx(frame[0 .. p + 28]);
 }
 
-// udpSend: payload -> UDP/IPv4/Ethernet-broadcast -> wire.
-fn udpSend(payload: []const u8) bool {
+// udpSendTo: payload -> UDP/IPv4/Ethernet-broadcast -> wire, arbitrary
+// destination IP/port (shell 'udp' command uses this for live probes).
+fn udpSendTo(dst_ip: [4]u8, dst_port: u16, payload: []const u8, probe: bool) bool {
     if (payload.len > 400) {
         sayf("net: marker too long ({d}B) — refused", .{payload.len});
         return false;
@@ -119,12 +120,12 @@ fn udpSend(payload: []const u8) bool {
     frame[ip + 9] = 17; // udp
     put16(frame[0..], ip + 10, 0); // csum placeholder
     @memcpy(frame[ip + 12..ip + 16], &OUR_IP);
-    @memcpy(frame[ip + 16..ip + 20], &DST_IP);
+    @memcpy(frame[ip + 16..ip + 20], &dst_ip);
     put16(frame[0..], ip + 10, csum(frame[ip .. ip + 20]));
 
     // UDP header
     put16(frame[0..], udp + 0, SRC_PORT);
-    put16(frame[0..], udp + 2, DST_PORT);
+    put16(frame[0..], udp + 2, dst_port);
     put16(frame[0..], udp + 4, udplen);
     put16(frame[0..], udp + 6, 0); // csum placeholder
     @memcpy(frame[pay .. pay + payload.len], payload);
@@ -134,7 +135,7 @@ fn udpSend(payload: []const u8) bool {
     // every middlebox honest).
     var pseudo: [420]u8 = undefined;
     @memcpy(pseudo[0..4], &OUR_IP);
-    @memcpy(pseudo[4..8], &DST_IP);
+    @memcpy(pseudo[4..8], &dst_ip);
     pseudo[8] = 0;
     pseudo[9] = 17;
     put16(pseudo[0..], 10, udplen);
@@ -142,7 +143,51 @@ fn udpSend(payload: []const u8) bool {
     const ucs = csum(pseudo[0 .. 12 + udplen]);
     put16(frame[0..], udp + 6, if (ucs == 0) 0xFFFF else ucs);
 
-    return e1000e.tx(frame[0 .. pay + payload.len]);
+    const f = frame[0 .. pay + payload.len];
+    if (probe) return e1000e.txProbe(f, 200 * 1_000_000);
+    return e1000e.tx(f);
+}
+
+fn udpSend(payload: []const u8) bool {
+    return udpSendTo(DST_IP, DST_PORT, payload, false);
+}
+
+// ---- shell-facing surface ----------------------------------------------------
+
+pub const Status = struct {
+    active: bool,
+    link: bool,
+    live_status: u32,
+    mac: ?*const [6]u8,
+    our_ip: [4]u8,
+    dst_ip: [4]u8,
+    dst_port: u16,
+    diag: e1000e.Diag,
+    stats: e1000e.Stats,
+    last_probe_ok: bool,
+};
+
+pub fn status() Status {
+    return .{
+        .active = up,
+        .link = e1000e.linkIsUp(),
+        .live_status = e1000e.liveStatus(),
+        .mac = if (up) e1000e.macAddr() else null,
+        .our_ip = OUR_IP,
+        .dst_ip = DST_IP,
+        .dst_port = DST_PORT,
+        .diag = e1000e.diagInfo(),
+        .stats = e1000e.stats(),
+        .last_probe_ok = e1000e.lastTxWaitOk(),
+    };
+}
+
+// sendUdp: arbitrary datagram for the shell 'udp' command — synchronous
+// DD probe so the shell can say whether the DESCRIPTOR completed (the
+// only TX oracle without RX), not just that we queued it.
+pub fn sendUdp(ip: [4]u8, port: u16, msg: []const u8) bool {
+    if (!up) return false;
+    return udpSendTo(ip, port, msg, true);
 }
 
 // mark: emit one "KORU <tag>" datagram. tag is a comptime string.
@@ -172,5 +217,22 @@ pub fn init() void {
         OUR_IP[0], OUR_IP[1], OUR_IP[2], OUR_IP[3],
     });
     if (arpAnnounce()) say("net: N1 arp who-has on wire\n") else say("net: N1 arp TX FAILED\n");
+
+    // diag marker — encode what init actually did so the listener log
+    // carries the state even when later stages die. Fields: stage reached,
+    // bar phys, pci cmd, status reg, tctl, ring regs, mac source, link.
+    {
+        const d = e1000e.diagInfo();
+        const mac = e1000e.macAddr();
+        var msg: [440]u8 = undefined;
+        const s = std.fmt.bufPrint(&msg, "KORU diag st={d} bar={x} cmd={x} st={x} tctl={x} bal={x} len={x} dt={x} mac={x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2} msrc={d} link={s}", .{
+            d.stage, d.bar0, d.cmd, d.status, d.tctl,
+            d.td_bal, d.td_len, d.td_t,
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+            d.mac_src, if (e1000e.linkIsUp()) "1" else "0",
+        }) catch return;
+        _ = udpSend(s);
+        sayf("net: diag -> {s}", .{s});
+    }
     mark("N2 udp telemetry live");
 }

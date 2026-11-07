@@ -10,9 +10,44 @@ Topology (updated 2026-11-07 ~14:00): direct P2P link, no router.
 Mac en8 (USB GbE dongle) = 192.168.99.1/24 LIVE 1000baseT;
 ThinkPad src = 192.168.99.2, dst udp/47820, static both ends.
 Listener bound 0.0.0.0:47820 — receives on en8 (NOT en0/192.168.1.5).
-Current ISO: `dist/koru-net-telemetry-p2p-20261107-1359.iso`
-(supersedes `koru-net-telemetry-n3-20261107-1329.iso`, which targeted
-192.168.1.5 via WiFi — do not flash that one).
+Current ISO: `dist/koru-net-telemetry-diag-20261107-1407.iso`
+(supersedes p2p-1359 and n3-1329 — do not flash those).
+
+## HW silence postmortem + diagnostics (2026-11-07 ~14:10)
+
+First HW flash (p2p-1359): booted to shell, link light ON, ZERO UDP.
+Serial diagnostics are invisible on the T590 (no serial port) — the fb
+shell is the only oracle, which is why shell commands matter.
+
+Init assumptions real silicon may violate, now instrumented:
+1. **Link-up timing** — old code read STATUS.LU once ~100ms after
+   ringSetup; PHY autoneg on a cold P2P link takes ~1-2s, so every boot
+   marker likely fired into a dead link. FIXED: init now polls LU up to
+   5s before markers; link state is also re-read live on every tx.
+2. **BAR0 decode** — assumed MEM+BM command bits take effect; now
+   readback (cmd=, st=, tctl=, ring bal/len/dh/dt) captured in Diag and
+   emitted as `KORU diag ...` marker + shown by shell `net`.
+3. **MAC source** — RAL0/RAH0 autoload vs EERD fallback now recorded
+   (mac_src 1|2) in diag.
+4. **TX completion** — new txProbe: synchronous DD-bit wait (200ms) —
+   distinguishes "descriptor never completed" (ring/setup broken) from
+   "completed but nothing on wire" (link/L2). Shell `udp` uses it.
+5. **Ring alignment** — tx_descs/tx_bufs now page-aligned (iPXE erratum).
+
+Shell commands added (fb console — the visible surface on HW):
+- `net` — up/down, live link+STATUS reg, MAC, IPs, init stage, BAR/cmd/
+  tctl/ring readbacks, TX sent/done/fail counters, last probe result.
+- `udp <a.b.c.d> <port> <msg>` — arbitrary datagram + sync DD probe;
+  prints "descriptor COMPLETED" vs "TX failed/timeout".
+
+Diag marker example (QEMU-verified arriving at listener):
+`KORU diag st=6 bar=febc0000 cmd=107 st=80080783 tctl=400fa bal=255000
+len=200 dt=0 mac=52:54:00:12:34:56 msrc=1 link=1`
+
+HW debug recipe: flash diag ISO → at shell type `net` (shows exactly
+what init did — stage<6 = where it stopped, st=ffffffff = dead BAR)
+then `udp 192.168.99.1 47820 hello` (probe=ok + listener hit = TX path
+works; probe=timeout = descriptor ring dead).
 
 - Driver: `koru/native/e1000e.zig` — TX-only port of iPXE
   `src/drivers/net/intel.c` (ref copy `session/net-telemetry/ref/`).

@@ -80,6 +80,8 @@ const BAR_SIZE: u64 = 128 * 1024;
 const RESET_DELAY_NS: u64 = 20 * 1_000_000;
 const EERD_MAX_NS: u64 = 100 * 1_000_000;
 const TX_MAX_NS: u64 = 50 * 1_000_000;
+const LINK_WAIT_NS: u64 = 5 * 1_000_000_000; // PHY autoneg on a cold P2P link
+const TX_PROBE_NS: u64 = 200 * 1_000_000;
 
 // ---- device table ----------------------------------------------------------
 // iPXE flag bits, only the ones this driver honours.
@@ -138,10 +140,37 @@ comptime {
     if (@sizeOf(Desc) != 16) @compileError("desc must be 16 bytes");
 }
 
-var tx_descs: [TX_N]Desc align(16) = undefined;
-var tx_bufs: [TX_N][TX_BUFSZ]u8 align(16) = undefined;
+var tx_descs: [TX_N]Desc align(4096) = undefined; // page-aligned — iPXE ring erratum
+var tx_bufs: [TX_N][TX_BUFSZ]u8 align(4096) = undefined;
 var tx_prod: usize = 0;
 var tx_cons: usize = 0;
+var tx_sent: u64 = 0;
+var tx_completed: u64 = 0;
+var tx_failed: u64 = 0;
+var last_tx_wait_ok: bool = false; // result of the most recent synchronous probe
+
+// diag: what init actually did, for the shell 'net' command and the
+// KORU diag marker — real silicon may violate every assumption below.
+pub const Diag = struct {
+    stage: u8 = 0, // 0 none 1 pci-found 2 bar-mapped 3 reset 4 mac 5 ring 6 linkwait
+    bar0: u64 = 0,
+    cmd: u32 = 0,     // PCI command reg readback
+    ctrl: u32 = 0,    // CTRL readback post-reset
+    status: u32 = 0,  // STATUS readback post-reset
+    tctl: u32 = 0,    // TCTL readback post-arm
+    td_bal: u32 = 0, td_bah: u32 = 0, td_len: u32 = 0,
+    td_h: u32 = 0, td_t: u32 = 0,
+    ral0: u32 = 0, rah0: u32 = 0,
+    mac_src: u8 = 0,  // 0 none 1 ral0/rah0 2 eeprom
+};
+var diag: Diag = .{};
+pub fn diagInfo() Diag {
+    return diag;
+}
+pub const Stats = struct { sent: u64, completed: u64, failed: u64 };
+pub fn stats() Stats {
+    return .{ .sent = tx_sent, .completed = tx_completed, .failed = tx_failed };
+}
 
 fn rd(off: usize) u32 {
     return regs[off / 4];
@@ -249,11 +278,17 @@ fn fetchMac() void {
     const valid = m[0] | m[1] | m[2] | m[3] | m[4] | m[5] != 0 and (m[0] & 1) == 0;
     if (valid) {
         mac = m;
+        diag.ral0 = lo;
+        diag.rah0 = hi;
+        diag.mac_src = 1;
         sayf("e1000e: autoloaded mac {x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}", .{ m[0], m[1], m[2], m[3], m[4], m[5] });
         return;
     }
+    diag.ral0 = lo;
+    diag.rah0 = hi;
     if (fetchMacEeprom()) |em| {
         mac = em;
+        diag.mac_src = 2;
         sayf("e1000e: eeprom mac {x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}", .{ em[0], em[1], em[2], em[3], em[4], em[5] });
         return;
     }
@@ -305,11 +340,13 @@ pub fn linkIsUp() bool {
 // tx: hand one Ethernet frame (14B header onward, no FCS — IFCS adds it)
 // to the ring. Polls the slot's DD bit before reuse; bounded wait, a
 // stuck descriptor reports false rather than hanging the caller.
-pub fn tx(frame: []const u8) bool {
-    if (!up) return false;
+// submit: queue one frame, return slot index or null when refused.
+fn submit(frame: []const u8) ?usize {
+    if (!up) return null;
     if (frame.len == 0 or frame.len > TX_BUFSZ) {
         sayf("e1000e: tx refused len={d}", .{frame.len});
-        return false;
+        tx_failed += 1;
+        return null;
     }
     if (tx_prod - tx_cons >= TX_N) {
         // ring full — wait for the oldest descriptor to complete
@@ -318,12 +355,14 @@ pub fn tx(frame: []const u8) bool {
         while (d.status & DESC_STATUS_DD == 0) {
             if (ukplat_monotonic_clock() - t0 > TX_MAX_NS) {
                 say("e1000e: tx ring stuck — descriptor never completed\n");
-                return false;
+                tx_failed += 1;
+                return null;
             }
             asm volatile ("pause");
         }
         d.status = 0;
         tx_cons += 1;
+        tx_completed += 1;
     }
     const slot = tx_prod & (TX_N - 1);
     const d = &tx_descs[slot];
@@ -337,8 +376,41 @@ pub fn tx(frame: []const u8) bool {
     };
     membar();
     tx_prod += 1;
+    link_up = (rd(R_STATUS) & STATUS_LU) != 0; // live link state, one MMIO read
     wr(R_TD + 0x18, @intCast(tx_prod & (TX_N - 1))); // TDT = tail index
+    tx_sent += 1;
+    return slot;
+}
+
+// waitDone: poll a slot's DD bit up to timeoutNs. The only TX-completion
+// oracle available without RX — distinguishes "descriptor never
+// completed" (ring/setup broken) from "completed but nothing on wire"
+// (link/L2/cable problem).
+pub fn waitDone(slot: usize, timeoutNs: u64) bool {
+    const d = &tx_descs[slot & (TX_N - 1)];
+    const t0 = ukplat_monotonic_clock();
+    while (d.status & DESC_STATUS_DD == 0) {
+        if (ukplat_monotonic_clock() - t0 > timeoutNs) return false;
+        asm volatile ("pause");
+    }
     return true;
+}
+
+pub fn lastTxWaitOk() bool {
+    return last_tx_wait_ok;
+}
+
+// tx: fire-and-forget queue (boot markers — never stall kmain).
+pub fn tx(frame: []const u8) bool {
+    return submit(frame) != null;
+}
+
+// txProbe: synchronous send + DD wait — the shell 'udp'/'ping' oracle.
+pub fn txProbe(frame: []const u8, timeoutNs: u64) bool {
+    const slot = submit(frame) orelse return false;
+    last_tx_wait_ok = waitDone(slot, timeoutNs);
+    if (last_tx_wait_ok) tx_completed += 1;
+    return last_tx_wait_ok;
 }
 
 // init: find the NIC in pci.devices, map BAR0, reset, fetch MAC, arm TX.
@@ -363,6 +435,7 @@ pub fn init() bool {
         return false;
     };
     flags = f;
+    diag.stage = 1;
     sayf("e1000e: {x}:{x}.{x} dev={x} class={x}/{x} flags={x}", .{ d.bus, d.slot, d.func, d.device, d.class, d.subclass, flags });
 
     if ((d.bars[0] & 1) != 0) {
@@ -370,21 +443,55 @@ pub fn init() bool {
         return false;
     }
     const bar0 = pci.barPhys(d, 0);
+    diag.bar0 = bar0;
     if (!mmio.map(bar0, BAR_SIZE)) {
         say("e1000e: BAR0 map refused\n");
         return false;
     }
+    diag.stage = 2;
     regs = @ptrFromInt(@as(usize, @intCast(bar0)));
 
     pci.setCommand(d, pci.command(d) | 0x6); // MEM + BM
+    diag.cmd = pci.command(d);
 
     reset();
+    diag.stage = 3;
+    diag.ctrl = rd(R_CTRL);
+    diag.status = rd(R_STATUS);
     fetchMac();
     if (mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5] == 0) return false;
+    diag.stage = 4;
 
     ringSetup();
+    diag.stage = 5;
+    diag.tctl = rd(R_TCTL);
+    diag.td_bal = rd(R_TD + 0x00);
+    diag.td_bah = rd(R_TD + 0x04);
+    diag.td_len = rd(R_TD + 0x08);
+    diag.td_h = rd(R_TD + 0x10);
+    diag.td_t = rd(R_TD + 0x18);
+
+    // PHY autoneg on a cold P2P link takes ~1-2s — the old code read LU
+    // once at ~100ms and fired every boot marker into a dead link.
+    // Wait bounded; proceed either way (markers attempted, honestly).
+    {
+        const t0 = ukplat_monotonic_clock();
+        while ((rd(R_STATUS) & STATUS_LU) == 0 and
+               ukplat_monotonic_clock() - t0 < LINK_WAIT_NS)
+        {
+            asm volatile ("pause");
+        }
+    }
+    diag.stage = 6;
     link_up = (rd(R_STATUS) & STATUS_LU) != 0;
+    diag.status = rd(R_STATUS);
     up = true;
-    sayf("e1000e: tx ring armed — link={} mac={x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}", .{ link_up, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5] });
+    sayf("e1000e: tx ring armed — link={} mac={x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2} st={x} cmd={x} tctl={x}", .{ link_up, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], diag.status, diag.cmd, diag.tctl });
     return true;
+}
+
+// liveStatus: fresh STATUS register read for the shell — never cached.
+pub fn liveStatus() u32 {
+    if (!up) return 0;
+    return rd(R_STATUS);
 }
