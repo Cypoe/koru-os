@@ -250,3 +250,11 @@ DSPCNTR format/stride/tileoff corrected vs libgfxinit (pipe.zig +
 i915.zig). Prior state: MODESET DONE + backlight ON but black panel,
 DSPASURF=0 suspect. Merged clean. ISO:
 dist/koru-i915-net-20261107-1747.iso — 'modeset' should now show image.
+
+## stride+format merge (2026-11-07 ~18:00)
+
+t590-m0 committed 86384b0 on native/i915-m0: plane format XRGB8888
+(4<<24) + stride verification print (pipe.zig). Prior: display LIVE
+with checkerboard+text but compressed/wrapped (DSPASTRIDE=0x200) +
+pink fringing (format bits). Merged clean. ISO:
+dist/koru-i915-net-20261107-1759.iso.
