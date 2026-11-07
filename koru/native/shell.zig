@@ -1,6 +1,7 @@
 // koru/native/shell — minimal command shell over the fb text console.
 // Line editing + dispatch; no IRQs, no runtime — ports + pixels only.
 const text = @import("text.zig");
+const i915drv = @import("i915/i915.zig");
 const kbd = @import("kbd");
 
 var line: [96]u8 = undefined;
@@ -60,10 +61,16 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  i915\n");
         return;
     }
     if (eq("clear")) { text.clear(); return; }
+    if (eq("i915")) {
+        text.puts("i915 modeset — watch last line before death\n");
+        i915drv.init();
+        text.puts("i915 returned — console still alive\n");
+        return;
+    }
     if (eq("reboot")) { reboot(); return; }
     if (eq("about")) {
         const d = text.dims();

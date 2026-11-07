@@ -30,6 +30,8 @@ const gpu = @import("gpu.zig");
 const surf = @import("surf.zig");
 const mouse = @import("mouse");
 const comp = @import("comp");
+const faults = @import("faults.zig");
+const led = @import("led.zig");
 const text = @import("text.zig");
 const shell = @import("shell.zig");
 
@@ -71,25 +73,8 @@ comptime {
 // multiboot2 header — magic, architecture (i386), length, checksum, end tag.
 comptime {
     asm (
-        \\ .section .multiboot, "a"
-        \\ .balign 8
-        \\ mb2_header:
-        \\   .long 0xE85250D6
-        \\   .long 0
-        \\   .long mb2_end - mb2_header
-        \\   .long -(0xE85250D6 + 0 + (mb2_end - mb2_header))
-        \\   .balign 8
-        \\   .short 5          // framebuffer request tag — asks the loader
-        \\   .short 1          //   for a linear fb (optional: boot still
-        \\   .long 20          //   proceeds if the loader can't give one)
-        \\   .long 1024
-        \\   .long 768
-        \\   .long 32
-        \\   .balign 8
-        \\   .short 0
-        \\   .short 0
-        \\   .long 8
-        \\ mb2_end:
+        \\ mb2_header_bytes: // emitted as export var below — zig 0.15.2
+        \\                     // DCEs unreferenced .multiboot asm data
         \\ .section .note.Xen, "a", @note
         \\ .balign 4
         \\   .long 4
@@ -108,6 +93,19 @@ comptime {
 export var pml4: [512]u64 align(4096) = undefined;
 export var pdpt: [512]u64 align(4096) = undefined;
 export var pd: [512]u64 align(4096) = undefined;
+
+// multiboot2 header as export var — .multiboot section, KEEP()'d by link.ld.
+// magic 0xE85250D6, arch i386, len=48, checksum, fb-request tag (32bpp),
+// end tag. zig 0.15.2 dead-code-eliminates unreferenced comptime asm
+// data — an export var cannot be dropped.
+export const mb2_header: [48]u8 align(8) linksection(".multiboot") = .{
+    0xD6, 0x50, 0xE8, 0x52, 0x00, 0x00, 0x00, 0x00, // magic, arch=i386
+    0x30, 0x00, 0x00, 0x00, 0xFA, 0xAE, 0xAD, 0x17, // len=48, checksum
+    0x05, 0x00, 0x01, 0x00, 0x14, 0x00, 0x00, 0x00, // tag5 fb req, size 20
+    0x00, 0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, // 1024x768x32
+    0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // depth=32, pad->8
+    0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, // end tag
+};
 
 // _start: 32-bit entry. Identity-map 0..32MiB (pml4->pdpt->pd[0..16),
 // sixteen 2 MiB pages — enough that the image's .bss (heap, pmm bitmaps)
@@ -405,6 +403,7 @@ var fullBoot: bool = false; // DIAG: false = fbDiag/console fast path; true = re
 var consoleMode: bool = true; // DIAG: true = text console after fb.init
 
 export fn kmain(mbi: u32) callconv(.c) noreturn {
+    faults.install(); // exceptions freeze with a report instead of resetting
     pmm.init(mbi); // frames live before anything allocates
     const doFull = blk: {
         var v = fullBoot;
@@ -424,6 +423,9 @@ export fn kmain(mbi: u32) callconv(.c) noreturn {
         smp.init();  // INIT-SIPI-SIPI — APs ack + park before userland runs
     }
     fb.init(mbi);
+    // i915 modeset is gated behind the shell 'i915' command — the proven
+    // console proves kernel+text first; typing it bounds any crash to
+    // i915 entry and the last console line names the stage.
     if (consoleMode) shell.run(); // DIAG — noreturn
     if (!doFull) { // DIAG fast path only — real boot continues below
         fbDiag();
@@ -437,4 +439,18 @@ export fn kmain(mbi: u32) callconv(.c) noreturn {
     prog.main();
     user.run();
     while (true) asm volatile ("hlt");
+}
+
+const std = @import("std");
+pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+    led.crash();
+    koru_say("!! PANIC\n");
+    if (text.dims().w != 0) {
+        text.puts("!! PANIC\n");
+        var i: usize = 0;
+        while (i < msg.len and i < 48) : (i += 1) text.putc(msg[i]);
+        text.newline();
+        text.puts("(frozen — no reset)\n");
+    }
+    while (true) asm volatile ("cli\n\thlt");
 }

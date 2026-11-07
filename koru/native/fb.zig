@@ -175,6 +175,19 @@ pub fn init(mbi_phys: u32) void {
     if (fromBga()) koru_say("fb: backend=bga\n");
 }
 
+// Linear scanout surface for the i915 M0 modeset: physical address
+// (identity map), pitch bytes, dims. null when no LFB backend adopted.
+pub const Scanout = struct { phys: u64, pitch: u32, w: u32, h: u32 };
+pub fn scanout() ?Scanout {
+    if (!present or backend == .vgpu) return null;
+    return .{
+        .phys = @intCast(@intFromPtr(fb_base)),
+        .pitch = fb_pitch,
+        .w = fb_width,
+        .h = fb_height,
+    };
+}
+
 extern fn koru_say(s: [*:0]const u8) void;
 extern fn koru_putdec(v: u64) void;
 
