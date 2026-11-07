@@ -202,6 +202,28 @@ fn dumpDisplayRegs() void {
     const pte = mmio.readGtt(0);
     mmio.say("  gtt[0] phys="); mmio.sayHex(pte.phys);
     mmio.say(" valid="); mmio.say(mmio.yn(pte.valid)); mmio.say("\n");
+    dumpAllPlanes();
+}
+
+// Every plane bank on SKL/KBL: pipe A/B/C x plane1(DSP*) + plane2(PLANE_*_2).
+// The bank holding stride=7680 + fmt=XRGB8888 + surf=gtt-offset is the
+// plane the scanout actually uses — labels make any mismatch self-evident.
+fn dumpPlane(comptime tag: [*:0]const u8, cntr: u32, stride: u32, surf: u32) void {
+    mmio.say("  "); mmio.say(tag); mmio.say(" CNTR="); mmio.sayHex(mmio.rd(cntr));
+    mmio.say(" STRIDE="); mmio.sayHex(mmio.rd(stride));
+    mmio.say(" SURF="); mmio.sayHex(mmio.rd(surf)); mmio.say("\n");
+}
+fn dumpAllPlanes() void {
+    mmio.say("i915: all plane banks:\n");
+    dumpPlane("A.p1", R.DSPACNTR, R.DSPASTRIDE, R.DSPASURF);
+    dumpPlane("A.p2", R.PLANE_CTL_2_A, R.PLANE_STRIDE_2_A, R.PLANE_SURF_2_A);
+    dumpPlane("B.p1", R.DSPBCNTR, R.DSPBSTRIDE, R.DSPBSURF);
+    dumpPlane("B.p2", R.PLANE_CTL_2_B, R.PLANE_STRIDE_2_B, R.PLANE_SURF_2_B);
+    dumpPlane("C.p1", R.DSPCCNTR, R.DSPCSTRIDE, R.DSPCSURF);
+    dumpPlane("C.p2", R.PLANE_CTL_2_C, R.PLANE_STRIDE_2_C, R.PLANE_SURF_2_C);
+    mmio.say("  PIPEACONF="); mmio.sayHex(mmio.rd(R.PIPEACONF));
+    mmio.say(" PIPEBCONF="); mmio.sayHex(mmio.rd(R.PIPEBCONF));
+    mmio.say(" PIPE_EDP_CONF="); mmio.sayHex(mmio.rd(R.PIPE_EDP_CONF)); mmio.say("\n");
 }
 
 fn enableOutput(cfg: *types.Port_Config) bool {
