@@ -80,7 +80,7 @@ pub fn syncDims() void {
     var info: fb.Info = undefined;
     if (fb.koruos_fb_info(&info) == 0) return;
     W = info.width; H = info.height;
-    cx = 0; cy = 0;
+    cx = 8; cy = 8;
 }
 pub fn init() void {
     var info: fb.Info = undefined;
@@ -111,6 +111,10 @@ pub fn putc(ch: u8) void {
     if (ch == '\n' or ch == '\r') { newline(); return; }
     if (ch == 0x08) { if (cx >= CW + 8) cx -= CW; return; }
     if (cx + CW >= W) newline();
+    // Paint the whole char cell bg first — post-rebase the scanout
+    // buffer holds the i915 pattern, not a cleared console. Without
+    // this the glyph's set-bits scatter white dots on the checkerboard.
+    _ = fb.koruos_fb_fill(cx, cy, CW, CH, bg);
     glyphAt(cx, cy, ch);
     cx += CW;
 }
