@@ -299,3 +299,11 @@ t590-m0 committed 2436c81 on native/i915-m0: surf=GGTT-offset
 confirmed + timing dumps + clean text band (i915.zig+15 pipe.zig+3).
 Prior: stride fixed (0x78=7680B) but DSPASURF=0 suspect + pink bar +
 garbled text. Merged clean. ISO: dist/koru-i915-net-20261107-1922.iso.
+
+## console-render merge (2026-11-07 ~19:50)
+
+t590-m0 committed e313cf6 on native/i915-m0: per-cell bg fill so
+glyphs render on the i915 scanout (text.zig +5). Prior: registers all
+correct (1080p60 timing, stride 0x78, size/pos) but console repaint
+drew with wrong geometry into the XRGB8888 buffer = wipe/re-render.
+Merged clean. ISO: dist/koru-i915-net-20261107-1949.iso.
