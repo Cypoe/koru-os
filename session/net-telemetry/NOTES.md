@@ -225,3 +225,12 @@ to net.mark — every modeset stage emits 'KORU i915: ...' UDP marker.
 ISO: dist/koru-i915-net-20261107-1656.iso. On HW: shell 'i915' command
 runs modeset; last KORU marker = exact death stage. QEMU-verified net
 path; i915 itself is HW-only (no VGA in QEMU -kernel path).
+
+## mb2 header fix (2026-11-07 ~17:06)
+
+Combined ISO failed GRUB: 'no multiboot header'. Root cause: t590-m0's
+export-var mb2_header had magic bytes D6 50 E8 52 (u32 0x52e850d6) —
+bytes 2-3 swapped vs correct LE D6 50 52 E8 (0xE85250D6). Checksum was
+right for the real magic. Fixed in boot.zig; verified magic+checksum
+in ELF and -cdrom QEMU boot to 'net: telemetry up'.
+ISO: dist/koru-i915-net-20261107-1705.iso (supersedes 1656).
