@@ -376,3 +376,46 @@ changes codegen (smaller/faster-different) and may mask a real bug. If it
 boots, the principled fix is section placement: keep boot .text+.rodata
 small OR move the kms/i915 bulk into a high vaddr section so the low RW
 segment stays <0x168000 with kms fully present at ReleaseSafe.
+
+## efault — bulletproof stage/fault oracle diagnostic ISO (2026-11-08)
+
+Independent audit pivot: the .data/.bss-start hypothesis was UNPROVEN (mb2
+spec has GRUB zero-fill .bss, so no kernel clear can overrun GRUB structs)
+and "zero UDP" can't separate pre-NIC from an net.init MMIO fault. STOPPED
+guessing size thresholds; built a fault-capture diagnostic instead.
+
+NEW MODULES (diagnostic boot replaces normal kmain):
+- koru/native/efault.zig — self-contained panel oracle. Parses mb2 tag-8,
+  maps the LFB with STATIC .bss page tables installed straight into
+  pdpt[gb]/pd[] (NO pmm.alloc, NO mmio.map, NO fb.zig — none of which can
+  be the crash site). Pixels are raw bounded volatile-u32 writes at
+  VA==phys. Stage bands S0-S4 = distinct colors in a top progress strip;
+  reportFault() draws red + "VEC nn" + "CR2 hhhh" via a tiny built-in
+  3x5 font. inReport guard: a fault INSIDE a report draw re-enters
+  isrReport, sees busy(), returns without touching fb -> freeze, never
+  triple-fault.
+- koru/native/dserial.zig — koru_say/koru_putdec via runtime fputs/stdout
+  UART, WITHOUT pulling user.zig's monolithic task/surface runtime.
+
+WIRING: faults.isrReport -> efault.reportFault(vec,cr2) + busy()-guarded
+serial/LED (nested faults skip straight to freeze). boot.kmain diagnostic:
+faults.install() FIRST, then efault.init(S0), mark1(idt), pmm.init,
+mark2(pmm), mark3(pre-net), net.init, mark4(net-done), finish, halt.
+comptime force-emission trimmed to runtime + dserial (virtio/gpu/surf/
+mouse/user.zig all un-emitted). panic simplified (no text/fb).
+
+QEMU -cdrom VERIFIED (koru-m1-efault-20261108-2208.iso):
+  serial: efault fb live addr=4244635648 pitch=4096 1024x768 -> S0..S4 ->
+  pmm usable=511MiB -> net telemetry up/N2/diag-net-done -> all stages.
+  screendump PPM: S0=(0,255,0) S1=(0,255,255) S2=(0,0,255) S3=(255,0,255)
+  S4=(255,255,0) + white finish border — bands reach the scanned surface.
+
+ON REAL T590 the panel now names the killer:
+  GRUB menu frozen, no bands .... kernel never ran / pre-S0 fault
+  bands up to Sk ................ died entering stage k+1 (k+1 is suspect)
+  S3 lit, no S4 .................. net.init() faulted (audit's prime suspect)
+  red VEC/CR2 .................... catchable exception — vector+CR2 on panel
+  menu redraws in a loop ......... triple fault / reset (pre-IDT or #DF)
+
+ISO: dist/koru-m1-efault-20261108-2208.iso (13,021,184 B, MBR 0x1be=0x83
+type=0xee LBA=0x10). ELF _end=0x5a5610 (.text=0xe25f — tiny, no kms).
