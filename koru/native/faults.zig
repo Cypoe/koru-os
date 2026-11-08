@@ -16,7 +16,6 @@
 
 const text = @import("text.zig");
 const led = @import("led.zig");
-const earlyfb = @import("earlyfb.zig");
 
 extern fn koru_say(s: [*:0]const u8) void;
 extern fn koru_putdec(v: u64) void;
@@ -58,7 +57,6 @@ fn readCr2() u64 {
 // text path needs, koru_say still carries it for anyone with a UART.
 pub export fn isrReport(vec: u64) callconv(.c) noreturn {
     led.crash();
-    earlyfb.fault(vec); // big red FAULT banner on the panel, if adopted
     koru_say("!! EXCEPTION vec=");
     koru_putdec(vec);
     koru_say("\n");

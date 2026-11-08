@@ -33,7 +33,6 @@ const comp = @import("comp");
 const faults = @import("faults.zig");
 const led = @import("led.zig");
 const text = @import("text.zig");
-const earlyfb = @import("earlyfb.zig");
 const shell = @import("shell.zig");
 const net = @import("net");
 
@@ -405,14 +404,10 @@ var fullBoot: bool = false; // DIAG: false = fbDiag/console fast path; true = re
 var consoleMode: bool = true; // DIAG: true = text console after fb.init
 
 export fn kmain(mbi: u32) callconv(.c) noreturn {
-    faults.install();    // IDT FIRST — any later fault FREEZES, never resets
-    pmm.init(mbi);       // frames live before anything allocates
-    earlyfb.init(mbi);   // adopt GRUB fb via PROVEN mmio.map + draw S0 banner;
-                         // AFTER pmm (mmio.map needs pmm.alloc), BEFORE net —
-                         // brackets the real-HW NIC fault window
-    net.init();          // NIC + UDP telemetry — the display-independent oracle;
-                         // runs before every stage that can die blind
-    earlyfb.stage(1, "nic-ok");   // NIC armed — KORU markers now reach the listener
+    faults.install(); // exceptions freeze with a report instead of resetting
+    pmm.init(mbi); // frames live before anything allocates
+    net.init();    // NIC + UDP telemetry — the display-independent oracle;
+                   // runs before every stage that can die blind
     text.udpMirror = net.mirror; // every console line streams to the listener
     const doFull = blk: {
         var v = fullBoot;
