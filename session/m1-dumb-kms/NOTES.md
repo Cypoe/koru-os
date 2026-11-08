@@ -500,3 +500,30 @@ shows kms:flip COMMITTED + kms:vblank markers.
 ISO: dist/koru-m2-atomic-20261108-2238.iso — isotree + docker
 koruos-amd64-img grub-mkrescue + CORRECTED MBR (0x1BE=0x83, 0x1C2=0x10,
 endCHS=0, LBA left 0x01). QEMU-verified boot to shell+hb.
+
+## M3 DMABUF — producer->scanout seam (2026-11-08)
+
+M1 dumb-KMS + M2 atomic CONFIRMED on real T590. M3 adds client buffer
+import — the compositor substrate.
+
+Model: dma-buf fd analogue = a token into an export table (MAX_DMABUFS=4).
+Backing store = DumbBuffer (GGTT-mapped for scanout, identity-CPU-mapped
+for producer, pmm-owned lifetime). refs counts producer+display holders.
+
+  dmabufCreate(w,h) -> token   producer side; wraps dumbCreate.
+  dmabufMap(token)   -> *DumbBuffer   producer's CPU render target.
+  dmabufImport(token)-> handle  display side; +1 display ref, resolves
+                                token->dumb handle for atomic flip.
+  dmabufUnref(token)           lifetime; frees export+dumb at refs=0.
+  producerRender(buf,seed)     stand-in producer: window-like surface
+                                (title bar + gradient + dots) into the
+                                CPU map — never touches an i915 register.
+  runDmabuf()                  demo: create->render->export->import->
+                                flipCommit->vblankWait->unref.
+
+shell: 'kdmabuf' (alphabetic). Flow needs live 'kms' modeset first.
+On panel: window-surface replaces prior pattern at next vblank = proof
+producer content reached scanout through the import seam.
+
+ISO: dist/koru-m3-dmabuf-20261108-2246.iso — proven pipeline + CORRECTED
+MBR. QEMU boot verified to shell+hb (dmabuf path HW-only, like M1/M2).

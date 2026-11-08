@@ -97,6 +97,12 @@ fn dispatch() void {
         text.puts("kflip returned — console still alive\n");
         return;
     }
+    if (eq("kdmabuf")) { // M3 dmabuf producer->scanout (needs live 'kms')
+        text.puts("kdmabuf: M3 dmabuf import — watch last line\n");
+        kmsdrv.runDmabuf();
+        text.puts("kdmabuf returned — console still alive\n");
+        return;
+    }
     if (eq("reboot")) { reboot(); return; }
     if (eq("about")) {
         const d = text.dims();

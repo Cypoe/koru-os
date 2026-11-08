@@ -715,3 +715,180 @@ pub fn runFlip() void {
     text.puts("KORU M2 atomic pageflip live\n");
     stage("kms: ==== M2 atomic complete ====");
 }
+
+// ---- M3 dmabuf: shareable producer->scanout buffer ---------------------------
+// The compositor seam. A producer (draw surface / app / console) renders
+// into a CPU-mapped buffer it does NOT own the display path for; it hands
+// an importable token to the KMS side, which resolves it to a dumb buffer
+// and pageflips it through the M2 atomic path. Producer and scanout are
+// decoupled: the producer never touches an i915 register.
+//
+// Modelled on dma-buf: the "fd" is a token into an export table. The
+// backing store is a DumbBuffer (GGTT-mapped for scanout, identity-CPU
+// mapped for the producer, pmm-owned for lifetime). refs counts holders —
+// producer + display — so a buffer can't be freed while scanned.
+
+pub const MAX_DMABUFS: usize = 4;
+
+const DmabufEnt = struct {
+    token: u32 = 0,
+    handle: u32 = 0, // dumb handle backing the export
+    refs: u32 = 0,   // producer + importer holds
+    live: bool = false,
+};
+
+var dmabufs: [MAX_DMABUFS]DmabufEnt = @splat(.{});
+var dmabufNextToken: u32 = 1;
+
+// Producer side: allocate a shareable buffer and get its import token.
+// Wraps dumbCreate — the buffer is GGTT-mapped + CPU-accessible already.
+pub fn dmabufCreate(w: u32, h: u32) ?u32 {
+    var slot: ?usize = null;
+    var si: usize = 0;
+    while (si < dmabufs.len) : (si += 1) {
+        if (!dmabufs[si].live) {
+            slot = si;
+            break;
+        }
+    }
+    const s = slot orelse {
+        mmio.say("kms: dmabufCreate refused — export table full\n");
+        return null;
+    };
+    const handle = dumbCreate(w, h, 32) orelse return null;
+    const tok = dmabufNextToken;
+    dmabufNextToken += 1;
+    dmabufs[s] = .{ .token = tok, .handle = handle, .refs = 1, .live = true };
+    mmio.say("kms: dmabuf export token="); mmio.sayDec(tok);
+    mmio.say(" handle="); mmio.sayDec(handle); mmio.say("\n");
+    stage("kms: dmabuf created+exported");
+    return tok;
+}
+
+// Look up the CPU-mapped backing store for a token — the producer's
+// render target. Null if the token isn't a live export.
+pub fn dmabufMap(token: u32) ?*const DumbBuffer {
+    var i: usize = 0;
+    while (i < dmabufs.len) : (i += 1) {
+        if (dmabufs[i].live and dmabufs[i].token == token) {
+            return dumbGet(dmabufs[i].handle);
+        }
+    }
+    return null;
+}
+
+// Import side: the display/KMS resolves a token to a dumb handle it can
+// atomic-flip. Adds a display ref so the producer can't free it mid-scan.
+pub fn dmabufImport(token: u32) ?u32 {
+    var i: usize = 0;
+    while (i < dmabufs.len) : (i += 1) {
+        if (dmabufs[i].live and dmabufs[i].token == token) {
+            dmabufs[i].refs += 1;
+            mmio.say("kms: dmabuf import token="); mmio.sayDec(token);
+            mmio.say(" -> handle="); mmio.sayDec(dmabufs[i].handle);
+            mmio.say(" refs="); mmio.sayDec(dmabufs[i].refs); mmio.say("\n");
+            stage("kms: dmabuf imported by display");
+            return dmabufs[i].handle;
+        }
+    }
+    mmio.say("kms: dmabufImport refused — bad token "); mmio.sayDec(token);
+    mmio.say("\n");
+    return null;
+}
+
+// Lifetime: drop a holder's ref; frees the export+dumb only at zero.
+pub fn dmabufUnref(token: u32) void {
+    var i: usize = 0;
+    while (i < dmabufs.len) : (i += 1) {
+        if (dmabufs[i].live and dmabufs[i].token == token) {
+            if (dmabufs[i].refs > 0) dmabufs[i].refs -= 1;
+            if (dmabufs[i].refs == 0) {
+                _ = dumbDestroy(dmabufs[i].handle);
+                dmabufs[i].live = false;
+                mmio.say("kms: dmabuf token="); mmio.sayDec(token);
+                mmio.say(" released (refs=0)\n");
+            }
+            return;
+        }
+    }
+}
+
+// ---- producer render ---------------------------------------------------------
+// A stand-in for a real producer (draw surface / app). Renders a window-
+// like surface into the dmabuf's CPU map: dark backdrop, a title bar, a
+// gradient client area, an accent block. Deliberately unlike the M1/M2
+// test patterns — proof the scanned content came from THIS producer.
+fn producerRender(buf: *const DumbBuffer, seed: u32) void {
+    const px: [*]volatile u32 = buf.map.?;
+    const row = buf.pitch / 4;
+    const w = buf.width;
+    const h = buf.height;
+    // window rect, centred, ~70% of screen
+    const wx0 = w / 6;
+    const wy0 = h / 5;
+    const wx1 = w - wx0;
+    const wy1 = h - wy0;
+    const titleH = 64;
+    var y: u32 = 0;
+    while (y < h) : (y += 1) {
+        var x: u32 = 0;
+        while (x < w) : (x += 1) {
+            var c: u32 = 0x00101020; // desktop
+            if (x >= wx0 and x < wx1 and y >= wy0 and y < wy1) {
+                if (y < wy0 + titleH) {
+                    c = 0x003040C0; // title bar
+                } else {
+                    // client gradient shifts with seed -> producer-owned
+                    const gx = x - wx0;
+                    const gy = y - wy0 - titleH;
+                    c = @as(u32, 0x00200000) |
+                        (@as(u32, gx * 255 / (wx1 - wx0)) << 16) |
+                        (@as(u32, (gy + seed * 7) * 255 / (wy1 - wy0)) << 8) |
+                        @as(u32, 0x80);
+                }
+            }
+            // three "window dots" top-left of title bar
+            if (y >= wy0 + 16 and y < wy0 + 48 and
+                (x == wx0 + 24 or x == wx0 + 56 or x == wx0 + 88))
+                c = 0x00FFFFFF;
+            px[@as(usize, @intCast(y)) * @as(usize, @intCast(row)) +
+                @as(usize, @intCast(x))] = c;
+        }
+    }
+    stage("kms: producer rendered into dmabuf (no i915 regs touched)");
+}
+
+// runDmabuf: the M3 demo — producer renders, exports token; display
+// imports, atomic-flips, collects vblank. Requires live 'kms' modeset.
+pub fn runDmabuf() void {
+    stage("kms: ==== M3 dmabuf producer->scanout ====");
+    if (!probe()) return;
+    if (gdev.scanout == null) {
+        stage("kms: no live scanout — run 'kms' first");
+        return;
+    }
+    // 1. PRODUCER: create shareable buffer + render content into it.
+    const tok = dmabufCreate(1920, 1080) orelse return;
+    const pbuf = dmabufMap(tok) orelse {
+        stage("kms: FAIL dmabufMap — producer lost its buffer");
+        dmabufUnref(tok);
+        return;
+    };
+    producerRender(pbuf, 3);
+    // 2. HANDOFF: display imports the token (the compositor seam).
+    const h = dmabufImport(tok) orelse {
+        dmabufUnref(tok);
+        return;
+    };
+    // 3. DISPLAY: atomic check->test->commit pageflip of the imported buf.
+    if (!flipCommit(h)) {
+        dmabufUnref(tok); // drop importer ref
+        return;
+    }
+    _ = vblankWait(2);
+    // 4. LIFETIME: producer drops its ref; display ref keeps it alive
+    //    while scanned. Buffer stays live until next flip/unref.
+    dmabufUnref(tok); // producer done -> refs 2->1 (display still holds)
+    text.puts("KORU M3 dmabuf live — producer->scanout decoupled\n");
+    stage("kms: ==== M3 dmabuf complete ====");
+}
