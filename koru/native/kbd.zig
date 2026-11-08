@@ -228,6 +228,49 @@ fn kawait(want: u8) u8 {
     return 0;
 }
 
+// ---- shared 8042 primitives for the aux/mouse probe (M4) -------------------
+// The aux channel shares this controller — mouse.zig's bring-up reuses
+// these exact proven inb/outb/status-bit waits rather than duplicating
+// (and mis-timing) them. Command bytes -> 0x64, data bytes -> 0x60.
+
+// write a controller command byte to port 0x64, IBF-safe (same wait
+// ksend uses: bit1 set = input buffer full = keep waiting).
+pub fn ctlWrite(cmd: u8) void {
+    var i: usize = 0;
+    while (inb(STATUS) & 0x02 != 0) : (i += 1) {
+        if (i > 1000000) return;
+    }
+    outb(STATUS, cmd);
+}
+
+// write a data byte to port 0x60 (device-bound), IBF-safe.
+pub fn dataWrite(b: u8) void {
+    var i: usize = 0;
+    while (inb(STATUS) & 0x02 != 0) : (i += 1) {
+        if (i > 1000000) return;
+    }
+    outb(DATA, b);
+}
+
+// is an output byte latched? (status bit0 = OBF)
+pub fn outAvail() bool {
+    return inb(STATUS) & 1 != 0;
+}
+// read one output byte from 0x60 — caller MUST have seen outAvail first.
+pub fn readOut() u8 {
+    return inb(DATA);
+}
+// flush every latched output byte — call BEFORE a command whose response
+// we want to be the *next* byte, so a stale scancode can't be mistaken
+// for the reply (the 8042diag selftest-bad bug: read-first-byte grabbed a
+// leftover byte instead of awaiting the real 0x55).
+pub fn drainOut() void {
+    var guard: usize = 0;
+    while (outAvail() and guard < 64) : (guard += 1) {
+        _ = readOut();
+    }
+}
+
 pub fn init() void {
     // drain a stale byte the firmware/loader may have left in the buffer
     while (inb(STATUS) & 1 != 0) _ = inb(DATA);

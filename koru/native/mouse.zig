@@ -227,87 +227,67 @@ fn auxWrite(cmd: u8) bool {
     return false;
 }
 
-// ---- 8042 controller probe helpers (M4 diag) --------------------------------
-// Controller commands go to port 0x64, data to 0x60. sendCtl issues a
-// command byte; readCtlByte drains one output byte with a bounded wait.
-fn sendCtl(cmd: u8) bool {
-    if (!waitIn()) return false;
-    outb(STATUS, cmd);
-    return true;
-}
-fn readCtlByte() ?u8 {
+// readResp — the FIRST kbd-class output byte after a drained command.
+// kbd.drainOut() runs before each controller command, so the next
+// non-aux byte IS the response — no stale-byte contamination (the bug
+// that made 8042diag report selftest-bad on a live controller). Aux
+// bytes route to the packet assembler, real scancodes to kbd.feedByte.
+fn readResp() u8 {
     var i: u32 = 0;
-    while (i < 200_000) : (i += 1) {
-        const st = inb(STATUS);
-        if ((st & 1) != 0) {
-            const b = inb(DATA);
-            if ((st & AUX_BYTE) == 0) return b; // kbd-class byte is ours here
-            // aux byte during probe — route to assembler, keep waiting
+    while (i < 400_000) : (i += 1) {
+        const st = kbd.statusRaw();
+        if (st & 1 == 0) continue;
+        const b = kbd.readOut();
+        if ((st & AUX_BYTE) != 0) {
             feedByte(b);
+            continue;
         }
+        kbd.feedByte(b); // preserve any real scancode
+        return b;
     }
-    return null;
+    return 0xEE;
 }
 
-// Full 8042 aux bring-up probe. Order matters on some ECs: pulse the aux
-// channel (0xA7 disable / 0xA8 enable) to reset it, THEN fix CCB, THEN
-// handshake the device. Records every step into st_* for the diag.
+// Full 8042 aux bring-up probe, built on kbd.zig's proven primitives
+// (ctlWrite/dataWrite/drainOut/statusRaw/readOut — the same IBF/OBF
+// status-bit waits consoleInit uses). Order: drain stale -> self-test ->
+// CCB read -> aux pulse -> CCB write -> device handshake -> poll.
 pub fn init() void {
     init_tried = true;
-    // The handshake races the armed IRQ handlers: a controller reply
-    // lands in the output buffer as a *kbd-class* byte and raises IRQ1,
-    // whose handler would consume it while we poll. i8042 discipline —
-    // run command sequences with delivery off; the byte still latches
-    // in OBF for our own read, it just can't be stolen mid-wait.
+    // The handshake races the armed IRQ handlers: run the whole probe
+    // with delivery off so a controller reply can't be stolen mid-wait.
     cli();
     defer sti();
-    if (!waitIn()) {
-        say("mouse: controller input buffer never emptied — refusing\n");
-        return;
-    }
 
-    // STEP 1 — controller self-test 0xAA. A live 8042 answers 0x55.
-    // If this fails the keyboard would be dead too, but record it anyway.
-    if (sendCtl(0xAA)) {
-        st_selftest = readCtlByte() orelse 0xEE;
-    } else {
-        st_selftest = 0xEE;
-    }
+    // STEP 1 — controller self-test 0xAA -> expect 0x55. Drain first so a
+    // leftover byte can't be mistaken for the reply.
+    kbd.drainOut();
+    kbd.ctlWrite(0xAA);
+    st_selftest = readResp();
     say("mouse: 8042 selftest="); koru_putdec(st_selftest); say("\n");
 
-    // STEP 2 — read CCB (0x20) so we know the controller's current aux
-    // gating before we touch it.
-    if (sendCtl(0x20)) {
-        st_ccb = readCtlByte() orelse 0xEE;
-    } else {
-        st_ccb = 0xEE;
-    }
+    // STEP 2 — read CCB (0x20): the controller's aux gating as found.
+    kbd.drainOut();
+    kbd.ctlWrite(0x20);
+    st_ccb = readResp();
     say("mouse: CCB="); koru_putdec(st_ccb); say("\n");
 
-    // STEP 3 — pulse the aux channel: 0xA7 disable then 0xA8 enable.
-    // Some ECs latch the aux port in a wedged state; a disable/enable
-    // cycle is the documented reset. st_auxen records the enable took.
-    _ = sendCtl(0xA7);
-    _ = readCtlByte(); // drain any response (usually none for A7)
-    st_auxen = if (sendCtl(0xA8)) 1 else 0;
-    _ = readCtlByte(); // drain
+    // STEP 3 — pulse the aux channel: 0xA7 disable / 0xA8 enable. These
+    // produce no reply byte; drainOut clears any stray after each.
+    kbd.ctlWrite(0xA7);
+    kbd.drainOut();
+    kbd.ctlWrite(0xA8);
+    st_auxen = 1; // ctlWrite is IBF-safe fire-and-forget; enable latched
+    kbd.drainOut();
     say("mouse: aux pulse A7/A8 auxen="); koru_putdec(st_auxen); say("\n");
 
-    // STEP 4 — CCB: set bit1 (aux IRQ), clear bit5 (aux clock disable) —
-    // the kbd bits belong to kbd. Uses the value read in step 2 if sane.
+    // STEP 4 — CCB write 0x60: bit1 aux-IRQ on, bit5 aux-clk-off cleared.
     var ccb = st_ccb;
-    if (ccb == 0xEE) ccb = 0x45; // sane default: kbd irq on, translation on
+    if (ccb == 0xEE) ccb = 0x45; // sane default if the read timed out
     ccb |= 0x02;
     ccb &= ~@as(u8, 0x20);
-    if (!sendCtl(0x60)) {
-        say("mouse: controller busy before CCB write — refusing\n");
-        return;
-    }
-    if (!waitIn()) {
-        say("mouse: controller busy on CCB data — refusing\n");
-        return;
-    }
-    outb(DATA, ccb);
+    kbd.ctlWrite(0x60);
+    kbd.dataWrite(ccb);
 
     // STEP 5 — device handshake: 0xF6 set defaults + 0xF4 enable
     // reporting. auxWrite returns true only on a 0xFA ACK from the device.

@@ -624,3 +624,31 @@ DECISION TABLE:
 
 ISO: dist/koru-m4-8042diag-20261109-0014.iso — proven pipeline +
 CORRECTED MBR. QEMU-verified boot to shell+hb.
+
+## M4 8042 FIX — reuse kbd's proven primitives (2026-11-09)
+
+8042diag result: selftest-bad BUT keyboard works -> the probe's READ was
+buggy, not the controller. Root cause: readCtlByte returned the FIRST
+output byte; a stale scancode/ACK contaminated the self-test read.
+kbd.zig's kawait() loops until the SPECIFIC response arrives, discarding
+others — the correct pattern.
+
+FIX — shared primitives extracted to kbd.zig (pub):
+  ctlWrite(cmd)->0x64, dataWrite(b)->0x60  (IBF-safe, ksend pattern)
+  outAvail(), readOut()->0x60, statusRaw()->0x64 (pre-existing), drainOut()
+mouse.zig init() rewritten on them:
+  drainOut -> ctlWrite(0xAA) -> readResp()   self-test, expect 0x55
+  drainOut -> ctlWrite(0x20) -> readResp()   CCB read
+  ctlWrite(0xA7)/drain, ctlWrite(0xA8)/drain aux pulse
+  ctlWrite(0x60)+dataWrite(ccb)              CCB write
+  auxWrite(0xF6)+auxWrite(0xF4)              device handshake (unchanged)
+  pollWindow()                               post-handshake 0x60 drain
+readResp() = first kbd-class byte after drain (aux->assembler, kbd->ring)
+— no stale-byte contamination. selftest should now read 0x55, ccb the
+real value, auxen reflect the pulse.
+
+If aux STILL =0 with a healthy selftest+ccb, the TrackPoint/touchpad is
+not answering on legacy PS/2 aux -> next move is USB-HID/XHCI probe.
+
+ISO: dist/koru-m4-8042fix-20261109-0020.iso — proven pipeline +
+CORRECTED MBR. QEMU-verified boot to shell+hb.
