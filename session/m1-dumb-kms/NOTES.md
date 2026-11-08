@@ -552,3 +552,43 @@ ISO: dist/koru-m4-mouse-20261108-2359.iso — proven pipeline + CORRECTED
 MBR. QEMU-verified boot to shell+hb (no PS/2 mouse in QEMU -> mouse.init
 fails gracefully, shell intact). Real HW: 'mouse' toggles cursor; move
 TrackPoint -> arrow follows, UDP 'cursor: move' + 'cursor: enabled'.
+
+## M4 DIAGNOSTIC — split no-packets vs sprite-invisible (2026-11-09)
+
+Real T590: 'mouse' toggles cleanly (UDP cursor:enabled/disabled) but ZERO
+cursor:move markers + NO arrow on panel. Two candidate failures:
+  (A) PS/2 aux not streaming — detect/enable/IRQ12 not delivering
+      (T590 TrackPoint may not be PS2 aux, or needs different init).
+  (B) sprite not compositing to the VISIBLE surface — putPx may write a
+      surface that isn't scanned (GRUB LFB vs post-kms rebase dumb buf),
+      or XOR-blend at wrong coords/format.
+
+DIAGNOSTIC BUILD splits them:
+  mouse.zig  +Diag{tried,aux_online,irq_armed,packets,desyncs,overflows,
+             drops} + diag(); init() now records aux_online (device ACK'd
+             0xF6+0xF4) and irq_armed (IRQ12 unmasked) as bools.
+  cursor.zig enable() FORCES sprite to fixed corner (50,50) regardless of
+             motion -> a STATIC arrow proves the draw path reaches the
+             visible surface even with zero packets. UDP markers emitted
+             at arm time (comptime tags):
+               cursor:aux=1/0    PS/2 aux detected+enabled at boot
+               cursor:irq=1/0    IRQ12 unmasked
+               cursor:pkts=live/0 cumulative packets received
+               cursor:sprite@50,50 draw path executed on live fb surface
+             report() prints full numeric diag on console.
+
+DECISION TABLE for the flash:
+  aux=0                      -> (A) aux never came up; TrackPoint isn't
+                               PS2-aux or needs different init. Sprite
+                               still tests (B) independently.
+  aux=1 irq=1 pkts=0        -> aux online but no packets -> IRQ12/packet
+                               routing or device-not-moving issue.
+  aux=1 irq=1 pkts=live     -> packets flowing but no move -> decoder/
+                               event-ring issue (desync/ovf/drop counts).
+  sprite@50,50 + NO arrow    -> (B) putPx hits wrong surface / bad coords.
+  sprite@50,50 + arrow seen  -> sprite path GOOD -> issue is purely (A)
+                               no-packets; cursor would move if packets
+                               arrived.
+
+ISO: dist/koru-m4-mousediag-20261109-0004.iso — proven pipeline +
+CORRECTED MBR. QEMU-verified boot to shell+hb.

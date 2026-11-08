@@ -56,6 +56,35 @@ var head: usize = 0;
 var tail: usize = 0;
 var drops: u64 = 0;
 
+// ---- M4 diagnostic state ---------------------------------------------------
+// init() outcome + cumulative counters, exposed for the 'mouse' command so
+// a silent cursor splits "aux never streamed" from "sprite not visible".
+var aux_online: bool = false; // device ACK'd enable -> detected+online
+var irq_armed: bool = false;  // IRQ12 unmasked at the IOAPIC/PIC
+var init_tried: bool = false;
+
+// diagnostic snapshot for the shell — all fields the oracle needs.
+pub const Diag = extern struct {
+    tried: u32,
+    aux_online: u32,
+    irq_armed: u32,
+    packets: u64,
+    desyncs: u64,
+    overflows: u64,
+    drops: u64,
+};
+pub fn diag() Diag {
+    return .{
+        .tried = @intFromBool(init_tried),
+        .aux_online = @intFromBool(aux_online),
+        .irq_armed = @intFromBool(irq_armed),
+        .packets = packets,
+        .desyncs = desyncs,
+        .overflows = overflows,
+        .drops = drops,
+    };
+}
+
 fn push(ev: kbd.InEv) void {
     const next = (head + 1) % ring.len;
     if (next == tail) {
@@ -185,6 +214,7 @@ fn auxWrite(cmd: u8) bool {
 }
 
 pub fn init() void {
+    init_tried = true;
     // The handshake races the armed IRQ handlers: a controller reply
     // lands in the output buffer as a *kbd-class* byte and raises IRQ1,
     // whose handler would consume it while we poll. i8042 discipline —
@@ -225,6 +255,8 @@ pub fn init() void {
         say("mouse: device refused enable — no pointer input\n");
         return;
     }
+    aux_online = true; // device ACK'd both commands -> detected+enabled
     koru_irq_unmask(12);
+    irq_armed = true;
     say("mouse: PS/2 aux online, IRQ12 unmasked\n");
 }

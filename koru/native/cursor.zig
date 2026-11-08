@@ -78,13 +78,29 @@ fn hideSprite() void {
 }
 
 // Centre the cursor on the current surface and arm it.
+// M4 diagnostic: sprite is FORCED to a fixed corner (50,50) so a static
+// arrow on-panel proves the draw path reaches the visible surface even if
+// no mouse packets ever stream. Motion still moves it if packets arrive.
 pub fn enable() void {
     const d = fb.cursorDims();
     if (!d.live) return;
-    cx = @intCast(d.w / 2);
-    cy = @intCast(d.h / 2);
+    cx = 50;
+    cy = 50;
     enabled = true;
     init_d = true;
+    // UDP markers split the two failure modes:
+    //   aux=1/0      -> PS/2 aux device detected+enabled at boot
+    //   irq=1/0      -> IRQ12 unmasked
+    //   pkts=live/0  -> cumulative packets received so far
+    //   sprite@50,50 -> draw path executed on the live fb surface
+    const dg = mouse.diag();
+    if (dg.aux_online != 0) net.mark("cursor:aux=1") else net.mark("cursor:aux=0");
+    if (dg.irq_armed != 0) net.mark("cursor:irq=1") else net.mark("cursor:irq=0");
+    if (dg.packets != 0) net.mark("cursor:pkts=live") else net.mark("cursor:pkts=0");
+    hideSprite();
+    drawSprite(cx, cy);
+    shown = true;
+    net.mark("cursor:sprite@50,50");
     net.mark("cursor: enabled");
 }
 
@@ -131,9 +147,12 @@ pub fn tick() bool {
     return true;
 }
 
-// One-line status for the shell 'mouse' command.
+// One-line status for the shell 'mouse' command — full M4 diagnostic:
+// aux detect/enable, IRQ12 arm, cumulative packet/desync/overflow/drop
+// counters, plus cursor pos + move count.
 pub fn report() void {
     const d = fb.cursorDims();
+    const dg = mouse.diag();
     say("mouse: cursor ");
     koru_putdec(@intCast(@max(cx, 0)));
     say(",");
@@ -146,7 +165,14 @@ pub fn report() void {
     koru_putdec(moves);
     say(" btns=");
     koru_putdec(pressed_n);
-    say(" enabled=");
+    say(" en=");
     say(if (enabled) "1" else "0");
+    say("\nmouse: aux tried="); koru_putdec(dg.tried);
+    say(" online="); koru_putdec(dg.aux_online);
+    say(" irq12="); koru_putdec(dg.irq_armed);
+    say(" pkts="); koru_putdec(dg.packets);
+    say(" desync="); koru_putdec(dg.desyncs);
+    say(" ovf="); koru_putdec(dg.overflows);
+    say(" drop="); koru_putdec(dg.drops);
     say("\n");
 }
