@@ -310,3 +310,16 @@ ISO: `dist/koru-m1-sizepad-20261108-2130.iso` (14,831,616 B, MBR
                          diff m1full vs m1nokms symtab+relocs, find the
                          bad symbol (likely an i915 fn newly reachable
                          via kms that miscompiles or bad reloc)
+
+## SIZE THRESHOLD BISECT — pad32 ISO (2026-11-08)
+
+sizepad-64KB confirmed SIZE/LAYOUT crash on T590 (good kernel + benign
+pad, no kms code, crashes identically). Analysis: all boot structures
+(pml4/pdpt/pd, 512KB stack) live INSIDE .bss, identity-mapped 0-32MiB;
+pmm.init reserve() is bookkeeping only — NO intra-kernel collision.
+Corrected _end values: good=0x6C9918, sizepad64=0x6D9918 (64KB growth).
+Next data point: pad32 (0x8000 rodata) -> _end=0x6D1918, halfway.
+ISO: dist/koru-m1-sizepad32-20261108-2141.iso (14,798,848 B).
+  pad32 crashes -> threshold <=32KB growth (low boundary ~7MB)
+  pad32 boots    -> threshold in 32-64KB -> narrow with 48KB next
+QEMU can't reproduce (tolerates any size) — HW flash is the only oracle.
