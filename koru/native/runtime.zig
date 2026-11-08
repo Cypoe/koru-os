@@ -107,7 +107,11 @@ pub export fn fwrite(ptr: [*]const u8, size: usize, nmemb: usize, stream: ?*anyo
 
 // ---- heap contract --------------------------------------------------------
 
-const HEAP_SIZE = 4 * 1024 * 1024;
+const HEAP_SIZE = 4 * 1024 * 1024 - 256 * 1024; // 3.75 MiB — .bss shrink: real-HW
+// boot crashes when _end crosses ~0x6C9918-0x6D1918 (size/layout boundary,
+// QEMU tolerates). 256 KiB of heap slack pulls _end ~192 KiB under the
+// working threshold while keeping all M1 code; shell path never touches
+// the bump heap (only prog.main's __koru_bare does).
 var heap: [HEAP_SIZE]u8 align(4096) = undefined;
 var heap_off: usize = 0;
 

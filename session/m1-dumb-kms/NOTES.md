@@ -323,3 +323,14 @@ ISO: dist/koru-m1-sizepad32-20261108-2141.iso (14,798,848 B).
   pad32 crashes -> threshold <=32KB growth (low boundary ~7MB)
   pad32 boots    -> threshold in 32-64KB -> narrow with 48KB next
 QEMU can't reproduce (tolerates any size) — HW flash is the only oracle.
+
+## HEAP-SHRINK UNBLOCK ISO (2026-11-08) — _end back under threshold
+
+sizepad32 confirmed threshold <32KB growth. Analysis: kernel image fully
+GRUB-reserved (last PT_LOAD memsz reaches _end); no intra-kernel
+collision; .bss dominated by runtime heap (4MiB). Fix: HEAP_SIZE
+4MiB->3.75MiB (-256KiB) in runtime.zig — shell/console path never uses
+the bump heap (only prog.main's __koru_bare). Result: full M1 kernel
+(kms+i915+shell) _end=0x699918, 192KiB under working 0x6C9918.
+ISO: dist/koru-m1-heapfix-20261108-2149.iso (15,022,080 B).
+Principled pmm-reserve of GRUB module/LFB regions = follow-up commit.
