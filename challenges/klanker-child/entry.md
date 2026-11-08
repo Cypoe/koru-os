@@ -40,10 +40,17 @@ fetch-pyroot + klanker/agents-* sources flattened into the stdlib dir
 - **`KL thread refused RuntimeError can't start new thread`** — the
   clone-thread shape (`0x7d0f00`) — `clone-threads` stands as the
   rung, now proven by klanker's own demand.
-- **`KL chat rc 1` → `Turn error: LLM_BASE_URL required`** — after
-  the writable-RAM layer and the marshal-budget rulings below, `chat`'s
-  wall is klanker's own provider config (no model endpoint in the
-  payload) — the application-provider gap, not a kernel/fs gap.
+- **`KL chat rc 1` → `Turn error: <urlopen error [Errno 97] Address
+  family not supported by protocol>`** — the payload now carries a
+  provider manifest: `/providers/lmstudio.local.json` (the
+  `AGENTS_PROVIDERS_DIR` overlay convention — host URLs ride the
+  payload, never the package) names LM Studio's llama-server on the
+  QEMU host via slirp's `10.0.2.2` alias, model `qwen3.5-4b`, auth
+  disabled. Manifest resolution, request build, and urlopen all
+  cleared; the refusal is `socket(AF_INET)` → `-97 EAFNOSUPPORT` —
+  the net stack is the named provider gap. En route the trimmed
+  stdlib needed `stringprep.py` (the `idna` codec's dependency —
+  urllib's host normalization).
 - `getcwd` returns `/` (the view root is the cwd model); `readlink`
   ENOSYS — survived, named.
 - `nr=0x19 readv` refused in the bag → python fell back cleanly.

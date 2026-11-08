@@ -1,0 +1,13 @@
+{
+  "name": "lmstudio.local",
+  "kind": "openai_compat",
+  "when": "on_request",
+  "cadence": "on_request",
+  "verb": "chat.completions",
+  "rests_on": "LM Studio's own llama-server backend on the QEMU host, reached through slirp's 10.0.2.2 host-gateway alias; OpenAI /v1 shape, token auth disabled.",
+  "expected_exit": 0,
+  "first_byte_sec": 90,
+  "idle_sec": 20,
+  "url": "http://10.0.2.2:1234/v1",
+  "model": "qwen3.5-4b"
+}

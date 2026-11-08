@@ -34,6 +34,11 @@ cp -r "$REPOS/agents-harness/runner" "$SP/" 2>/dev/null || true
 find "$SP" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 cp "$ROOT/koruos/native/tests/kmain.py" "$STAGE/root/main.py"
+# the provider-manifest overlay — AGENTS_PROVIDERS_DIR=/providers in
+# the probe; lmstudio.local names LM Studio's llama-server on the
+# QEMU host (slirp 10.0.2.2) with literal url+model, auth disabled.
+mkdir -p "$STAGE/root/providers"
+cp "$ROOT/koruos/native/tests/lmstudio.local.json" "$STAGE/root/providers/"
 
 cd "$STAGE/root"
 find . -mindepth 1 | LC_ALL=C sort | cpio -o -H newc > "$STAGE/kroot.cpio"

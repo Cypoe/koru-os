@@ -89,7 +89,9 @@ _envbig = max(os.environ.items(), key=lambda kv: len(kv[1]), default=("-", "-"))
 print("KL envsz", _envsz, "envn", len(os.environ), "biggest", _envbig[0], len(_envbig[1]))
 try:
     r = subprocess.run(
-        [PYBIN, "-m", "klanker", "chat", "ping"],
+        [PYBIN, "-m", "klanker", "chat", "ping",
+         "--provider", "lmstudio.local"],
+        env={**os.environ, "AGENTS_PROVIDERS_DIR": "/providers"},
         capture_output=True, text=True, timeout=150)
     print("KL chat rc", r.returncode)
     if r.returncode != 0:

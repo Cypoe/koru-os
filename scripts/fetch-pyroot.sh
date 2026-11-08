@@ -73,7 +73,7 @@ for p in encodings codecs.py io.py abc.py _collections_abc.py \
          bisect.py random.py hashlib.py copy.py tempfile.py \
          struct.py zoneinfo _zoneinfo _compat_pickle.py pickle.py \
          email mimetypes.py quopri.py uu.py calendar.py \
-         http ftplib.py nntplib.py sysconfig.py \
+         http ftplib.py nntplib.py sysconfig.py stringprep.py \
          _aix_support.py _osx_support.py _bootsubprocess.py socketserver.py; do
   [ -e "$PY/$p" ] && mkdir -p "$STAGE/keep/$(dirname "$p")" && cp -r "$PY/$p" "$STAGE/keep/$p"
 done
