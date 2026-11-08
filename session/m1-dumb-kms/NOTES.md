@@ -221,3 +221,37 @@ ISO: `dist/koru-m1-earlyfb4-20261108-2033.iso` (15,056,896 B, MBR
   still cycles, no banner ........... death genuinely pre-kmain
                                    (GRUB load or _start) — no Zig marker
                                    can see it; instrument _start asm next
+
+## BISECT ISO — earlyfb fully disabled (2026-11-08, commit cfbd741)
+
+All four earlyfb ISOs (earlyfb1-4) crash pre-NIC on real T590: panel
+flashes, returns to USB loader, ZERO UDP, nothing on screen. Known-good
+i915-net-1949 boots fine to shell+heartbeat on the SAME hardware/flash
+path. Host ELF diff: M1 loads fine (same entry 0x100050, mb2 magic
+@0x1020 len=48, same 7-phdr) -> RUNTIME crash, not load. earlyfb4 used
+proven mmio.map + blind-safe geometry validation and STILL crashed with
+no marker -> suspect is earlyfb's FAULT path itself (fb write inside
+isrReport on a bad/unmapped fb -> #PF->#DF->triple fault->reset,
+invisible) OR a deeper M1 build bug.
+
+BISECT: removed ALL earlyfb wiring. boot.zig drops the earlyfb import +
+earlyfb.init/earlyfb.stage calls; faults.zig drops the earlyfb import +
+earlyfb.fault(vec) in isrReport (breaks the fault-handler fb-write
+recursion — the exact suspected triple-fault mechanism). Both files now
+BYTE-IDENTICAL to merge-base fc509df. earlyfb.zig left on disk but fully
+unreferenced -> lazy codegen emits nothing. kms.zig + shell commands
+kept (shell-gated/inert). Boot path = proven faults->pmm->net->fb.init->
+shell, identical to the working build for every pre-NIC stage.
+
+QEMU -cdrom verified: pmm->pci->e1000e->net->fb-init->shell->hb, ZERO
+efb markers, fast boot (no dwell). ISO below.
+
+ISO: `dist/koru-m1-bisect-noefb-20261108-2111.iso` (15,022,080 B, MBR
+0x1be=0x83 LBA=0x10). Flash this ONE — it answers the fork:
+  boots clean to shell+UDP ........ earlyfb was the crasher (fault-path
+                                  fb-write recursion); reintroduce a
+                                  SAFER oracle or drop it and proceed to
+                                  kms/kmsbuf M1 testing
+  STILL crashes pre-NIC ........... deeper M1 build bug (kms.zig /
+                                  i915.zig / shell changes), NOT the
+                                  oracle -> bisect those next
