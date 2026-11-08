@@ -592,3 +592,35 @@ DECISION TABLE for the flash:
 
 ISO: dist/koru-m4-mousediag-20261109-0004.iso — proven pipeline +
 CORRECTED MBR. QEMU-verified boot to shell+hb.
+
+## M4 8042 AUX HANDSHAKE DEBUG (2026-11-09)
+
+Diag result: sprite draw WORKS (arrow at 50,50 visible) but aux=0 irq=0
+pkts=0 — PS/2 AUX device never ACK'd enable. TrackPoint+touchpad silent.
+
+mouse.init() rewritten as a full 8042 probe (sendCtl/readCtlByte helpers):
+  STEP1 selftest 0xAA -> st_selftest (0x55=controller OK)
+  STEP2 read CCB 0x20  -> st_ccb (controller's aux gating before touch)
+  STEP3 aux pulse 0xA7 disable / 0xA8 enable -> st_auxen (EC wedge reset)
+  STEP4 CCB write 0x60: bit1 aux-irq on, bit5 aux-clk-off cleared
+  STEP5 device handshake auxWrite(0xF6)+auxWrite(0xF4) -> aux_online
+  STEP6 pollWindow(): bounded 0x60 drain post-handshake -> st_pollbytes
+       (catches unsolicited/enable-triggered traffic even if IRQ12 masked)
+
+Diag extended: +selftest,ccb,auxen,pollbytes. cursor.enable() emits UDP
+markers for each step (comptime tags): 8042=selftest-ok/bad, auxen=1/0,
+poll=live/0, aux=1/0, irq=1/0, pkts=live/0, sprite@50,50. report() prints
+all numeric fields.
+
+DECISION TABLE:
+  selftest!=0x55         -> 8042 itself unhealthy (kbd would be dead too)
+  selftest=0x55 auxen=0  -> aux port enable refused at controller level
+  auxen=1 aux=0 poll=0   -> device NAK'd handshake: not PS/2 aux, or EC
+                            gates pointing devices (needs EC cmd / USB-HID)
+  auxen=1 aux=0 poll>0   -> bytes arriving but no ACK -> framing/desync
+  aux=1 irq=0 pkts>0     -> packets stream but IRQ12 not firing -> PIC
+                            slave/cascade mask issue (IRQ12->int 0x2C)
+  aux=1 irq=1 pkts>0     -> fully up; motion should move cursor
+
+ISO: dist/koru-m4-8042diag-20261109-0014.iso — proven pipeline +
+CORRECTED MBR. QEMU-verified boot to shell+hb.

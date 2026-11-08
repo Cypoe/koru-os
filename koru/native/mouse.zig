@@ -21,6 +21,7 @@ extern fn koru_irq_unmask(irq: u8) void;
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
 extern fn koru_input_wake() callconv(.c) void;
+extern fn koru_putdec(v: u64) void;
 
 const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64;
@@ -57,11 +58,16 @@ var tail: usize = 0;
 var drops: u64 = 0;
 
 // ---- M4 diagnostic state ---------------------------------------------------
-// init() outcome + cumulative counters, exposed for the 'mouse' command so
-// a silent cursor splits "aux never streamed" from "sprite not visible".
+// init() outcome + cumulative counters + per-step handshake results,
+// exposed for the 'mouse' command so a silent cursor splits "aux never
+// streamed" from "sprite not visible". step* fields are the 8042 probe.
 var aux_online: bool = false; // device ACK'd enable -> detected+online
 var irq_armed: bool = false;  // IRQ12 unmasked at the IOAPIC/PIC
 var init_tried: bool = false;
+var st_selftest: u8 = 0;   // 0xAA result byte (0x55 = controller OK)
+var st_ccb: u8 = 0;        // CCB read back via 0x20
+var st_auxen: u8 = 0;      // 0xA8 aux-enable accepted (1) or refused (0)
+var st_pollbytes: u32 = 0; // bytes seen polling 0x60 after enable
 
 // diagnostic snapshot for the shell — all fields the oracle needs.
 pub const Diag = extern struct {
@@ -72,6 +78,10 @@ pub const Diag = extern struct {
     desyncs: u64,
     overflows: u64,
     drops: u64,
+    selftest: u32,
+    ccb: u32,
+    auxen: u32,
+    pollbytes: u32,
 };
 pub fn diag() Diag {
     return .{
@@ -82,6 +92,10 @@ pub fn diag() Diag {
         .desyncs = desyncs,
         .overflows = overflows,
         .drops = drops,
+        .selftest = st_selftest,
+        .ccb = st_ccb,
+        .auxen = @intFromBool(st_auxen != 0),
+        .pollbytes = st_pollbytes,
     };
 }
 
@@ -213,6 +227,31 @@ fn auxWrite(cmd: u8) bool {
     return false;
 }
 
+// ---- 8042 controller probe helpers (M4 diag) --------------------------------
+// Controller commands go to port 0x64, data to 0x60. sendCtl issues a
+// command byte; readCtlByte drains one output byte with a bounded wait.
+fn sendCtl(cmd: u8) bool {
+    if (!waitIn()) return false;
+    outb(STATUS, cmd);
+    return true;
+}
+fn readCtlByte() ?u8 {
+    var i: u32 = 0;
+    while (i < 200_000) : (i += 1) {
+        const st = inb(STATUS);
+        if ((st & 1) != 0) {
+            const b = inb(DATA);
+            if ((st & AUX_BYTE) == 0) return b; // kbd-class byte is ours here
+            // aux byte during probe — route to assembler, keep waiting
+            feedByte(b);
+        }
+    }
+    return null;
+}
+
+// Full 8042 aux bring-up probe. Order matters on some ECs: pulse the aux
+// channel (0xA7 disable / 0xA8 enable) to reset it, THEN fix CCB, THEN
+// handshake the device. Records every step into st_* for the diag.
 pub fn init() void {
     init_tried = true;
     // The handshake races the armed IRQ handlers: a controller reply
@@ -226,37 +265,86 @@ pub fn init() void {
         say("mouse: controller input buffer never emptied — refusing\n");
         return;
     }
-    outb(STATUS, 0xA8); // enable aux channel
-    // CCB: set bit1 (aux IRQ), clear bit5 (aux clock disable) — the kbd
-    // bits belong to kbd.
-    if (!waitIn()) {
-        say("mouse: controller busy before CCB read — refusing\n");
-        return;
+
+    // STEP 1 — controller self-test 0xAA. A live 8042 answers 0x55.
+    // If this fails the keyboard would be dead too, but record it anyway.
+    if (sendCtl(0xAA)) {
+        st_selftest = readCtlByte() orelse 0xEE;
+    } else {
+        st_selftest = 0xEE;
     }
-    outb(STATUS, 0x20);
-    if (!waitOut()) {
-        say("mouse: CCB read timed out — aux channel not answering\n");
-        return;
+    say("mouse: 8042 selftest="); koru_putdec(st_selftest); say("\n");
+
+    // STEP 2 — read CCB (0x20) so we know the controller's current aux
+    // gating before we touch it.
+    if (sendCtl(0x20)) {
+        st_ccb = readCtlByte() orelse 0xEE;
+    } else {
+        st_ccb = 0xEE;
     }
-    var ccb = inb(DATA);
+    say("mouse: CCB="); koru_putdec(st_ccb); say("\n");
+
+    // STEP 3 — pulse the aux channel: 0xA7 disable then 0xA8 enable.
+    // Some ECs latch the aux port in a wedged state; a disable/enable
+    // cycle is the documented reset. st_auxen records the enable took.
+    _ = sendCtl(0xA7);
+    _ = readCtlByte(); // drain any response (usually none for A7)
+    st_auxen = if (sendCtl(0xA8)) 1 else 0;
+    _ = readCtlByte(); // drain
+    say("mouse: aux pulse A7/A8 auxen="); koru_putdec(st_auxen); say("\n");
+
+    // STEP 4 — CCB: set bit1 (aux IRQ), clear bit5 (aux clock disable) —
+    // the kbd bits belong to kbd. Uses the value read in step 2 if sane.
+    var ccb = st_ccb;
+    if (ccb == 0xEE) ccb = 0x45; // sane default: kbd irq on, translation on
     ccb |= 0x02;
     ccb &= ~@as(u8, 0x20);
-    if (!waitIn()) {
+    if (!sendCtl(0x60)) {
         say("mouse: controller busy before CCB write — refusing\n");
         return;
     }
-    outb(STATUS, 0x60);
     if (!waitIn()) {
         say("mouse: controller busy on CCB data — refusing\n");
         return;
     }
     outb(DATA, ccb);
+
+    // STEP 5 — device handshake: 0xF6 set defaults + 0xF4 enable
+    // reporting. auxWrite returns true only on a 0xFA ACK from the device.
     if (!auxWrite(0xF6) or !auxWrite(0xF4)) {
         say("mouse: device refused enable — no pointer input\n");
+        // STEP 6 (diagnostic) — poll 0x60 anyway for a window: maybe the
+        // device streams unsolicited packets even without the enable ACK.
+        st_pollbytes = pollWindow();
+        say("mouse: post-refuse poll bytes="); koru_putdec(st_pollbytes); say("\n");
         return;
     }
     aux_online = true; // device ACK'd both commands -> detected+enabled
+
+    // STEP 6 — post-enable poll: catch any bytes the device already
+    // queued, and prove the data port drains even if IRQ12 is masked.
+    st_pollbytes = pollWindow();
+    say("mouse: post-enable poll bytes="); koru_putdec(st_pollbytes); say("\n");
+
     koru_irq_unmask(12);
     irq_armed = true;
     say("mouse: PS/2 aux online, IRQ12 unmasked\n");
+}
+
+// Bounded nonblocking drain of port 0x60 — counts bytes the aux channel
+// has already latched, feeding any real packets to the assembler. Runs
+// AFTER the handshake so unsolicited/enable-triggered traffic is seen
+// even before IRQ12 is unmasked.
+fn pollWindow() u32 {
+    var n: u32 = 0;
+    var i: u32 = 0;
+    while (i < 400_000) : (i += 1) {
+        const st = inb(STATUS);
+        if ((st & 1) != 0) {
+            const b = inb(DATA);
+            n += 1;
+            if ((st & AUX_BYTE) != 0) feedByte(b) else kbd.feedByte(b);
+        }
+    }
+    return n;
 }

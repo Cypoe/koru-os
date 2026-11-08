@@ -94,6 +94,11 @@ pub fn enable() void {
     //   pkts=live/0  -> cumulative packets received so far
     //   sprite@50,50 -> draw path executed on the live fb surface
     const dg = mouse.diag();
+    // 8042 handshake-step markers (results recorded at boot init):
+    if (dg.selftest == 0x55) net.mark("cursor:8042=selftest-ok")
+    else net.mark("cursor:8042=selftest-bad");
+    if (dg.auxen != 0) net.mark("cursor:auxen=1") else net.mark("cursor:auxen=0");
+    if (dg.pollbytes != 0) net.mark("cursor:poll=live") else net.mark("cursor:poll=0");
     if (dg.aux_online != 0) net.mark("cursor:aux=1") else net.mark("cursor:aux=0");
     if (dg.irq_armed != 0) net.mark("cursor:irq=1") else net.mark("cursor:irq=0");
     if (dg.packets != 0) net.mark("cursor:pkts=live") else net.mark("cursor:pkts=0");
@@ -174,5 +179,9 @@ pub fn report() void {
     say(" desync="); koru_putdec(dg.desyncs);
     say(" ovf="); koru_putdec(dg.overflows);
     say(" drop="); koru_putdec(dg.drops);
+    say("\nmouse: 8042 selftest="); koru_putdec(dg.selftest);
+    say(" ccb="); koru_putdec(dg.ccb);
+    say(" auxen="); koru_putdec(dg.auxen);
+    say(" pollbytes="); koru_putdec(dg.pollbytes);
     say("\n");
 }
