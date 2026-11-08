@@ -9,7 +9,7 @@ const CH: u32 = 9; // 8px glyph + 1px leading
 
 const BLANK = [8]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
-const font: [128][8]u8 = .{
+pub const font: [128][8]u8 = .{
     BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, // 0-7
     BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, // 8-15
     BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, // 16-23
