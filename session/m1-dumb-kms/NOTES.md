@@ -179,3 +179,45 @@ serial shows efb:live addr=4244635648, efb:S0/S1/S2/S3 in order, then
 fb:init re-adopts phys=4244635648 (same LFB, epd reused) → fb-init/
 shell/hb UDP markers. Flash this one; watch the PANEL for the stage
 log and the listener for post-NIC markers.
+
+## HW flash #2 → earlyfb4: oracle moved OFF custom page tables (2026-11-08)
+
+`koru-m1-earlyfb2-20261108-1845.iso` on real T590: NO stage bands, backlight
+flashes, returns to GRUB, ZERO UDP. Host-side ELF diff vs known-good
+i915-net-1949 proved GRUB LOADS the M1 kernel fine (same entry 0x100050,
+mb2 magic @0x1020 len=48, same 7-phdr) — it's a RUNTIME crash, not a load
+problem. `_start`/GDT/page-tables/mb2_header diffed vs merge base fc509df:
+BYTE-IDENTICAL — trampoline exonerated.
+
+Prime suspect: earlyfb's hand-rolled `epd[8][512]` 2MiB PDEs + `pdpt[gb]`
+install, sized for QEMU's fb @0xFD000000 (GB3). Real-HW GRUB reports a
+DIFFERENT fb phys; if it lands outside the 8-window scheme or maps wrong,
+the first fb.koruos_fb_* write #PFs → isrReport→earlyfb.fault repeats the
+same wild write → #PF→#DF→TRIPLE FAULT→GRUB. Matches: nothing on screen,
+backloader, zero UDP, pre-NIC.
+
+FIX (commit pending): DELETE the custom static tables entirely. earlyfb.init
+now runs AFTER pmm.init and maps the fb through the PROVEN `mmio.map`
+(pmm-backed hi pd tables — the exact path fb.init uses on real HW, so it
+cannot regress what already works). Geometry validation kept (bpp=32,
+type=1, pitch>=width*4, pitch<=1MiB, fb<=32MiB); any refusal → oracle blind,
+boot continues to shell+UDP. kmain order is now:
+  faults.install → pmm.init → earlyfb.init(S0) → net.init → stage(1 nic-ok)
+Trade-off: loses the pre-pmm marker window, but pmm.init is memory-only and
+proven; the real-HW risk window (net.init PCI/e1000e device touches) stays
+bracketed. fb.init later re-adopts the SAME lfb via mmio.map — pdpt[gb]
+reused, console coexists (verified).
+
+QEMU -cdrom verified (m1.elf, -m1024): pmm→efb:live addr=4244635648→
+efb:S0→pci/e1000e/net→KORU N2→efb:S1 nic-ok→fb:init re-adopt SAME phys→
+fb-init/shell/hb. Full healthy boot, markers in order.
+
+ISO: `dist/koru-m1-earlyfb4-20261108-2033.iso` (15,056,896 B, MBR
+0x1be=0x83 LBA=0x10). Next flash distinguishes:
+  UDP markers + shell, no bands .... oracle blind (mmio.map refused) —
+                                   kernel healthy, proceed to kms/kmsbuf
+  colored STAGE band ................ exact milestone; frozen red FAULT
+                                   vec=n names any post-IDT fault
+  still cycles, no banner ........... death genuinely pre-kmain
+                                   (GRUB load or _start) — no Zig marker
+                                   can see it; instrument _start asm next

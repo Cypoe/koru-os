@@ -4,10 +4,17 @@
 // 8042 channel on this EC), so the ONLY observability that works before
 // net.init brings UDP up is the panel itself: GRUB hands the kernel a
 // linear framebuffer via multiboot2 tag 8 and keeps scanning it until
-// i915 modesets. This module adopts that fb right after faults.install
-// — before pmm/net — using STATIC page tables (pmm and mmio.map don't
-// exist yet), then draws BIG color-coded stage banners + text straight
-// through fb.koruos_fb_* — no text.zig console dependency, no cursor.
+// i915 modesets. This module adopts that fb AFTER pmm.init (mmio.map
+// needs the pmm-backed hi pd tables) and BEFORE net.init — the window
+// where a real-HW PCI/NIC fault is most likely and nothing else can
+// report — then draws BIG color-coded stage banners + text straight
+// through fb.koruos_fb_*. Uses the PROVEN mmio.map, NOT custom static
+// page tables: the first earlyfb draft hand-rolled epd[8][512] 2MiB
+// PDEs sized for QEMU's 0xFD000000 fb; a real-HW fb address outside
+// that scheme could leave a mapped-but-wrong or unmapped window and
+// #PF inside the fault handler -> triple fault -> GRUB (the -1845
+// reset loop). mmio.map is the same pmm-backed path fb.init uses on
+// real HW, so it cannot regress what already works.
 //
 // It also gives isrReport a panel-drawn fault vector: a post-IDT fault
 // FREEZES on a red "FAULT vec=n" screen instead of triple-faulting back
@@ -20,24 +27,17 @@
 //   banner stays on stage N, no more ...... ran, hung at stage N
 //   banner reaches NIC + UDP markers ....... healthy to shell
 //
-// fb.init later re-adopts the SAME lfb through mmio.map — the epd[]
-// tables installed here are reused (pdpt[gb] already nonzero), so the
+// fb.init later re-adopts the SAME lfb through mmio.map — the pdpt[gb]
+// table mmio.map installs here is reused (already nonzero), so the
 // early markers and the console share one surface with no conflict.
 
 const std = @import("std");
 const fb = @import("fb.zig");
+const mmio = @import("mmio"); // PROVEN mapper — pmm-backed, same as fb.init
 const text = @import("text.zig"); // for the shared 8x8 font only
 
-extern var pdpt: [512]u64; // boot.zig — pd covers GB0 only
-extern var pd: [512]u64;
 extern fn koru_say(s: [*:0]const u8) void;
 extern fn koru_putdec(v: u64) void;
-
-// One 4 KiB pd per 1 GiB window, for hi windows pmm can't serve yet.
-// Untouched entries stay not-present (loader-zeroed .bss). 8 windows
-// = 0..8 GiB — the GRUB LFB lands ~0xFD000000 (GB3) on QEMU and in
-// similar high stolen-memory on real HW.
-var epd: [8][512]u64 align(4096) = [_][512]u64{[_]u64{0} ** 512} ** 8;
 
 const Mb2Fb = extern struct {
     type: u32,
@@ -95,33 +95,6 @@ fn probe(mbi_phys: u32) ?Mb2Fb {
         off += (s + 7) & ~@as(usize, 7); // tags are 8-byte aligned
     }
     return null;
-}
-
-// Identity-map [phys,phys+len) with 2 MiB pages, using the static epd[]
-// tables for hi GBs. Mirrors mmio.map's entry format minus PCD —
-// cached is fine for a brief boot log; fb.init re-maps PCD later.
-fn mapWindow(phys: u64, len: u64) bool {
-    const first = phys & ~@as(u64, 0x1FFFFF);
-    const last = (phys + len + 0x1FFFFF) & ~@as(u64, 0x1FFFFF);
-    var p = first;
-    while (p < last) : (p += 0x200000) {
-        const gb: usize = @intCast(p >> 30);
-        if (gb >= epd.len) return false;
-        var table: *[512]u64 = &pd;
-        if (gb != 0) {
-            if (pdpt[gb] == 0) {
-                const taddr: u64 = @intCast(@intFromPtr(&epd[gb]));
-                pdpt[gb] = (taddr & ~@as(u64, 0xFFF)) | 0x3;
-            }
-            table = @ptrFromInt(pdpt[gb] & ~@as(u64, 0xFFF));
-        }
-        table[(p >> 21) & 0x1FF] = p | 0x83; // P|RW|PS — 2 MiB, cached
-    }
-    asm volatile ("mov %cr3, %rax\n\tmov %rax, %cr3"
-        :
-        :
-        : .{ .rax = true, .memory = true });
-    return true;
 }
 
 // --- raw drawing (no text.zig console state needed) --------------------
@@ -196,8 +169,11 @@ fn clearAll() void {
     rect(0, 0, W, H, C_BLACK);
 }
 
-// Adopt the loader's fb and draw the first banner. Runs right after
-// faults.install so anything it does wrong FREEZES via the IDT.
+// Adopt the loader's fb and draw the first banner. Runs AFTER pmm.init
+// (mmio.map needs pmm.alloc for hi pd tables) and BEFORE net.init so a
+// real-HW NIC fault is the first thing the oracle brackets. Uses the
+// proven mmio.map — if it refuses, the oracle goes blind and boot
+// continues to shell/UDP rather than risk a fault-in-handler.
 pub fn init(mbi_phys: u32) void {
     const f = probe(mbi_phys) orelse {
         koru_say("efb: no mb2 tag8 — oracle blind\n");
@@ -223,8 +199,10 @@ pub fn init(mbi_phys: u32) void {
         koru_say("efb: fb too large — oracle blind\n");
         return;
     }
-    if (!mapWindow(f.addr, bytes)) {
-        koru_say("efb: mapWindow refused — oracle blind\n");
+    // Proven path: pmm-backed hi pd tables, same as fb.init. A refusal
+    // leaves the oracle blind; boot continues to shell+UDP.
+    if (!mmio.map(f.addr, bytes)) {
+        koru_say("efb: mmio.map refused — oracle blind\n");
         return;
     }
     fb.adoptRaw(f.addr, f.pitch, f.width, f.height);
