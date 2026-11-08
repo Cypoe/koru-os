@@ -209,7 +209,20 @@ pub fn init(mbi_phys: u32) void {
         koru_say("efb: tag8 unsupported — oracle blind\n");
         return;
     }
+    // The oracle must NEVER crash the boot. Every fb.koruos_fb_* offset
+    // is y*(pitch/4)+x — if pitch < width*4 a fill writes past the mapped
+    // window, #PFs, and isrReport->earlyfb.fault repeats the same wild
+    // write -> triple fault -> reset (the exact -1845 symptom: no marker,
+    // bootloader, zero UDP). Reject anything that can't bound a row.
+    if (f.pitch < f.width * 4 or f.pitch > 0x100000) {
+        koru_say("efb: bad pitch — oracle blind\n");
+        return;
+    }
     const bytes = @as(u64, f.pitch) * @as(u64, f.height);
+    if (bytes > 0x2000000) { // >32 MiB — not a real panel fb
+        koru_say("efb: fb too large — oracle blind\n");
+        return;
+    }
     if (!mapWindow(f.addr, bytes)) {
         koru_say("efb: mapWindow refused — oracle blind\n");
         return;
