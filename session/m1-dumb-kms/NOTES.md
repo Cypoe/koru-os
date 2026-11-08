@@ -679,3 +679,25 @@ mmio.map. No new bus drivers — enumeration+register dumps only.
 ISO: dist/koru-hwprobe-20261109-0037.iso — proven pipeline + CORRECTED
 MBR. QEMU-verified boot to shell+hb (QEMU shows its own PCI/USB — proves
 the probes run; real-HW is the oracle via UDP).
+
+## HWPROBE2 — prog-if fix + smbus/i2c probe (2026-11-09)
+
+Real T590 pciscan bus map: 0:2.0 i915; 0:20.0 dev 0x9E2D + 58:0.0 dev
+0x9D2D = TWO USB host controllers; 0:31.4 SMBUS/I2C; 0:31.6 ETH; 60/61
+NVIDIA/Samsung. usb probe reported xhci=0 — BUG: it re-read
+pci.read8(0x0A) for prog-if; correct field is d.progif (pci.record
+already decodes (cls>>8)&0xFF). Fixed all 3 sites.
+
+  pciscan   now prints d.progif correctly -> XHCI=0x30 EHCI=0x20
+            OHCI=0x10 UHCI=0x00 identified per controller.
+  usb       XHCI op probe (BAR0->CAPLENGTH/HCSPARAMS/HCCPARAMS/DBOFF/
+            RTSOFF, USBCMD/USBSTS, per-port PORTSC connect+enable) now
+            fires on the real controllers.
+  smbus     NEW — class0C/sub05 probe: BAR decode (IO vs MEM), config
+            0x40-0x7F dump (SMBus rev/PID/TID/block-base), MMIO head dump.
+            Targets 0:31.4 — the likely I2C HID path for the touchpad.
+  inputscan verdict updated: XHCI>0 -> USB HID (expected); smbus-only ->
+            I2C HID behind PCH SMBus; else re-check aux/EC.
+
+ISO: dist/koru-hwprobe2-20261109-0043.iso — proven pipeline + CORRECTED
+MBR. QEMU-verified boot to shell+hb.

@@ -134,6 +134,10 @@ fn dispatch() void {
         hwprobe.inputScan();
         return;
     }
+    if (eq("smbus")) { // SMBus/I2C controller probe (0:31.4 class)
+        hwprobe.smbus();
+        return;
+    }
     if (eq("reboot")) { reboot(); return; }
     if (eq("about")) {
         const d = text.dims();

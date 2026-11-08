@@ -67,7 +67,7 @@ pub fn pciScan() void {
         puts(" cls="); hex2(d.class); puts("/"); hex2(d.subclass);
         puts(" "); puts(className(d.class, d.subclass));
         // prog-if distinguishes XHCI(0x30)/EHCI(0x20)/UHCI(0x00) under USB
-        const pif = pci.read8(d.bus, d.slot, d.func, 0x0A);
+        const pif = d.progif; // already decoded correctly by pci.record
         puts(" pif="); hex2(pif);
         // BAR0 phys — the host-controller MMIO base for USB candidates
         const b0 = pci.barPhys(d, 0);
@@ -142,7 +142,7 @@ pub fn usb() void {
     while (i < pci.count) : (i += 1) {
         const d = &pci.devices[i];
         if (d.class == 0x0C and d.subclass == 0x03) {
-            const pif = pci.read8(d.bus, d.slot, d.func, 0x0A);
+            const pif = d.progif; // already decoded correctly by pci.record
             // XHCI prog-if = 0x30; EHCI = 0x20; report all, probe XHCI deep.
             if (pif == 0x30) {
                 found += 1;
@@ -227,6 +227,62 @@ pub fn acpiEc() void {
     puts("KORU acpi-ec done\n");
 }
 
+// ---- smbus / i2c -------------------------------------------------------------
+// Intel PCH SMBus lives at LPC-bridge 0:31.4 (class 0x0C/sub 0x05). The
+// T590 touchpad is often an I2C HID device behind it — this dumps the
+// controller's BAR + device-specific config space to identify SMBus vs
+// I2C and surface the block-transfer/base registers.
+fn smbusProbe(d: *const pci.Device) void {
+    puts("smbus: candidate at "); loc(d); puts("\n");
+    // BAR space: Intel SMBus on PCH is usually an I/O or MEM BAR. Print
+    // each BAR raw + decoded base so we see which space it decoded into.
+    var bi: usize = 0;
+    while (bi < 6) : (bi += 1) {
+        const raw = d.bars[bi];
+        if (raw == 0) continue;
+        const phys = pci.barPhys(d, bi);
+        puts("smbus:   bar"); dec(bi); puts(" raw="); dec(raw);
+        puts(" base="); dec(phys);
+        puts(if ((raw & 1) != 0) " (IO)" else " (MEM)"); puts("\n");
+    }
+    // Device-specific config space 0x40-0xFF often carries SMBus revision,
+    // PID/TID, and the block-base I/O registers on Intel PCH.
+    puts("smbus:   config 0x40..0x7F:");
+    var off: u8 = 0x40;
+    while (off < 0x80) : (off += 4) {
+        puts(" "); dec(off); puts("="); dec(pci.read32(d.bus, d.slot, d.func, off));
+    }
+    nl();
+    // If BAR0 is a MEM BAR, map it and dump the register head — the SMBus
+    // control/status + PID live there on ICH/PCH parts.
+    const bar0 = pci.barPhys(d, 0);
+    if (bar0 != 0 and (d.bars[0] & 1) == 0 and mmio.map(bar0, 0x1000)) {
+        const r: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(bar0)));
+        puts("smbus:   mmio[0..0x20]:");
+        var i: usize = 0;
+        while (i < 8) : (i += 1) {
+            puts(" "); dec(i * 4); puts("="); dec(r[i]);
+        }
+        nl();
+    }
+}
+
+pub fn smbus() void {
+    puts("KORU smbus — SMBus/I2C controller probe\n");
+    pci.init();
+    var found: u32 = 0;
+    var i: usize = 0;
+    while (i < pci.count) : (i += 1) {
+        const d = &pci.devices[i];
+        if (d.class == 0x0C and d.subclass == 0x05) {
+            found += 1;
+            smbusProbe(d);
+        }
+    }
+    puts("smbus: controllers found="); dec(found); puts("\n");
+    puts("KORU smbus done\n");
+}
+
 // ---- inputscan ---------------------------------------------------------------
 // Synthesize the enumeration into a verdict: which bus most likely carries
 // the T590 TrackPoint+touchpad. ThinkPad pointing devices are USB HID on
@@ -237,34 +293,40 @@ pub fn inputScan() void {
     var xhci: u32 = 0;
     var echi: u32 = 0;
     var ehci: u32 = 0;
-    var smbus: u32 = 0;
+    var nSmbus: u32 = 0;
     var i2c: u32 = 0;
     var i: usize = 0;
     while (i < pci.count) : (i += 1) {
         const d = &pci.devices[i];
         if (d.class == 0x0C and d.subclass == 0x03) {
-            const pif = pci.read8(d.bus, d.slot, d.func, 0x0A);
+            const pif = d.progif; // already decoded correctly by pci.record
             if (pif == 0x30) xhci += 1 else if (pif == 0x20) ehci += 1
             else if (pif == 0x00 or pif == 0x10) echi += 1;
         }
-        if (d.class == 0x0C and d.subclass == 0x05) smbus += 1;
+        if (d.class == 0x0C and d.subclass == 0x05) nSmbus += 1;
         if (d.class == 0x0C and d.subclass == 0x04) i2c += 1; // IPMI? no—serial
     }
     puts("inputscan: xhci="); dec(xhci);
     puts(" ehci="); dec(ehci); puts(" u/ohci="); dec(echi);
-    puts(" smbus/i2c-ctrl="); dec(smbus); puts("\n");
+    puts(" smbus/i2c-ctrl="); dec(nSmbus); puts("\n");
     puts("inputscan: class0C/sub04(i2c-ish)="); dec(i2c); puts("\n");
 
     puts("inputscan: VERDICT — ");
     if (xhci > 0) {
-        puts("XHCI host controller present -> pointing devices are almost\n");
-        puts("certainly USB HID behind it (T590 TrackPoint+touchpad are USB\n");
-        puts("on modern ThinkPads, EC-routed). PS/2 aux=0 is EXPECTED — they\n");
-        puts("were never on 8042 aux. Next: full XHCI enumerate + HID report.\n");
+        puts("XHCI host controller(s) present -> pointing devices are almost\n");
+        puts("certainly USB HID behind them (T590 TrackPoint+touchpad are USB\n");
+        puts("on modern ThinkPads, often EC-routed or on the xHCI root hub).\n");
+        puts("PS/2 aux=0 is EXPECTED — they were never on 8042 aux. Next: full\n");
+        puts("XHCI port->device-slot enumerate + HID report-descriptor read.\n");
+        if (nSmbus > 0)
+            puts("inputscan: note — SMBus/I2C controller also present; some\n");
     } else if (ehci > 0 or echi > 0) {
         puts("EHCI/OHCI present, no XHCI -> devices on USB2 EHCI.\n");
+    } else if (nSmbus > 0) {
+        puts("no USB host controller but SMBus/I2C present -> pointing devices\n");
+        puts("may be I2C HID behind the PCH SMBus. Probe 'smbus' for the regs.\n");
     } else {
-        puts("no USB host controller found -> check I2C/SMBUS or legacy aux.\n");
+        puts("no USB host controller and no SMBus found -> re-check aux/EC.\n");
     }
     puts("KORU inputscan done\n");
 }
