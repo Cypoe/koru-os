@@ -255,3 +255,36 @@ ISO: `dist/koru-m1-bisect-noefb-20261108-2111.iso` (15,022,080 B, MBR
   STILL crashes pre-NIC ........... deeper M1 build bug (kms.zig /
                                   i915.zig / shell changes), NOT the
                                   oracle -> bisect those next
+
+## RECIPE+SOURCE BISECT — kms.zig is the SOLE boot-crasher (2026-11-08)
+
+koru-m1-bisect-noefb STILL crashed on T590 (earlyfb+boot wiring exonerated).
+Decisive ELF forensics then collapsed the suspect list:
+
+- PROVEN recipe (scripts/build-native.sh, sed-substituted {{ ENTRY }})
+  produces a kernel whose LOADABLE image is BYTE-IDENTICAL to
+  build-m1.sh output — only DWARF paths differ. Recipe EXONERATED.
+- Reverting fb.zig+i915.zig+shell.zig+text.zig to fc509df (earlyfb already
+  gone) yields m1srcbase.elf == koru-i915-net-1949.iso kernel
+  BYTE-IDENTICAL (all 4 LOAD segs). Toolchain+program EXONERATED.
+- Keeping i915 pub-promotions+fb adoptRaw+text font-pub but dropping the
+  kms.zig import (shell.zig->merge-base) yields m1nokms.elf ALSO == good
+  kernel BYTE-IDENTICAL. i915-pub/fb/text add ZERO net code. EXONERATED.
+- => the ENTIRE bootable delta is kms.zig's emission: +0xf0a0 .text
+  (~60KB), +0x7d8 .rodata, +0x308 .data; .bss UNCHANGED (0x525918).
+  kms.zig is compiled in via boot->shell->kms->i915 but NOT executed
+  pre-NIC — yet its presence crashes real HW pre-NIC (QEMU boots fine).
+  Mechanism is binary-level (emission/layout vs real-HW mem map), not
+  execution. kms.zig source is clean Zig (one small var gdev, no
+  comptime/export/large statics).
+
+ISOs:
+  dist/koru-m1-srcbase-20261108-2122.iso  (merge-base native == good)
+  dist/koru-m1-nokms-20261108-2127.iso    (all-M1 minus kms.zig == good)
+Both loadable-identical to known-good -> WILL boot on HW; flashing
+confirms kms.zig is the sole crasher with zero ambiguity.
+
+NEXT: distinguish SIZE-vs-CONTENT. If pure +60KB layout crashes real HW,
+a size-pad control reproduces it; else kms.zig's emitted code/relocs are
+bad -> inspect symtab/relocs of m1full vs m1nokms. Then either shrink the
+KMS footprint or find the bad emission.
