@@ -288,3 +288,25 @@ NEXT: distinguish SIZE-vs-CONTENT. If pure +60KB layout crashes real HW,
 a size-pad control reproduces it; else kms.zig's emitted code/relocs are
 bad -> inspect symtab/relocs of m1full vs m1nokms. Then either shrink the
 KMS footprint or find the bad emission.
+
+## SIZE-PAD CONTROL ISO (2026-11-08) — distinguishes SIZE-vs-CONTENT
+
+Built srcbase (merge-base native == good kernel) + a forced-emission
+`export const koru_sizepad: [0x10000]u8` (64 KiB benign .rodata) in
+boot.zig. Verified layout reproduces M1-full's HIGH sections EXACTLY:
+  PAD    .data@0x172000 .bss@0x1b4000 _end=0x6D9918  (== M1FULL)
+  GOOD   .data@0x162000 .bss@0x1a4000 _end=0x689918
+  M1FULL .data@0x172000 .bss@0x1b4000 _end=0x6D9918
+(.text/.rodata sizes differ — pad is rodata not code — but the
+kernel-end/.bss boundary that could hit a real-HW limit is identical.)
+QEMU -cdrom: boots to shell+hb clean. ISO below.
+
+ISO: `dist/koru-m1-sizepad-20261108-2130.iso` (14,831,616 B, MBR
+0x1be=0x83 LBA=0x10). Flash result forks the fix:
+  pad CRASHES pre-NIC .... real-HW layout/size boundary — find exact
+                         threshold (binary-search pad size / section);
+                         kms.zig innocent, shrink or relocate kernel
+  pad BOOTS .............. kms.zig's emitted code/relocs are the bug —
+                         diff m1full vs m1nokms symtab+relocs, find the
+                         bad symbol (likely an i915 fn newly reachable
+                         via kms that miscompiles or bad reloc)
