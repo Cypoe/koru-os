@@ -1,0 +1,18 @@
+✓ Compiled /Users/larsde/src/koru-os-m1/koru/fb/tests/boot_fb.k → /Users/larsde/src/koru-os-m1/koru/fb/tests/backend.zig
+✓ Generated /Users/larsde/src/koru-os-m1/koru/fb/tests/backend_output_emitted.zig (764335 bytes)
+✓ Found 1 compiler requirement(s) for backend
+✓ Generated /Users/larsde/src/koru-os-m1/koru/fb/tests/build_backend.zig
+✓ Generated /Users/larsde/src/koru-os-m1/koru/fb/tests/build.zig (for backend compilation)
+Building executable...
+✓ Backend cache hit (skipped zig build)
+🎯 Compiler coordination: Passes: 20 (flow-based: elaborate, analysis, emission)
+✓ Generated output_emitted.zig (29575 bytes)
+✗ Compilation failed
+Error: error: undefined symbol: _koruos_fb_fill
+    note: referenced by .zig-cache/tmp/a11660b2bcf2b1da/a_zcu.o:_output_emitted.koru_koruos.koru_fb.fill_event.__koru_handler_impl
+error: undefined symbol: _koruos_fb_info
+    note: referenced by .zig-cache/tmp/a11660b2bcf2b1da/a_zcu.o:_output_emitted.koru_koruos.koru_fb.info_event.handler
+error: undefined symbol: _koruos_fb_present
+    note: referenced by .zig-cache/tmp/a11660b2bcf2b1da/a_zcu.o:_output_emitted.koru_koruos.koru_fb.present_event.__koru_handler_impl
+
+✗ Backend execution failed

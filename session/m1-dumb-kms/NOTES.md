@@ -334,3 +334,45 @@ the bump heap (only prog.main's __koru_bare). Result: full M1 kernel
 (kms+i915+shell) _end=0x699918, 192KiB under working 0x6C9918.
 ISO: dist/koru-m1-heapfix-20261108-2149.iso (15,022,080 B).
 Principled pmm-reserve of GRUB module/LFB regions = follow-up commit.
+
+## .data/.bss-START POSITION hypothesis + ReleaseSmall test ISO (2026-11-08)
+
+Refined ELF forensics: the crash variable is NOT _end — it is the START
+vaddr of the RW PT_LOAD segment (.data+.bss). Measured:
+
+  build        .data start   .bss start   _end       T590 result
+  good/nokms   0x162000      ~0x1A0000    0x6C9918   BOOTS
+  pad32        0x16A000      ~0x1B0000    0x6D1918   CRASH
+  heapfix/M1   0x172000      0x1B4000     0x699918   CRASH
+  relsmall     0x124000      0x166000     0x64B918   (this ISO — QEMU OK)
+
+pad32 proves POSITION not size: a 32KiB benign .rodata pad (no KMS code)
+pushed .data 0x162000->0x16A000 and reproduced the crash. heapfix proved
+_end is irrelevant: _end=0x699918 (LOWEST of the crashing set) still
+crashed because .data stayed at 0x172000.
+
+Boundary object: the RW-segment start must stay below ~0x168000 (~1.4MiB
+phys). That page is NOT kernel .bss (page tables/heap/stacks live far
+higher, .bss>=0x166000 and extend to ~0x6-7MB). The leading candidate is a
+GRUB/firmware low-memory allocation — the multiboot2 info structure /
+boot-module area that GRUB's loader carves from low RAM on the real-T590
+e820 layout (QEMU's clean e820 hides it). When .data start crosses
+~0x168000 the kernel's early .data load + first .bss page-table writes
+physically overlap that still-live GRUB region -> corrupted mbi/module
+data -> pre-NIC reset. CONFIRM by capturing mb2 mbi/module phys addrs on
+HW, or by the relsmall boot result.
+
+TEST ISO (decisive): -O ReleaseSmall collapses .text 0x66e5f->0x1ae8e so
+.data lands at 0x124000 — the LOWEST RW start of any M1 build, all kms
+code present, _end=0x64B918 (lowest yet). If the hypothesis holds this
+boots on the T590 where heapfix crashed.
+
+  dist/koru-m1-relsmall-20261108-2156.iso  (12,296,192 B, MBR
+  0x1be=0x83 type=0xee LBA=0x10). QEMU -cdrom: telemetry->N2->fb-init->
+  shell->hb clean.
+
+Caveat: ReleaseSmall is a TEST, not necessarily the ship config — it
+changes codegen (smaller/faster-different) and may mask a real bug. If it
+boots, the principled fix is section placement: keep boot .text+.rodata
+small OR move the kms/i915 bulk into a high vaddr section so the low RW
+segment stays <0x168000 with kms fully present at ReleaseSafe.

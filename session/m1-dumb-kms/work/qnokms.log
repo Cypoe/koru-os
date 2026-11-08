@@ -1,0 +1,31 @@
+pmm: usable=1023MiB managed=262112 frames live=1643
+pmm: free refused phys=6ca000 (unowned)
+PMM selftest ok
+pci: 00:00.0 8086:1237 class=06/00/00 irq=00 caps=-
+pci: 00:01.0 8086:7000 class=06/01/00 irq=00 caps=-
+pci: 00:01.1 8086:7010 class=01/01/80 irq=00 caps=-
+pci: 00:01.3 8086:7113 class=06/80/00 irq=09 caps=-
+pci: 00:02.0 1234:1111 class=03/00/00 irq=00 caps=-
+pci: 00:03.0 8086:10d3 class=02/00/00 irq=0b caps=01,05,10,11
+pci: 06 devices enumerated
+e1000e: 0:3.0 dev=10d3 class=2/0 flags=0
+e1000e: mac reset only (140261/80283 was 140241/80283)
+e1000e: autoloaded mac 52:54:00:12:34:56
+e1000e: tx ring armed — link=true mac=52:54:00:12:34:56 st=80283 cmd=107 tctl=400fa
+net: telemetry up — 192.168.99.1:47820 <- src 192.168.99.2
+net: N1 arp who-has on wire
+net: diag -> KORU diag st=6 bar=feb80000 cmd=107 st=80283 tctl=400fa bal=26d000 len=200 dt=0 mac=52:54:00:12:34:56 msrc=1 link=1
+net: -> KORU N2 udp telemetry live
+fb: init mbi=9333264
+fb: tag8 addr=4244635648 pitch=4096 w=1024 h=768 bpp=32 type=1
+fb: adopt phys=4244635648 len=3145728
+fb: backend=mb2
+net: -> KORU fb-init
+net: -> KORU shell
+net: -> KORU hb
+net: -> KORU hb
+net: -> KORU hb
+net: -> KORU hb
+net: -> KORU hb
+net: -> KORU hb
+net: -> KORU hb
