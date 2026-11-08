@@ -120,6 +120,12 @@ fn waitEvent() ?u32 {
     while (spins < 50_000_000) : (spins += 1) {
         const erdp = opRd64_(OP_ERDP);
         const trbPhys = erdp & ~@as(u64, 0xF);
+        // empty/not-yet-armed ring: ERDP can read 0 -> @ptrFromInt(0) is a
+        // null-pointer panic in safe mode. Poll until a real TRB addr.
+        if (trbPhys == 0 or trbPhys < evtRingPhys or trbPhys >= evtRingPhys + 4096) {
+            asm volatile ("pause");
+            continue;
+        }
         const t: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(trbPhys)));
         const ctrl = (@as(u32, @intCast(t[1] >> 32)) );
         const cbit = ctrl & 1;
