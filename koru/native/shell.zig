@@ -91,6 +91,12 @@ fn dispatch() void {
         text.puts("kmsbuf returned — console still alive\n");
         return;
     }
+    if (eq("kflip")) { // M2 atomic pageflip + vblank (needs live 'kms')
+        text.puts("kflip: M2 atomic pageflip — watch last line\n");
+        kmsdrv.runFlip();
+        text.puts("kflip returned — console still alive\n");
+        return;
+    }
     if (eq("reboot")) { reboot(); return; }
     if (eq("about")) {
         const d = text.dims();

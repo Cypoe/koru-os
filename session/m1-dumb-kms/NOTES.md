@@ -455,3 +455,48 @@ FIXED ISOs (all now match working MBR pattern):
 boot.zig+faults.zig restored to pre-efault M1 shell path (efault.zig/
 dserial.zig remain on disk, unreferenced). Next: flash packfix on T590 —
 expect UDP telemetry + shell; then kmsbuf/kms M1 sequence.
+
+## RESULT (2026-11-08) — M1 dumb-KMS WORKS on real T590
+
+packfix ISO booted to shell on real HW (UDP diag->shell->hb @22:27).
+`kmsbuf` + `kms` both completed: KMS object model (1 crtc, 2 planes, 1 eDP)
+-> dumb buffer create/map -> test pattern -> modeset (link CR+EQ pass,
+pipe+plane programmed) -> "MODESET DONE eDP lit via dumb-KMS" -> console
+rebased onto dumb buffer -> rainbow color-bar pattern + live shell.
+M1 dumb-KMS milestone ACHIEVED on silicon.
+
+LESSON (durable): the M1 ISO assembler's MBR patch was the sole cause of
+every "kernel won't boot" symptom — byte-identical kernels crashed
+identically. ALWAYS diff a new ISO's MBR partition entry (0x1BE) against a
+known-good ISO before debugging kernel code. Correct patch:
+  byte[0x1BE]=0x83  byte[0x1C2]=0x10  byte[0x1C3..0x1C5]=0
+  LEAVE LBA[0x1C6..0x1C9]=0x01  and  size[0x1CA..0x1CD] as xorriso wrote.
+Do NOT force LBA=0x10 or leave type=0xee (GPT-protective).
+
+## M2 ATOMIC — pageflip + vblank (2026-11-08)
+
+M1 CONFIRMED on real T590 (kms/kmsbuf modeset, rainbow+console, UDP live).
+M2 extends kms.zig/pipe.zig with the atomic commit model:
+
+  CHECK  atomicCheck(h)  — pure object validation, zero HW writes.
+  TEST   atomicTest(h)   — GTT PTE readback verify, still zero disp writes.
+  COMMIT flipCommit(h)   — ONE DSPASURF write arms the flip the display
+         engine applies at next vblank (SKL surface reg = flip request);
+         readback-verified, then object state (scanout/plane.fb) commits
+         and the retired buffer's frames are freed.
+  VBLANK vblankWait(n)   — DEIMR unmasked + DEIIR polled for n events
+         (consoleMode has no IRQ path -> polled delivery of real HW
+         vblank/flip-done interrupts); each event -> serial+UDP marker.
+
+pipe.zig: +pageflipSurface/surfaceOffset/vblankEnable/vblankPoll.
+kms.zig: +fillFlipPattern (horizontal bands + diagonal tick — distinct
+from M1 bars), atomicCheck/atomicTest/flipCommit/vblankWait/runFlip.
+shell.zig: + 'kflip' command (alphabetic).
+
+Shell flow on T590: 'kms' (live modeset) -> 'kflip' (atomic pageflip).
+Flip pattern should replace the M1 bars on-panel at next vblank; UDP
+shows kms:flip COMMITTED + kms:vblank markers.
+
+ISO: dist/koru-m2-atomic-20261108-2238.iso — isotree + docker
+koruos-amd64-img grub-mkrescue + CORRECTED MBR (0x1BE=0x83, 0x1C2=0x10,
+endCHS=0, LBA left 0x01). QEMU-verified boot to shell+hb.

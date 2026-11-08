@@ -134,3 +134,50 @@ pub fn on(fb: *const types.Framebuffer, mode: *const dp.Mode, link: *const dp.DP
     cursorOff(); // Update_Cursor(Pipe_Cfg.Cursor) — default off
     transcoder.on(mode.*, link.*);
 }
+
+// ---- M2 atomic pageflip ------------------------------------------------------
+// On SKL the hires plane's surface register (DSPASURF) doubles as the
+// pageflip request: writing a new GGTT byte offset while the pipe is live
+// arms an async flip the display engine applies at the next vblank — the
+// hardware does the commit, no modeset re-run, no blank. This is the real
+// atomic-commit mechanism M2 exercises: check/test stage the candidate,
+// commit writes the surface, vblank delivers the event.
+//
+// The surface value is the GGTT byte offset (same encoding setupHiresPlane
+// uses: fb.offset already == gtt_page*4096, low 12 bits ignored by HW).
+
+// Program the plane's surface to a new GGTT offset — the flip request.
+// Does NOT touch stride/size/pos/format: a same-mode flip only swaps the
+// scanned buffer. Readback-verified by the caller.
+pub fn pageflipSurface(gttByteOffset: u64) void {
+    mmio.wr(R.DSPASURF, @as(u32, @intCast(gttByteOffset)) & ~@as(u32, 0xfff));
+}
+
+// Read back the currently-programmed surface offset (for flip verify).
+pub fn surfaceOffset() u32 {
+    return mmio.rd(R.DSPASURF);
+}
+
+// Display-engine interrupt IIR — the polled vblank/flip event source.
+// DEIIR (0x044008) latches which DE interrupt fired; DEIMR (0x044004)
+// unmasks the sources we want. We enable pipe-A vblank + plane-flip and
+// poll IIR for edges — real hardware events, delivered by polling since
+// consoleMode has no IRQ/APIC path armed.
+pub const DE_IMR = R.DEIMR;
+pub const DE_IIR = R.DEIIR;
+
+// Unmask display-engine vblank + plane-flip-done interrupts.
+pub fn vblankEnable() void {
+    // DEIMR is active-low on SKL (0 = unmasked). Enable the vblank +
+    // flip sources for pipe A: bits are per-source; setting the mask to
+    // 0 unmasks everything the IIR can report — we then filter by which
+    // bits actually toggle. Conservative: unmask all, we only READ IIR.
+    mmio.wr(R.DEIMR, 0);
+}
+
+// Read + clear the display-engine interrupt status. Returns raw IIR.
+pub fn vblankPoll() u32 {
+    const s = mmio.rd(R.DEIIR);
+    if (s != 0) mmio.wr(R.DEIIR, s); // write-1-to-clear the serviced bits
+    return s;
+}

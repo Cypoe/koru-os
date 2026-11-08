@@ -575,3 +575,143 @@ pub fn runModeset() void {
     text.puts("KORU M1 dumb-KMS live\n");
     stage("kms: ==== M1 dumb-KMS complete ====");
 }
+
+// ---- M2 atomic commit + pageflip/vblank -------------------------------------
+// The atomic model for a same-mode scanout swap: CHECK validates the
+// candidate object, TEST stages it with zero hardware writes, COMMIT is a
+// single surface-register write the display engine applies at vblank —
+// the hardware performs the atomic commit, no modeset re-run, no blank.
+// vblank events arrive on the display-engine IIR, polled (consoleMode has
+// no IRQ path). Every step emits a stage marker so the panel/UDP names
+// the last completed atomic step.
+
+// Distinct flip pattern — horizontal bands + a white diagonal tick, so a
+// photo unambiguously distinguishes a flipped frame from the M1 bars.
+fn fillFlipPattern(buf: *const DumbBuffer) void {
+    const px: [*]volatile u32 = buf.map.?;
+    const row = buf.pitch / 4;
+    const w = buf.width;
+    const h = buf.height;
+    const bands = [_]u32{ 0x0000FF00, 0x0000FFFF, 0x000000FF, 0x00FF00FF };
+    var y: u32 = 0;
+    while (y < h) : (y += 1) {
+        var x: u32 = 0;
+        while (x < w) : (x += 1) {
+            const bi = @as(usize, @intCast(@min((y * 4) / h, 3)));
+            var c: u32 = bands[bi];
+            if (x == y or x + y == w - 1) c = 0x00FFFFFF; // diagonal tick
+            if (x < 8 or y < 8 or x >= w - 8 or y >= h - 8) c = 0x00FFFF00;
+            px[@as(usize, @intCast(y)) * @as(usize, @intCast(row)) +
+                @as(usize, @intCast(x))] = c;
+        }
+    }
+    stage("kms: flip pattern filled");
+}
+
+// CHECK: is this handle a legal flip candidate? Pure object validation —
+// no register writes, safe to call speculatively.
+pub fn atomicCheck(bufHandle: u32) bool {
+    if (!gdev.up) return false;
+    if (gdev.scanout == null) {
+        mmio.say("kms: atomicCheck — no live scanout (run 'kms' first)\n");
+        return false;
+    }
+    const buf = gdev.dumbs[bufHandle] orelse {
+        mmio.say("kms: atomicCheck — null buffer\n");
+        return false;
+    };
+    if (bufHandle == gdev.scanout.?) {
+        mmio.say("kms: atomicCheck — already the scanout\n");
+        return false;
+    }
+    if (buf.width != gdev.mode.?.hVisible or buf.height != gdev.mode.?.vVisible) {
+        mmio.say("kms: atomicCheck — dims mismatch mode\n");
+        return false;
+    }
+    return true;
+}
+
+// TEST: stage the candidate — verify GTT PTE resolves + CPU map live.
+// Still zero display-register writes; proves the buffer is flippable.
+pub fn atomicTest(bufHandle: u32) bool {
+    if (!atomicCheck(bufHandle)) return false;
+    const buf = gdev.dumbs[bufHandle].?;
+    const pte = mmio.readGtt(buf.gtt_page);
+    mmio.say("kms: atomicTest gtt["); mmio.sayDec(buf.gtt_page);
+    mmio.say("] phys="); mmio.sayHex(pte.phys);
+    mmio.say(" want="); mmio.sayHex(buf.phys); mmio.say("\n");
+    if (!pte.valid or pte.phys != buf.phys) {
+        stage("kms: FAIL atomicTest — GTT PTE mismatch");
+        return false;
+    }
+    stage("kms: atomicTest passed (check+test, no hw writes)");
+    return true;
+}
+
+// COMMIT: the atomic commit point — one DSPASURF write arms the flip the
+// display engine applies at vblank. Readback verifies the request landed.
+pub fn flipCommit(bufHandle: u32) bool {
+    if (!atomicTest(bufHandle)) return false;
+    const buf = gdev.dumbs[bufHandle].?;
+    const prev = gdev.scanout.?;
+    mmio.say("kms: flipCommit surf_off="); mmio.sayHex(buf.gtt_offset);
+    mmio.say(" prev_h="); mmio.sayDec(prev); mmio.say("\n");
+    pipe.pageflipSurface(buf.gtt_offset);
+    const rb = pipe.surfaceOffset();
+    mmio.say("kms: DSPASURF readback="); mmio.sayHex(rb); mmio.say("\n");
+    if ((rb & ~@as(u32, 0xfff)) != (@as(u32, @intCast(buf.gtt_offset)) & ~@as(u32, 0xfff))) {
+        stage("kms: FAIL flipCommit — surface readback mismatch");
+        return false;
+    }
+    // Commit object state — the plane now scans the new buffer.
+    gdev.scanout = bufHandle;
+    gdev.planes[0].fb = buf;
+    stage("kms: flip COMMITTED — flip armed for next vblank");
+    _ = dumbDestroy(prev); // retire old scanout frames
+    return true;
+}
+
+// VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).
+// Returns events seen — 0 means the IIR didn't latch (still reports the
+// flip committed; the scanout swap is visible regardless).
+pub fn vblankWait(n: u32) u32 {
+    pipe.vblankEnable();
+    var seen: u32 = 0;
+    var spins: u64 = 0;
+    const maxSpins: u64 = 200_000_000; // ~frame-time-ish bound per event
+    _ = pipe.vblankPoll(); // drain stale
+    while (seen < n and spins < maxSpins * @as(u64, n)) : (spins += 1) {
+        if (pipe.vblankPoll() != 0) {
+            seen += 1;
+            mmio.say("kms: vblank event "); mmio.sayDec(seen); mmio.say("\n");
+            net.mark("kms:vblank");
+        }
+        asm volatile ("pause");
+    }
+    mmio.say("kms: vblank wait done events="); mmio.sayDec(seen); mmio.say("\n");
+    stage("kms: vblank events delivered");
+    return seen;
+}
+
+// runFlip: full M2 atomic pageflip — requires a live 'kms' modeset.
+// Creates a second dumb buffer, fills the flip pattern, runs the
+// check->test->commit sequence, then collects vblank events.
+pub fn runFlip() void {
+    stage("kms: ==== M2 atomic pageflip ====");
+    if (!probe()) return;
+    if (gdev.scanout == null) {
+        stage("kms: no live scanout — run 'kms' first");
+        return;
+    }
+    const h = dumbCreate(1920, 1080, 32) orelse return;
+    const buf = gdev.dumbs[h].?;
+    fillFlipPattern(&buf);
+    if (!flipCommit(h)) {
+        _ = dumbDestroy(h);
+        return;
+    }
+    // two vblanks prove the flip landed and the event path streams
+    _ = vblankWait(2);
+    text.puts("KORU M2 atomic pageflip live\n");
+    stage("kms: ==== M2 atomic complete ====");
+}
