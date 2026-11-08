@@ -527,3 +527,28 @@ producer content reached scanout through the import seam.
 
 ISO: dist/koru-m3-dmabuf-20261108-2246.iso — proven pipeline + CORRECTED
 MBR. QEMU boot verified to shell+hb (dmabuf path HW-only, like M1/M2).
+
+## M4 NATIVE MOUSE — TrackPoint cursor (2026-11-08)
+
+PS/2 aux driver ALREADY existed: mouse.zig does 8042 aux enable (0xA8),
+CCB bit1/bit5, auxWrite handshake, 3-byte packet decode (buttons+dx/dy),
+IRQ12 (vec 0x2C via user.zig), wired at boot.zig:426 after kbd.init.
+M4 adds the consumer + cursor:
+
+  fb.zig   +putPx/getPx/cursorDims — direct pixel access on whatever
+           surface is live (GRUB LFB or post-kms rebase dumb buffer).
+  cursor.zig NEW — drains mouse.pop() motion deltas, integrates cx/cy
+           clamped to surface, moves a 12x12 arrow sprite via XOR blend
+           (self-erasing, no snapshot — composites over console/pattern/
+           dmabuf). Button edges counted. UDP net.mark on move stride.
+  shell.zig +'mouse' command (toggle+report), cursor.tick() in run loop.
+
+Cursor is the FALLBACK path (composite into scanned surface) — the i915
+HW cursor plane (CUR_CTL_A/CUR_BASE_A/CUR_POS_A) is the preferred route
+but needs GGTT cursor image + format setup; deferred, regs documented.
+Works pre- AND post-'kms' since fb_base follows the rebase.
+
+ISO: dist/koru-m4-mouse-20261108-2359.iso — proven pipeline + CORRECTED
+MBR. QEMU-verified boot to shell+hb (no PS/2 mouse in QEMU -> mouse.init
+fails gracefully, shell intact). Real HW: 'mouse' toggles cursor; move
+TrackPoint -> arrow follows, UDP 'cursor: move' + 'cursor: enabled'.

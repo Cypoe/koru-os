@@ -200,6 +200,25 @@ pub fn scanout() ?Scanout {
     };
 }
 
+// ---- M4 cursor surface access ----------------------------------------------
+// Direct pixel write + dims for the cursor sprite compositor. Works on
+// whatever surface is live — GRUB LFB pre-modeset, or the i915 dumb
+// buffer after kms rebase (fb_base was repointed). vgpu backend is the
+// only refusal; LFB paths always present.
+pub fn putPx(x: u32, y: u32, c: u32) void {
+    if (!present or backend == .vgpu) return;
+    if (x >= fb_width or y >= fb_height) return;
+    fb_base[y * (fb_pitch / 4) + x] = c;
+}
+pub fn getPx(x: u32, y: u32) u32 {
+    if (!present or backend == .vgpu) return 0;
+    if (x >= fb_width or y >= fb_height) return 0;
+    return fb_base[y * (fb_pitch / 4) + x];
+}
+pub fn cursorDims() struct { w: u32, h: u32, live: bool } {
+    return .{ .w = fb_width, .h = fb_height, .live = present and backend != .vgpu };
+}
+
 // Adopt an already-mapped LFB without minting page tables — the
 // earlyfb oracle identity-maps the GRUB fb with static hi-memory pd
 // tables before pmm/mmio exist, then hands the window here so the

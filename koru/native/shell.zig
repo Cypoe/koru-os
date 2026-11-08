@@ -4,6 +4,8 @@ const text = @import("text.zig");
 const i915drv = @import("i915/i915.zig");
 const kmsdrv = @import("i915/kms.zig");
 const kbd = @import("kbd");
+const mouse = @import("mouse");
+const cursor = @import("cursor.zig");
 const net = @import("net");
 
 var line: [96]u8 = undefined;
@@ -31,6 +33,7 @@ pub fn run() noreturn {
         } else if (kbd.pollChar()) |c| {
             handle(c);
         }
+        _ = cursor.tick(); // M4: drain mouse motion, move the cursor sprite
         // NOT hlt — IF=0 here, hlt halts the CPU on the first iteration.
         asm volatile ("pause");
     }
@@ -101,6 +104,17 @@ fn dispatch() void {
         text.puts("kdmabuf: M3 dmabuf import — watch last line\n");
         kmsdrv.runDmabuf();
         text.puts("kdmabuf returned — console still alive\n");
+        return;
+    }
+    if (eq("mouse")) { // M4 native cursor: toggle + report position
+        if (cursor.isEnabled()) {
+            cursor.disable();
+            text.puts("mouse: cursor off\n");
+        } else {
+            cursor.enable();
+            text.puts("mouse: cursor on — move the TrackPoint\n");
+        }
+        cursor.report();
         return;
     }
     if (eq("reboot")) { reboot(); return; }
