@@ -652,3 +652,30 @@ not answering on legacy PS/2 aux -> next move is USB-HID/XHCI probe.
 
 ISO: dist/koru-m4-8042fix-20261109-0020.iso — proven pipeline +
 CORRECTED MBR. QEMU-verified boot to shell+hb.
+
+## HW-ENUMERATION PROBES (2026-11-09)
+
+M4 mouse: sprite works, aux=0 — TrackPoint/touchpad not on 8042 aux.
+Need to enumerate what bus they actually use. New hwprobe.zig + 4
+alphabetic shell commands; every line console-prints -> UDP mirror
+streams it to the listener automatically.
+
+  pciscan   full PCI table: bus:slot.func, vendor:device, class:subclass
+            +progif, class-name, bar0 phys. Ground truth for host ctrls.
+  usb       XHCI probe: find class0C/sub03/progif30 controllers, map BAR0,
+            read CAPLENGTH/HCIVERSION/HCSPARAMS(maxslots,maxports)/
+            HCCPARAMS/DBOFF/RTSOFF, then USBCMD/USBSTS + per-port PORTSC
+            (connect/enable). Tells if HID devices are electrically there
+            even without transfer support.
+  acpi      SDT table list (sig/phys/len) + EC probe: ECDT/FADT hex-dump
+            heads (EC_SC/EC_DATA ports live there) + read EC status port
+            OBF/IBF bits.
+  inputscan synthesized verdict: counts xhci/ehci/uhci-ohci/smbus/i2c,
+            prints which bus likely carries TrackPoint/touchpad.
+
+Reuses pci.devices/count/barPhys/read8-32, acpi.tables/findTable,
+mmio.map. No new bus drivers — enumeration+register dumps only.
+
+ISO: dist/koru-hwprobe-20261109-0037.iso — proven pipeline + CORRECTED
+MBR. QEMU-verified boot to shell+hb (QEMU shows its own PCI/USB — proves
+the probes run; real-HW is the oracle via UDP).

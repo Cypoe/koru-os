@@ -6,6 +6,7 @@ const kmsdrv = @import("i915/kms.zig");
 const kbd = @import("kbd");
 const mouse = @import("mouse");
 const cursor = @import("cursor.zig");
+const hwprobe = @import("hwprobe.zig");
 const net = @import("net");
 
 var line: [96]u8 = undefined;
@@ -115,6 +116,22 @@ fn dispatch() void {
             text.puts("mouse: cursor on — move the TrackPoint\n");
         }
         cursor.report();
+        return;
+    }
+    if (eq("pciscan")) { // enumerate all PCI devices + BARs
+        hwprobe.pciScan();
+        return;
+    }
+    if (eq("usb")) { // XHCI host-controller caps + port status
+        hwprobe.usb();
+        return;
+    }
+    if (eq("acpi")) { // ACPI SDT list + embedded-controller probe
+        hwprobe.acpiEc();
+        return;
+    }
+    if (eq("inputscan")) { // synthesize pointing-device bus verdict
+        hwprobe.inputScan();
         return;
     }
     if (eq("reboot")) { reboot(); return; }
