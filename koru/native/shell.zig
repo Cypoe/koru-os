@@ -7,6 +7,7 @@ const kbd = @import("kbd");
 const mouse = @import("mouse");
 const cursor = @import("cursor.zig");
 const hwprobe = @import("hwprobe.zig");
+const xhci = @import("xhci.zig");
 const net = @import("net");
 
 var line: [96]u8 = undefined;
@@ -136,6 +137,12 @@ fn dispatch() void {
     }
     if (eq("smbus")) { // SMBus/I2C controller probe (0:31.4 class)
         hwprobe.smbus();
+        return;
+    }
+    if (eq("xusb")) { // XHCI slot-enum foundation (rings + Enable Slot)
+        text.puts("xusb: XHCI enumeration — watch last line\n");
+        _ = xhci.init();
+        text.puts("xusb returned — console still alive\n");
         return;
     }
     if (eq("reboot")) { reboot(); return; }

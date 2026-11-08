@@ -701,3 +701,25 @@ already decodes (cls>>8)&0xFF). Fixed all 3 sites.
 
 ISO: dist/koru-hwprobe2-20261109-0043.iso — proven pipeline + CORRECTED
 MBR. QEMU-verified boot to shell+hb.
+
+## XHCI DRIVER FOUNDATION (2026-11-09)
+
+Confirmed on T590: 2 XHCI (0:20.0, 58:0.0); 0:20.0 ports 6+8 connected =
+TrackPoint+touchpad as USB HID. New xhci.zig + 'xusb' shell command.
+
+Lands the transport substrate (first cut, needs HW iteration):
+  - find XHCI (class0C/sub03/progif30), map BAR0, enable mem+master
+  - caps read (caplen/hcsp maxslots+maxports), op-reg head dump (ground
+    truth for offsets)
+  - HC reset (HCRST, wait CNR/HCH)
+  - DMA rings in pmm-contiguous pages: cmd ring, event ring, DCBAA,
+    scratchpad; phys==VA (no IOMMU)
+  - ERST segment table, ERDP arm, CRCR RCS
+  - Enable Slot TRB (type9) + event-ring poll -> slot id
+Stage markers per step; op-reg dump prints live values for offset debug.
+HONEST: register offsets + ring/event logic are best-known xHCI spec —
+transfer-level descriptor fetch (Address Device + GET_DESCRIPTOR) is the
+NEXT iteration; this pass proves how far init+slot-alloc gets on HW.
+
+ISO: dist/koru-xhci-20261109-0049.iso — proven pipeline + CORRECTED MBR.
+QEMU-verified boot to shell+hb.
