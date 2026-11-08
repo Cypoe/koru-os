@@ -18,7 +18,7 @@ const prog = @import("program");
 const runtime = @import("runtime");
 const virtio = @import("virtio");
 const aspace = @import("aspace");
-const dserial = @import("dserial.zig");
+const user = @import("user");
 const fb = @import("fb.zig");
 const pmm = @import("pmm");
 const kbd = @import("kbd");
@@ -31,7 +31,6 @@ const surf = @import("surf.zig");
 const mouse = @import("mouse");
 const comp = @import("comp");
 const faults = @import("faults.zig");
-const efault = @import("efault.zig");
 const led = @import("led.zig");
 const text = @import("text.zig");
 const shell = @import("shell.zig");
@@ -51,12 +50,25 @@ comptime {
     _ = &runtime.stdout;
     _ = &runtime.stderr;
     _ = &runtime._uk_alloc_head;
-    // Diagnostic boot runs no program/user.run — the virtio/gpu/surf/mouse
-    // providers and user.zig's task runtime are not emitted. net/faults/
-    // efault/e1000e still call the serial externs; dserial.zig provides
-    // them via the runtime fputs/stdout UART path with no user.zig pull.
-    _ = &dserial.koru_say;
-    _ = &dserial.koru_putdec;
+    _ = &virtio.uk_blkdev_get;
+    _ = &virtio.uk_blkdev_configure;
+    _ = &virtio.uk_blkdev_queue_get_info;
+    _ = &virtio.uk_blkdev_queue_configure;
+    _ = &virtio.uk_blkdev_queue_submit_one;
+    _ = &virtio.uk_blkdev_queue_finish_reqs;
+    _ = &virtio.uk_blkdev_start;
+    _ = &virtio.uk_blkdev_stop;
+    _ = &virtio.uk_blkdev_queue_unconfigure;
+    _ = &virtio.uk_blkdev_unconfigure;
+    _ = &gpu.gpu_irq_ack;
+    _ = &gpu.gpu_msix_vec;
+    _ = &gpu.gpu_msix_seen;
+    _ = &surf.koruos_surface_open;
+    _ = &surf.koruos_surface_fill;
+    _ = &surf.koruos_surface_px;
+    _ = &surf.koruos_surface_present;
+    _ = &surf.koruos_surface_close;
+    _ = &mouse.mouse_irq;
 }
 
 // multiboot2 header — magic, architecture (i386), length, checksum, end tag.
@@ -391,39 +403,63 @@ fn textConsole() noreturn {
 var fullBoot: bool = false; // DIAG: false = fbDiag/console fast path; true = real program
 var consoleMode: bool = true; // DIAG: true = text console after fb.init
 
-// DIAGNOSTIC kmain — efault stage/fault oracle. Replaces the normal boot
-// path for the real-HW bring-up: instead of racing to shell blind, we
-// bracket every risky stage with a coloured band on the GRUB LFB and let
-// the IDT freeze+report any exception on-panel. The LAST lit band names
-// the furthest stage; a red VEC/CR2 screen names the faulting vector.
-//
-//   S0 kernel-ran   — efault.init adopted tag-8 + drew first band
-//   S1 idt          — faults.install() already ran (first statement)
-//   S2 pmm          — pmm.init() returned (memory map parsed, frames live)
-//   S3 pre-net      — about to call net.init (NIC probe / MMIO suspect)
-//   S4 net-done     — net.init() returned (e1000e up, UDP armed)
-//
-// On real HW the panel is the oracle: bands frozen mid-boot or a red fault
-// screen tell us exactly which stage/vector kills it — no serial needed.
 export fn kmain(mbi: u32) callconv(.c) noreturn {
-    faults.install(); // IDT FIRST — any exception freezes w/ efault report
-    efault.init(mbi); // adopt GRUB LFB (static maps, no pmm/mmio) + S0
-    efault.mark(1);   // S1 idt installed
-    pmm.init(mbi);    // memory map + frame allocator — S2
-    efault.mark(2);
-    efault.mark(3);   // S3 pre-net — next call is the prime suspect
-    net.init();       // NIC probe + e1000e MMIO + UDP telemetry — S4
-    efault.mark(4);
-    net.mark("diag-net-done");
-    efault.finish();  // survived every stage — steady marker, then halt
-    while (true) asm volatile ("cli\n\thlt");
+    faults.install(); // exceptions freeze with a report instead of resetting
+    pmm.init(mbi); // frames live before anything allocates
+    net.init();    // NIC + UDP telemetry — the display-independent oracle;
+                   // runs before every stage that can die blind
+    text.udpMirror = net.mirror; // every console line streams to the listener
+    const doFull = blk: {
+        var v = fullBoot;
+        asm volatile ("" : [v] "+r" (v)); // opaque — keeps the branch + inits live
+        break :blk v;
+    };
+    if (doFull) {
+        acpi.init(mbi); // RSDP + table directory — MADT/FACP names resolved
+        pci.init();  // config-space scan while IF=0 — the dump can't
+                     // interleave with IRQ prints; providers look up, never
+                     // rescan
+        ioapic.init(); // GSI routes armed (masked) — every later unmask
+                       // takes the LAPIC door; PIC lines masked for good
+        user.init(); // IDT + PIC + sti — interrupts live before the program
+        kbd.init();  // 8042 drain + IRQ1 — input events queue from here on
+        mouse.init(); // 8042 aux channel — PS/2 mouse, IRQ12
+        smp.init();  // INIT-SIPI-SIPI — APs ack + park before userland runs
+    }
+    fb.init(mbi);
+    // i915 modeset is gated behind the shell 'i915' command — the proven
+    // console proves kernel+text first; typing it bounds any crash to
+    // i915 entry and the last console line names the stage.
+    net.mark("fb-init");
+    if (consoleMode) { net.mark("shell"); shell.run(); } // DIAG — noreturn
+    if (!doFull) { // DIAG fast path only — real boot continues below
+        fbDiag();
+        while (true) asm volatile ("hlt");
+    }
+    stageMark(0x00FF0000); // DIAG red — fb adopted, entering comp
+    net.mark("comp-init");
+    comp.init(); // nativeCompositor — owns the scanout's scene from here
+    stageMark(0x0000FF00); // DIAG green — comp.init returned
+    net.mark("comp-done");
+    aspace.selftest();
+    stageMark(0x0000FFFF); // DIAG cyan — aspace done
+    net.mark("aspace-done");
+    prog.main();
+    net.mark("prog-main");
+    user.run();
+    while (true) asm volatile ("hlt");
 }
 
 const std = @import("std");
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     led.crash();
     koru_say("!! PANIC\n");
-    // Diagnostic build: no text/fb console — serial + freeze is the report.
-    _ = msg;
+    if (text.dims().w != 0) {
+        text.puts("!! PANIC\n");
+        var i: usize = 0;
+        while (i < msg.len and i < 48) : (i += 1) text.putc(msg[i]);
+        text.newline();
+        text.puts("(frozen — no reset)\n");
+    }
     while (true) asm volatile ("cli\n\thlt");
 }

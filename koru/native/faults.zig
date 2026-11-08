@@ -14,7 +14,7 @@
 // GDT kernel code (ljmp $0x08 in the trampoline), attr 0x8E =
 // present|DPL0|64-bit interrupt gate.
 
-const efault = @import("efault.zig");
+const text = @import("text.zig");
 const led = @import("led.zig");
 
 extern fn koru_say(s: [*:0]const u8) void;
@@ -56,23 +56,27 @@ fn readCr2() u64 {
 // Never returns: report then halt. If the fault corrupted whatever the
 // text path needs, koru_say still carries it for anyone with a UART.
 pub export fn isrReport(vec: u64) callconv(.c) noreturn {
-    const cr2 = readCr2();
-    // efault.busy() is the recursion guard: once a fault report has started
-    // drawing, a fault INSIDE those fb writes re-enters here — skip the
-    // serial/LED work and let reportFault no-op, then freeze. A nested
-    // fault can never reach a second fb write, so it can't triple-fault.
-    if (!efault.busy()) {
-        led.crash();
-        koru_say("!! EXCEPTION vec=");
-        koru_putdec(vec);
+    led.crash();
+    koru_say("!! EXCEPTION vec=");
+    koru_putdec(vec);
+    koru_say("\n");
+    if (vec == 14) { // #PF — the faulting linear address is the whole story
+        const cr2 = readCr2();
+        koru_say("!! CR2=");
+        koru_putdec(cr2);
         koru_say("\n");
-        if (vec == 14) { // #PF — the faulting linear address is the story
-            koru_say("!! CR2=");
-            koru_putdec(cr2);
-            koru_say("\n");
+        if (text.dims().w != 0) {
+            text.puts("!! PF cr2=");
+            text.putdec(cr2);
+            text.newline();
         }
     }
-    efault.reportFault(vec, cr2);
+    if (text.dims().w != 0) {
+        text.puts("!! EXCEPTION vec=");
+        text.putdec(vec);
+        text.newline();
+        text.puts("(frozen — no reset)\n");
+    }
     while (true) {
         asm volatile ("cli\n\thlt");
     }

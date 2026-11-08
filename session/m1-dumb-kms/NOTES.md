@@ -419,3 +419,39 @@ ON REAL T590 the panel now names the killer:
 
 ISO: dist/koru-m1-efault-20261108-2208.iso (13,021,184 B, MBR 0x1be=0x83
 type=0xee LBA=0x10). ELF _end=0x5a5610 (.text=0xe25f — tiny, no kms).
+
+## ROOT CAUSE — ISO MBR partition table, not kernel (2026-11-08)
+
+Decisive: koru-m1-nokms ISO kernel PT_LOAD bytes BYTE-IDENTICAL to working
+koru-i915-net-20261107-1949.iso yet crashed identically -> packaging bug.
+Full ISO9660 tree diff (578 files): identical except .disk uuid, grub.cfg
+menuentry name, koru.elf non-loadable bytes, EFI-only images. All .mod
+files identical (same grub-mkrescue/xorriso 1.5.6, same docker image).
+
+THE BUG — MBR partition entry 0 at 0x1BE:
+  working ISOs (1949/1856/1747):  83 00 02 00 10 00 00 00 01 00 00 00 <sz>
+    boot=0x83 type=0x10 endCHS=0 LBA=0x01
+  M1 ISOs (all):                  83 00 02 00 ee .. .. .. 10 00 00 00 <sz>
+    boot=0x83 type=0xee(GPT!) endCHS!=0 LBA=0x10
+
+xorriso/grub-mkrescue DEFAULT emits: 00 00 02 00 ee 1a 18 0c 01 00 00 00
+(boot=0x00 type=0xee LBA=0x01). The working patch sets boot=0x83,
+type=0x10, endCHS=0, and LEAVES LBA=0x01. The M1 patch WRONGLY forced
+LBA=0x10 and left type=0xee -> BIOS told boot partition starts sector 16
+as GPT-protective -> boot chain reads wrong sector -> kernel never runs.
+Byte-identical kernel, identical crash — explains EVERY M1 ISO failing.
+
+CORRECT MBR PATCH (verified vs 3 working ISOs):
+  byte[0x1BE]=0x83  byte[0x1C2]=0x10  byte[0x1C3..0x1C5]=0
+  LEAVE LBA[0x1C6..0x1C9]=0x01 and size[0x1CA..0x1CD] as xorriso wrote.
+
+FIXED ISOs (all now match working MBR pattern):
+  dist/koru-m1-packfix-20261108-2224.iso  <- REAL M1 kernel (shell+kms),
+      QEMU-verified to shell+hb. PRIMARY — flash this.
+  dist/koru-m1-efault-20261108-2208.iso   <- efault fault-oracle, repatched
+  dist/koru-m1-relsmall-20261108-2156.iso <- repatched
+  dist/koru-m1-heapfix-20261108-2149.iso  <- repatched
+
+boot.zig+faults.zig restored to pre-efault M1 shell path (efault.zig/
+dserial.zig remain on disk, unreferenced). Next: flash packfix on T590 —
+expect UDP telemetry + shell; then kmsbuf/kms M1 sequence.
