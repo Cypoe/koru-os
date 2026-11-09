@@ -20,6 +20,7 @@ const fb = @import("fb.zig");
 const net = @import("net");
 const text = @import("text.zig");
 const user = @import("user");
+const std = @import("std");
 
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
@@ -42,6 +43,8 @@ var pressed_n: u32 = 0;
 var input_armed: bool = false;
 var pkt_marked: bool = false;
 var drawn_gen: u64 = 0; // fb.generation() the sprite was last drawn on
+var diag_n: u64 = 0;   // cumulative motion events seen (wire stride)
+var edge_n: u64 = 0;   // clamp/edge markers emitted
 
 // ensureInput — the shell path boots with fullBoot=false, so the doFull
 // init block (acpi/pci/ioapic/user/kbd/mouse/smp) never ran and
@@ -89,6 +92,16 @@ const SPRITE = [SPR_H]u16{
 
 fn say(s: [*:0]const u8) void {
     _ = fputs(s, stdout);
+}
+
+// sayU — dual-write one formatted line: serial AND the UDP mirror, same
+// discipline as mouse.zig (the T590 oracle lives on the wire).
+fn sayU(comptime fmt: []const u8, args: anytype) void {
+    var buf: [192]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    buf[s.len] = 0;
+    _ = fputs(@ptrCast(&buf), stdout);
+    net.mirror(s);
 }
 
 fn drawSprite(x: i32, y: i32) void {
@@ -163,10 +176,16 @@ pub fn isEnabled() bool {
 pub fn tick() bool {
     if (!enabled or !init_d) return false;
     var moved = false;
+    var last_dx: i32 = 0;
+    var last_dy: i32 = 0;
+    var evs: u64 = 0;
     while (mouse.pop()) |ev| {
         if (ev.kind == 3) { // motion — raw device deltas, y already surface-space
             cx += ev.dx;
             cy += ev.dy;
+            last_dx = ev.dx;
+            last_dy = ev.dy;
+            evs += 1;
             moves += 1;
             moved = true;
         } else if (ev.kind == 2) { // button edge — count held buttons
@@ -187,10 +206,27 @@ pub fn tick() bool {
     if (stale) shown = false; // old surface may be freed — nothing to erase
     const maxX = @as(i32, @intCast(d.w)) - @as(i32, SPR_W);
     const maxY = @as(i32, @intCast(d.h)) - @as(i32, SPR_H);
+    const pre_x = cx;
+    const pre_y = cy;
     if (cx < 0) cx = 0;
     if (cy < 0) cy = 0;
     if (cx > maxX) cx = maxX;
     if (cy > maxY) cy = maxY;
+    const clamped = (cx != pre_x or cy != pre_y);
+    // Jump diagnostic (T590 oracle): per-tick delta + pre/post-clamp pos.
+    // First 8 motion ticks verbosely, then every 16th — enough to see the
+    // erratic pattern without flooding the listener at packet rate.
+    // Every clamp event is marked separately (edge hit = suspect).
+    if (moved) {
+        diag_n += evs;
+        if (diag_n <= 8 or moves % 16 == 0)
+            sayU("cursor:ev dx={d} dy={d} pre={d},{d} pos={d},{d} clamp={d}\n",
+                .{ last_dx, last_dy, pre_x, pre_y, cx, cy, @intFromBool(clamped) });
+        if (clamped) {
+            edge_n += 1;
+            if (edge_n <= 8 or edge_n % 16 == 0) net.mark("cursor:edge");
+        }
+    }
     // Re-assert the sprite: erase at the last DRAWN pos (ox,oy — NOT the
     // just-updated cx,cy: hiding at the new pos XOR-cancelled the draw,
     // which is why the T590 arrow never appeared), then draw at the

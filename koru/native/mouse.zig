@@ -202,14 +202,19 @@ pub fn feedByte(b: u8) void {
     prev_btns = btns;
 }
 
-// vec-0x2C path — called from user.zig's irq_exc_dispatch. Reads the byte
-// the controller has; if it arrived without the aux flag it isn't ours —
-// route it to the kbd rather than eat it.
+// vec-0x2C path — called from user.zig's irq_exc_dispatch. Drains every
+// AUX-flagged byte latched (bursts would otherwise wait on re-fire and
+// starve the packet assembler). A pending NON-aux byte is left in the
+// output register for kbd.pollChar — consuming it here would eat a
+// keystroke (the old code did exactly that on a stray IRQ12).
 pub export fn mouse_irq() callconv(.c) void {
-    const st = inb(STATUS);
-    if (st & 1 == 0) return;
-    const b = inb(DATA);
-    if ((st & AUX_BYTE) != 0) feedByte(b) else kbd.feedByte(b);
+    var guard: u32 = 0;
+    while (guard < 8) : (guard += 1) {
+        const st = inb(STATUS);
+        if (st & 1 == 0) return;           // output register empty
+        if ((st & AUX_BYTE) == 0) return;  // kbd byte — leave it for pollChar
+        feedByte(inb(DATA));
+    }
 }
 
 // ---- init -----------------------------------------------------------------

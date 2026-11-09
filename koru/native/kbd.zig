@@ -132,8 +132,13 @@ pub fn conByte() ?u8 {
 pub fn pollChar() ?u8 {
     const st = inb(STATUS);
     if (st & 1 == 0) return null;
+    // AUX check BEFORE consuming: an aux byte pending ahead of IRQ12's
+    // handler must be LEFT in the output register — reading it here and
+    // dropping it desyncs the mouse's 3-byte packet frame (wild dx/dy =
+    // the T590 cursor-jump bug). IRQ12 is armed whenever aux streams,
+    // so the byte is drained there a few instructions later.
+    if (st & 0x20 != 0) return null; // aux/mouse byte — not ours, don't eat
     const b = inb(DATA);
-    if (st & 0x20 != 0) return null; // aux/mouse byte — not ours
     const code = b & 0x7F;
     if (code == 0x2A or code == 0x36) { // shift make/break updates state
         shift = (b & 0x80) == 0;
