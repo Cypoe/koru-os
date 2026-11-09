@@ -101,7 +101,7 @@ pub const DumbBuffer = struct {
     map: ?[*]volatile u32 = null, // CPU view — identity VA == phys
 };
 
-pub const MAX_DUMBS: usize = 4;
+pub const MAX_DUMBS: usize = 16; // scene swapchain(2) + modeset + window dmabufs + diagnostics
 pub const DUMMY_GTT_PAGES: u32 = 128; // libgfxinit VT-d tail, same as M0
 
 pub const Device = struct {
@@ -648,34 +648,56 @@ pub fn atomicTest(bufHandle: u32) bool {
     return true;
 }
 
-// COMMIT: the atomic commit point — one DSPASURF write arms the flip the
-// display engine applies at vblank. Readback verifies the request landed.
-pub fn flipCommit(bufHandle: u32) bool {
+// flipSwap — the swapchain-safe commit: same check->test->commit as
+// flipCommit but the PREVIOUS scanout buffer is NOT destroyed. The
+// scene compositor owns a two-dumb swapchain; the retired front buffer
+// becomes the next back and must stay alive. fb_base follows the newly
+// scanned buffer via rebaseQuiet (no generation bump — a routine flip
+// is not a surface-identity change; no serial print — flip cadence).
+pub fn flipSwap(bufHandle: u32) bool {
     if (!atomicTest(bufHandle)) return false;
     const buf = gdev.dumbs[bufHandle].?;
-    const prev = gdev.scanout.?;
-    mmio.say("kms: flipCommit surf_off="); mmio.sayHex(buf.gtt_offset);
-    mmio.say(" prev_h="); mmio.sayDec(prev); mmio.say("\n");
+    // QUIET by contract: this runs once per frame in the scene
+    // swapchain — no stage()/say/mark here (LED blink + UDP marker per
+    // flip would strangle the frame cadence). The compositor emits its
+    // own stride'd scene:flip marker; failures return false and the
+    // caller names them.
     pipe.pageflipSurface(buf.gtt_offset);
     const rb = pipe.surfaceOffset();
-    mmio.say("kms: DSPASURF readback="); mmio.sayHex(rb); mmio.say("\n");
     if ((rb & ~@as(u32, 0xfff)) != (@as(u32, @intCast(buf.gtt_offset)) & ~@as(u32, 0xfff))) {
-        stage("kms: FAIL flipCommit — surface readback mismatch");
         return false;
     }
-    // Commit object state — the plane now scans the new buffer.
     gdev.scanout = bufHandle;
     gdev.planes[0].fb = buf;
-    stage("kms: flip COMMITTED — flip armed for next vblank");
-    // The console + cursor must live on the SCANNED surface: without
-    // this rebase, fb_base kept pointing at the modeset buffer whose
-    // frames dumbDestroy frees next — text and the mouse sprite drew
-    // into freed pmm memory while the panel showed the flip buffer
-    // (the T590 "black screen, no arrow" report). Rebase BEFORE the
-    // free so no draw ever targets the retired frames.
-    rebaseConsole(bufHandle);
+    fb.rebaseQuiet(buf.phys, buf.pitch, buf.width, buf.height);
+    return true;
+}
+
+// COMMIT: the atomic commit point — one DSPASURF write arms the flip the
+// display engine applies at vblank. Readback verifies the request landed.
+// Diagnostics flavour (kflip/kdmabuf): retires the previous scanout
+// buffer — wrong for a swapchain, right for a one-shot test flip.
+pub fn flipCommit(bufHandle: u32) bool {
+    if (bufHandle >= gdev.dumbs.len or gdev.scanout == null) return false;
+    const prev = gdev.scanout.?;
+    if (!flipSwap(bufHandle)) return false;
     _ = dumbDestroy(prev); // retire old scanout frames
     return true;
+}
+
+// vblankArm — unmask the display-engine interrupt sources once (DEIMR
+// active-low; 0 = all unmasked). The scene compositor's flip pacing
+// polls DEIIR for vblank edges; without this the IIR stays masked and
+// no events ever latch.
+pub fn vblankArm() void {
+    pipe.vblankEnable();
+}
+
+// vblankDrain — one quiet DEIIR read+clear. Returns raw IIR; nonzero
+// means at least one vblank (or other DE event) latched since the last
+// drain. No markers, no waits — the compositor polls this per tick.
+pub fn vblankDrain() u32 {
+    return pipe.vblankPoll();
 }
 
 // VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).
@@ -735,7 +757,7 @@ pub fn runFlip() void {
 // mapped for the producer, pmm-owned for lifetime). refs counts holders —
 // producer + display — so a buffer can't be freed while scanned.
 
-pub const MAX_DMABUFS: usize = 4;
+pub const MAX_DMABUFS: usize = 16;
 
 const DmabufEnt = struct {
     token: u32 = 0,

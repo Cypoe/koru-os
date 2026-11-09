@@ -1,46 +1,29 @@
-// koru/native/win — the first movable compositor surface ("kwin").
+// koru/native/win — the "kwin" window PRODUCER for the scene core.
 //
-// One opaque window, software-composited onto the console scanout:
-// a 320x200 backing buffer painted once (border + titlebar + font
-// label + solid body), then blitted over the scanout at (wx,wy).
-// The scanout target is whatever fb.scanout() reports — the GRUB/EFI
-// LFB before 'kms', the i915 dumb buffer after rebase — so the window
-// rides the proven console surface either way.
+// MC-1: N windows, not one. Each window is a producer-owned backing
+// (dmabuf when the i915 device is up, pmm otherwise — kind named in the
+// marker, never silent) painted once with chrome (border + titlebar +
+// label + body), then registered with comp as a .window layer. The
+// compositor owns geometry/z/focus/drag through the placement
+// authority; this module owns only pixels + the titlebar focus repaint.
 //
-// Backing: a dmabuf export when the i915 KMS device is up (the M3
-// producer->scanout seam, CPU side only — the window is composited,
-// never scanned directly), contiguous pmm frames otherwise. The kind
-// is named in the create marker; never silently chosen.
+// What died vs the single-window version: the retained-restore snapshot
+// (the scene's retained backings make it obsolete), the heal stride
+// (console is a root layer now — no occlusion loss to heal), the
+// generation rescan (present.zig owns surface re-targeting), and all
+// drag/input logic (comp.tick hit-tests and drags).
 //
-// Damage model is retained-restore, not damage lists: before the
-// window covers a rect we snapshot the scanout pixels beneath it;
-// moving restores the vacated rect, re-snapshots the destination,
-// and blits. Console output printed under the window while it was up
-// is occluded — standard retained-mode loss, named not hidden. A slow
-// heal stride re-blits the window so glyph bleed self-repairs.
-//
-// Input: cursor.zig owns pointer position + held buttons; this module
-// hit-tests the sprite tip against the window rect. Press-inside +
-// motion = drag, release = drop. The XOR cursor sprite must never be
-// painted over by a non-XOR blit, so every composite runs between
-// cursor.compositeSuspend() (sprite erased, scene pixels restored)
-// and cursor.compositeResume() (sprite redrawn on top) — the ordering
-// a real scanout compositor uses.
-//
-// Generation discipline: every scanout access is gated on
-// fb.generation() matching the gen captured at create/rescan. A kms
-// flip/modeset repoints fb_base — restoring or snapshotting the OLD
-// surface would read/write freed pmm frames, so a gen change triggers
-// rescan() (re-target + re-capture + re-blit, no restore — the old
-// surface is already gone).
+// Focus chrome: titlebar colour is DERIVED from comp focus state each
+// tick — repaint the strip into the backing + damageLayer, never store
+// a second copy of "am I focused" anywhere but last_focus for change
+// detection.
 
 const std = @import("std");
-const fb = @import("fb.zig");
 const pmm = @import("pmm");
 const mmio = @import("mmio");
 const net = @import("net");
 const text = @import("text.zig");
-const cursor = @import("cursor.zig");
+const comp = @import("comp");
 const kms = @import("i915/kms.zig");
 
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
@@ -50,42 +33,33 @@ const WW: u32 = 320;
 const WH: u32 = 200;
 const TITLE_H: u32 = 22;
 const BORDER: u32 = 2;
-const HEAL_STRIDE: u64 = 8192;
+const MAX_WIN: usize = 8;
 
 // XRGB8888 — same packing as the console/i915 paths.
 const C_BODY: u32 = 0x002A2F3A;
 const C_TITLE: u32 = 0x003040C0;
+const C_TITLE_DIM: u32 = 0x00202E58;
 const C_BORDER: u32 = 0x00D8DEE9;
 const C_LABEL: u32 = 0x00F8F8F2;
 const C_HINT: u32 = 0x008A93A6;
 
-var live: bool = false;
-var wx: u32 = 0;
-var wy: u32 = 0;
-var sw: u32 = 0; // scanout dims captured at create/rescan
-var sh: u32 = 0;
-var gen: u64 = 0; // fb.generation() the composites target
-var dragging: bool = false;
-var grab_dx: i32 = 0;
-var grab_dy: i32 = 0;
-var prev_held: bool = false;
-var moves: u64 = 0;
-var heal_n: u64 = 0;
+const NAMES = [_][]const u8{ "kwin0", "kwin1", "kwin2", "kwin3",
+    "kwin4", "kwin5", "kwin6", "kwin7" };
 
-// window backing — dmabuf (token owns the export) or pmm (phys+pages),
-// one or the other, never both.
-var buf: [*]volatile u32 = undefined;
-var pitch: u32 = 0; // pixels per row
-var tok: ?u32 = null;
-var pphys: u64 = 0;
-var ppages: usize = 0;
+const WinObj = struct {
+    live: bool = false,
+    handle: i32 = -1, // comp layer handle (stable slot)
+    buf: [*]volatile u32 = undefined,
+    pitch: u32 = 0, // pixels per row
+    tok: ?u32 = null,
+    pphys: u64 = 0,
+    ppages: usize = 0,
+    last_focus: bool = false,
+};
+var wins = [_]WinObj{.{}} ** MAX_WIN;
+var spawned: u64 = 0;
+var closed: u64 = 0;
 
-// retained under-window snapshot — WW*WH pixels, pitch WW, pmm frames.
-var snap: [*]u32 = undefined;
-var snap_ok: bool = false;
-
-// sayU — dual-write one formatted line: serial AND the UDP mirror,
-// same discipline as cursor.zig (the T590 oracle lives on the wire).
 fn sayU(comptime fmt: []const u8, args: anytype) void {
     var b: [224]u8 = undefined;
     const s = std.fmt.bufPrint(&b, fmt, args) catch return;
@@ -94,7 +68,7 @@ fn sayU(comptime fmt: []const u8, args: anytype) void {
     net.mirror(s);
 }
 
-// ---- pixel helpers ---------------------------------------------------------
+// ---- pixel helpers (into a window backing) ---------------------------------
 
 fn setPx(b: [*]volatile u32, p: u32, x: u32, y: u32, c: u32) void {
     b[@as(usize, @intCast(y)) * @as(usize, @intCast(p)) +
@@ -113,12 +87,8 @@ fn frameRect(b: [*]volatile u32, p: u32, w: u32, h: u32, t: u32, c: u32) void {
     fillRect(b, p, 0, 0, t, h, c);
     fillRect(b, p, w - t, 0, t, h, c);
 }
-fn readPx(b: [*]volatile u32, p: u32, x: u32, y: u32) u32 {
-    return b[@as(usize, @intCast(y)) * @as(usize, @intCast(p)) +
-        @as(usize, @intCast(x))];
-}
-// 8x8 font into an arbitrary buffer — reuses text.zig's glyph table and
-// its bit order (bit c of row r = column c), advance 9 like the console.
+// 8x8 font into an arbitrary buffer — text.zig's glyph table, bit c of
+// row r = column c, advance 9 like the console.
 fn drawText(b: [*]volatile u32, p: u32, x0: u32, y0: u32, s: []const u8, c: u32) void {
     var x = x0;
     for (s) |ch| {
@@ -138,298 +108,171 @@ fn drawText(b: [*]volatile u32, p: u32, x0: u32, y0: u32, s: []const u8, c: u32)
     }
 }
 
-// ---- the window's own pixels ------------------------------------------------
+// ---- the window's own pixels ---------------------------------------------------
 
-fn paintWindow() void {
-    fillRect(buf, pitch, 0, 0, WW, WH, C_BODY);
-    frameRect(buf, pitch, WW, WH, BORDER, C_BORDER);
-    // titlebar inside the border
-    fillRect(buf, pitch, BORDER, BORDER, WW - 2 * BORDER, TITLE_H - 2 * BORDER, C_TITLE);
-    drawText(buf, pitch, 10, BORDER + (TITLE_H - 2 * BORDER - 8) / 2, "kwin", C_LABEL);
-    drawText(buf, pitch, 10, TITLE_H + 8, "drag me", C_HINT);
+fn paintTitle(w: *WinObj, idx: usize, focused: bool) void {
+    const tc = if (focused) C_TITLE else C_TITLE_DIM;
+    fillRect(w.buf, w.pitch, BORDER, BORDER, WW - 2 * BORDER, TITLE_H - 2 * BORDER, tc);
+    drawText(w.buf, w.pitch, 10, BORDER + (TITLE_H - 2 * BORDER - 8) / 2,
+        NAMES[idx], C_LABEL);
 }
 
-// ---- scanout target ---------------------------------------------------------
+fn paintWindow(w: *WinObj, idx: usize) void {
+    const body = C_BODY + @as(u32, @intCast(idx)) * 0x00010101; // per-window tint
+    fillRect(w.buf, w.pitch, 0, 0, WW, WH, body);
+    frameRect(w.buf, w.pitch, WW, WH, BORDER, C_BORDER);
+    paintTitle(w, idx, true);
+    drawText(w.buf, w.pitch, 10, TITLE_H + 8, "drag me", C_HINT);
+}
 
-const Target = struct { px: [*]volatile u32, pitch: u32, w: u32, h: u32 };
+// ---- backing free ---------------------------------------------------------------
 
-fn target() ?Target {
-    const s = fb.scanout() orelse return null;
-    if (s.pitch < 4 or s.w == 0 or s.h == 0) return null;
-    return .{
-        .px = @ptrFromInt(@as(usize, @intCast(s.phys))),
-        .pitch = s.pitch / 4,
-        .w = s.w,
-        .h = s.h,
+fn freeWin(w: *WinObj) void {
+    if (w.tok) |t| {
+        kms.dmabufUnref(t);
+        w.tok = null;
+    } else if (w.pphys != 0) {
+        _ = pmm.freeBlock(w.pphys, w.ppages);
+        w.pphys = 0;
+    }
+    w.buf = undefined;
+    w.pitch = 0;
+}
+
+// ---- spawn / close ---------------------------------------------------------------
+
+pub fn spawn() void {
+    var slot: ?usize = null;
+    for (wins[0..], 0..) |*w, i| {
+        if (!w.live) {
+            slot = i;
+            break;
+        }
+    }
+    const si = slot orelse {
+        sayU("KORU kwin: pool full ({d})\n", .{MAX_WIN});
+        text.puts("kwin: pool full\n");
+        return;
     };
-}
-
-// ---- retained-restore damage -------------------------------------------------
-// All three run with the cursor suspended — the scanout holds pure
-// scene pixels (no XOR sprite) for the whole window rect. Element-wise
-// row copies: the scanout side is volatile (device-mapped memory),
-// @memcpy won't take the qualifier mix.
-
-fn saveRect(t: Target) void {
-    var y: u32 = 0;
-    while (y < WH) : (y += 1) {
-        const srow = @as(usize, @intCast(wy + y)) * @as(usize, @intCast(t.pitch)) +
-            @as(usize, @intCast(wx));
-        const drow = @as(usize, @intCast(y)) * @as(usize, WW);
-        var x: usize = 0;
-        while (x < @as(usize, WW)) : (x += 1) snap[drow + x] = t.px[srow + x];
-    }
-}
-fn restoreRect(t: Target) void {
-    var y: u32 = 0;
-    while (y < WH) : (y += 1) {
-        const drow = @as(usize, @intCast(wy + y)) * @as(usize, @intCast(t.pitch)) +
-            @as(usize, @intCast(wx));
-        const srow = @as(usize, @intCast(y)) * @as(usize, WW);
-        var x: usize = 0;
-        while (x < @as(usize, WW)) : (x += 1) t.px[drow + x] = snap[srow + x];
-    }
-}
-fn blitWin(t: Target) void {
-    var y: u32 = 0;
-    while (y < WH) : (y += 1) {
-        const drow = @as(usize, @intCast(wy + y)) * @as(usize, @intCast(t.pitch)) +
-            @as(usize, @intCast(wx));
-        const srow = @as(usize, @intCast(y)) * @as(usize, @intCast(pitch));
-        var x: usize = 0;
-        while (x < @as(usize, WW)) : (x += 1) t.px[drow + x] = buf[srow + x];
-    }
-}
-
-fn ensureSnap() bool {
-    if (snap_ok) return true;
-    const bytes = @as(u64, WW) * WH * 4;
-    const pages: usize = @intCast((bytes + 4095) / 4096);
-    const phys = pmm.allocContiguous(pages, 1) orelse return false;
-    if (!mmio.map(phys, bytes)) {
-        _ = pmm.freeBlock(phys, pages);
-        return false;
-    }
-    snap = @ptrFromInt(@as(usize, @intCast(phys)));
-    snap_ok = true;
-    return true;
-}
-
-// ---- backing alloc/free -------------------------------------------------------
-
-fn allocBacking() ?[]const u8 {
-    // dmabuf first when the KMS device is up — the M3 export seam. The
-    // window never imports/flips; the token just owns a CPU-mapped
-    // dumb buffer with real GTT residency.
+    var w = WinObj{};
+    // try dmabuf first — need the token kept, so alloc inline
+    var kind: []const u8 = "pmm";
     if (kms.device().up) {
         if (kms.dmabufCreate(WW, WH)) |t| {
             if (kms.dmabufMap(t)) |b| {
                 if (b.map) |m| {
-                    tok = t;
-                    buf = m;
-                    pitch = b.pitch / 4;
-                    return "dmabuf";
+                    w.tok = t;
+                    w.buf = m;
+                    w.pitch = b.pitch / 4;
+                    kind = "dmabuf";
                 }
             }
-            kms.dmabufUnref(t); // map refused — release the export
+            if (w.tok == null) kms.dmabufUnref(t);
         }
     }
-    // pmm backing — same pixels, same composite; used where no i915
-    // device exists (QEMU, pre-'kms' shell). Named in the marker.
-    const bytes = @as(u64, WW) * WH * 4;
-    const pages: usize = @intCast((bytes + 4095) / 4096);
-    const phys = pmm.allocContiguous(pages, 1) orelse return null;
-    if (!mmio.map(phys, bytes)) {
-        _ = pmm.freeBlock(phys, pages);
-        return null;
+    if (w.pitch == 0) {
+        const bytes = @as(u64, WW) * WH * 4;
+        const pages: usize = @intCast((bytes + 4095) / 4096);
+        const phys = pmm.allocContiguous(pages, 1) orelse {
+            sayU("KORU kwin: backing alloc failed\n", .{});
+            text.puts("kwin: alloc failed\n");
+            return;
+        };
+        if (!mmio.map(phys, bytes)) {
+            _ = pmm.freeBlock(phys, pages);
+            sayU("KORU kwin: backing map failed\n", .{});
+            text.puts("kwin: map failed\n");
+            return;
+        }
+        w.pphys = phys;
+        w.ppages = pages;
+        w.buf = @ptrFromInt(@as(usize, @intCast(phys)));
+        w.pitch = WW;
+        kind = "pmm";
     }
-    pphys = phys;
-    ppages = pages;
-    buf = @ptrFromInt(@as(usize, @intCast(phys)));
-    pitch = WW;
-    return "pmm";
-}
+    paintWindow(&w, si);
 
-fn freeBacking() void {
-    if (tok) |t| {
-        kms.dmabufUnref(t); // refs 1->0 -> dumbDestroy frees the frames
-        tok = null;
-    } else if (pphys != 0) {
-        _ = pmm.freeBlock(pphys, ppages);
-        pphys = 0;
-    }
-    buf = undefined;
-    pitch = 0;
-}
-
-// ---- create / destroy / rescan -------------------------------------------------
-
-fn clampPos(nx: i64, ny: i64) struct { x: u32, y: u32 } {
+    // cascade placement — desired pos; comp's decide() clamps.
+    var sw: u32 = 0;
+    var sh: u32 = 0;
+    comp.dims(&sw, &sh);
+    const off: i64 = @as(i64, @intCast(si)) * 28;
     const maxX: i64 = @as(i64, @intCast(sw)) - WW;
     const maxY: i64 = @as(i64, @intCast(sh)) - WH;
-    const x = @max(@as(i64, 0), @min(nx, maxX));
-    const y = @max(@as(i64, 0), @min(ny, maxY));
-    return .{ .x = @intCast(x), .y = @intCast(y) };
-}
+    const cx: i64 = @divTrunc(@as(i64, sw), 2) - WW / 2 + off;
+    const cy: i64 = @divTrunc(@as(i64, sh), 2) - WH / 2 + 24 + off;
+    const dx: u32 = @intCast(@max(@as(i64, 0), @min(cx, @max(@as(i64, 0), maxX))));
+    const dy: u32 = @intCast(@max(@as(i64, 0), @min(cy, @max(@as(i64, 0), maxY))));
 
-fn placeInitial(t: Target) void {
-    const c = clampPos(@divTrunc(@as(i64, t.w), 2) - WW / 2,
-        @divTrunc(@as(i64, t.h), 2) - WH / 2 + 24);
-    wx = c.x;
-    wy = c.y;
-}
-
-pub fn toggle() void {
-    if (live) {
-        destroy();
+    const buf: [*]u32 = @volatileCast(w.buf);
+    const handle = comp.windowOpen(buf, w.pitch, WW, WH, dx, dy, TITLE_H, si);
+    if (handle < 0) {
+        freeWin(&w);
+        sayU("KORU kwin: scene refused window\n", .{});
+        text.puts("kwin: scene refused\n");
         return;
     }
-    const t = target() orelse {
-        sayU("KORU kwin: no scanout — fb backend absent or vgpu\n", .{});
-        text.puts("kwin: no framebuffer\n");
-        return;
-    };
-    if (t.w <= WW or t.h <= WH) {
-        sayU("KORU kwin: screen {d}x{d} too small for 320x200\n", .{ t.w, t.h });
-        text.puts("kwin: screen too small\n");
-        return;
-    }
-    const kind = allocBacking() orelse {
-        sayU("KORU kwin: backing alloc failed\n", .{});
-        text.puts("kwin: alloc failed\n");
-        return;
-    };
-    if (!ensureSnap()) {
-        sayU("KORU kwin: snapshot alloc failed\n", .{});
-        freeBacking();
-        text.puts("kwin: alloc failed\n");
-        return;
-    }
-    sw = t.w;
-    sh = t.h;
-    gen = fb.generation();
-    placeInitial(t);
-    paintWindow();
-
-    cursor.compositeSuspend();
-    saveRect(t);
-    blitWin(t);
-    cursor.compositeResume();
-
-    live = true;
-    dragging = false;
-    prev_held = false;
-    moves = 0;
-    heal_n = 0;
-    // readback proof — the composite either landed in the scanned
-    // surface or it didn't; three pixels name it on the wire.
-    const body = readPx(t.px, t.pitch, wx + WW / 2, wy + TITLE_H + 20);
-    const bord = readPx(t.px, t.pitch, wx + 1, wy + 1);
-    const titl = readPx(t.px, t.pitch, wx + WW / 2, wy + 4);
-    sayU("KORU kwin create 320x200 @{d},{d} backing={s} body={x} border={x} title={x}\n",
-        .{ wx, wy, kind, body, bord, titl });
-    if (!cursor.isEnabled()) cursor.enable(); // drag needs the pointer
-    text.puts("kwin: window up — press+drag inside it\n");
+    w.handle = handle;
+    w.live = true;
+    w.last_focus = comp.isFocused(handle); // windowOpen focuses+raises
+    wins[si] = w;
+    spawned += 1;
+    sayU("KORU kwin spawn {d} 320x200 handle={d} backing={s}\n",
+        .{ si, handle, kind });
+    text.puts("kwin: window up — press+drag titlebar to move\n");
+    if (!cursorMod.isEnabled()) cursorMod.enable();
 }
 
-fn destroy() void {
-    const t = target();
-    // restore only onto the SAME generation we snapshotted — a flipped
-    // scanout means the old frames may already be freed.
-    if (t) |tt| {
-        if (fb.generation() == gen) {
-            cursor.compositeSuspend();
-            restoreRect(tt);
-            cursor.compositeResume();
+// close the focused window, else the topmost — 'kwclose'.
+pub fn closeTop() void {
+    var h = comp.focusedWindow();
+    if (h < 0) h = comp.topWindow();
+    if (h < 0) {
+        sayU("KORU kwin: nothing to close\n", .{});
+        text.puts("kwin: no windows\n");
+        return;
+    }
+    var found: ?usize = null;
+    for (wins[0..], 0..) |*w, i| {
+        if (w.live and w.handle == h) {
+            found = i;
+            break;
         }
     }
-    freeBacking();
-    live = false;
-    dragging = false;
-    sayU("KORU kwin destroy @{d},{d}\n", .{ wx, wy });
+    const si = found orelse {
+        // a scene window we don't own (surf/shell-spawned) — detach only
+        comp.detach(h);
+        sayU("KORU kwin close foreign handle={d}\n", .{h});
+        return;
+    };
+    var w = wins[si];
+    comp.detach(h); // vacated rect damages -> reveal beneath
+    freeWin(&w);
+    w.live = false;
+    w.handle = -1;
+    wins[si] = w;
+    closed += 1;
+    sayU("KORU kwin close {d} handle={d}\n", .{ si, h });
     text.puts("kwin: window closed\n");
 }
 
-// gen changed under a live window (kms flip/modeset): the old surface
-// is gone — re-target, re-capture under-content on the NEW surface,
-// re-blit. No restore: there is nothing safe to restore onto.
-fn rescan(t: Target) void {
-    sw = t.w;
-    sh = t.h;
-    gen = fb.generation();
-    const c = clampPos(@as(i64, wx), @as(i64, wy));
-    wx = c.x;
-    wy = c.y;
-    cursor.compositeSuspend();
-    saveRect(t);
-    blitWin(t);
-    cursor.compositeResume();
-    sayU("KORU kwin rescan @{d},{d} on {d}x{d}\n", .{ wx, wy, sw, sh });
-}
-
-// ---- per-tick: drag input + heal ----------------------------------------------
+// ---- per-tick producer update -----------------------------------------------------
+// Focus chrome only: repaint the titlebar strip when comp's focus state
+// flips, then damage that backing rect into the scene.
 
 pub fn tick() void {
-    if (!live) return;
-    const t = target() orelse return;
-    if (fb.generation() != gen) {
-        rescan(t);
-        return;
-    }
-    if (cursor.isEnabled()) {
-        const c = cursor.pos();
-        const held = cursor.buttonsHeld() > 0;
-        const inside = c.x >= @as(i32, @intCast(wx)) and
-            c.x < @as(i32, @intCast(wx + WW)) and
-            c.y >= @as(i32, @intCast(wy)) and
-            c.y < @as(i32, @intCast(wy + WH));
-
-        if (!dragging) {
-            // drag starts only on the press EDGE inside the window — a
-            // button held from outside doesn't capture on entry.
-            if (held and !prev_held and inside) {
-                dragging = true;
-                grab_dx = c.x - @as(i32, @intCast(wx));
-                grab_dy = c.y - @as(i32, @intCast(wy));
-                moves = 0;
-                sayU("KORU kwin drag @{d},{d}\n", .{ wx, wy });
-            }
-        } else {
-            if (!held) {
-                dragging = false;
-                sayU("KORU kwin drop @{d},{d}\n", .{ wx, wy });
-            } else {
-                const want = clampPos(@as(i64, c.x) - @as(i64, grab_dx),
-                    @as(i64, c.y) - @as(i64, grab_dy));
-                if (want.x != wx or want.y != wy) {
-                    cursor.compositeSuspend();
-                    restoreRect(t);
-                    wx = want.x;
-                    wy = want.y;
-                    saveRect(t);
-                    blitWin(t);
-                    cursor.compositeResume();
-                    moves += 1;
-                    if (moves == 1 or moves % 16 == 0)
-                        sayU("KORU kwin move @{d},{d}\n", .{ wx, wy });
-                }
-            }
-        }
-        prev_held = held;
-    } else {
-        prev_held = false;
-    }
-
-    // heal stride — console output under the window is occluded;
-    // re-blitting keeps the surface solid until the next real move.
-    // Runs with or without the cursor: suspend/resume are no-ops then.
-    heal_n += 1;
-    if (heal_n >= HEAL_STRIDE) {
-        heal_n = 0;
-        if (!dragging) {
-            cursor.compositeSuspend();
-            blitWin(t);
-            cursor.compositeResume();
+    for (wins[0..], 0..) |*w, i| {
+        if (!w.live) continue;
+        const f = comp.isFocused(w.handle);
+        if (f != w.last_focus) {
+            w.last_focus = f;
+            paintTitle(w, i, f);
+            _ = comp.damageLayer(w.handle, BORDER, BORDER,
+                WW - 2 * BORDER, TITLE_H - 2 * BORDER);
         }
     }
 }
+
+// cursor wiring — the scene owns input; we only ensure the pointer
+// exists so titlebar drags have a cursor to grab.
+const cursorMod = @import("cursor.zig");

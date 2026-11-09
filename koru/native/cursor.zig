@@ -28,6 +28,8 @@ extern fn koru_putdec(v: u64) void;
 
 const SPR_W: u32 = 12;
 const SPR_H: u32 = 12;
+pub const SPR_W_PUB = SPR_W;
+pub const SPR_H_PUB = SPR_H;
 const XOR: u32 = 0x00FFFFFF; // white XOR — inverts whatever is beneath
 
 var cx: i32 = 0;
@@ -151,13 +153,15 @@ pub fn enable() void {
     if (dg.aux_online != 0) net.mark("cursor:aux=1") else net.mark("cursor:aux=0");
     if (dg.irq_armed != 0) net.mark("cursor:irq=1") else net.mark("cursor:irq=0");
     if (dg.packets != 0) net.mark("cursor:pkts=live") else net.mark("cursor:pkts=0");
-    hideSprite();
-    drawSprite(cx, cy);
-    ox = cx;
-    oy = cy;
-    shown = true;
-    drawn_gen = fb.generation();
-    net.mark("cursor:sprite");
+    if (!sceneOwned) {
+        hideSprite();
+        drawSprite(cx, cy);
+        ox = cx;
+        oy = cy;
+        shown = true;
+        drawn_gen = fb.generation();
+        net.mark("cursor:sprite");
+    }
     net.mark("cursor: enabled");
 }
 
@@ -182,14 +186,42 @@ pub fn buttonsHeld() u32 {
     return pressed_n;
 }
 
+// ---- scene-compositor mode (MC-1) -----------------------------------------
+// When the scene core owns the display, cursor.zig keeps ONLY the device
+// side: packet drain, position, buttons, markers. The sprite is painted
+// by comp's composite (damage-tracked), so every direct fb draw/erase
+// below becomes a no-op — no XOR writes outside the damage pass.
+var sceneOwned: bool = false;
+pub fn setSceneOwned(b: bool) void {
+    sceneOwned = b;
+    if (b) { shown = false; } // forget any direct-drawn sprite state
+}
+
+// sprite() — the rect + visibility the scene needs for hit-independent
+// damage and overlay. on = enabled and positioned (init_d done).
+pub const Sprite = struct { x: i32, y: i32, w: i32, h: i32, on: bool };
+pub fn sprite() Sprite {
+    return .{
+        .x = cx, .y = cy,
+        .w = @intCast(SPR_W), .h = @intCast(SPR_H),
+        .on = enabled and init_d,
+    };
+}
+// the bitmap rows for comp.setSprite — same MSB-left bit order per row.
+pub fn spriteBits() *const [SPR_H]u16 {
+    return &SPRITE;
+}
+
 // composite suspend/resume — a non-XOR writer (the window blit) is
 // about to repaint a rect that may contain the sprite. Erase now so
 // the blit sees pure scene pixels; redraw on top afterwards. Both are
 // safe no-ops when the cursor isn't enabled.
 pub fn compositeSuspend() void {
+    if (sceneOwned) return;
     hideSprite();
 }
 pub fn compositeResume() void {
+    if (sceneOwned) return;
     if (!enabled or shown) return;
     drawSprite(cx, cy);
     ox = cx;
@@ -260,7 +292,7 @@ pub fn tick() bool {
     // current one. Runs on motion, on surface swap, and every 32nd idle
     // tick so console text printed under the sprite heals.
     tick_n += 1;
-    const redraw = moved or stale or !shown or (tick_n & 31) == 0;
+    const redraw = !sceneOwned and (moved or stale or !shown or (tick_n & 31) == 0);
     if (redraw) {
         if (shown) drawSprite(ox, oy); // XOR-erase at last drawn pos
         drawSprite(cx, cy);

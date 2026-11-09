@@ -1046,3 +1046,71 @@ the surface solid); window backing is CPU-composited, not a KMS
 plane (planes[1] sprite exists in the object model, unwired);
 'kwin' before 'kms' on T590 composites onto the GRUB/EFI fb — same
 code path, different scanout.
+
+## MC-1 — unified scene compositor on the live shell path (2026-11-09)
+
+comp.zig evolved into THE scene core per COMPOSITOR-DESIGN.md and wired
+into shell.run (the only live path — fullBoot/consoleMode are dead
+vars). win.zig/cursor.zig/text.zig/surf.zig all serve it now.
+
+- Scene core (comp.zig, dep-free -M module): explicit monotonic z per
+  layer (no index-order z, no compaction — handles stable), kinds
+  root/window/surface, placement authority decide()=float clamp,
+  window objects {title_h, focused, dragging, grab, key_intake stub}.
+- Damage: Acc = bounded 32-rect list, union-merge on insert (overlap
+  or edge-touch -> bbox), clip-to-scene, overflow -> whole-scene.
+  damage() unions into `pending`; present drains once per tick. The
+  retained-restore snapshot and heal stride are DELETED.
+- Console = retained ROOT LAYER: text.zig gained a Sink
+  {px,pitch,w,h,damage}; shell.consoleUp allocates a W*H pmm backing,
+  fills bg, sets sink, attachRoot(z=0). putc/fill/clear report cell
+  rects; glyph px ride the cell rect. Covering console text no longer
+  destroys it — reveal repaints from the backing.
+- Input: cursor.zig stays device-side (drain/pos/buttons/markers) +
+  sprite()/spriteBits()/setSceneOwned; sceneOwned makes all direct fb
+  sprite ops no-ops. shell feeds comp.feedPointer once per tick; comp
+  owns press-edge hit-test (topmost window by z), focus+raise, titlebar
+  drag via grab offset -> place(), outside-click -> root focus.
+- win.zig = N-window producer (MAX_WIN=8): spawn/closeTop/tick.
+  'kwin' spawns (cascade), 'kwclose' closes focused-else-topmost.
+  Backing = dmabuf when kms up else pmm (named). Focus titlebar colour
+  derived per tick + damageLayer. windowOpen auto-focuses+raises.
+- Present seam (present.zig, root module): backend A immediate ->
+  composite damage rects into fb.scanout() (tear risk named); backend
+  B flip -> two 1920x1080-class scene dumbs via kms.dumbCreate,
+  per-buffer damage accs (union into BOTH, clear on paint), flipSwap
+  (new — same commit minus prev-destroy), DEIIR vblankDrain gates the
+  next composite so scanned/armed buffers are never written. Gen change
+  (modeset) -> full damage + swapchain teardown/re-ensure.
+- kms.zig: MAX_DUMBS/MAX_DMABUFS 4->16; flipCommit refactored onto
+  flipSwap (diagnostics keep prev-destroy); flipSwap is QUIET (no
+  stage()/say — per-frame cadence); rebaseQuiet in fb.zig follows the
+  scanned buffer without gen bump or serial print.
+- fb.zig: koruos_fb_scanout export (phys+pitch+dims) + rebaseQuiet.
+- surf.zig: attach/move/detach updated to handle-based API.
+
+QEMU-VERIFIED (dist/koru-mc1-scene.iso, -cdrom -m 1024, serial + HMP
+monitor + screendump): boot->scene live 1024x768; 'kwin' x2 ->
+kwin0 handle=1 z=2 + kwin1 handle=1->2 z=4 cascade pmm backings;
+mouse press on kwin1 titlebar -> comp: drag arm -> 6x(15,8) moves ->
+drag drop; titlebar px = 0x3040C0 focused, bodies tinted per-index,
+border 0xd8dee9; console text px present in retained root (2024 non-bg
+px sampled); 'kwclose' -> KORU kwin close 1 handle=2, vacated region
+repainted console bg 0x1a1a2e (retained reveal, no snapshot).
+
+T590 ORACLE (unverified — no HW this session): flash ISO -> 'kwin' x2
+overlapping cascade windows; TrackPoint press-drag titlebar moves with
+z-order intact; 'kms' -> scene swapchain comes up (KORU scene: flip
+buffers up + flip markers on :47820); console text survives window
+coverage; 'kwclose' reveals. Panel visibility + i915 flip path are
+HW-only — QEMU exercises backend A only.
+
+Honest limits: backend B (flip) is code-complete but UNEXERCISED —
+QEMU has no i915; first T590 'kms' run is its debut. vblank pacing
+assumes DEIIR latches post-arm events (vblankArm unmasks once). kflip/
+kdmabuf/kms re-run during live flip mode can destroy scene buffers —
+detected per-tick via dumbGet, named, swapchain rebuilt. Console
+backing sized at consoleUp; a modeset to DIFFERENT dims leaves stale
+sink geometry (both paths are 1920x1080 today). Damage->composite is
+per-pixel topmost-wins — full-screen repaint ~tens of ms, damage
+rects are small in steady state.

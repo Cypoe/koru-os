@@ -73,6 +73,49 @@ var cy: u32 = 0;
 var W: u32 = 0;
 var H: u32 = 0;
 
+// ---- retained-console sink (MC-1) ---------------------------------------
+// When the scene compositor owns the console, text renders into a
+// backing buffer (a root layer) instead of the scanout — covering
+// console text with a window no longer destroys it. Every cell write
+// reports its scene rect through `damage` so the compositor's
+// accumulator coalesces it like any other layer. sink==null keeps the
+// direct-fb path (boot diagnostics, panic, pre-compositor shell).
+pub const Sink = struct {
+    px: [*]volatile u32,
+    pitch: u32, // pixels per row
+    w: u32,
+    h: u32,
+    damage: *const fn (x: u32, y: u32, w: u32, h: u32) void,
+};
+pub var sink: ?Sink = null;
+
+fn putPxS(x: u32, y: u32, c: u32) void {
+    if (sink) |s| {
+        if (x < s.w and y < s.h)
+            s.px[@as(usize, @intCast(y)) * @as(usize, @intCast(s.pitch)) +
+                @as(usize, @intCast(x))] = c;
+    } else {
+        _ = fb.koruos_fb_px(x, y, c);
+    }
+}
+fn fillS(x: u32, y: u32, w: u32, h: u32, c: u32) void {
+    if (sink) |s| {
+        if (x >= s.w or y >= s.h or w == 0 or h == 0) return;
+        const x1 = @min(x + w, s.w);
+        const y1 = @min(y + h, s.h);
+        const row = @as(usize, @intCast(s.pitch));
+        var yy = y;
+        while (yy < y1) : (yy += 1) {
+            const base = @as(usize, @intCast(yy)) * row + @as(usize, @intCast(x));
+            var xx: usize = 0;
+            while (xx < @as(usize, x1 - x)) : (xx += 1) s.px[base + xx] = c;
+        }
+        s.damage(x, y, x1 - x, y1 - y);
+    } else {
+        _ = fb.koruos_fb_fill(x, y, w, h, c);
+    }
+}
+
 pub fn dims() struct { w: u32, h: u32 } {
     return .{ .w = W, .h = H };
 }
@@ -86,11 +129,11 @@ pub fn init() void {
     var info: fb.Info = undefined;
     if (fb.koruos_fb_info(&info) == 0) return;
     W = info.width; H = info.height;
-    _ = fb.koruos_fb_fill(0, 0, W, H, bg);
+    fillS(0, 0, W, H, bg);
     cx = 8; cy = 8;
 }
 pub fn clear() void {
-    if (W != 0) _ = fb.koruos_fb_fill(0, 0, W, H, bg);
+    if (W != 0) fillS(0, 0, W, H, bg);
     cx = 8; cy = 8;
 }
 fn glyphAt(x: u32, y: u32, g: u8) void {
@@ -101,7 +144,7 @@ fn glyphAt(x: u32, y: u32, g: u8) void {
         var c: usize = 0;
         while (c < 8) : (c += 1) {
             if (((bits >> @intCast(c)) & 1) != 0) {
-                _ = fb.koruos_fb_px(x + @as(u32, @intCast(c)), y + @as(u32, @intCast(r)), fg);
+                putPxS(x + @as(u32, @intCast(c)), y + @as(u32, @intCast(r)), fg);
             }
         }
     }
@@ -127,7 +170,8 @@ pub fn putc(ch: u8) void {
     // Paint the whole char cell bg first — post-rebase the scanout
     // buffer holds the i915 pattern, not a cleared console. Without
     // this the glyph's set-bits scatter white dots on the checkerboard.
-    _ = fb.koruos_fb_fill(cx, cy, CW, CH, bg);
+    // fillS reports the cell rect as scene damage when a sink is live.
+    fillS(cx, cy, CW, CH, bg);
     glyphAt(cx, cy, ch);
     cx += CW;
 }

@@ -7,6 +7,10 @@ const kbd = @import("kbd");
 const mouse = @import("mouse");
 const cursor = @import("cursor.zig");
 const win = @import("win.zig");
+const comp = @import("comp");
+const present = @import("present.zig");
+const pmm = @import("pmm");
+const mmio = @import("mmio");
 const hwprobe = @import("hwprobe.zig");
 const xhci = @import("xhci.zig");
 const net = @import("net");
@@ -15,8 +19,56 @@ var line: [96]u8 = undefined;
 var n: usize = 0;
 var raw: bool = false; // scan mode — dump raw 8042 bytes, ESC exits
 
+// consoleUp — the retained root layer (MC-1). Allocates a full-scene
+// backing, points text.zig's sink at it, and attaches it as comp's
+// .root layer. After this, console text survives being covered by
+// windows — the occlusion loss that forced kwin's heal stride is gone.
+fn consoleUp() void {
+    var w: u32 = 0;
+    var h: u32 = 0;
+    comp.dims(&w, &h);
+    if (w == 0 or h == 0) {
+        text.puts("scene: no dims — console stays on scanout\n");
+        return;
+    }
+    const bg: u32 = 0x001A1A2E; // console bg — matches post-kms look
+    const bytes = @as(u64, w) * h * 4;
+    const pages: usize = @intCast((bytes + 4095) / 4096);
+    const phys = pmm.allocContiguous(pages, 1) orelse {
+        text.puts("scene: console backing alloc failed — scanout console\n");
+        return;
+    };
+    if (!mmio.map(phys, bytes)) {
+        _ = pmm.freeBlock(phys, pages);
+        text.puts("scene: console backing map failed — scanout console\n");
+        return;
+    }
+    const buf: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(phys)));
+    var i: usize = 0;
+    while (i < @as(usize, w) * h) : (i += 1) buf[i] = bg;
+    text.setColor(0xFFFFFFFF, bg);
+    text.sink = .{
+        .px = buf,
+        .pitch = w,
+        .w = w,
+        .h = h,
+        .damage = comp.sceneDamage,
+    };
+    const root = comp.attachRoot(@volatileCast(buf), w, w, h);
+    text.puts("scene: console root layer ");
+    text.putdec(w);
+    text.putc('x');
+    text.putdec(h);
+    text.puts(if (root >= 0) " up\n" else " REFUSED\n");
+}
+
 pub fn run() noreturn {
-    text.init();
+    comp.init();      // scene core — dims + layer/damage state
+    consoleUp();      // console backing + sink + root layer
+    text.init();      // dims + bg fill (into backing via sink) + cursor home
+    present.init();   // present seam — backend chosen per tick by device state
+    cursor.setSceneOwned(true); // sprite composites inside the damage pass
+    comp.setSprite(cursor.spriteBits());
     text.puts("KORU OS - native shell\n");
     text.puts("type 'help'\n\n");
     prompt();
@@ -37,7 +89,11 @@ pub fn run() noreturn {
             handle(c);
         }
         _ = cursor.tick(); // M4: drain mouse motion, move the cursor sprite
-        win.tick();        // kwin: drag-input routing + window composites
+        const sp = cursor.sprite();
+        comp.feedPointer(sp.x, sp.y, sp.on, cursor.buttonsHeld());
+        comp.tick();      // scene input: press-edge focus/raise/drag
+        win.tick();       // kwin: focus-titlebar repaints -> damage
+        present.tick();   // drain damage -> composite -> present (A or B)
         // NOT hlt — IF=0 here, hlt halts the CPU on the first iteration.
         asm volatile ("pause");
     }
@@ -71,7 +127,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwclose\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -110,8 +166,12 @@ fn dispatch() void {
         text.puts("kdmabuf returned — console still alive\n");
         return;
     }
-    if (eq("kwin")) { // movable window — toggle create/destroy
-        win.toggle();
+    if (eq("kwin")) { // spawn another compositor window (cascade)
+        win.spawn();
+        return;
+    }
+    if (eq("kwclose")) { // close focused window, else topmost
+        win.closeTop();
         return;
     }
     if (eq("mouse")) { // M4 native cursor: toggle + report position

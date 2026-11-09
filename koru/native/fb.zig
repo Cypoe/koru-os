@@ -196,6 +196,18 @@ pub fn rebase(phys: u64, pitch: u32, w: u32, h: u32) void {
     gen += 1;
 }
 
+// rebaseQuiet — the pageflip-path rebase. A routine flip swaps between
+// two buffers the scene already tracks, so it is NOT a surface-identity
+// change: no generation bump (gen drives whole-scene repaint on
+// modeset), no serial print (flip cadence would flood the wire). Only
+// fb_base/pitch/dims follow the scanned buffer.
+pub fn rebaseQuiet(phys: u64, pitch: u32, w: u32, h: u32) void {
+    fb_base = @ptrFromInt(@as(usize, @intCast(phys)));
+    fb_pitch = pitch;
+    fb_width = w;
+    fb_height = h;
+}
+
 pub fn scanout() ?Scanout {
     if (!present or backend == .vgpu) return null;
     return .{
@@ -281,6 +293,26 @@ pub export fn koruos_fb_fill(x: u32, y: u32, w: u32, h: u32, color: u32) callcon
         var xx = @min(x, fb_width);
         while (xx < x1) : (xx += 1) fb_base[yy * row + xx] = color;
     }
+    return 1;
+}
+
+// Linear scanout descriptor for the scene compositor — phys+pitch+dims
+// of whatever surface fb_base currently names (LFB pre-'kms', dumb
+// buffer post-rebase/flip). 0 when no linear backend is live (vgpu).
+pub const ScanoutInfo = extern struct {
+    phys: u64,
+    pitch: u32,
+    w: u32,
+    h: u32,
+};
+pub export fn koruos_fb_scanout(out: *ScanoutInfo) callconv(.c) u8 {
+    if (backend == .vgpu or !present) return 0;
+    out.* = .{
+        .phys = @intCast(@intFromPtr(fb_base)),
+        .pitch = fb_pitch,
+        .w = fb_width,
+        .h = fb_height,
+    };
     return 1;
 }
 

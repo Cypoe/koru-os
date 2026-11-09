@@ -69,7 +69,9 @@ pub export fn koruos_surface_open(w: u32, h: u32, title: [*:0]const u8) callconv
     @memset(buf[0 .. w * h], 0); // cleared before attach — map paints it
     var sx: u32 = 0;
     var sy: u32 = 0;
-    const slot = comp.attach(buf, w, h, &sx, &sy);
+    // pitch == w for this provider's backing; ANCHOR is the desired pos —
+    // comp's placement authority (decide) has final say.
+    const slot = comp.attach(buf, w, w, h, 40, 40, .surface, 0, &sx, &sy);
     if (slot < 0) {
         _ = pmm.freeBlock(phys, pages);
         return null;
@@ -186,7 +188,7 @@ pub export fn koruos_surface_close(p: ?*anyopaque) callconv(.c) u8 {
     const s = asSurf(p) orelse return 0;
     // detach before freeing — the reveal repaint reads lower backings
     // only, but the vacated rect must leave the stack first.
-    comp.detach(@intCast(s.slot));
+    comp.detach(s.slot); // dead-slot mark + vacated-rect damage; no compaction
     _ = pmm.freeBlock(s.phys, s.pages);
     s.live = false;
     closed += 1;
