@@ -19,10 +19,7 @@ const mouse = @import("mouse");
 const fb = @import("fb.zig");
 const net = @import("net");
 const text = @import("text.zig");
-const acpi = @import("acpi");
-const ioapic = @import("ioapic");
 const user = @import("user");
-const pmm = @import("pmm");
 
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
@@ -45,22 +42,20 @@ var pkt_marked: bool = false;
 // ensureInput — the shell path boots with fullBoot=false, so the doFull
 // init block (acpi/pci/ioapic/user/kbd/mouse/smp) never ran and
 // mouse.init() was dead code: every M4 "aux=0" measured an un-run
-// driver. IRQ delivery needs user.init (IDT+PIC+sti); IRQ12 then routes
-// via ioapic when MADT exists, else the PIC fallback lands it on vec
-// 0x2C which irq_exc_dispatch already claims. kbd.init is deliberately
-// skipped — IRQ1 would steal scancodes from the shell's pollChar path.
+// driver. IRQ delivery needs only user.init (IDT + PIC remap + sti).
+// acpi.init/ioapic.init are deliberately NOT run here: acpi.init hung
+// twice on the T590's real tables (mb2 walk, then deeper SDT/MADT) and
+// input doesn't need it — IRQ12 reaches vec 0x2C through the PIC
+// fallback in koru_irq_unmask (slave bit + cascade unmask), and
+// ioapic.gsiFor/isLapic early-return on !live so eoiVec takes picEoi.
+// kbd.init is skipped — IRQ1 would steal scancodes from pollChar.
 fn ensureInput() void {
     if (input_armed) return;
     input_armed = true;
     // Stage markers bracket every bring-up step — a hang on real HW now
     // names the stage on the wire instead of silence after 'mouse'.
     net.mark("in:begin");
-    net.mark("in:acpi");
-    acpi.init(pmm.boot_mbi); // MADT -> ioapic routes (no-op if absent)
-    net.mark("in:acpi-done");
-    net.mark("in:ioapic");
-    ioapic.init();
-    net.mark("in:ioapic-done");
+    net.mark("in:acpi-skip"); // acpi/ioapic bypassed — PIC door for IRQ12
     net.mark("in:user");
     user.init();  // IDT + PIC remap + LAPIC + sti — interrupts live
     net.mark("in:user-done");
