@@ -851,3 +851,20 @@ Elan 0x04F3:0x2901 should now emit RPT lines on touch; Lite-On
 wrong HID iface selected (multi-function touchpad) or report-proto
 needing SET_PROTOCOL(0) boot — diagnostics now show cc/epid/portsc.
 NEXT (Stage C): decode report -> cursor.zig.
+
+## XHCI STAGE B ARMED — output-ctx readback + deep NAK queue (commit pending)
+
+T590 xhciC: ConfigureEP ok + SET_PROTOCOL/SET_IDLE cc=1 + portsc
+ccs/ped=1 but ZERO interrupt-IN events / 160 polls.
+
+xhciD adds: OUTPUT device-ctx readback (dcbaa[slot]->DevCtx, ep@dci,
+state=d[0]&7) — QEMU proves HC sets epstate=1 Running + correct
+interval/type/mps/dequeue. Report loop: prime 8 NAK'd TDs (8x512B),
+doorbell(slot,dci) re-ring per idle timeout, re-arm freed buf per
+event, armed/doorbell/rearm markers.
+
+T590 oracle: 'xusb' -> read 'outctx epstate=' line. =1 -> HC armed,
+device not sending (suspect: wrong HID iface/alt-setting, or Elan
+needs report-proto boot SET_PROTOCOL(0), or touchpad genuinely idle).
+!=1 -> ConfigureEP didn't take on Intel -> revisit ctx fields.
+SHIP ISO: dist/koru-xhciD-20261109-0252.iso.
