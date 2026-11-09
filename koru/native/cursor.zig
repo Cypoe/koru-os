@@ -52,10 +52,21 @@ var pkt_marked: bool = false;
 fn ensureInput() void {
     if (input_armed) return;
     input_armed = true;
+    // Stage markers bracket every bring-up step — a hang on real HW now
+    // names the stage on the wire instead of silence after 'mouse'.
+    net.mark("in:begin");
+    net.mark("in:acpi");
     acpi.init(pmm.boot_mbi); // MADT -> ioapic routes (no-op if absent)
+    net.mark("in:acpi-done");
+    net.mark("in:ioapic");
     ioapic.init();
+    net.mark("in:ioapic-done");
+    net.mark("in:user");
     user.init();  // IDT + PIC remap + LAPIC + sti — interrupts live
+    net.mark("in:user-done");
+    net.mark("in:mouse");
     mouse.init(); // 8042 aux + TrackPoint sequence + IRQ12 unmask
+    net.mark("in:mouse-done");
 }
 
 // 12x12 arrow sprite, tip at top-left. '1' = on-pixel (XOR'd).
