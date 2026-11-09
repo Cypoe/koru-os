@@ -15,6 +15,7 @@
 // present|DPL0|64-bit interrupt gate.
 
 const text = @import("text.zig");
+const net = @import("net");
 const led = @import("led.zig");
 
 extern fn koru_say(s: [*:0]const u8) void;
@@ -76,6 +77,29 @@ pub export fn isrReport(vec: u64) callconv(.c) noreturn {
         text.putdec(vec);
         text.newline();
         text.puts("(frozen — no reset)\n");
+    }
+    // mirror the fault signature to the UDP wire — serial/fb alone are
+    // invisible to the remote oracle. Best-effort: net.mirror no-ops if
+    // the NIC never came up.
+    {
+        var fb: [72]u8 = undefined;
+        var fp: usize = 0;
+        const m0 = "KORU VEC";
+        var mi: usize = 0;
+        while (mi < m0.len) : (mi += 1) { fb[fp] = m0[mi]; fp += 1; }
+        var nv = vec; var tk: usize = 20; var tmp: [20]u8 = undefined;
+        if (nv == 0) { tk -= 1; tmp[tk] = '0'; }
+        else { while (nv != 0) : (nv /= 10) { tk -= 1; tmp[tk] = '0' + @as(u8, @intCast(nv % 10)); } }
+        while (tk < 20) : (tk += 1) { fb[fp] = tmp[tk]; fp += 1; }
+        const m1 = " CR2=";
+        mi = 0; while (mi < m1.len) : (mi += 1) { fb[fp] = m1[mi]; fp += 1; }
+        const crv = if (vec == 14) readCr2() else 0;
+        var kh: usize = 16;
+        while (kh > 0) : (kh -= 1) {
+            const nib = @as(u8, @intCast((crv >> @intCast(4 * (kh - 1))) & 0xF));
+            fb[fp] = "0123456789abcdef"[@intCast(nib)]; fp += 1;
+        }
+        net.mirror(fb[0..fp]);
     }
     while (true) {
         asm volatile ("cli\n\thlt");

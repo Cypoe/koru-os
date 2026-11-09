@@ -271,6 +271,31 @@ fn eventWait(ev: *Ring, want: u64, ccOut: ?*u32, slotOut: ?*u32) i32 {
     return -1;
 }
 
+// wait for a transfer (EP) completion event — returns its completion
+// code, or -1 on timeout. Accepts ANY T_XFER event regardless of which
+// stage TRB the HC points at (real HW differs from QEMU here).
+fn eventWaitXfer() i32 {
+    var spins: usize = 50_000_000;
+    while (spins > 0) : (spins -= 1) {
+        const t = &ering.trbs[ering.deq];
+        if ((t.ctl & 1) != ering.pcs) continue;
+        const ptr = (@as(u64, t.p_hi) << 32) | t.p_lo;
+        const ty = (t.ctl >> 10) & 0x3F;
+        const cc = (t.st >> 24) & 0xFF;
+        lastEvtPtr = ptr; lastEvtSt = t.st; lastEvtCtl = t.ctl; lastEvtTy = ty;
+        ering.deq += 1;
+        if (ering.deq >= ering.n - 1) { ering.deq = 0; ering.pcs ^= 1; }
+        const dp = physOf(&ering.trbs[ering.deq]);
+        wr64(rtsbase, RT_IR0 + IR_ERDP, dp | ERDP_EHB);
+        if (ty == T_XFER) { return @intCast(cc); }
+        if (evtTrace) {
+            say("  evt ty="); hex32(ty); say(" cc="); hex32(cc);
+            say(" ptr="); hex64(ptr); say("\n");
+        }
+    }
+    return -1;
+}
+
 // issue a command TRB, ring doorbell 0, wait for its completion.
 // returns slot id from the event, or -1.
 fn xcmd(p: u64, st: u32, ctl: u32) i32 {
@@ -321,14 +346,19 @@ fn ep0GetDesc(bufPhys: u64) i32 {
     t2.ctl = ttype(T_STATUS) | TIOC | ep0Ring.pcs;
     const stPtr = physOf(t2);
     ep0Ring.enq += 1;
+    say("xhci: getdesc setup=0x"); hex64(setup); say(" stPtr="); hex64(stPtr);
+    say(" ep0phys="); hex64(ep0RingPhys); say(" slot="); hex32(curSlot); say("\n");
     doorbell(curSlot, 1);
-    var cc: u32 = 0;
-    var sl: u32 = 0;
-    const r = eventWait(&ering, stPtr, &cc, &sl);
-    return if (r < 0) -1 else @intCast(cc);
+    say("xhci: doorbell rung slot="); hex32(curSlot); say(" tgt=1\n");
+    evtTrace = true;
+    const cc = eventWaitXfer();
+    evtTrace = false;
+    say("xhci: xfer cc="); hex32(@intCast(cc)); say(" evtPtr="); hex64(lastEvtPtr); say("\n");
+    return cc;
 }
 
 var ep0Ring: Ring = undefined;
+var ep0RingPhys: u64 = 0;
 var curSlot: u32 = 0;
 // last consumed event TRB — captured for failure diagnostics
 var lastEvtPtr: u64 = 0;
@@ -436,7 +466,7 @@ fn probeDev(d: *const pci.Device) u32 {
     wr32(rtsbase, RT_IR0 + IR_IMAN, rd32(rtsbase, RT_IR0 + IR_IMAN) | IMAN_IP | IMAN_IE);
     // command ring: CRCR = base | RCS(bit0). CS is HC-managed.
     wr64(opbase, OP_CRCR, (cmdPhys & ~@as(u64, 0x3F)) | 1);
-    opWr(OP_USBCMD, opRd(OP_USBCMD) | USBCMD_RS | USBCMD_INTE);
+    opWr(OP_USBCMD, opRd(OP_USBCMD) | USBCMD_RS); // no INTE: we poll; IRQ on unhandled vec panics
     i = 0;
     while (i < 100000 and (opRd(OP_USBSTS) & USBSTS_HCH) != 0) : (i += 1) {}
     say("xhci: running sts="); hex32(opRd(OP_USBSTS)); say("\n");
@@ -509,6 +539,7 @@ fn probeDev(d: *const pci.Device) u32 {
             stage("xhci: FAIL ep0ring alloc"); return found;
         };
         ringInit(&ep0Ring, ep0Phys, 32);
+        ep0RingPhys = ep0Phys;
         // control EP: type=ctrl, cerr=3, mps by speed (SS=512, HS=64, else 8)
         const mps: u32 = if (speed == 4) 512 else if (speed == 3) 64 else 8;
         ic.ep[0].d[0] = 0;
