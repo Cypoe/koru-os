@@ -105,6 +105,11 @@ fn rsdpFromMb2(mbi_phys: u32) ?u64 {
             const pa: u64 = mbi_phys + off + 8;
             if (rsdpAt(pa)) return pa;
         }
+        // sz==0 (a tag whose size field reads 0 — seen on real GRUB mb2
+        // tag sets QEMU never produces) would spin off+=0 forever:
+        // measured as the T590 'mouse' hang at in:acpi. Every legal mb2
+        // tag is >=8 bytes; refuse to advance on anything smaller.
+        if (sz < 8) break;
         off += sz;
     }
     return null;
