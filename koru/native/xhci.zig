@@ -682,44 +682,55 @@ fn enumHid(port: u32, slotId: i32, speed: u32) void {
 // command) -> SET_CONFIGURATION -> interrupt transfer ring + report poll.
 // Field-for-field vs hid.c; runtime values dual-write serial/fb + UDP.
 
-const HidEp = struct {
-    cfgVal: u32 = 1,
+const HidCand = struct {
     iface: u32 = 0,
-    proto: u32 = 0,
+    alt: u32 = 0,
     addr: u32 = 0,
     mps: u32 = 0,
     ival: u32 = 0,
+    protoIf: u32 = 0, // bInterfaceProtocol (0=report-only 1=kbd 2=mouse boot)
 };
 
-// scan config descriptor for the first HID interface (class 3) + its
-// interrupt-IN endpoint — hid.c parse_config verbatim. cfgVal carries
-// bConfigurationValue out of the config header (type 2) for
-// SET_CONFIGURATION. cfg[0] must be the config header start.
-fn parseConfig(cfg: [*]const u8, len: usize, e: *HidEp) bool {
+// scan config descriptor for EVERY HID interface's interrupt-IN
+// endpoints — multi-function HID devices (Elan touchpad, 945B report
+// desc) put the real report stream on a non-first interface/alt/EP.
+// cfgVal carries bConfigurationValue for SET_CONFIGURATION.
+fn parseHidAll(cfg: [*]const u8, len: usize, cfgVal: *u32, cands: []HidCand) usize {
+    var n: usize = 0;
     var i: usize = 0;
-    var foundIf = false;
+    var iface: u32 = 0;
+    var alt: u32 = 0;
+    var protoIf: u32 = 0;
+    var isHid = false;
     while (i + 2 <= len) {
         const blen = cfg[i];
         const btype = cfg[i + 1];
         if (blen < 2) break;
-        if (btype == 4 and blen >= 9 and cfg[i + 5] == 3) { // HID iface
-            e.iface = cfg[i + 2];
-            e.proto = cfg[i + 7];
-            foundIf = true;
-        } else if (btype == 5 and foundIf and blen >= 7) { // endpoint
+        if (btype == 2 and blen >= 9) { // config header
+            cfgVal.* = cfg[i + 5];
+        } else if (btype == 4 and blen >= 9) { // interface
+            iface = cfg[i + 2];
+            alt = cfg[i + 3];   // bAlternateSetting — endpoint only
+                                // streams when this alt is SET_INTERFACE'd
+            protoIf = cfg[i + 7];
+            isHid = cfg[i + 5] == 3; // bInterfaceClass == HID
+        } else if (btype == 5 and blen >= 7 and isHid) { // endpoint
             const attr = cfg[i + 3] & 3;
-            if ((cfg[i + 2] & 0x80) != 0 and attr == 3) { // IN + interrupt
-                e.addr = cfg[i + 2];
-                e.mps = @as(u32, cfg[i + 4]) | (@as(u32, cfg[i + 5]) << 8);
-                e.ival = cfg[i + 6];
-                return true;
+            if ((cfg[i + 2] & 0x80) != 0 and attr == 3 and n < cands.len) {
+                cands[n] = .{
+                    .iface = iface,
+                    .alt = alt,
+                    .addr = cfg[i + 2],
+                    .mps = @as(u32, cfg[i + 4]) | (@as(u32, cfg[i + 5]) << 8),
+                    .ival = cfg[i + 6],
+                    .protoIf = protoIf,
+                };
+                n += 1;
             }
-        } else if (btype == 2 and blen >= 9) { // config header
-            e.cfgVal = cfg[i + 5]; // bConfigurationValue
         }
         i += blen;
     }
-    return false;
+    return n;
 }
 
 // xHCI endpoint-context Interval field = exponent n, service every
@@ -764,183 +775,164 @@ fn hidStageB(port: u32, slotId: i32, speed: u32) void {
     }
     say("xhci: hid cfg total="); hex32(@intCast(total)); say("\n");
 
-    var e: HidEp = .{};
-    if (!parseConfig(cfg, total, &e)) {
+    // EVERY HID int-IN endpoint — multi-function devices (Elan) put the
+    // report stream on a non-first interface/alt/EP.
+    var cands: [8]HidCand = undefined;
+    var cfgVal: u32 = 1;
+    const nc = parseHidAll(cfg, total, &cfgVal, &cands);
+    say("xhci: hid cands="); dec(nc); say("\n");
+    for (cands[0..nc]) |c| {
+        say("xhci: cand iface="); hex32(c.iface); say(" alt="); hex32(c.alt);
+        say(" ep=0x"); hex32(c.addr); say(" mps="); hex32(c.mps);
+        say(" ival="); hex32(c.ival); say(" pif="); hex32(c.protoIf); say("\n");
+    }
+    if (nc == 0) {
         say("xhci: no HID int-in ep — skip\n");
         return;
     }
-    say("xhci: hid iface="); hex32(e.iface); say(" proto="); hex32(e.proto);
-    say(" ep=0x"); hex32(e.addr); say(" mps="); hex32(e.mps);
-    say(" ival="); hex32(e.ival); say(" cfg="); hex32(e.cfgVal); say("\n");
-    stage("xhci: hid endpoint found");
 
-    // DCI for interrupt-IN endpoint: epn*2 + 1 (hid.c)
-    const epn = e.addr & 0xF;
-    const dci = epn * 2 + 1;
-    say("xhci: dci="); hex32(dci); say("\n");
-
-    // ConfigureEP input context (hid.c): fresh zeroed ctx, add flags =
-    // slot ctx (bit0) + endpoint ctx for this dci; slot ctx carries only
-    // Context Entries = dci.
-    const icPhys = allocPage() orelse return;
-    const ic: *InputCtx = @ptrFromInt(@as(usize, @intCast(icPhys)));
-    ic.ctrl.d[1] = 1 | (@as(u32, 1) << @as(u5, @intCast(dci)));
-    ic.slot.d[0] = dci << 27;
-    // interrupt-IN transfer ring (32 TRBs) + 8 rotating 512B report bufs
-    const intPhys = allocPage() orelse return;
-    var intRing: Ring = undefined;
-    ringInit(&intRing, intPhys, 32);
+    // shared report-buffer page: 8 rotating 512B slots (one page).
     const repPhys = allocPage() orelse return;
     const repBase: [*]u8 = @ptrFromInt(@as(usize, @intCast(repPhys)));
+    const NBUF: usize = 8;
+    const BSZ: usize = 512;
 
-    // endpoint ctx d[0..4] — Linux xhci_endpoint_init field layout:
-    //   d0[23:16]=Interval EXPONENT (period = 2^n * 125us), EP state
-    //     left 0 — spec 4.6.6: HC sets output ctx state=Running itself;
-    //   d1[5:3]=type(7=intr-IN), d1[2:1]=CErr=3, d1[15:8]=MaxBurst
-    //     (HS int: wMaxPacketSize[12:11]=mult -> burst=mult-1),
-    //   d1[31:16]=MaxPacket (wMaxPacketSize[10:0]);
-    //   d2/d3=dequeue ptr|DCS; d4=MaxESITPayloadLo[31:16]|AvgTrbLen[15:0].
-    // hid.c wrote raw bInterval + avg-len=8 — invisible on QEMU
-    // (bInterval=1, mps=8) but wrong on real silicon.
-    const iv = epInterval(speed, e.ival);
-    const pkt = e.mps & 0x7FF; // wMaxPacketSize[10:0]
-    const rptLen: u32 = if (pkt < 8) 8 else if (pkt > 255) 255 else pkt;
-    var burst: u32 = 0;
-    if (speed >= 3) { // HS interrupt: wMaxPacketSize[12:11] = mult
-        const mv = (e.mps >> 11) & 3;
-        if (mv > 0) burst = mv - 1;
-    }
-    const ectx = &ic.ep[@intCast(dci - 1)];
-    ectx.d[0] = iv << 16;
-    ectx.d[1] = (7 << 3) | (3 << 1) | (burst << 8) | (pkt << 16);
-    ectx.d[2] = @truncate(intPhys | 1); // dequeue ptr | DCS=1
-    ectx.d[3] = @truncate(intPhys >> 32);
-    ectx.d[4] = (rptLen << 16) | rptLen; // esit-lo | avg-trb-len
-    say("xhci: cfgEP ic ctrl d1="); hex32(ic.ctrl.d[1]);
-    say(" slot d0="); hex32(ic.slot.d[0]);
-    say(" ep d0="); hex32(ectx.d[0]); say(" d1="); hex32(ectx.d[1]);
-    say(" d2="); hex32(ectx.d[2]); say(" d4="); hex32(ectx.d[4]);
-    say(" iv="); hex32(iv); say(" pkt="); hex32(pkt);
-    say(" burst="); hex32(burst); say(" rptLen="); hex32(rptLen); say("\n");
-    const rc = xcmd(icPhys, 0, ttype(T_CFGEP) | (@as(u32, @intCast(slotId)) << 24));
-    say("xhci: configure-ep dci="); hex32(dci); say(" rc="); hex32i(rc); say("\n");
-    if (rc < 0) {
-        stage("xhci: FAIL configure endpoint");
-        return;
-    }
-    stage("xhci: endpoint configured");
-
-    // OUTPUT device-context readback — did the HC actually mark this
-    // endpoint Running? dcbaa[slot] -> DevCtx (slot ctx @0 + ep ctxs
-    // @1..31); our endpoint is index dci. EP state = d[0]&7
-    // (0=Disabled 1=Running 2=Halted 3=Stopped per spec 6.2.3).
-    // This is the direct answer to "is the endpoint armed".
-    {
-        const dcp: [*]volatile Ctx32 = @ptrFromInt(@as(usize, @intCast(dcbaa[@intCast(slotId)])));
-        const oc = &dcp[@intCast(dci)];
-        say("xhci: outctx dci="); hex32(dci); say(" epstate="); hex32(oc.d[0] & 7);
-        say(" d0="); hex32(oc.d[0]); say(" d1="); hex32(oc.d[1]);
-        say(" dq="); hex64((@as(u64, oc.d[3]) << 32) | oc.d[2]);
-        say(" d4="); hex32(oc.d[4]); say("\n");
-    }
-
-    // SET_CONFIGURATION — hid.c: bmRT=0 req=9 wVal=cfgVal, no data stage
-    const scc = ctrlXfer(0x00, 9, e.cfgVal, 0, 0, 0, false);
-    say("xhci: set-config "); hex32(e.cfgVal); say(" cc="); hex32i(scc); say("\n");
+    // SET_CONFIGURATION once — activates all interfaces at alt 0.
+    const scc = ctrlXfer(0x00, 9, cfgVal, 0, 0, 0, false);
+    say("xhci: set-config "); hex32(cfgVal); say(" cc="); hex32i(scc); say("\n");
     if (scc != 1) {
         stage("xhci: FAIL set configuration");
         return;
     }
-    // HID class requests — real HID devices commonly need these before
-    // the interrupt endpoint streams (QEMU usb-tablet doesn't):
-    //   SET_PROTOCOL(0x0B) bmRT=0x21 wVal=1 = report protocol, wIdx=iface
-    //   SET_IDLE(0x0A)     bmRT=0x21 wVal=0 = infinite idle, reportID=0
-    // A stall here is not fatal — log the cc and keep polling.
-    const pcc = ctrlXfer(0x21, 0x0B, 1, e.iface, 0, 0, false);
-    say("xhci: set-proto cc="); hex32i(pcc); say("\n");
-    const idleCc = ctrlXfer(0x21, 0x0A, 0, e.iface, 0, 0, false);
-    say("xhci: set-idle cc="); hex32i(idleCc); say("\n");
-    stage("xhci: configured — polling interrupt-IN");
 
-    // interrupt-IN report loop. For interrupt-IN the host queues NAK'd
-    // TDs that the HC completes when the device has data — a NAK does
-    // NOT disarm a TD (it retries per endpoint interval), so the armed
-    // queue persists; we re-queue only the slot each completion frees
-    // (hid.c post_report_trb per poll). Prime NBUF TDs + doorbell once;
-    // per event re-arm freed buffer + re-ring; per idle timeout re-ring
-    // the doorbell so the HC re-scans the ring (insurance).
-    const NBUF: usize = 8;
-    const BSZ: usize = 512;
-    var primed: usize = 0;
-    while (primed < NBUF) : (primed += 1) {
-        const bp = repBase + primed * BSZ;
-        @memset(bp[0..BSZ], 0);
-        ringPush(&intRing, repPhys + primed * BSZ, rptLen,
-            ttype(T_NORMAL) | TIOC | T_ISP);
-    }
-    say("xhci: armed tdq="); dec(NBUF); say(" dci="); hex32(dci);
-    say(" db=slot"); dec(@intCast(slotId)); say(":"); hex32(dci); say("\n");
-    doorbell(@intCast(slotId), @intCast(dci));
-    evtTrace = true;
-    var reports: usize = 0;
-    var polls: usize = 0;
-    var errs: usize = 0;
-    var rearm: usize = 0;
-    while (polls < 160 and reports < 48) : (polls += 1) {
-        const cc = eventWaitXfer();
-        if (cc < 0) {
-            doorbell(@intCast(slotId), @intCast(dci)); // keep ep kicked
-            // heartbeat every 32 idle polls — proves the loop is alive
-            // and shows whether the port/device is still enabled.
-            if (polls % 32 == 31) {
-                const ps = opRd(opPortSc(port));
-                say("xhci: poll idle t="); dec(polls);
-                say(" portsc="); hex32(ps);
-                say(" ccs="); if ((ps & PSC_CCS) != 0) say("1") else say("0");
-                say(" ped="); if ((ps & PSC_PED) != 0) say("1") else say("0"); say("\n");
-            }
-            continue;
+    // Per-candidate scan: ConfigureEP -> SET_INTERFACE(alt) ->
+    // SET_PROTOCOL -> SET_IDLE -> arm TDs -> poll. First (cand,proto)
+    // with reports>0 wins. Each endpoint gets its OWN transfer ring —
+    // endpoint ctxs hold independent dequeue pointers so rings can't be
+    // shared. A NAK'd TD stays armed (retries per interval), so we arm
+    // once per candidate and let both protocol attempts reuse it.
+    var found = false;
+    for (cands[0..nc]) |c| {
+        if (found) break;
+        const epn = c.addr & 0xF;
+        const dci = epn * 2 + 1;
+        const intPhys = allocPage() orelse return;
+        var intRing: Ring = undefined;
+        ringInit(&intRing, intPhys, 32);
+        // ConfigureEP input ctx — add slot + this endpoint's ctx.
+        const icPhys = allocPage() orelse continue;
+        const ic: *InputCtx = @ptrFromInt(@as(usize, @intCast(icPhys)));
+        ic.ctrl.d[1] = 1 | (@as(u32, 1) << @as(u5, @intCast(dci)));
+        ic.slot.d[0] = dci << 27;
+        const iv = epInterval(speed, c.ival);
+        const pkt = c.mps & 0x7FF;
+        const rptLen: u32 = if (pkt < 8) 8 else if (pkt > 255) 255 else pkt;
+        var burst: u32 = 0;
+        if (speed >= 3) {
+            const mv = (c.mps >> 11) & 3;
+            if (mv > 0) burst = mv - 1;
         }
-        // decode which report buffer this event's TRB wrote: the event
-        // TRB pointer is the completed Normal TRB; its param = buf phys.
-        var bidx: usize = 0;
-        if (lastEvtPtr >= intPhys and lastEvtPtr < intPhys + 512) {
-            const tt: *volatile Trb = @ptrFromInt(@as(usize, @intCast(lastEvtPtr)));
-            const bpp = (@as(u64, tt.p_hi) << 32) | tt.p_lo;
-            if (bpp >= repPhys and bpp < repPhys + NBUF * BSZ)
-                bidx = @intCast((bpp - repPhys) / BSZ);
+        const ectx = &ic.ep[@intCast(dci - 1)];
+        ectx.d[0] = iv << 16;
+        ectx.d[1] = (7 << 3) | (3 << 1) | (burst << 8) | (pkt << 16);
+        ectx.d[2] = @truncate(intPhys | 1);
+        ectx.d[3] = @truncate(intPhys >> 32);
+        ectx.d[4] = (rptLen << 16) | rptLen;
+        const rc = xcmd(icPhys, 0, ttype(T_CFGEP) | (@as(u32, @intCast(slotId)) << 24));
+        say("xhci: cfgEP dci="); hex32(dci); say(" rc="); hex32i(rc); say("\n");
+        if (rc < 0) continue;
+        // outctx readback — is THIS endpoint Running?
+        {
+            const dcp: [*]volatile Ctx32 = @ptrFromInt(@as(usize, @intCast(dcbaa[@intCast(slotId)])));
+            const oc = &dcp[@intCast(dci)];
+            say("xhci: outctx epstate="); hex32(oc.d[0] & 7);
+            say(" d0="); hex32(oc.d[0]); say(" dq="); hex64((@as(u64, oc.d[3]) << 32) | oc.d[2]); say("\n");
         }
-        const rb = repBase + bidx * BSZ;
-        const xlen = lastEvtSt & 0xFFFFFF; // transfer event: bytes moved
-        const epid = (lastEvtCtl >> 16) & 0x1F; // ctl[20:16] = endpoint id
-        var b: [224]u8 = undefined;
-        const s = std.fmt.bufPrintZ(&b,
-            "xhci: RPT cc={x} len={d} ep={x} st={x} b={x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2}\n",
-            .{ cc, xlen, epid, lastEvtSt,
-              rb[0], rb[1], rb[2], rb[3],
-              rb[4], rb[5], rb[6], rb[7] }) catch return;
-        say(s.ptr);
-        // re-arm the buffer that just completed (hid.c post_report_trb)
-        @memset(rb[0..BSZ], 0);
-        ringPush(&intRing, repPhys + bidx * BSZ, rptLen,
-            ttype(T_NORMAL) | TIOC | T_ISP);
+        // arm NBUF NAK'd TDs once — reused by both protocol attempts.
+        var primed: usize = 0;
+        while (primed < NBUF) : (primed += 1) {
+            const bp = repBase + primed * BSZ;
+            @memset(bp[0..BSZ], 0);
+            ringPush(&intRing, repPhys + primed * BSZ, rptLen,
+                ttype(T_NORMAL) | TIOC | T_ISP);
+        }
+        say("xhci: armed tdq="); dec(NBUF); say(" dci="); hex32(dci);
+        say(" db=slot"); dec(@intCast(slotId)); say(":"); hex32(dci); say("\n");
         doorbell(@intCast(slotId), @intCast(dci));
-        rearm += 1;
-        if (cc == 1) {
-            reports += 1;
-            errs = 0;
-        } else {
-            errs += 1;
-            if (errs >= 8) {
-                say("xhci: report errors cc="); hex32i(cc); say("\n");
-                break;
+        // protocol order: boot-capable iface -> boot(0) first (simplest
+        // mouse reports for cursor); report-only iface -> report(1).
+        const p0: u32 = if (c.protoIf == 1 or c.protoIf == 2) 0 else 1;
+        const p1: u32 = 1 - p0;
+        var pi: usize = 0;
+        while (pi < 2 and !found) : (pi += 1) {
+            const proto = if (pi == 0) p0 else p1;
+            // SET_INTERFACE(alt) — standard req 0x0B bmRT=0x01 (activate
+            // this alt setting so its endpoints stream).
+            _ = ctrlXfer(0x01, 0x0B, c.alt, c.iface, 0, 0, false);
+            const pcc = ctrlXfer(0x21, 0x0B, proto, c.iface, 0, 0, false);
+            const idleCc = ctrlXfer(0x21, 0x0A, 0, c.iface, 0, 0, false);
+            say("xhci: try iface="); hex32(c.iface); say(" alt="); hex32(c.alt);
+            say(" dci="); hex32(dci); say(" proto="); hex32(proto);
+            say(" setproto_cc="); hex32i(pcc); say(" idle_cc="); hex32i(idleCc); say("\n");
+            evtTrace = true;
+            var reports: usize = 0;
+            var polls: usize = 0;
+            var errs: usize = 0;
+            var rearm: usize = 0;
+            while (polls < 48 and reports < 16) : (polls += 1) {
+                const cc = eventWaitXfer();
+                if (cc < 0) {
+                    doorbell(@intCast(slotId), @intCast(dci));
+                    continue;
+                }
+                const epid = (lastEvtCtl >> 16) & 0x1F;
+                if (epid != dci) continue; // stale event from another ep
+                var bidx: usize = 0;
+                if (lastEvtPtr >= intPhys and lastEvtPtr < intPhys + 512) {
+                    const tt: *volatile Trb = @ptrFromInt(@as(usize, @intCast(lastEvtPtr)));
+                    const bpp = (@as(u64, tt.p_hi) << 32) | tt.p_lo;
+                    if (bpp >= repPhys and bpp < repPhys + NBUF * BSZ)
+                        bidx = @intCast((bpp - repPhys) / BSZ);
+                }
+                const rb = repBase + bidx * BSZ;
+                const xlen = lastEvtSt & 0xFFFFFF;
+                var b: [224]u8 = undefined;
+                const s = std.fmt.bufPrintZ(&b,
+                    "xhci: RPT cc={x} len={d} ep={x} b={x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2}\n",
+                    .{ cc, xlen, epid,
+                      rb[0], rb[1], rb[2], rb[3],
+                      rb[4], rb[5], rb[6], rb[7] }) catch return;
+                say(s.ptr);
+                @memset(rb[0..BSZ], 0);
+                ringPush(&intRing, repPhys + bidx * BSZ, rptLen,
+                    ttype(T_NORMAL) | TIOC | T_ISP);
+                doorbell(@intCast(slotId), @intCast(dci));
+                rearm += 1;
+                if (cc == 1) {
+                    reports += 1;
+                    errs = 0;
+                } else {
+                    errs += 1;
+                    if (errs >= 8) break;
+                }
+            }
+            evtTrace = false;
+            say("xhci: try done iface="); hex32(c.iface); say(" dci="); hex32(dci);
+            say(" proto="); hex32(proto); say(" reports="); dec(reports);
+            say(" polls="); dec(polls); say(" rearm="); dec(rearm); say("\n");
+            if (reports > 0) {
+                found = true;
+                say("xhci: ==== HID WINNER iface="); hex32(c.iface);
+                say(" alt="); hex32(c.alt); say(" dci="); hex32(dci);
+                say(" proto="); hex32(proto); say(" reports="); dec(reports); say(" ====\n");
+                stage("xhci: hid reports flowing");
             }
         }
     }
-    evtTrace = false;
-    say("xhci: report-poll done reports="); dec(reports);
-    say(" polls="); dec(polls); say(" rearm="); dec(rearm); say("\n");
-    stage("xhci: hid reports done");
+    if (!found) {
+        say("xhci: no HID endpoint produced reports\n");
+        stage("xhci: hid reports none");
+    }
 }
 
 // ---- entry: probe every XHCI controller -------------------------------------
