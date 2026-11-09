@@ -482,6 +482,27 @@ pub fn dims(sw: *u32, sh: *u32) void {
     sh.* = H;
 }
 
+// scene dims follow the scanout — a modeset/rebase changes fb geometry
+// (koruos_fb_info reports the live surface). Layers re-clamp through
+// the placement authority so nothing is left offscene; damage clips to
+// the NEW bounds. Called by present on fb.generation() change.
+pub fn syncDims() void {
+    var info: Info = undefined;
+    if (koruos_fb_info(&info) == 0) return;
+    if (info.width == W and info.height == H) return;
+    W = info.width;
+    H = info.height;
+    say("comp: scene dims -> ");
+    koru_putdec(W);
+    say("x");
+    koru_putdec(H);
+    say("\n");
+    for (layers[0..], 0..) |*l, i| {
+        if (!l.live) continue;
+        place(i, @intCast(l.x), @intCast(l.y)); // re-clamp into new scene
+    }
+}
+
 // ---- focus / raise -------------------------------------------------------------
 
 fn focusWindow(handle: i32) void {

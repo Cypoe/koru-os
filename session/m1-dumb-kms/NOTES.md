@@ -1114,3 +1114,45 @@ backing sized at consoleUp; a modeset to DIFFERENT dims leaves stale
 sink geometry (both paths are 1920x1080 today). Damage->composite is
 per-pixel topmost-wins — full-screen repaint ~tens of ms, damage
 rects are small in steady state.
+
+## MC-1 fix — console root resize on surface gen change (2026-11-09)
+
+T590 regression: after 'kms' modeset (1024x768 LFB -> 1920x1080 i915
+dumb), console text invisible — typing showed no letters. Root cause:
+consoleUp sized the retained root backing + text Sink at BOOT dims;
+modeset left stale sink geometry AND comp.W/H never resynced, so
+composite clipped to the old 1024x768 scene rect.
+
+Fix (commit on native/m1-dumb-kms):
+- comp.syncDims(): on demand, re-reads koruos_fb_info, updates scene
+  W/H, re-clamps every live layer through decide() (placement
+  authority), damage clips to new bounds.
+- present.zig now OWNS the console backing (moved from shell.zig):
+  consoleUp/consoleSync/consoleForce/consoleRealloc. present.tick's
+  fb.generation() branch calls comp.syncDims() THEN consoleSync()
+  BEFORE full damage + swapchain teardown.
+- consoleSync(): same dims -> retained backing stays (console text
+  SURVIVES a same-geometry modeset — retention working as designed);
+  different dims -> detach old root, free backing, alloc new W*H,
+  reset text.sink {px,pitch,w,h,damage}, attachRoot, marker
+  "KORU scene: console resized WxH — fresh console". Old glyph pixels
+  can't remap across geometry — console restarts fresh (named; the
+  pre-MC1 modeset wiped scanout anyway).
+- Diagnostics: 'conresize' -> consoleSync() manual; 'consmall' ->
+  consoleForce(800,600) arbitrary-geometry test.
+- text.zig syncDims/rebase path: rebaseConsole->text.syncDims still
+  runs on modeset (fb.rebase path unchanged); flipSwap uses
+  rebaseQuiet which deliberately does NOT touch text (dims don't
+  change on routine flips; syncDims would reset cx,cy per frame).
+
+QEMU-VERIFIED (dist/koru-mc1r-scene.iso): 'consmall' -> "console
+forced 800x600" -> screendump shows console bg+text only in top-left
+800x600, scene BG black elsewhere; 'echo SMALL' letters render;
+'conresize' -> "console resized 1024x768 — fresh console" -> full
+console + text restored. Exercises detach->free->alloc->sink->
+attachRoot->damage->composite — the exact fix mechanics.
+
+UNEXERCISED: comp.syncDims + the automatic gen-change trigger need a
+real modeset — QEMU has no i915. T590 'kms' is the debut: expect
+"comp: scene dims -> 1920x1080" + "console resized 1920x1080" +
+flip buffers up + console text visible.

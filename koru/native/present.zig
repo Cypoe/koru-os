@@ -21,6 +21,9 @@ const comp = @import("comp");
 const fb = @import("fb.zig");
 const kms = @import("i915/kms.zig");
 const net = @import("net");
+const pmm = @import("pmm");
+const mmio = @import("mmio");
+const text = @import("text.zig");
 
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
 extern var stdout: ?*anyopaque;
@@ -47,6 +50,126 @@ var retry_n: u64 = 0;
 var flip_count: u64 = 0;
 var paint_count: u64 = 0;
 var pre_scanout: ?u32 = null; // foreign scanout to retire after first flip
+
+// ---- console root backing ---------------------------------------------------
+// Owned here (not shell.zig) so the gen-change path can resize it with
+// the scene: a modeset to different dims leaves a W*H backing that can't
+// cover the new scene — the T590 "console invisible post-kms" regression.
+// The backing is pmm; text.zig's Sink points at it and reports damage.
+
+const CON_BG: u32 = 0x001A1A2E;
+var con_phys: u64 = 0;
+var con_pages: usize = 0;
+var con_handle: i32 = -1;
+var con_buf: [*]volatile u32 = undefined;
+var con_pitch: u32 = 0;
+var con_w: u32 = 0;
+var con_h: u32 = 0;
+
+fn consoleAlloc(w: u32, h: u32) bool {
+    const bytes = @as(u64, w) * h * 4;
+    const pages: usize = @intCast((bytes + 4095) / 4096);
+    const phys = pmm.allocContiguous(pages, 1) orelse return false;
+    if (!mmio.map(phys, bytes)) {
+        _ = pmm.freeBlock(phys, pages);
+        return false;
+    }
+    const buf: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(phys)));
+    var i: usize = 0;
+    while (i < @as(usize, w) * h) : (i += 1) buf[i] = CON_BG;
+    con_phys = phys;
+    con_pages = pages;
+    con_buf = buf;
+    con_pitch = w;
+    con_w = w;
+    con_h = h;
+    return true;
+}
+
+fn consoleFree() void {
+    if (con_phys != 0) _ = pmm.freeBlock(con_phys, con_pages);
+    con_phys = 0;
+    con_pages = 0;
+    con_buf = undefined;
+    con_handle = -1;
+}
+
+fn consoleBind() void {
+    text.setColor(0xFFFFFFFF, CON_BG);
+    text.sink = .{
+        .px = con_buf,
+        .pitch = con_pitch,
+        .w = con_w,
+        .h = con_h,
+        .damage = comp.sceneDamage,
+    };
+    con_handle = comp.attachRoot(@volatileCast(con_buf), con_pitch, con_w, con_h);
+}
+
+// consoleUp — allocate the full-scene console backing and attach it as
+// comp's .root layer. Called once from shell.run after comp.init.
+pub fn consoleUp() void {
+    var w: u32 = 0;
+    var h: u32 = 0;
+    comp.dims(&w, &h);
+    if (w == 0 or h == 0) {
+        text.puts("scene: no dims — console stays on scanout\n");
+        return;
+    }
+    if (!consoleAlloc(w, h)) {
+        text.puts("scene: console backing alloc failed — scanout console\n");
+        return;
+    }
+    consoleBind();
+    text.puts("scene: console root layer ");
+    text.putdec(w);
+    text.putc('x');
+    text.putdec(h);
+    text.puts(if (con_handle >= 0) " up\n" else " REFUSED\n");
+}
+
+// consoleRealloc — detach the old root, free its backing, allocate and
+// bind a new one at (w,h). Shared core of consoleSync/consoleForce.
+fn consoleRealloc(w: u32, h: u32) bool {
+    const old = con_handle;
+    if (old >= 0) comp.detach(old);
+    consoleFree();
+    if (!consoleAlloc(w, h)) {
+        text.sink = null; // loud: console falls back to direct scanout writes
+        text.puts("scene: console backing alloc failed — scanout console\n");
+        return false;
+    }
+    consoleBind();
+    return true;
+}
+
+// consoleSync — the gen-change hook. Same dims -> the retained backing
+// is still valid (console text SURVIVES a same-geometry modeset — that
+// is the point of retention). Different dims -> realloc: old glyph
+// pixels can't be remapped, so the console restarts fresh (named — the
+// pre-MC1 modeset wiped the scanout anyway).
+pub fn consoleSync() void {
+    var w: u32 = 0;
+    var h: u32 = 0;
+    comp.dims(&w, &h);
+    if (w == 0 or h == 0) return;
+    if (con_handle < 0) {
+        consoleUp(); // was never up (alloc failed at boot) — retry now
+        return;
+    }
+    if (w == con_w and h == con_h) return;
+    if (!consoleRealloc(w, h)) return;
+    sayU("KORU scene: console resized {d}x{d} — fresh console\n", .{ w, h });
+}
+
+// consoleForce — diagnostic: rebind the root backing at ARBITRARY dims
+// (QEMU can't modeset, so this is how the resize mechanics get verified
+// without i915). Root layer smaller/larger than scene clips honestly.
+pub fn consoleForce(w: u32, h: u32) void {
+    if (w == 0 or h == 0) return;
+    if (!consoleRealloc(w, h)) return;
+    sayU("KORU scene: console forced {d}x{d}\n", .{ w, h });
+}
 
 fn sayU(comptime fmt: []const u8, args: anytype) void {
     var b: [224]u8 = undefined;
@@ -221,6 +344,8 @@ pub fn tick() void {
     const g = fb.generation();
     if (g != last_gen) {
         last_gen = g;
+        comp.syncDims();  // scene geometry follows the new scanout FIRST
+        consoleSync();    // root backing resizes/re-attaches on dim change
         var w: u32 = 0;
         var h: u32 = 0;
         comp.dims(&w, &h);
