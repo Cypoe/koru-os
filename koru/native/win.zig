@@ -141,7 +141,18 @@ fn freeWin(w: *WinObj) void {
 
 // ---- spawn / close ---------------------------------------------------------------
 
+fn tsc() u64 {
+    var lo: u32 = undefined;
+    var hi: u32 = undefined;
+    asm volatile ("rdtsc"
+        : [lo] "={eax}" (lo), [hi] "={edx}" (hi),
+        :
+        : .{ .memory = true });
+    return (@as(u64, hi) << 32) | lo;
+}
+
 pub fn spawn() void {
+    const t0 = tsc(); // phase timing -> spawn marker (T590 slow-open profile)
     var slot: ?usize = null;
     for (wins[0..], 0..) |*w, i| {
         if (!w.live) {
@@ -190,7 +201,9 @@ pub fn spawn() void {
         w.pitch = WW;
         kind = "pmm";
     }
+    const t1 = tsc(); // alloc done
     paintWindow(&w, si);
+    const t2 = tsc(); // paint done
 
     // cascade placement — desired pos; comp's decide() clamps.
     var sw: u32 = 0;
@@ -217,8 +230,10 @@ pub fn spawn() void {
     w.last_focus = comp.isFocused(handle); // windowOpen focuses+raises
     wins[si] = w;
     spawned += 1;
-    sayU("KORU kwin spawn {d} 320x200 handle={d} backing={s}\n",
-        .{ si, handle, kind });
+    const t3 = tsc(); // attach/scene done
+    sayU("KORU kwin spawn {d} 320x200 handle={d} backing={s} us alloc={d} paint={d} attach={d}\n",
+        .{ si, handle, kind,
+           (t1 - t0) / 3000, (t2 - t1) / 3000, (t3 - t2) / 3000 });
     text.puts("kwin: window up — press+drag titlebar to move\n");
     if (!cursorMod.isEnabled()) cursorMod.enable();
 }

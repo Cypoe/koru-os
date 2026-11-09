@@ -517,6 +517,11 @@ fn raiseLayer(handle: i32) void {
     if (!l.live) return;
     l.z = z_next;
     z_next += 1;
+    // z decides pixels — raising changes pxIn resolution across the
+    // layer's whole rect (overlaps now resolve to THIS layer). Without
+    // damage the composite keeps stale pixels until an unrelated move
+    // repaints: click-to-raise looked dead until you dragged (T590 r6).
+    _ = damage(l.x, l.y, l.w, l.h);
 }
 
 // topmost window layer containing scene point (x,y) — hit-test walks

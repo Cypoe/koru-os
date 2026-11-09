@@ -1318,3 +1318,34 @@ Decode correct on both sides of the CCB write.
 UNEXERCISED: T590's actual CCB-read race (scancode landing mid-probe)
 is timing-dependent — the deterministic write removes the dependency
 entirely, so HW behavior can't regress from it.
+
+## MC-1r7 fix — click-to-raise z-order + spawn phase timing (2026-11-09)
+
+T590 r6 worked (kbd decode, kwin x N, drag, pointer) but two issues:
+
+1. Z-ORDER/RAISE: clicking a lower window didn't cover the one above
+   until you dragged it. Root cause: comp.tick press-edge calls
+   focusWindow+raiseLayer; raiseLayer re-stamped l.z but generated
+   ZERO damage — z decides pxIn resolution, but only damaged rects
+   composite, so overlap pixels kept stale topmost content until a
+   drag's place() damaged old+new rects. Fix: raiseLayer now damages
+   the layer's full rect — every raise repaints its z-resolution
+   domain (windowOpen's extra raise merges harmlessly).
+
+2. SLOW SPAWN: added rdtsc phase timing to win.spawn — marker now
+   reads 'us alloc=N paint=N attach=N' (alloc=dumbCreate/pmm+map,
+   paint=fillRect pass, attach=windowOpen/place/damage). QEMU numbers:
+   first spawn 47/315/586us, second 28/44/75us — all sub-ms; the
+   'alarming' T590 cost is therefore NOT the spawn CPU path itself.
+   Remaining suspects: (a) first-spawn cursorMod.enable()->mouse.init
+   8042 probe (one-time, ~100ms-class, only if cursor wasn't already
+   on); (b) flip-appear latency — window shows at next flip, and if
+   DEIIR still dead the 2048-tick timeout at slow loop rates is the
+   real delay. T590 marker will name which.
+
+QEMU-VERIFIED (dist/koru-mc1r7-scene.iso): 2 kwins spawn (markers
+with us breakdown), click->'focus root' defocus repaint reached
+screen (5580 px diff). Click-raise pixel-verify INCONCLUSIVE — QEMU
+mouse_move is relative from unknown cursor start, couldn't land on
+the 28px window strip reliably; raise path verified by inspection
+(z-change => damage => composite resolves new order).
