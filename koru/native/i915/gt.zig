@@ -34,6 +34,20 @@ const led = @import("../led.zig");
 const text = @import("../text.zig");
 const kms = @import("kms.zig");
 
+extern var stdout: ?*anyopaque;
+extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+
+// sayU — dual-write one formatted line: serial AND the UDP mirror, same
+// discipline as cursor.zig/mouse.zig. The T590 oracle lives on the wire;
+// mmio.say alone never reaches 192.168.99.1.
+fn sayU(comptime fmt: []const u8, args: anytype) void {
+    var buf: [256]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    buf[s.len] = 0;
+    _ = fputs(@ptrCast(&buf), stdout);
+    net.mirror(s);
+}
+
 fn stage(comptime msg: [*:0]const u8) void {
     mmio.say(msg); mmio.say("\n");
     net.mark(std.mem.sliceTo(msg, 0));
@@ -534,9 +548,285 @@ fn lrcPatch(dst: [*]u32, used: usize, engineBase: u32, off: u32, val: u32) void 
     }
 }
 
-fn blitPhase(p: Pages) void {
-    stage("gt5: ==== BCS blit-via-LRC begin ====");
+const BLT_RED: u32 = 0xffff_0000;
+const BLT_MAGENTA: u32 = 0xffff_00ff;
+const STRIPE_DWORDS: u32 = 32;
+
+// Compact one-line engine dump that reaches the UDP wire (sayU). PDP0 and
+// CTXCTL are the context discriminators: the LRC image sets PDP0=pdPhys
+// and CONTEXT_CONTROL=0x8; a bare/GGTT run leaves them at whatever the
+// last writer left — comparing gt5b vs gt5a dumps shows whether the
+// execlist context actually took.
+fn dumpEngineU(comptime tag: []const u8, base: u32) void {
+    sayU("gt5: {s} EXCC={x} IPEIR={x} IPEHR={x} INSTDONE={x} ACTHD={x} HEAD={x} TAIL={x} START={x} CTL={x} MIMODE={x} IMR={x} ID={x} PDP0={x} CTXCTL={x}\n", .{
+        tag, rdAt(base, OFF_EXCC), rdAt(base, OFF_IPEIR), rdAt(base, OFF_IPEHR),
+        rdAt(base, OFF_INSTDONE), rdAt(base, OFF_ACTHD), rdAt(base, OFF_HEAD),
+        rdAt(base, OFF_TAIL), rdAt(base, OFF_START), rdAt(base, OFF_CTL),
+        rdAt(base, OFF_MI_MODE), rdAt(base, OFF_IMR), rdAt(base, OFF_ID),
+        rdAt(base, OFF_PDP0_LDW), rdAt(base, 0x244) });
+}
+
+fn pollHead(base: u32, want: u32, ms: u32) u32 {
+    const deadline = mmio.nowMs() + ms;
+    var head: u32 = 0;
+    while (mmio.nowMs() < deadline) {
+        head = rdAt(base, OFF_HEAD) & HEAD_ADDR_MASK;
+        if (head == want) return head;
+        asm volatile ("pause");
+    }
+    return head;
+}
+
+// emitBltBatch — one ring image shared by both phases:
+//   [NOOP] [optional emit_pdps preamble] [XY_COLOR_BLT red rect]
+//   [MI_STORE_DWORD_IMM|GGTT x32 magenta stripe] [BATCH_BUFFER_END] [pad]
+// The stripe runs AFTER the blt and lives near the TOP of the buffer
+// (row 8) while the blt targets the BOTTOM pages — no overlap on the
+// 1080p scanout, so magenta survives as an independent write proof.
+// dstLo/dstHi = the blt destination in the CURRENT address space:
+//   phase B (bare ring): GGTT byte offset of the target phys pages.
+//   phase A (LRC ctx):   PPGTT VA 0 (PT maps VA0 -> buf.phys+startByte).
+fn emitBltBatch(ring: [*]volatile u32, pdpPre: bool, base: u32,
+                pdLo: u32, pdHi: u32,
+                dstLo: u32, dstHi: u32,
+                pitch: u32, rows: u32, widthDw: u32,
+                gttStripe: u64) usize {
+    var dw: usize = 0;
+    ring[dw] = MI_NOOP; dw += 1;
+    if (pdpPre) {
+        ring[dw] = MI_ARB_ON_OFF | MI_ARB_DISABLE; dw += 1;
+        ring[dw] = MI_NOOP; dw += 1;
+        ring[dw] = miLri(8) | MI_LRI_FORCE_POSTED; dw += 1;
+        var pdp: u32 = 3;
+        while (true) : (pdp -= 1) {
+            const a = base + OFF_PDP0_LDW + pdp * PDP_STRIDE;
+            ring[dw] = a + 4; ring[dw + 1] = pdHi; dw += 2; // UDW
+            ring[dw] = a; ring[dw + 1] = pdLo; dw += 2; // LDW
+            if (pdp == 0) break;
+        }
+        ring[dw] = MI_ARB_ON_OFF | MI_ARB_ENABLE; dw += 1;
+    }
+    // XY_COLOR_BLT ver>=8 layout (intel_migrate.c emit_clear):
+    //   DW1 = DEPTH_32|ROP_COLOR_COPY|pitch ; DW2 = origin(0)
+    //   DW3 = (rows<<16)|width_dw ; DW4/DW5 = dst addr ; DW6 = color
+    ring[dw] = XY_COLOR_BLT_CMD | BLT_WRITE_RGBA | 5; dw += 1; // (7-2)
+    ring[dw] = BLT_DEPTH_32 | BLT_ROP_COLOR_COPY | pitch; dw += 1;
+    ring[dw] = 0; dw += 1;
+    ring[dw] = (rows << 16) | widthDw; dw += 1;
+    ring[dw] = dstLo; dw += 1;
+    ring[dw] = dstHi; dw += 1;
+    ring[dw] = BLT_RED; dw += 1;
+    ring[dw] = MI_NOOP; dw += 1;
+    var i: u32 = 0;
+    while (i < STRIPE_DWORDS) : (i += 1) {
+        const a = gttStripe + @as(u64, i) * 4;
+        ring[dw] = MI_STORE_DWORD_IMM_GEN4_GGTT; dw += 1;
+        ring[dw] = @truncate(a); dw += 1;
+        ring[dw] = @truncate(a >> 32); dw += 1;
+        ring[dw] = BLT_MAGENTA; dw += 1;
+    }
+    ring[dw] = MI_BATCH_BUFFER_END; dw += 1;
+    while (dw % 2 != 0) : (dw += 1) ring[dw] = MI_NOOP;
+    return dw;
+}
+
+// readback — sample the blt region + stripe row, every value on the wire.
+// round 0 = immediately after head==want (pre-compositor), round 1 =
+// +200ms later. red->0 between rounds = the GPU wrote and the
+// compositor erased it — that IS the visible-rect proof.
+fn readback(tag: []const u8, buf: kms.DumbBuffer, startByte: u64,
+             rows: u32, pitch: u32, round: u32) void {
+    const px = buf.map orelse {
+        sayU("gt5: {s} no cpu map\n", .{tag});
+        return;
+    };
+    const regionBytes: u64 = @as(u64, rows) * pitch;
+    const rowDw: u64 = pitch / 4;
+    _ = rowDw;
+    var red: u32 = 0;
+    var n: u32 = 0;
+    const fracs = [_]u64{ 1, 3, 5, 7 };
+    const tenth = regionBytes / 10;
+    for (fracs) |f| {
+        const rb = tenth * f;
+        const cols = [_]u64{ 64, pitch / 2, pitch - 64 };
+        for (cols) |colB| {
+            const byteOff = startByte + rb + colB;
+            const idx: usize = @intCast(byteOff / 4);
+            const v = px[idx];
+            n += 1;
+            // XRGB-ish red: R=ff G=0 B=0, any alpha
+            if ((v & 0x00ff0000) == 0x00ff0000 and (v & 0x0000ff00) == 0 and
+                (v & 0x000000ff) == 0) red += 1;
+            sayU("gt5: {s} r{d} f{d} px={x}\n", .{ tag, round, n, v });
+        }
+    }
+    // stripe probes: row 8, cols 100..131 step 8
+    const sBase: u64 = @as(u64, 8) * pitch + 100 * 4;
+    var mag: u32 = 0;
+    const ks = [_]u64{ 0, 8, 16, 24 };
+    for (ks) |k| {
+        const idx: usize = @intCast(sBase / 4 + k);
+        const v = px[idx];
+        if ((v & 0x00ff0000) == 0x00ff0000 and (v & 0x000000ff) == 0xff and
+            (v & 0x0000ff00) == 0) mag += 1;
+        sayU("gt5: {s} r{d} st{d} px={x}\n", .{ tag, round, k, v });
+    }
+    sayU("gt5: {s} round{d} red={d}/12 mag={d}/4\n", .{ tag, round, red, mag });
+}
+
+// phase B — bare ring, NO execlist context: the engine's current address
+// space is whatever a context-free gen9 CS defaults to (expected GGTT).
+// dst = the scanout's GGTT byte offset, so if GGTT addressing is live the
+// blt lands on scanned phys directly. Runs BEFORE any ELSP submit — once
+// a context loads it may persist and change the meaning of dst.
+fn blitBare(p: Pages, buf: kms.DumbBuffer, startByte: u64,
+             rows: u32, pitch: u32, widthDw: u32) void {
     const base = BCS_BASE;
+    stage("gt5b: ==== bare-ring GGTT blit begin ====");
+    const ring: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(p.ringPhys)));
+    var zi: usize = 0;
+    while (zi < 2048) : (zi += 1) ring[zi] = MI_NOOP;
+    const gttDst = buf.gtt_offset + startByte;
+    const gttStripe = buf.gtt_offset + @as(u64, 8) * pitch + 400;
+    const dw = emitBltBatch(ring, false, base, 0, 0,
+        @truncate(gttDst), @truncate(gttDst >> 32),
+        pitch, rows, widthDw, gttStripe);
+    const tailB: u32 = @intCast(dw * 4);
+    sayU("gt5b: dst_gtt={x} stripe_gtt={x} tail={x} rows={d}\n", .{
+        gttDst, gttStripe, tailB, rows });
+    ringReset(base);
+    wrAt(base, OFF_HWS_PGA, @truncate(@as(u64, p.hwspGttSlot) * 4096));
+    wrAt(base, OFF_IMR, 0xffff_ffff);
+    wrAt(base, OFF_MI_MODE, rdAt(base, OFF_MI_MODE) & ~(@as(u32, 1) << 8));
+    wrAt(base, OFF_START, @truncate(@as(u64, p.ringGttSlot) * 4096));
+    wrAt(base, OFF_CTL, 0x1001);
+    mmio.postingRead(base + OFF_CTL);
+    wrAt(base, OFF_TAIL, tailB); // tail LAST — the kick
+    stage("gt5b: submitted — polling head");
+    const want = tailB & HEAD_ADDR_MASK;
+    const head = pollHead(base, want, 1500);
+    sayU("gt5b: head={x} want={x}\n", .{ head, want });
+    if (head == want) {
+        stage("gt5b: SUBMIT-OK");
+    } else {
+        stage("gt5b: HEAD-STALLED");
+    }
+    dumpEngineU("gt5b", base);
+    readback("gt5b", buf, startByte, rows, pitch, 0);
+    mmio.sleepUs(200000);
+    readback("gt5b", buf, startByte, rows, pitch, 1);
+}
+
+// phase A — LRC context + ELSP, PPGTT addressing. Same blt image but dst
+// is PPGTT VA 0; the PT maps VA0 -> buf.phys + startByte (bottom pages,
+// away from console damage). If the context loads, this is the real
+// gen8+ path; if gt5b already proved GGTT, this confirms PPGTT too.
+fn blitLrc(p: Pages, buf: kms.DumbBuffer, startByte: u64, startPage: u32,
+            rows: u32, pitch: u32, widthDw: u32, nPages: u32) void {
+    const base = BCS_BASE;
+    stage("gt5a: ==== LRC+ELSP PPGTT blit begin ====");
+
+    const ctxPhys = allocPages(2, 1) orelse {
+        stage("gt5a: FAIL ctx alloc");
+        return;
+    };
+    const pdPhys = allocPages(1, 1) orelse {
+        stage("gt5a: FAIL pd alloc");
+        return;
+    };
+    const ptPhys = allocPages(1, 1) orelse {
+        stage("gt5a: FAIL pt alloc");
+        return;
+    };
+    _ = hostmmio.map(pdPhys, 4096);
+    _ = hostmmio.map(ptPhys, 4096);
+
+    const ctxGttSlot = GTT_BASE_SLOT + 24;
+    mmio.writeGtt(ctxGttSlot, ctxPhys, true);
+    mmio.writeGtt(ctxGttSlot + 1, ctxPhys + 4096, true);
+    const ctxGttOff: u64 = @as(u64, ctxGttSlot) * 4096;
+
+    const ctxPages: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(ctxPhys)));
+    const lrc: [*]u32 = @ptrFromInt(@as(usize, @intCast(ctxPhys + 4096)));
+    const pd: [*]u64 = @ptrFromInt(@as(usize, @intCast(pdPhys)));
+    const pt: [*]u64 = @ptrFromInt(@as(usize, @intCast(ptPhys)));
+
+    var zi: usize = 0;
+    while (zi < 2048) : (zi += 1) ctxPages[zi] = 0;
+
+    // PPGTT: PD[0]->PT ; PT[i] -> buf.phys + (startPage+i)*4K | PRESENT|RW|PAT
+    pd[0] = ptPhys | 3;
+    var pi: u32 = 0;
+    while (pi < nPages) : (pi += 1) {
+        pt[pi] = (buf.phys + (@as(u64, startPage) + pi) * 4096) | 0x83;
+    }
+    stage("gt5a: lrc+pdpt built");
+
+    const used = buildLrcImage(lrc, base);
+    const ringGttOff: u32 = @truncate(@as(u64, p.ringGttSlot) * 4096);
+    lrcPatch(lrc, used, base, 0x034, 0); // HEAD
+    lrcPatch(lrc, used, base, 0x038, ringGttOff); // START (ggtt off)
+    lrcPatch(lrc, used, base, 0x03c, 0x1001); // CTL = 1<<12|VALID
+    lrcPatch(lrc, used, base, 0x244, 0x8); // CONTEXT_CONTROL
+    lrcPatch(lrc, used, base, 0x09c, 0x0100_0000); // MI_MODE STOP_RING<<16
+    const pdLo: u32 = @truncate(pdPhys);
+    const pdHi: u32 = @truncate(pdPhys >> 32);
+    lrcPatch(lrc, used, base, 0x28c, pdHi); // PDP3_UDW
+    lrcPatch(lrc, used, base, 0x288, pdLo); // PDP3_LDW
+    lrcPatch(lrc, used, base, 0x284, pdHi); // PDP2_UDW
+    lrcPatch(lrc, used, base, 0x280, pdLo); // PDP2_LDW
+    lrcPatch(lrc, used, base, 0x27c, pdHi); // PDP1_UDW
+    lrcPatch(lrc, used, base, 0x278, pdLo); // PDP1_LDW
+    lrcPatch(lrc, used, base, 0x274, pdHi); // PDP0_UDW
+    lrcPatch(lrc, used, base, 0x270, pdLo); // PDP0_LDW
+    sayU("gt5a: lrc {d}dw ctx_gtt={x} pdphys={x}\n", .{ used, ctxGttOff, pdPhys });
+
+    // ring batch: emit_pdps + blt(dst VA 0) + stripe
+    const ring: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(p.ringPhys)));
+    var zi2: usize = 0;
+    while (zi2 < 2048) : (zi2 += 1) ring[zi2] = MI_NOOP;
+    const gttStripe = buf.gtt_offset + @as(u64, 8) * pitch + 400;
+    const dw = emitBltBatch(ring, true, base, pdLo, pdHi, 0, 0,
+        pitch, rows, widthDw, gttStripe);
+    const tailA: u32 = @intCast(dw * 4);
+    lrcPatch(lrc, used, base, 0x030, tailA); // TAIL = this batch's end
+
+    // legacy arm too (cheap; LRC restore overwrites on ctx switch-in)
+    ringReset(base);
+    wrAt(base, OFF_HWS_PGA, @truncate(@as(u64, p.hwspGttSlot) * 4096));
+    wrAt(base, OFF_IMR, 0xffff_ffff);
+    wrAt(base, OFF_MI_MODE, rdAt(base, OFF_MI_MODE) & ~(@as(u32, 1) << 8));
+    wrAt(base, OFF_START, ringGttOff);
+    wrAt(base, OFF_CTL, 0x1001);
+    mmio.postingRead(base + OFF_CTL);
+
+    const desc: u64 = ctxGttOff |
+        (INTEL_LEGACY_32B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT) |
+        GEN8_CTX_VALID | GEN8_CTX_PRIVILEGE | GEN8_CTX_FORCE_RESTORE;
+    sayU("gt5a: elsp desc={x}\n", .{desc});
+    wrAt(base, OFF_ELSP, @truncate(desc >> 32)); // UDW first
+    wrAt(base, OFF_ELSP, @truncate(desc)); // LDW commits
+    stage("gt5a: elsp written — polling");
+
+    const want = tailA & HEAD_ADDR_MASK;
+    const head = pollHead(base, want, 1500);
+    sayU("gt5a: head={x} want={x}\n", .{ head, want });
+    if (head == want) {
+        stage("gt5a: SUBMIT-OK");
+    } else {
+        stage("gt5a: HEAD-STALLED");
+    }
+    dumpEngineU("gt5a", base);
+    readback("gt5a", buf, startByte, rows, pitch, 0);
+    mmio.sleepUs(200000);
+    readback("gt5a", buf, startByte, rows, pitch, 1);
+}
+
+fn blitPhase(p: Pages) void {
+    stage("gt5: ==== blit-via-GPU begin ====");
+    const base = BCS_BASE;
+    _ = base;
 
     // dst = live kms scanout if present, else a fresh dumb buffer.
     var dstBuf: ?kms.DumbBuffer = null;
@@ -555,165 +845,48 @@ fn blitPhase(p: Pages) void {
         stage("gt5: FAIL no dst buffer (run kms first)");
         return;
     };
-    stage("gt5: dst buffer acquired");
+    sayU("gt5: dst w={d} h={d} pitch={d} phys={x} gtt_off={x} frames={d}\n", .{
+        buf.width, buf.height, buf.pitch, buf.phys, buf.gtt_offset, buf.frames });
 
+    // Geometry: bottom ~250 rows of the buffer — far from the console
+    // titlebar/text damage so the compositor can't erase the proof before
+    // a frame flips. startByte is page-aligned so one PT covers it.
     const pitch: u32 = buf.pitch;
-    const rows: u32 = 250; // ~1.9MB top strip — inside one 2MiB PPGTT PT
-    const widthDw: u32 = pitch / 4;
-    const nPages: u32 = @intCast((@as(u64, rows) * pitch + 4095) / 4096);
-    mmio.say("gt5: dst w="); mmio.sayDec(buf.width);
-    mmio.say(" h="); mmio.sayDec(buf.height);
-    mmio.say(" pitch="); mmio.sayDec(pitch);
-    mmio.say(" rows="); mmio.sayDec(rows);
-    mmio.say(" ptes="); mmio.sayDec(nPages); mmio.say("\n");
+    if (pitch == 0 or buf.frames == 0) {
+        stage("gt5: FAIL degenerate buffer");
+        return;
+    }
+    const totalPages: usize = buf.frames;
+    const startPage: u32 = if (totalPages > 520)
+        @intCast(totalPages - 469) else 0;
+    const availBytes: u64 = @as(u64, totalPages - @as(usize, startPage)) * 4096;
+    var rows: u32 = @intCast(@min(availBytes / pitch, @as(u64, 250)));
+    if (rows == 0) rows = 1;
+    var nPages: u32 = @intCast((@as(u64, rows) * pitch + 4095) / 4096);
+    const maxPages: u32 = @intCast(totalPages - @as(usize, startPage));
+    if (nPages > maxPages) {
+        nPages = maxPages;
+        rows = @intCast((@as(u64, nPages) * 4096) / pitch);
+        if (rows == 0) rows = 1;
+    }
     if (nPages > 512) {
-        stage("gt5: FAIL pte overflow");
-        return;
+        rows = @intCast((512 * 4096) / pitch);
+        if (rows == 0) rows = 1;
+        nPages = @intCast((@as(u64, rows) * pitch + 4095) / 4096);
     }
+    const widthDw: u32 = pitch / 4;
+    const startByte: u64 = @as(u64, startPage) * 4096;
+    sayU("gt5: geom startPage={d} startByte={x} rows={d} nPages={d} widthDw={d}\n", .{
+        startPage, startByte, rows, nPages, widthDw });
 
-    // ---- memory: ctx object (2pg), PD page, PT page -------------------------
-    const ctxPhys = allocPages(2, 1) orelse {
-        stage("gt5: FAIL ctx alloc");
-        return;
-    };
-    const pdPhys = allocPages(1, 1) orelse {
-        stage("gt5: FAIL pd alloc");
-        return;
-    };
-    const ptPhys = allocPages(1, 1) orelse {
-        stage("gt5: FAIL pt alloc");
-        return;
-    };
-    _ = hostmmio.map(pdPhys, 4096);
-    _ = hostmmio.map(ptPhys, 4096);
+    // baseline readback BEFORE any submit — what does the surface hold now?
+    readback("gt5pre", buf, startByte, rows, pitch, 0);
 
-    const ctxGttSlot = GTT_BASE_SLOT + 24;
-    mmio.writeGtt(ctxGttSlot, ctxPhys, true);
-    mmio.writeGtt(ctxGttSlot + 1, ctxPhys + 4096, true);
-    const ctxGttOff: u64 = @as(u64, ctxGttSlot) * 4096;
+    blitBare(p, buf, startByte, rows, pitch, widthDw);
+    blitLrc(p, buf, startByte, startPage, rows, pitch, widthDw, nPages);
 
-    // CPU views (identity physmap)
-    const ctxPages: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(ctxPhys)));
-    const lrc: [*]u32 = @ptrFromInt(@as(usize, @intCast(ctxPhys + 4096)));
-    const pd: [*]u64 = @ptrFromInt(@as(usize, @intCast(pdPhys)));
-    const pt: [*]u64 = @ptrFromInt(@as(usize, @intCast(ptPhys)));
-
-    // zero ctx object (HWS page + reg-state page)
-    var zi: usize = 0;
-    while (zi < 2048) : (zi += 1) ctxPages[zi] = 0;
-
-    // ---- PPGTT page tables (3-level; entries = PHYSICAL addrs) --------------
-    // PD[0] -> PT ; PT[i] -> dstPhys + i*4K  (VA 0..2MiB, PDE0/PTE i)
-    pd[0] = ptPhys | 3; // PRESENT|RW, PPAT_CACHED_PDE(0)
-    var pi: u32 = 0;
-    while (pi < nPages) : (pi += 1) {
-        pt[pi] = (buf.phys + @as(u64, pi) * 4096) | 0x83; // PRESENT|RW|PPAT_CACHED(_PAGE_PAT=0x80)
-    }
-    stage("gt5: lrc+pdpt built");
-
-    // ---- LRC reg-state image (page 1) ---------------------------------------
-    const used = buildLrcImage(lrc, base);
-    const ringGttOff: u32 = @truncate(@as(u64, p.ringGttSlot) * 4096);
-    const tailB = ringTailBytes();
-    lrcPatch(lrc, used, base, 0x034, 0); // HEAD
-    lrcPatch(lrc, used, base, 0x030, tailB); // TAIL
-    lrcPatch(lrc, used, base, 0x038, ringGttOff); // START (ggtt off)
-    lrcPatch(lrc, used, base, 0x03c, 0x1001); // CTL = 1<<12|VALID (2 pages)
-    lrcPatch(lrc, used, base, 0x244, 0x8); // CONTEXT_CONTROL: inhibit syn switch
-    lrcPatch(lrc, used, base, 0x09c, 0x0100_0000); // MI_MODE: STOP_RING<<16 set, bit8 clear
-    // PDP0..3 -> PD page (same PD for all four; we only use VA<4GiB)
-    const pdLo: u32 = @truncate(pdPhys);
-    const pdHi: u32 = @truncate(pdPhys >> 32);
-    lrcPatch(lrc, used, base, 0x28c, pdHi); // PDP3_UDW
-    lrcPatch(lrc, used, base, 0x288, pdLo); // PDP3_LDW
-    lrcPatch(lrc, used, base, 0x284, pdHi); // PDP2_UDW
-    lrcPatch(lrc, used, base, 0x280, pdLo); // PDP2_LDW
-    lrcPatch(lrc, used, base, 0x27c, pdHi); // PDP1_UDW
-    lrcPatch(lrc, used, base, 0x278, pdLo); // PDP1_LDW
-    lrcPatch(lrc, used, base, 0x274, pdHi); // PDP0_UDW
-    lrcPatch(lrc, used, base, 0x270, pdLo); // PDP0_LDW
-    mmio.say("gt5: lrc image "); mmio.sayDec(used);
-    mmio.say("dw ctx_gtt_off="); mmio.sayHex(ctxGttOff); mmio.say("\n");
-
-    // ---- ring batch: emit_pdps + XY_COLOR_BLT --------------------------------
-    const ring: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(p.ringPhys)));
-    var dw: usize = 0;
-    ring[dw] = MI_NOOP; dw += 1;
-    ring[dw] = MI_ARB_ON_OFF | MI_ARB_DISABLE; dw += 1;
-    ring[dw] = MI_NOOP; dw += 1;
-    ring[dw] = miLri(8) | MI_LRI_FORCE_POSTED; dw += 1;
-    var pdp: u32 = 3;
-    while (true) : (pdp -= 1) {
-        const a = base + OFF_PDP0_LDW + pdp * PDP_STRIDE;
-        ring[dw] = a + 4; ring[dw + 1] = pdHi; dw += 2; // UDW
-        ring[dw] = a; ring[dw + 1] = pdLo; dw += 2; // LDW
-        if (pdp == 0) break;
-    }
-    ring[dw] = MI_ARB_ON_OFF | MI_ARB_ENABLE; dw += 1;
-    ring[dw] = XY_COLOR_BLT_CMD | BLT_WRITE_RGBA | 5; dw += 1; // (7-2)
-    ring[dw] = BLT_DEPTH_32 | BLT_ROP_COLOR_COPY | pitch; dw += 1;
-    ring[dw] = 0; dw += 1;
-    ring[dw] = (rows << 16) | widthDw; dw += 1;
-    ring[dw] = 0; dw += 1; // dst addr lo (PPGTT VA 0)
-    ring[dw] = 0; dw += 1; // dst addr hi
-    ring[dw] = 0xffff_0000; dw += 1; // color: opaque red
-    ring[dw] = MI_NOOP; dw += 1;
-    ring[dw] = MI_BATCH_BUFFER_END; dw += 1;
-    while (dw % 2 != 0) : (dw += 1) ring[dw] = MI_NOOP;
-    const newTail: u32 = @intCast(dw * 4);
-    // NOTE: ringTailBytes()/computeTail scanned the OLD image; the batch
-    // tail for THIS submit is newTail — patch LRC TAIL slot + CTL.
-    lrcPatch(lrc, used, base, 0x030, newTail);
-
-    // arm ring regs the legacy way too (cheap; LRC restore overwrites)
-    ringReset(base);
-    wrAt(base, OFF_HWS_PGA, @truncate(@as(u64, p.hwspGttSlot) * 4096));
-    wrAt(base, OFF_IMR, 0xffff_ffff);
-    wrAt(base, OFF_MI_MODE, rdAt(base, OFF_MI_MODE) & ~(@as(u32, 1) << 8));
-    wrAt(base, OFF_START, ringGttOff);
-    wrAt(base, OFF_CTL, 0x1001);
-    mmio.postingRead(base + OFF_CTL);
-
-    // ---- ELSP submit: context descriptor = GGTT off of ctx obj | flags -----
-    const desc: u64 = ctxGttOff |
-        (INTEL_LEGACY_32B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT) |
-        GEN8_CTX_VALID | GEN8_CTX_PRIVILEGE | GEN8_CTX_FORCE_RESTORE;
-    mmio.say("gt5: elsp submit desc="); mmio.sayHex(desc); mmio.say("\n");
-    wrAt(base, OFF_ELSP, @truncate(desc >> 32)); // UDW first
-    wrAt(base, OFF_ELSP, @truncate(desc)); // LDW commits
-    stage("gt5: elsp written — polling");
-
-    const want = newTail & HEAD_ADDR_MASK;
-    var head: u32 = 0;
-    var i: u32 = 0;
-    while (i < 500000) : (i += 1) {
-        head = rdAt(base, OFF_HEAD) & HEAD_ADDR_MASK;
-        if (head == want) break;
-        asm volatile ("pause");
-    }
-    mmio.say("gt5: head="); mmio.sayHex(head);
-    mmio.say(" want="); mmio.sayHex(want);
-    if (head == want) mmio.say(" BLT-SUBMIT-OK\n") else mmio.say(" HEAD-STALLED\n");
-    dumpEngine("blt ", base);
-
-    // ---- readback: did the GPU write the color into the scanout? -----------
-    mmio.sleepUs(50000);
-    const px: [*]const volatile u32 = @ptrFromInt(@as(usize, @intCast(buf.phys)));
-    const rowDw: usize = @intCast(pitch / 4);
-    const samples = [_]usize{ 10 * rowDw + 10, 100 * rowDw + 100,
-        (@as(usize, rows) / 2) * rowDw + 500, 200 * rowDw + 900 };
-    var okCount: u32 = 0;
-    for (samples) |s| {
-        const v = px[s];
-        mmio.say("gt5: px="); mmio.sayHex(v); mmio.say("\n");
-        if ((v & 0xffff_0000) == 0xffff_0000) okCount += 1;
-    }
-    if (okCount > 0) {
-        stage("gt5: ==== GPU-DRAW PROVEN — blt color in scanout ====");
-    } else {
-        stage("gt5: ==== BLT submitted but no color readback ====");
-    }
     if (owned) |h| _ = kms.dumbDestroy(h);
+    stage("gt5: ==== blit probe done — see gt5b/gt5a markers ====");
 }
 
 fn computeTail(p: Pages) u32 {
