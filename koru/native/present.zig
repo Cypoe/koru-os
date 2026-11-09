@@ -30,6 +30,18 @@ extern var stdout: ?*anyopaque;
 
 const MAX_BUFS: usize = 2;
 const MAX_FLIP_FAILS: u32 = 12;
+// Vblank-oracle timeout: flip_pending normally clears on a DEIIR edge.
+// If DEIIR never latches on this panel (unverified assumption — M2's
+// vblankWait result was discarded, so a dead IIR was never caught),
+// the swapchain froze after frame 1 on T590: prompt visible, then no
+// echo/window ever. Timeout ticks bound the stall — the display
+// engine applies each DSPASURF at vblank regardless, so a timed-out
+// re-arm still produces live (if tear-prone) flips instead of a
+// frozen frame.
+const FLIP_TIMEOUT_TICKS: u64 = 1 << 17;
+var flip_age: u64 = 0; // ticks since flip_pending armed
+var timeout_clears: u64 = 0;
+var last_vblank_raw: u32 = 0; // last DEIIR read — kstat oracle
 
 const Buf = struct {
     ok: bool = false,
@@ -217,6 +229,7 @@ fn teardown() void {
     }
     front = null;
     flip_pending = false;
+    flip_age = 0;
     pre_scanout = null;
 }
 
@@ -315,9 +328,28 @@ fn immediateTick() void {
 fn flipTick() void {
     // vblank oracle FIRST: any latched DE event means >=1 vblank passed
     // since the last drain — an armed flip has landed, the old front is
-    // safe to paint again.
+    // safe to paint again. Timeout fallback: if DEIIR never latches
+    // (dead oracle — M2 never verified it), pending would stick after
+    // frame 1 and the scene froze (T590 r3: prompt visible, no echo,
+    // no window). Bounded stall -> live tear-prone flips instead.
     const ev = kms.vblankDrain();
-    if (flip_pending and ev != 0) flip_pending = false;
+    last_vblank_raw = ev;
+    if (flip_pending) {
+        if (ev != 0) {
+            flip_pending = false;
+            flip_age = 0;
+        } else {
+            flip_age += 1;
+            if (flip_age >= FLIP_TIMEOUT_TICKS) {
+                flip_pending = false;
+                flip_age = 0;
+                timeout_clears += 1;
+                if (timeout_clears == 1 or timeout_clears % 64 == 0)
+                    sayU("KORU scene: vblank oracle silent — timeout clear {d}\n",
+                        .{timeout_clears});
+            }
+        }
+    }
 
     fanDamage(comp.takePending());
 
@@ -353,6 +385,7 @@ fn flipTick() void {
     }
     front = back;
     flip_pending = true;
+    flip_age = 0;
     flip_count += 1;
     if (flip_count == 1 or flip_count % 120 == 0)
         sayU("KORU scene: flip {d} back={d} rects={d} full={d}\n",
@@ -362,6 +395,31 @@ fn flipTick() void {
 pub fn init() void {
     last_gen = fb.generation();
     last_mode_was_flip = false;
+}
+
+// kstat — the flip-path oracle. Dumps swapchain state, the DEIIR raw
+// last read, the plane's programmed DSPASURF, and READBACK PIXELS from
+// each scene buffer's CPU map — proving whether composite wrote
+// content into the buffer the display engine is pointed at.
+pub fn stat() void {
+    sayU("present: flips={d} pending={d} age={d} timeouts={d} vb_raw={x} fails={d} gaveup={d}\n",
+        .{ flip_count, @intFromBool(flip_pending), flip_age, timeout_clears,
+           last_vblank_raw, flip_fails, @intFromBool(flip_gave_up) });
+    for (bufs, 0..) |b, i| {
+        if (!b.ok) {
+            sayU("  buf{d}: down\n", .{i});
+            continue;
+        }
+        // readback: center + top-left pixels of the composited surface
+        const cx = @as(usize, b.h / 2) * b.pitch + @as(usize, b.w / 2);
+        const tl = @as(usize, 8) * b.pitch + 8;
+        const pc: u32 = b.map[cx];
+        const pt: u32 = b.map[tl];
+        sayU("  buf{d}: h={d} acc.n={d} acc.full={d} px@center={x} px@8,8={x}\n",
+            .{ i, b.handle, b.acc.n, @intFromBool(b.acc.full), pc, pt });
+    }
+    sayU("  front={d} dspsurf={x} pre_scanout={d}\n",
+        .{ front orelse 99, kms.surfaceOffset(), pre_scanout orelse 999 });
 }
 
 pub fn tick() void {

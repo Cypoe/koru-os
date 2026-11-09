@@ -1220,3 +1220,39 @@ UNEXERCISED: the flip-alloc starvation itself is i915-only (QEMU has
 no kms.device().up) — T590 'kms' is the debut. If dumbs still fail,
 serial now shows 'flip alloc fail N' + 'gave up' markers instead of
 silently starving; immediate mode keeps console live either way.
+
+## MC-1r4 fix — frozen swapchain: dead DEIIR oracle + kstat readback (2026-11-09)
+
+T590 regression: input+spawn live (kwin dmabuf handle=1, aux irq12
+armed) but NOTHING updated on panel — prompt frame frozen, no echo,
+no window. Diagnosis: flipTick gates ALL compositing on flip_pending,
+cleared only by kms.vblankDrain() (DEIIR poll). M2's flipCommit never
+depended on DEIIR — runFlip DISCARDS vblankWait(2)'s result, so a
+dead IIR was never caught on HW. First swapchain frame composites
+(acc.full at buf create) + flipSwap arms DSPASURF -> prompt visible;
+pending then sticks forever -> damage accumulates in accs, never
+composites -> frozen frame. Matches symptom exactly. (Damage-flow
+breakage ruled out by inspection: sceneDamage->pending->takePending
+->fanDamage all wired; QEMU-verified.)
+
+Fix:
+- FLIP_TIMEOUT_TICKS=1<<17: pending clears on tick-count even with
+  ev==0 — bounded stall -> live tear-prone flips instead of frozen
+  frame. DSPASURF re-arms each flip; HW applies at vblank regardless.
+  First timeout emits 'vblank oracle silent — timeout clear N'.
+- kms.surfaceOffset() export (DSPASURF readback).
+- present.stat() + shell 'kstat' command: flips/pending/age/
+  timeouts/vb_raw/fails/gaveup, per-buf acc.n+acc.full, READBACK
+  PIXELS from each buf's CPU map (center + 8,8), front index,
+  dspsurf readback, pre_scanout. The T590 oracle now proves:
+  composite wrote px -> which buffer DSPASURF points at -> whether
+  DEIIR latched.
+
+QEMU-VERIFIED (dist/koru-mc1r4-scene.iso): boot->scene->'kstat'
+prints stat block (immediate mode, bufs down, dspsurf=0 — correct
+no-i915). 'echo' path unaffected.
+UNEXERCISED: flip path i915-only — T590 'kms' debut. If DEIIR is
+alive, vb_raw nonzero + timeouts=0; if dead, timeouts climb and
+flips continue tear-prone. If flips STILL frozen with timeouts
+climbing, DSPASURF flips aren't applying -> next suspect is the
+atomic-commit property path vs legacy surface write.

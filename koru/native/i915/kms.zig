@@ -710,6 +710,13 @@ pub fn vblankDrain() u32 {
     return pipe.vblankPoll();
 }
 
+// surfaceOffset — readback of the plane's programmed DSPASURF (GGTT
+// byte offset, low 12 bits ignored by HW). The kstat diagnostic uses
+// it to prove which buffer the display engine is pointed at.
+pub fn surfaceOffset() u32 {
+    return pipe.surfaceOffset();
+}
+
 // VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).
 // Returns events seen — 0 means the IIR didn't latch (still reports the
 // flip committed; the scanout swap is visible regardless).

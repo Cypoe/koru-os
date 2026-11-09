@@ -91,7 +91,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwclose\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwclose\n  kstat\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -147,6 +147,10 @@ fn dispatch() void {
     }
     if (eq("consmall")) { // diagnostic: force console root to 800x600
         present.consoleForce(800, 600);
+        return;
+    }
+    if (eq("kstat")) { // flip-path oracle: swapchain + DEIIR + readback px
+        present.stat();
         return;
     }
     if (eq("mouse")) { // M4 native cursor: toggle + report position
