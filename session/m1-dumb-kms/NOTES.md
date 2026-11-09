@@ -1461,3 +1461,37 @@ whichever reg toggles at ~60Hz is the real vblank oracle.
 
 ISO dist/koru-mc1rb-scene.iso, MBR
 8300020010000000010000008f790000.
+
+## MC-1rc — ILK legacy IRQ bank + FRMCNT-edge-aligned commits (2026-11-09)
+
+T590 kstat decoded (mc1rb): FRMCNT increments ~60/s (display scans
+60fps) but EVERY vblank status/IRQ reg read 0 — DEISR=0 DEIIR=0
+SDEISR=1000000(static) SDEIIR=0 IIR28=0 GTIIR=0 PSTAT24=0. The DE*/
+SDE* quartets at 0x44000/0x0c4000 are SNB+ display-ENGINE regs —
+Arrandale (gen5/Ironlake) routes per-pipe interrupts through the
+LEGACY bank instead: LGC_IMR=0x20820 LGC_ISR=0x20830
+LGC_IIR=0x20840 (new regs.zig consts + PIPEASTAT_A=0x70024).
+
+vblankEnable now also writes LGC_IMR=0xFFFF0000 — unmask low 16
+(per-pipe space), keep hotplug/FM/MST masked (no IRQ handler; an
+unmasked storm would livelock). vblankPoll reads+acks LGC_IIR via
+ISR write-back and ORs it into the drain. kstat dumps all 11
+candidate regs (3 sayU lines).
+
+FALLBACK COMMIT PATH (active while no IRQ proven): flipTick now
+edge-aligns DSPASURF writes on FRMCNT — composite into back buffer
+first (never scanned, always safe), then waitFrameEdge() spins for
+the next FRMCNT increment (~260k MMIO reads, bounded ~30-50ms) and
+kms.flipSwapFast writes DSPASURF within ~us of the frame boundary,
+skipping atomicTestQuiet so nothing pushes the commit off vblank.
+flip_pending clears on IIR event OR FRMCNT delta past armed_frm OR
+timeout — FRMCNT delta = flip landed at boundary, giving ~30fps
+cadence (detect-then-wait skips a boundary) pending T590 verdict.
+r9's mid-scan commits are structurally impossible now: the write
+only ever happens immediately after a frame boundary.
+
+QEMU-verified: boot->kstat prints 'vb i915 down — no regs' (flip
+path never runs without KMS; no MMIO faults). ISO
+dist/koru-mc1rc-scene.iso MBR 8300020010000000010000009b790000.
+T590: kstat 2x ~1s apart — watch LGCIIR/LGCISR toggle at 60Hz;
+if it latches, wire flip gating to it for true 60fps.

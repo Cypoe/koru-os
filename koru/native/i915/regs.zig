@@ -784,6 +784,15 @@ pub const R = struct {
     pub const VCS_HWSTAM: u32 = 0x012098;
     pub const BCS_HWSTAM: u32 = 0x022098;
     pub const IIR: u32 = 0x044028;
+    // Ironlake-era (gen<=5) legacy interrupt bank. The DE*/SDE*
+    // quartets at 0x044000/0x0c4000 are SNB+ display-ENGINE regs and
+    // carry no per-pipe vblank on ILK — T590 kstat proved all of them
+    // read 0 while FRMCNT ticks at 60Hz. Per-pipe interrupts on ILK
+    // route through the legacy IIR/ISR/IMR space instead.
+    pub const LGC_IMR: u32 = 0x020820;
+    pub const LGC_ISR: u32 = 0x020830;
+    pub const LGC_IIR: u32 = 0x020840;
+    pub const PIPEASTAT_A: u32 = 0x070024;
     pub const PIPE_FRMCNT_A: u32 = 0x070040;
     pub const PIPE_FRMCNT_B: u32 = 0x071040;
     pub const PIPE_FRMCNT_C: u32 = 0x072040;

@@ -179,6 +179,15 @@ pub fn vblankEnable() void {
     mmio.wr(R.DEIER, 0xFFFF_FFFF);
     mmio.wr(R.SDEIMR, 0);
     mmio.wr(R.SDEIER, 0xFFFF_FFFF);
+    // Ironlake legacy bank (T590 = Arrandale = gen5, NOT SNB): the
+    // DE*/SDE* quartets above are SNB+ engine regs and never carried
+    // per-pipe vblank here — kstat read them all 0 while FRMCNT
+    // ticked 60Hz. ILK routes pipe interrupts through IIR/ISR/IMR at
+    // 0x20840/0x20830/0x20820. IMR bit=1 masks, so write 0xFFFF0000:
+    // unmask the low 16 bits (per-pipe interrupt space) while keeping
+    // hotplug/FM/MST-class upper sources masked — we have no IRQ
+    // handler and an unmasked storm would livelock the shell.
+    mmio.wr(R.LGC_IMR, 0xFFFF_0000);
 }
 
 // Read + clear the display-engine interrupt status. Returns raw IIR.
@@ -187,11 +196,13 @@ pub fn vblankPoll() u32 {
     if (s != 0) mmio.wr(R.DEIIR, s); // write-1-to-clear the serviced bits
     const s2 = mmio.rd(R.SDEIIR);
     if (s2 != 0) mmio.wr(R.SDEIIR, s2);
-    // NOTE: PIPE_FRMCNT_A delta was tried as a vblank oracle — it
-    // proved frames scan but fires at the wrong phase, so flipSwap
-    // committed mid-scan and the panel tore (worse than the ~10fps
-    // timeout stutter). Reverted: frame counting can't time commits.
-    // Timeout pacing in present.zig is the stable baseline until a
-    // REAL vblank status register is identified on this Ironlake.
-    return s | s2;
+    // Ironlake legacy IIR (0x20840): gen<=5 identity register — latches
+    // which unmasked source fired. T590 kstat showed DEIIR/SDEIIR/IMR
+    // space all dead; this is the remaining candidate. Ack by writing
+    // the latched ISR bits back to ISR (gen<=5 clear semantics); if
+    // the write doesn't take, IIR stays nonzero — harmless now that
+    // present.zig edge-aligns commits on FRMCNT (rate self-limits).
+    const s3 = mmio.rd(R.LGC_IIR);
+    if (s3 != 0) mmio.wr(R.LGC_ISR, mmio.rd(R.LGC_ISR));
+    return s | s2 | s3;
 }

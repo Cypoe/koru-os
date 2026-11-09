@@ -683,6 +683,35 @@ pub fn flipSwap(bufHandle: u32) bool {
     return true;
 }
 
+// flipSwapFast — the FRMCNT-edge-aligned hot-path commit. Identical
+// DSPASURF write + readback + bookkeeping to flipSwap but skips
+// atomicTestQuiet: present.zig detects the frame boundary, then must
+// land the DSPASURF write within microseconds — re-running the GTT
+// PTE check between detect and commit would push the write off
+// vblank and reintroduce the r9 mid-scan tearing. The buffer's
+// liveness/GTT state was already proven by flipSwap on prior frames
+// and by the caller's dumbGet check.
+pub fn flipSwapFast(bufHandle: u32) bool {
+    const buf = gdev.dumbs[bufHandle] orelse return false;
+    pipe.pageflipSurface(buf.gtt_offset);
+    const rb = pipe.surfaceOffset();
+    if ((rb & ~@as(u32, 0xfff)) != (@as(u32, @intCast(buf.gtt_offset)) & ~@as(u32, 0xfff))) {
+        return false;
+    }
+    gdev.scanout = bufHandle;
+    gdev.planes[0].fb = buf;
+    fb.rebaseQuiet(buf.phys, buf.pitch, buf.width, buf.height);
+    return true;
+}
+
+// frameCount — PIPE_FRMCNT_A: increments once per scanned frame at
+// the frame boundary (~vblank). NOT a vblank oracle for pacing
+// decisions (r9: mid-scan commits tore) — used ONLY to edge-align
+// the DSPASURF write itself and to detect flip landing.
+pub fn frameCount() u32 {
+    return mmio.rd(R.PIPE_FRMCNT_A);
+}
+
 // COMMIT: the atomic commit point — one DSPASURF write arms the flip the
 // display engine applies at vblank. Readback verifies the request landed.
 // Diagnostics flavour (kflip/kdmabuf): retires the previous scanout
@@ -717,17 +746,20 @@ pub fn surfaceOffset() u32 {
     return pipe.surfaceOffset();
 }
 
-// vblankRegs — the 8 candidate vblank registers as values (for
+// vblankRegs — the candidate vblank registers as values (for
 // present.stat's sayU dual-write; mmio.say was serial-only and never
 // reached the UDP wire). Order: DEISR DEIIR SDEISR SDEIIR IIR28
-// GTIIR FRMCNT PSTAT24(0x70024 PIPEASTAT_A). Zeros when i915 down.
-pub fn vblankRegs() [8]u32 {
+// GTIIR FRMCNT PSTAT24 PIPEASTAT_A(0x70024) LGC_IMR LGC_ISR
+// LGC_IIR(0x20840, the Ironlake per-pipe interrupt identity reg).
+// Zeros when i915 down.
+pub fn vblankRegs() [11]u32 {
     if (!device().up) return @splat(0);
     return .{
         mmio.rd(R.DEISR), mmio.rd(R.DEIIR),
         mmio.rd(R.SDEISR), mmio.rd(R.SDEIIR),
         mmio.rd(R.IIR), mmio.rd(R.GTIIR),
-        mmio.rd(R.PIPE_FRMCNT_A), mmio.rd(0x70024),
+        mmio.rd(R.PIPE_FRMCNT_A), mmio.rd(R.PIPEASTAT_A),
+        mmio.rd(R.LGC_IMR), mmio.rd(R.LGC_ISR), mmio.rd(R.LGC_IIR),
     };
 }
 
@@ -748,8 +780,13 @@ pub fn vblankDebug() void {
     // Per-pipe vblank candidates (literal offsets — regs.zig lacks
     // PIPEASTAT): 0x70024 = PIPEASTAT_A (ILK: bit1=vblank, bit0=MPU),
     // 0x44018 = GTIIR (GT-engine IIR — third interrupt engine).
-    mmio.say(" PSTAT24="); mmio.sayHex(mmio.rd(0x70024));
+    mmio.say(" PSTAT24="); mmio.sayHex(mmio.rd(R.PIPEASTAT_A));
     mmio.say(" GTIIR="); mmio.sayHex(mmio.rd(R.GTIIR));
+    // Ironlake legacy bank — the gen<=5 per-pipe interrupt space the
+    // DE*/SDE* regs don't cover on Arrandale.
+    mmio.say(" LGCIMR="); mmio.sayHex(mmio.rd(R.LGC_IMR));
+    mmio.say(" LGCISR="); mmio.sayHex(mmio.rd(R.LGC_ISR));
+    mmio.say(" LGCIIR="); mmio.sayHex(mmio.rd(R.LGC_IIR));
     mmio.say("\n");
 }
 

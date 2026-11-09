@@ -56,6 +56,7 @@ const Buf = struct {
 var bufs: [MAX_BUFS]Buf = .{ .{}, .{} };
 var front: ?usize = null; // index of last flipSwapped buffer
 var flip_pending: bool = false; // a flip is armed, vblank not yet seen
+var armed_frm: u32 = 0; // FRMCNT at arm time — delta = flip landed at a frame boundary
 var vb_armed: bool = false;
 var last_gen: u64 = 0;
 var last_mode_was_flip: bool = false;
@@ -325,6 +326,22 @@ fn immediateTick() void {
             .{ p.n, @intFromBool(p.full), s.w, s.h });
 }
 
+// waitFrameEdge — bounded spin for the next PIPE_FRMCNT_A increment.
+// FRMCNT ticks once per scanned frame at the frame boundary (~vblank);
+// returning the instant it changes lets flipTick land DSPASURF within
+// microseconds of vblank instead of at a random mid-scan phase (the
+// r9 tearing). ~260k MMIO reads ≈ 30-50ms — over one full 60Hz frame
+// period, so a live counter always catches its edge; a dead counter
+// costs one bounded stall then commits anyway.
+fn waitFrameEdge() void {
+    const c0 = kms.frameCount();
+    var budget: u32 = 262_144;
+    while (kms.frameCount() == c0) {
+        budget -= 1;
+        if (budget == 0) return;
+    }
+}
+
 fn flipTick() void {
     // vblank oracle FIRST: any latched DE event means >=1 vblank passed
     // since the last drain — an armed flip has landed, the old front is
@@ -334,8 +351,13 @@ fn flipTick() void {
     // no window). Bounded stall -> live tear-prone flips instead.
     const ev = kms.vblankDrain();
     last_vblank_raw = ev;
+    const frm = kms.frameCount();
     if (flip_pending) {
-        if (ev != 0) {
+        // Clear on: real IIR event, OR FRMCNT advanced past armed_frm
+        // (the armed flip landed at a frame boundary — FRMCNT ticks
+        // once per frame at ~vblank, proven 60Hz on T590), OR the
+        // bounded timeout if both oracles are dead.
+        if (ev != 0 or frm != armed_frm) {
             flip_pending = false;
             flip_age = 0;
         } else {
@@ -373,10 +395,18 @@ fn flipTick() void {
     const nr = b.acc.n;
     b.acc.clear();
 
-    if (!kms.flipSwap(b.handle)) {
+    // FRMCNT-edge-aligned commit: r9 proved mid-scan DSPASURF writes
+    // tear. Composite is already done (back buffer isn't scanned), so
+    // spin for the next frame boundary and land the write within ~µs
+    // of it — flipSwapFast skips the atomic re-check that would push
+    // the commit off vblank. Bounded: if FRMCNT stalls we commit
+    // anyway rather than freeze the scene.
+    waitFrameEdge();
+    if (!kms.flipSwapFast(b.handle)) {
         sayU("KORU scene: flipSwap refused handle={d}\n", .{b.handle});
         return; // acc already cleared — buffer content is correct for next flip
     }
+    armed_frm = kms.frameCount();
     if (front == null) {
         if (pre_scanout) |m| {
             if (m != b.handle) _ = kms.dumbDestroy(m); // retire modeset/test buffer
@@ -428,6 +458,8 @@ pub fn stat() void {
             .{ vr[0], vr[1], vr[2], vr[3] });
         sayU("  vb IIR28={x} GTIIR={x} FRMCNT={x} PSTAT24={x}\n",
             .{ vr[4], vr[5], vr[6], vr[7] });
+        sayU("  vb LGCIMR={x} LGCISR={x} LGCIIR={x}\n",
+            .{ vr[8], vr[9], vr[10] });
     } else {
         sayU("  vb i915 down — no regs\n", .{});
     }
