@@ -171,6 +171,33 @@ pub fn isEnabled() bool {
     return enabled;
 }
 
+// pointer state for the window/compositor layer — position is the
+// sprite tip (the arrow's hotspot is its top-left pixel), held is the
+// count of currently-down buttons.
+pub const Pos = struct { x: i32, y: i32 };
+pub fn pos() Pos {
+    return .{ .x = cx, .y = cy };
+}
+pub fn buttonsHeld() u32 {
+    return pressed_n;
+}
+
+// composite suspend/resume — a non-XOR writer (the window blit) is
+// about to repaint a rect that may contain the sprite. Erase now so
+// the blit sees pure scene pixels; redraw on top afterwards. Both are
+// safe no-ops when the cursor isn't enabled.
+pub fn compositeSuspend() void {
+    hideSprite();
+}
+pub fn compositeResume() void {
+    if (!enabled or shown) return;
+    drawSprite(cx, cy);
+    ox = cx;
+    oy = cy;
+    shown = true;
+    drawn_gen = fb.generation();
+}
+
 // Drain pending mouse events, integrate motion, move the sprite.
 // Call once per shell-loop iteration. Returns true if the cursor moved.
 pub fn tick() bool {

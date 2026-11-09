@@ -6,6 +6,7 @@ const kmsdrv = @import("i915/kms.zig");
 const kbd = @import("kbd");
 const mouse = @import("mouse");
 const cursor = @import("cursor.zig");
+const win = @import("win.zig");
 const hwprobe = @import("hwprobe.zig");
 const xhci = @import("xhci.zig");
 const net = @import("net");
@@ -36,6 +37,7 @@ pub fn run() noreturn {
             handle(c);
         }
         _ = cursor.tick(); // M4: drain mouse motion, move the cursor sprite
+        win.tick();        // kwin: drag-input routing + window composites
         // NOT hlt — IF=0 here, hlt halts the CPU on the first iteration.
         asm volatile ("pause");
     }
@@ -69,7 +71,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -106,6 +108,10 @@ fn dispatch() void {
         text.puts("kdmabuf: M3 dmabuf import — watch last line\n");
         kmsdrv.runDmabuf();
         text.puts("kdmabuf returned — console still alive\n");
+        return;
+    }
+    if (eq("kwin")) { // movable window — toggle create/destroy
+        win.toggle();
         return;
     }
     if (eq("mouse")) { // M4 native cursor: toggle + report position

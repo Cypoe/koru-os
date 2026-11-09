@@ -945,3 +945,104 @@ UDP :47820 should show 'mouse: trackpoint variant=N fw=0xNN' +
 wiggle stick -> mouse:streaming + cursor:move + pkts>0. If
 tp-id-none on real HW too, the TrackPoint is NOT on 8042 aux (then
 it's the xhci/USB-HID path from the xhci* notes).
+
+## INPUT LANDED on real T590 (2026-11-09) — PS/2 aux streaming to cursor
+
+MILESTONE: input works on the panel. PS/2 aux channel (TrackPoint
+stick + touchpad on the same aux interface) streams packets via
+8042 -> IRQ12 -> cursor.zig -> XOR sprite composited onto the live
+i915 scanout. Cursor moves smoothly; keyboard types. This is the
+first real input->display loop on bare-metal Koru OS.
+
+USB XHCI enumeration is proven separately (xhci* series): Elan +
+Lite-On devices enumerate with VID:PID, endpoint config reaches
+epstate=1 Running + armed, but HID report streams never arrive —
+host side verified correct, devices stay silent on first-picked
+interface. Method recorded: Linux-driver-as-oracle (trackpoint.c,
+hid-elan.c, elantech.c from torvalds/linux) before inventing any
+sequence — that oracle is what made the PS/2 path land.
+
+Key bugs fixed this stretch (all in git log native/m1-dumb-kms):
+- dead mouse.init — fullBoot=false since ced3e26 meant the doFull
+  init block never ran; mouse.init() was unreachable code. Fixed by
+  lazy ensureInput() inside cursor.enable().
+- acpi mb2-tag infinite loop — sz==0 tag walked off+=0 forever;
+  bounded. (cursor path now bypasses acpi/ioapic entirely — PIC
+  fallback delivers IRQ12; ioapic.gsiFor early-returns when !live.)
+- CCB kbd-inhibit — 8042 CCB write was inhibiting the keyboard
+  channel; aux bring-up no longer touches it.
+- freed-framebuffer cursor — after 'kflip' the sprite kept XORing
+  into the retired dumb buffer (black screen, no arrow); fb.generation
+  tracking + rebase-before-free fixed it.
+- kbd.pollChar eating aux bytes — stray aux bytes latched in the
+  output register were consumed as scancodes; pollChar now routes
+  AUX-flagged bytes to mouse.feedByte (STATUS bit5), leaving real
+  keystrokes alone.
+
+Commits: 71e0cf7 acpi bound, ff258f3 cursor PIC bypass, 5f0077d
+scanout-resident sprite, 9533515 kbd-death+invisible-sprite fix,
+a6edfd4 pollChar aux-byte fix. ISOs: koru-tpinit-20261109-1409.iso
+through -1542.iso series on real HW.
+
+Next: first compositor surface — movable window driven by the
+pointer (kwin), software-composited onto the console scanout.
+
+## FIRST COMPOSITOR SURFACE — kwin movable window (2026-11-09)
+
+`kwin` shell command toggles a 320x200 window on the console scanout,
+driven by the TrackPoint/touchpad pointer. New module
+`koru/native/win.zig`; cursor.zig gained pos()/buttonsHeld()/
+compositeSuspend()/compositeResume(); shell.zig routes win.tick()
+each loop iteration (after cursor.tick).
+
+Design (all primitives proven, nothing new invented at the HW layer):
+- Backing: kms.dmabufCreate+dmabufMap when the i915 device is up
+  (M3 export seam, CPU side only — window is composited, never
+  scanned); pmm.allocContiguous+mmio.map otherwise (QEMU, pre-'kms').
+  Backing kind named in the create marker, never silent.
+- Painter: fillWindow into the backing — 2px border, titlebar,
+  "kwin"/"drag me" labels via text.zig's font table written into the
+  buffer (glyphAt's bit order replicated — bit c of row r = column c).
+- Composite: software blit onto whatever fb.scanout() reports —
+  GRUB/EFI LFB pre-'kms', i915 dumb buffer post-rebase. Opaque
+  overwrite; no alpha (seam carries none — comp.zig's ruling).
+- Damage: retained-restore. Snapshot of under-window scanout px is
+  captured (cursor suspended) before cover; move = restore vacated +
+  re-snapshot dest + blit. Text printed under the window is occluded
+  (named loss); heal stride (8192 ticks) re-blits so glyph bleed
+  self-repairs.
+- Input: press EDGE inside window rect starts drag (button held from
+  outside doesn't capture); motion moves origin clamped to scanout;
+  release = drop. Cursor suspend/resume brackets every composite so
+  the XOR sprite is never painted over by a non-XOR blit.
+- Generation discipline: all scanout access gated on fb.generation();
+  a kms flip/modeset triggers rescan() (re-target+re-capture+re-blit,
+  no restore — old frames may be freed). Destroy restores only on
+  matching gen.
+- Markers: sayU dual-write (serial + UDP mirror) — create (with
+  readback px proof: body/border/title hex), drag, move (stride 1,16..),
+  drop, destroy, rescan.
+
+QEMU-VERIFIED (koru-kwin-20261109-1614.iso, -cdrom -m 1024, serial +
+HMP monitor): boot->shell; 'kwin' ->
+  KORU kwin create 320x200 @352,308 backing=pmm body=2a2f3a
+  border=d8dee9 title=3040c0
+(readback proves painter+composite landed in the scanned LFB);
+mouse_button+mouse_move drag -> drag @352,308 / move @372,320 /
+drop @432,356 (4x(20,12)=(80,48) exact); second 'kwin' ->
+destroy @432,356; recreate -> identical create marker, hb continues,
+no panic. Full cycle create->drag->drop->destroy->recreate clean.
+
+T590 ORACLE (panel visibility is HW-only — QEMU has no i915 and
+-display none here): flash dist/koru-kwin-20261109-1614.iso ->
+'kwin' -> colored window with titlebar should appear on the EFI fb;
+'kms' first for the i915 scanout (window rescans onto it live);
+TrackPoint press-drag inside window moves it; 'kwin' again closes.
+UDP :47820 shows KORU kwin create/drag/move/drop/destroy markers.
+
+Honest limits: one window, no z-order/focus/minimize; opaque only;
+console text under the window is occluded while covered (heal keeps
+the surface solid); window backing is CPU-composited, not a KMS
+plane (planes[1] sprite exists in the object model, unwired);
+'kwin' before 'kms' on T590 composites onto the GRUB/EFI fb — same
+code path, different scanout.
