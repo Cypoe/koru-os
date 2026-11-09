@@ -92,7 +92,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwclose\n  kstat\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -136,6 +136,10 @@ fn dispatch() void {
     }
     if (eq("kwin")) { // spawn another compositor window (cascade)
         win.spawn();
+        return;
+    }
+    if (eq("kwui")) { // MC-3: oshun/CmdView component window
+        win.spawnUi();
         return;
     }
     if (eq("kwclose")) { // close focused window, else topmost

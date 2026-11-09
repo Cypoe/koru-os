@@ -627,6 +627,26 @@ pub fn tick() void {
     }
 }
 
+// ---- producer-side queries (MC-3) ---------------------------------------------
+// win.zig's ui windows need pointer pos + their own scene origin for
+// CmdView hit-testing — comp owns both, so it hands them out read-only.
+
+pub fn pointerPos(x: *i32, y: *i32, on: *bool, buttons: *u32) void {
+    x.* = ptr_x;
+    y.* = ptr_y;
+    on.* = ptr_on;
+    buttons.* = ptr_buttons;
+}
+
+pub fn scenePos(handle: i32, x: *u32, y: *u32) bool {
+    if (handle < 0 or @as(usize, @intCast(handle)) >= MAX_LAYERS) return false;
+    const l = &layers[@intCast(handle)];
+    if (!l.live) return false;
+    x.* = l.x;
+    y.* = l.y;
+    return true;
+}
+
 // ---- init ---------------------------------------------------------------------
 
 pub fn init() void {

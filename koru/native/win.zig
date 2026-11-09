@@ -24,6 +24,7 @@ const mmio = @import("mmio");
 const net = @import("net");
 const text = @import("text.zig");
 const comp = @import("comp");
+const cmdview = @import("cmdview.zig");
 // (i915/kms not imported — window backings are CPU-side pool slices)
 
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
@@ -53,6 +54,15 @@ const WinObj = struct {
     pitch: u32 = 0, // pixels per row
     pool_i: i32 = -1, // backing-pool slice index, -1 = none
     last_focus: bool = false,
+    title: []const u8 = "",
+    // MC-3 ui windows: body pixels come from the CmdView rasterizer,
+    // not paintWindow's test pattern. hot = pointer-inside-button
+    // state (stream B); ctr_* = live counter slot (ud==90) clocked by
+    // TSC so it advances in real time, not loop iterations.
+    ui: bool = false,
+    hot: bool = false,
+    ctr_sec: u32 = 0,
+    ctr_tsc: u64 = 0,
 };
 var wins = [_]WinObj{.{}} ** MAX_WIN;
 var spawned: u64 = 0;
@@ -138,10 +148,11 @@ fn drawText(b: [*]volatile u32, p: u32, x0: u32, y0: u32, s: []const u8, c: u32)
 // ---- the window's own pixels ---------------------------------------------------
 
 fn paintTitle(w: *WinObj, idx: usize, focused: bool) void {
+    _ = idx;
     const tc = if (focused) C_TITLE else C_TITLE_DIM;
     fillRect(w.buf, w.pitch, BORDER, BORDER, WW - 2 * BORDER, TITLE_H - 2 * BORDER, tc);
     drawText(w.buf, w.pitch, 10, BORDER + (TITLE_H - 2 * BORDER - 8) / 2,
-        NAMES[idx], C_LABEL);
+        w.title, C_LABEL);
 }
 
 fn paintWindow(w: *WinObj, idx: usize) void {
@@ -175,7 +186,70 @@ fn tsc() u64 {
     return (@as(u64, hi) << 32) | lo;
 }
 
+// MC-3: a ui window's body is the CmdView rasterizer's output — the
+// real oshun component (button + label + live counter) solved
+// off-target and shipped as ui_cmds.txt. Chrome (frame+titlebar) stays
+// compositor-side; the body region is cmdview's 316x174 canvas at
+// backing offset (2,24).
+fn paintUi(w: *WinObj) void {
+    fillRect(w.buf, w.pitch, 0, 0, WW, WH, C_BODY);
+    frameRect(w.buf, w.pitch, WW, WH, BORDER, C_BORDER);
+    paintTitle(w, 0, true);
+    cmdview.ensure();
+    cmdview.setCounter(0);
+    cmdview.render(w.buf, w.pitch, 0); // stream A — normal palette
+}
+
+// repaint the component body from the active stream + damage it.
+fn repaintUi(w: *WinObj) void {
+    cmdview.render(w.buf, w.pitch, if (w.hot) 1 else 0);
+    _ = comp.damageLayer(w.handle, cmdview.OX, cmdview.OY, cmdview.CW, cmdview.CH);
+}
+
+// per-tick ui producer update: hover hit-test (pointer -> canvas coords
+// via comp's scene origin) flips the hot stream; the TSC-clocked counter
+// advances the live text slot ~1/2s. Both repaint through the same
+// damage path as everything else.
+fn uiTick(w: *WinObj) void {
+    var px: i32 = 0;
+    var py: i32 = 0;
+    var on: bool = false;
+    var btn: u32 = 0;
+    comp.pointerPos(&px, &py, &on, &btn);
+    var sx: u32 = 0;
+    var sy: u32 = 0;
+    if (comp.scenePos(w.handle, &sx, &sy)) {
+        const lx = px - @as(i32, @intCast(sx)) - cmdview.OX;
+        const ly = py - @as(i32, @intCast(sy)) - cmdview.OY;
+        const hot = on and cmdview.hitButton(lx, ly);
+        if (hot != w.hot) {
+            w.hot = hot;
+            repaintUi(w);
+            sayU("KORU kwin ui hot={d}\n", .{@intFromBool(hot)});
+        }
+    }
+    const now = tsc();
+    if (w.ctr_tsc == 0) w.ctr_tsc = now;
+    // ~2s per count at ~2.5GHz TSC — real time, not loop iterations
+    if (now - w.ctr_tsc > 5_000_000_000) {
+        w.ctr_tsc = now;
+        w.ctr_sec +%= 1;
+        if (w.ctr_sec > 9999) w.ctr_sec = 0;
+        cmdview.setCounter(w.ctr_sec);
+        repaintUi(w);
+    }
+}
+
 pub fn spawn() void {
+    spawnImpl(false);
+}
+
+// 'kwui' — the oshun/CmdView window.
+pub fn spawnUi() void {
+    spawnImpl(true);
+}
+
+fn spawnImpl(ui: bool) void {
     const t0 = tsc(); // phase timing -> spawn marker (T590 slow-open profile)
     var slot: ?usize = null;
     for (wins[0..], 0..) |*w, i| {
@@ -212,7 +286,14 @@ pub fn spawn() void {
     w.buf = pool_buf + pidx * (POOL_BYTES / 4);
     w.pitch = WW;
     const t1 = tsc(); // alloc done (pool handout — ~ns)
-    paintWindow(&w, si);
+    if (ui) {
+        w.ui = true;
+        w.title = "oshun";
+        paintUi(&w);
+    } else {
+        w.title = NAMES[si];
+        paintWindow(&w, si);
+    }
     const t2 = tsc(); // paint done
 
     // cascade placement — desired pos; comp's decide() clamps.
@@ -295,6 +376,7 @@ pub fn tick() void {
             _ = comp.damageLayer(w.handle, BORDER, BORDER,
                 WW - 2 * BORDER, TITLE_H - 2 * BORDER);
         }
+        if (w.ui) uiTick(w);
     }
 }
 
