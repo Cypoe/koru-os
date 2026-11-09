@@ -868,3 +868,19 @@ device not sending (suspect: wrong HID iface/alt-setting, or Elan
 needs report-proto boot SET_PROTOCOL(0), or touchpad genuinely idle).
 !=1 -> ConfigureEP didn't take on Intel -> revisit ctx fields.
 SHIP ISO: dist/koru-xhciD-20261109-0252.iso.
+
+## XHCI MULTI-FUNCTION HID SCAN (commit pending)
+
+T590 xhciD discriminator: epstate=1 Running + armed + cc=1 but reports=0
+-> host correct, device not streaming on first-picked interface. Elan
+multi-function.
+
+xhciE: parseHidAll collects ALL HID int-IN endpoints (iface/alt/addr/
+mps/ival/protoIf). Per candidate: own ring + ConfigureEP + readback +
+8 NAK'd TDs; per protocol (boot-first if pif 1/2 else report-first):
+SET_INTERFACE+SET_PROTOCOL+SET_IDLE+poll48 filtered epid==dci. WINNER
+= first reports>0.
+
+QEMU: usb-kbd -> proto=0 BOOT reports=10 (a-e). Boot mouse reports =
+Stage C cursor input. Ship ISO: dist/koru-xhciE-*.iso.
+T590 oracle: 'xusb' -> 'cand' lines per EP, 'try' per proto, WINNER.
