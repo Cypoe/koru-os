@@ -723,3 +723,23 @@ NEXT iteration; this pass proves how far init+slot-alloc gets on HW.
 
 ISO: dist/koru-xhci-20261109-0049.iso — proven pipeline + CORRECTED MBR.
 QEMU-verified boot to shell+hb.
+
+## XHCI command/event path fix (commit 329e53c, ISO koru-xhci4-20261109-0104.iso)
+
+xhci2 real-T590: panic gone but HANG after "Enable Slot issued". Spec audit
+found the event ring was never armed:
+
+- ERSTSZ/ERSTBA/ERDP are RUNTIME registers (bar0+capRTSOFF), NOT op space.
+  Code wrote them to op+0x38/0x40/0x48 = CONFIG/MFINDEX/reserved -> HC had
+  no event ring, completions posted nowhere. Now rtWr/rtWr64 at rtsbase.
+- USBCMD.RS was never set after HCRST -> command ring never fetched. Now
+  RS=1 after Enable Slot TRB queued + CONFIG.MaxSlotsEnabled=maxSlots.
+- Command ring needs NO doorbell (HC polls once RCS=1); doorbells are for
+  transfer rings. dboff/rtsoff now read from caps; BAR mapped 64K.
+- waitEvent slot-id extract fixed (was reading completion-code byte); now
+  logs ty/cc/dw2/slot, ERDP advance EHB=0, real ring-wrap cycle flip,
+  ~1s timeout dumps erdp/crcr/usbcmd/usbsts for diagnosis.
+
+QEMU boot verified clean (no xhci device present; xusb is on-demand).
+Real-T590 oracle: `xusb` should now reach SLOT ALLOCATED or a bounded
+TIMEOUT dump showing whether the HC consumed the command ring.
