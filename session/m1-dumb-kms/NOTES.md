@@ -743,3 +743,39 @@ found the event ring was never armed:
 QEMU boot verified clean (no xhci device present; xusb is on-demand).
 Real-T590 oracle: `xusb` should now reach SLOT ALLOCATED or a bounded
 TIMEOUT dump showing whether the HC consumed the command ring.
+
+## XHCI full enumeration — ported from proven reference (ISO koru-xhci5-20261109-0122.iso)
+
+Replaced spec-blind xhci.zig with a faithful port of the WORKING
+koru-desktop providers/usb-xhci/app/xhci.c (landed, verified on
+linuxu/QEMU). The earlier hangs were multiple compounding bugs; the
+reference resolved them all:
+
+- TRB ctl dword: type=bits[15:10] (6b), cycle=bit0, TC=bit1, LINK=bit2,
+  IOC=bit5, IDT=bit6, slot-id=ctl[31:24] (cmd TRBs). Event-TRB slot =
+  ctl[31:24], completion code = st[31:24]. (Was using type@[31:16].)
+- Proper ring model: link TRB at ring end (type LINK|TC), producer/
+  consumer cycle state pcs, wrap flips cycle. Command ring 64 TRBs,
+  event ring 64, ep0 ring 32.
+- Event ring + doorbells in RUNTIME space at bar0+RTSOFF; interrupter-0
+  block at +0x20 (IMAN/IMOD/ERSTSZ/ERSTBA/ERDP). ERDP release =
+  next_dequeue_phys | EHB(bit3).
+- Command ring DOES need doorbell(0,0) after each command TRB.
+- USBCMD = RS|INTE; wait HCH=0. CONFIG.MaxSlotsEnabled=8. IMAN IP|IE.
+- Scratchpad buffer array when HCCPARAMS2.MaxScratchpadBuffers>0
+  (Intel needs it) -> dcbaa[0].
+- Port scan: PORTSC CCS -> port reset (PSC_PR) -> drain PSC events ->
+  speed -> Enable Slot -> Address Device (input ctx: add slot+ep0,
+  slot ctx entries/speed/rhport, ep0 ctrl ctx mps by speed + dequeue
+  ptr|DCS) -> dcbaa[slot]=devctx -> GET_DESCRIPTOR(Device,18B) -> VID:PID.
+- Loops ALL ports per controller AND all xhci controllers (class
+  0x0C/0x03/progif 0x30). Alphabetic shell cmd 'xusb'.
+
+QEMU-xhci VERIFICATION (test build auto-ran init at boot, then reverted):
+  -device qemu-xhci -device usb-tablet -> enumerated port4 slot=1,
+    Address Device ok, GET_DESCRIPTOR -> vid=0x0627 pid=0x0001
+    (QEMU tablet) len=0x12. Full path proven.
+
+Real-T590 oracle: flash koru-xhci5-*.iso, run 'xusb'. Expect both HID
+devices on ctrl 0:20.0 (ports ~6,8) -> two 'DEV port=N vid=.. pid=..'
+lines. If it hangs, the stage markers + per-port PORTSC dump localize it.

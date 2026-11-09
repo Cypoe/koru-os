@@ -1,21 +1,30 @@
-// koru/native/xhci — XHCI USB host-controller driver foundation (M-input).
+// koru/native/xhci — XHCI USB host-controller driver.
 //
-// Goal: enumerate the two T590 XHCI controllers (0:20.0, 58:0.0) far enough
-// to allocate device slots and read descriptors — the path to the USB HID
-// TrackPoint+touchpad that PS/2 aux never answered.
+// Ported from the PROVEN koru-desktop provider
+// providers/usb-xhci/app/xhci.c (itself written against the xHCI 1.2
+// spec; landed + verified on linuxu/QEMU). This is the real path —
+// no degraded mode.
 //
-// This pass lands the transport substrate: host-controller init (reset,
-// scratchpad, max-slots), DMA command + event rings, the DCBAA, and the
-// Enable Slot command with event-ring polling. Every step emits a stage
-// marker (serial + UDP) so the T590 flash names the last completed step.
-// Register offsets follow the xHCI spec operational space; the op-block
-// dump at init prints the live values so any offset error is visible.
+// Flow per controller: find -> caps -> HCRST -> DCBAAP/CONFIG ->
+// command+event rings (link-TRB wrapped) -> ERST/ERDP in RUNTIME space
+// (bar0+RTSOFF, interrupter-0 block at +0x20) -> USBCMD RS|INTE ->
+// port scan/reset -> Enable Slot -> Address Device -> GET_DESCRIPTOR
+// (Device) -> VID:PID per attached device.
+//
+// Key register/TRB facts (from the reference, spec-verified):
+//   TRB ctl dword: type = bits[15:10] (6b), cycle = bit0, TC=bit1,
+//     LINK=bit2, IOC=bit5, IDT=bit6, slot-id = bits[31:24] (cmd TRBs),
+//     event-TRB slot = ctl[31:24], completion code = st[31:24].
+//   Command ring needs doorbell(0,0) after each command.
+//   Transfer rings doorbell(slot, ep_target).
+//   ERDP release = next_dequeue_phys | EHB(bit3).
+//   phys==VA: pmm frames are identity-mapped in this kernel.
 
 const std = @import("std");
 const pci = @import("pci");
 const pmm = @import("pmm");
 const hostmmio = @import("mmio"); // host page-table mapper
-const im = @import("i915/mmio.zig"); // say/sayHex/sayDec + reg layer
+const im = @import("i915/mmio.zig"); // say/sayHex/sayDec
 const net = @import("net");
 
 fn stage(comptime msg: [*:0]const u8) void {
@@ -24,321 +33,472 @@ fn stage(comptime msg: [*:0]const u8) void {
 }
 fn say(s: [*:0]const u8) void { im.say(s); }
 fn hex32(v: u32) void { im.sayHex(v); }
+fn hex64(v: u64) void {
+    im.sayHex(@intCast(v >> 32)); im.sayHex(@intCast(v & 0xFFFFFFFF));
+}
 fn dec(v: u64) void { im.sayDec(v); }
 
-// ---- register map -----------------------------------------------------------
-// cap = BAR0 + 0 ; op = BAR0 + CAPLENGTH. All offsets bytes unless noted.
-const CAP_CAPLENGTH = 0x00; // u8 at +0 (in dword0 low byte)
-const CAP_HCIVERSION = 0x02; // u16
-const CAP_HCSPARAMS = 0x04;  // u32
-const CAP_HCCPARAMS = 0x10;  // u32
-const CAP_DBOFF = 0x14;      // u32 doorbell offset (from op base? from bar)
-const CAP_RTSOFF = 0x18;     // u32 runtime regs offset
+// ---- capability regs (off 0 of BAR0) ----
+// cap0 dword: CAPLENGTH = &0xff, HCIVERSION = (>>16)&0xffff
+// hcs1 @+4: maxslots=&0xff, maxints=(>>8)&0x7ff, maxports=(>>24)&0xff
+// hcs2 @+8: scratchpad bufs = (>>27)&0x1f
+// dword @+0x14: DBOFF = &~3 ; @+0x18: RTSOFF = &~0x1f
+const CAP_HCSPARAMS = 0x04;
+const CAP_HCCPARAMS2 = 0x08;
+const CAP_DBOFF = 0x14;
+const CAP_RTSOFF = 0x18;
 
+// ---- operational regs (off CAPLENGTH) ----
 const OP_USBCMD = 0x00;
 const OP_USBSTS = 0x04;
-const OP_PAGESIZE = 0x08;
-const OP_DNCTRL = 0x10;
-const OP_CRCR = 0x18;   // 64-bit command ring control
-const OP_DCBAAP = 0x30; // 64-bit device context base array ptr
-const OP_CONFIG = 0x38; // USBCFG: MaxSlotsEnabled[7:0]
-// Event-ring + interrupt regs live in RUNTIME space (bar0 + RTSOFF),
-// NOT operational. Writing them at op+0x38/40/48 corrupted CONFIG/MFINDEX
-// and left the event ring unarmed -> HC posts completions nowhere -> hang.
-const RT_ERSTSZ = 0x08; // runtime +0x08  event ring segment table size
-const RT_ERSTBA = 0x10; // runtime +0x10  64-bit segment table base
-const RT_ERDP   = 0x18; // runtime +0x18  64-bit event ring dequeue ptr
-
-const PORTSC_BASE = 0x400; // port n regs at op + 0x400 + (n-1)*0x10
-
-// USBCMD bits
-const USBCMD_RS = 1 << 0;   // run/stop
-const USBCMD_HCRST = 1 << 1; // host controller reset
+const OP_DNCTRL = 0x14;
+const OP_CRCR = 0x18;    // 64-bit command ring control
+const OP_DCBAAP = 0x30;  // 64-bit device context base array ptr
+const OP_CONFIG = 0x38;  // USBCFG: MaxSlotsEnabled[7:0]
+fn opPortSc(i: u32) u32 { return 0x400 + 0x10 * i; }
+const USBCMD_RS = 1 << 0;
+const USBCMD_HCRST = 1 << 1;
 const USBCMD_INTE = 1 << 2;
-const USBCMD_HSEE = 1 << 3;
-// USBSTS bits
-const USBSTS_HCH = 1 << 0;  // halted
-const USBSTS_CNR = 1 << 11; // controller not ready
-const USBSTS_CSEC = 1 << 18; // config error
+const USBSTS_HCH = 1 << 0;
+const USBSTS_CNR = 1 << 11;
+// PORTSC bits
+const PSC_CCS = 1 << 0;
+const PSC_PED = 1 << 1;
+const PSC_PR = 1 << 4;
+fn pscSpeed(v: u32) u32 { return (v >> 10) & 0xF; }
+const PSC_WRC: u32 = (1 << 8) | (1 << 9) | (1 << 16) | (1 << 17) | (1 << 18) |
+    (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22) | (1 << 23) | (1 << 24);
 
-var bar0: u64 = 0;
+// ---- runtime regs (off RTSOFF); interrupter-0 block at +0x20 ----
+const RT_IR0 = 0x20;
+const IR_IMAN = 0x00;
+const IR_IMOD = 0x04;
+const IR_ERSTSZ = 0x08;
+const IR_ERSTBA = 0x10;
+const IR_ERDP = 0x18;
+const IMAN_IE = 1 << 1;
+const IMAN_IP = 1 << 0;
+const ERDP_EHB: u64 = 1 << 3;
+
+// ---- TRB control-dword helpers ----
+const Trb = extern struct { p_lo: u32, p_hi: u32, st: u32, ctl: u32 };
+const TCYC: u32 = 1 << 0;
+const TTC: u32 = 1 << 1;   // toggle cycle (link TRBs)
+const TLINK: u32 = 1 << 2;
+const TIOC: u32 = 1 << 5;  // interrupt on completion
+const TIDT: u32 = 1 << 6;  // immediate data (setup TRB)
+fn ttype(v: u32) u32 { return (v & 0x3F) << 10; }
+const T_CMD = 1;
+const T_CPL = 33;   // command completion event
+const T_PSC = 34;   // port status change event
+const T_XFER = 32;  // transfer event
+const T_SETUP = 2;
+const T_DATA = 3;
+const T_STATUS = 4;
+const T_LINK = 6;
+const T_ENSLOT = 9;
+const T_ADDR = 11;
+
+// ---- context structs (32-byte ctx entries, DMA'd) ----
+const Ctx32 = extern struct { d: [8]u32 };
+const InputCtx = extern struct { ctrl: Ctx32, slot: Ctx32, ep: [31]Ctx32 };
+const DevCtx = extern struct { slot: Ctx32, ep: [31]Ctx32 };
+fn sCtxEntries(v: u32) u32 { return v << 27; }
+fn sCtxRhPort(v: u32) u32 { return v << 16; }
+fn sCtxSpeed(v: u32) u32 { return v << 20; }
+const EP_CTX_TYPE_CTRL: u32 = 4 << 3;
+fn epCtxMps(v: u32) u32 { return (v & 0xFFFF) << 16; }
+fn epCtxCerr(v: u32) u32 { return (v & 3) << 1; }
+
+// ---- DMA rings -------------------------------------------------------------
+const Ring = struct {
+    trbs: [*]volatile Trb,
+    n: usize,
+    enq: usize,
+    deq: usize,
+    pcs: u32, // producer/consumer cycle state, starts 1
+};
+
 var opbase: u64 = 0;
 var rtsbase: u64 = 0;
-var dboff: u32 = 0;
-var caplen: usize = 0;
-var maxSlots: u32 = 0;
+var dbbase: u64 = 0;
 var maxPorts: u32 = 0;
+var maxSlots: u32 = 0;
+var scratchBufs: u32 = 0;
 
-fn opRd(off: u32) u32 {
-    const p: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(opbase + off)));
-    return p[0];
-}
-fn opWr(off: u32, v: u32) void {
-    const p: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(opbase + off)));
-    p[0] = v;
-}
-fn opWr64(off: u32, v: u64) void {
-    const p: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(opbase + off)));
-    p[0] = v;
-}
-fn rtWr(off: u32, v: u32) void {
-    const p: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(rtsbase + off)));
-    p[0] = v;
-}
-fn rtWr64(off: u32, v: u64) void {
-    const p: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(rtsbase + off)));
-    p[0] = v;
-}
-fn rtRd64(off: u32) u64 {
-    const p: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(rtsbase + off)));
-    return p[0];
-}
-fn capRd(off: u32) u32 {
-    const p: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(bar0 + off)));
-    return p[0];
-}
-
-// ---- DMA rings ---------------------------------------------------------------
-// XHCI DMA addresses are physical; our pmm frames are identity-mapped so
-// phys==VA and no IOMMU translation is needed. Rings are page-sized TRB
-// arrays allocated contiguous.
-const TRB_SIZE = 16;
-const RING_TRBS = 64; // TRBs per ring (1KB of TRBs, fits a page w/ headroom)
-
-var cmdRingPhys: u64 = 0;
-var evtRingPhys: u64 = 0;
+var cring: Ring = undefined;
+var ering: Ring = undefined;
+var dcbaa: [*]volatile u64 = undefined;
 var dcbaaPhys: u64 = 0;
-var scratchPhys: u64 = 0;
-var erstPhys: u64 = 0;
-var evtDequeue: u64 = 0; // current event TRB phys we consume
-var evtCycle: u32 = 1;   // expected cycle bit in event TRBs
-var cmdProducer: u32 = 0;
 
-// TRB control dword: [31:16]=type, [15:0]=flags (cycle is bit0 'C').
-fn trbControl(ty: u8, cycle: u32) u32 {
-    return (@as(u32, ty) << 16) | (cycle & 1);
-}
-
-// write a TRB into a ring (phys ring, index). Returns phys addr of TRB.
-fn trbAt(ringPhys: u64, idx: u32) u64 {
-    return ringPhys + @as(u64, idx) * TRB_SIZE;
-}
-fn trbWr64(trbPhys: u64, param: u64, status: u32, ctrl: u32) void {
-    const p: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(trbPhys)));
-    p[0] = param;
-    const dw23: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(trbPhys + 8)));
-    dw23[0] = status;
-    dw23[1] = ctrl;
-}
-
-// poll the event ring for a command-completion event matching `wantSlot`
-// (0 = any). Returns the slot id (event DW2 bits) or 0 on timeout.
-fn waitEvent() ?u32 {
-    var spins: u64 = 0;
-    while (spins < 3_000_000) : (spins += 1) {
-        const erdp = rtRd64(RT_ERDP);
-        const trbPhys = erdp & ~@as(u64, 0xF);
-        // empty/not-yet-armed ring: ERDP can read 0 -> @ptrFromInt(0) is a
-        // null-pointer panic in safe mode. Poll until a real TRB addr.
-        if (trbPhys == 0 or trbPhys < evtRingPhys or trbPhys >= evtRingPhys + 4096) {
-            asm volatile ("pause");
-            continue;
-        }
-        const t: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(trbPhys)));
-        const ctrl = (@as(u32, @intCast(t[1] >> 32)) );
-        const cbit = ctrl & 1;
-        const ty = (ctrl >> 16) & 0x3FFF;
-        if (cbit == evtCycle and ty != 0) {
-            // event TRB: dw0-1 = command ptr, dw2 = {cc[31:24],param[23:0]},
-            // dw3 = ctrl. For cmd-completion events the Slot ID is in
-            // dw2 param bits[7:0]; dw2[31:24] is the completion code.
-            const dw2 = @as(u32, @intCast(t[1] & 0xFFFFFFFF));
-            const cc = (dw2 >> 24) & 0xFF;
-            const slot = dw2 & 0xFF;
-            say("xhci: event ty="); hex32(ty); say(" cc="); hex32(cc);
-            say(" dw2="); hex32(dw2); say(" slot="); hex32(slot); say("\n");
-            // advance dequeue past this TRB; wrap at ring end flips cycle
-            var next = trbPhys + TRB_SIZE;
-            var flip = false;
-            if (next >= evtRingPhys + RING_TRBS * TRB_SIZE) {
-                next = evtRingPhys;
-                flip = true;
-            }
-            rtWr64(RT_ERDP, next); // EHB=0: let HC keep posting events
-            if (flip) evtCycle ^= 1;
-            evtDequeue = next;
-            return slot;
-        }
-        asm volatile ("pause");
-    }
-    // timeout — dump live ring state so we see if the HC consumed anything
-    say("xhci: waitEvent TIMEOUT erdp="); dec(rtRd64(RT_ERDP));
-    say(" crcr="); dec(opRd64_(OP_CRCR));
-    say(" usbcmd="); hex32(opRd(OP_USBCMD)); say(" usbsts="); hex32(opRd(OP_USBSTS)); say("\n");
-    return null;
-}
-fn opRd64_(off: u32) u64 {
-    const p: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(opbase + off)));
+// ---- low-level accessors ----------------------------------------------------
+fn rd32(b: u64, o: u32) u32 {
+    const p: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(b + o)));
     return p[0];
 }
-// ---- host controller init ----------------------------------------------------
-pub fn init() bool {
-    stage("xhci: ==== XHCI bring-up ====");
-    // find an XHCI controller (class 0x0C/sub 0x03/progif 0x30)
-    pci.init();
-    var d: ?*const pci.Device = null;
-    var i: usize = 0;
-    while (i < pci.count) : (i += 1) {
-        const dev = &pci.devices[i];
-        if (dev.class == 0x0C and dev.subclass == 0x03 and dev.progif == 0x30) {
-            d = dev;
-            break;
+fn wr32(b: u64, o: u32, v: u32) void {
+    const p: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(b + o)));
+    p[0] = v;
+}
+fn wr64(b: u64, o: u32, v: u64) void {
+    const p: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(b + o)));
+    p[0] = v;
+}
+fn opRd(o: u32) u32 { return rd32(opbase, o); }
+fn opWr(o: u32, v: u32) void { wr32(opbase, o, v); }
+fn physOf(p: anytype) u64 { return @intFromPtr(p); }
+
+// zero a full page of u64s
+fn zeroPage(phys: u64) void {
+    const p: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(phys)));
+    var k: usize = 0;
+    while (k < 512) : (k += 1) p[k] = 0;
+}
+
+// alloc one page, zero it, return phys
+fn allocPage() ?u64 {
+    const p = pmm.allocContiguous(1, 1) orelse return null;
+    zeroPage(p);
+    return p;
+}
+
+// ---- rings ------------------------------------------------------------------
+fn ringInit(r: *Ring, trbPhys: u64, n: usize) void {
+    const t: [*]volatile Trb = @ptrFromInt(@as(usize, @intCast(trbPhys)));
+    r.trbs = t;
+    r.n = n;
+    r.enq = 0;
+    r.deq = 0;
+    r.pcs = 1;
+    // link TRB at end: point back to ring start, TC so consumer flips cycle
+    const base = trbPhys & ~@as(u64, 0xF);
+    t[n - 1].p_lo = @truncate(base);
+    t[n - 1].p_hi = @truncate(base >> 32);
+    t[n - 1].st = 0;
+    t[n - 1].ctl = ttype(T_LINK) | TTC;
+}
+
+fn ringPush(r: *Ring, p: u64, st: u32, ctl: u32) void {
+    const t = &r.trbs[r.enq];
+    t.p_lo = @truncate(p);
+    t.p_hi = @truncate(p >> 32);
+    t.st = st;
+    t.ctl = ctl | r.pcs;
+    r.enq += 1;
+    if (r.enq >= r.n - 1) {
+        const lk = &r.trbs[r.n - 1];
+        lk.ctl = ttype(T_LINK) | TTC | r.pcs;
+        r.enq = 0;
+        r.pcs ^= 1;
+    }
+}
+
+fn doorbell(slot: u32, target: u32) void {
+    wr32(dbbase, slot * 4, target);
+}
+
+// Poll the event ring for a completion TRB whose TRB-pointer matches `want`
+// (0 = any CPL/XFER/PSC). Advances dequeue, releases ERDP=next|EHB.
+fn eventWait(ev: *Ring, want: u64, ccOut: ?*u32, slotOut: ?*u32) i32 {
+    var spins: usize = 50_000_000;
+    while (spins > 0) : (spins -= 1) {
+        const t = &ev.trbs[ev.deq];
+        if ((t.ctl & 1) != ev.pcs) continue;
+        const ptr = (@as(u64, t.p_hi) << 32) | t.p_lo;
+        const ty = (t.ctl >> 10) & 0x3F;
+        const cc = (t.st >> 24) & 0xFF;
+        ev.deq += 1;
+        if (ev.deq >= ev.n - 1) {
+            ev.deq = 0;
+            ev.pcs ^= 1;
+        }
+        const dp = physOf(&ev.trbs[ev.deq]);
+        wr64(rtsbase, RT_IR0 + IR_ERDP, dp | ERDP_EHB);
+        if (ty == T_CPL or ty == T_XFER or ty == T_PSC) {
+            if (want == 0 or ptr == want) {
+                if (ccOut) |o| o.* = cc;
+                if (slotOut) |o| o.* = (t.ctl >> 24) & 0xFF;
+                return @intCast(ty);
+            }
         }
     }
-    const dev = d orelse {
-        stage("xhci: FAIL no XHCI controller");
-        return false;
-    };
-    say("xhci: controller "); dec(dev.bus); say(":"); dec(dev.slot); say("."); dec(dev.func); say("\n");
-    bar0 = pci.barPhys(dev, 0);
+    return -1;
+}
+
+// issue a command TRB, ring doorbell 0, wait for its completion.
+// returns slot id from the event, or -1.
+fn xcmd(p: u64, st: u32, ctl: u32) i32 {
+    const tptr = physOf(&cring.trbs[cring.enq]);
+    ringPush(&cring, p, st, ctl);
+    doorbell(0, 0);
+    var cc: u32 = 0;
+    var sl: u32 = 0;
+    const r = eventWait(&ering, tptr, &cc, &sl);
+    if (r < 0) {
+        say("xhci: cmd timeout type="); hex32((ctl >> 10) & 0x3F); say("\n");
+        return -1;
+    }
+    if (cc != 1) {
+        say("xhci: cmd type="); hex32((ctl >> 10) & 0x3F);
+        say(" cc="); hex32(cc); say("\n");
+        return -1;
+    }
+    return @intCast(sl);
+}
+
+// GET_DESCRIPTOR(Device) on ep0's transfer ring. bufPhys = DMA buf (18B).
+// returns completion code (1 = success) or -1.
+fn ep0GetDesc(bufPhys: u64) i32 {
+    var setup: u64 = 0;
+    // bmRT=0x80, bReq=6 GET_DESCRIPTOR, wValue=0x0100 (device), wIndex=0,
+    // wLength=18.
+    setup = @as(u64, 0x80) | (@as(u64, 6) << 8) |
+        (@as(u64, 0x0100) << 16) | (@as(u64, 18) << 48);
+    const t0 = &ep0Ring.trbs[ep0Ring.enq];
+    t0.p_lo = @truncate(setup);
+    t0.p_hi = @truncate(setup >> 32);
+    t0.st = 8;
+    t0.ctl = ttype(T_SETUP) | TIDT | (3 << 16) | ep0Ring.pcs; // TRT=3 in-data
+    ep0Ring.enq += 1;
+    const t1 = &ep0Ring.trbs[ep0Ring.enq];
+    t1.p_lo = @truncate(bufPhys);
+    t1.p_hi = @truncate(bufPhys >> 32);
+    t1.st = 18;
+    t1.ctl = ttype(T_DATA) | (1 << 16) | TIOC | ep0Ring.pcs; // DIR=in
+    ep0Ring.enq += 1;
+    const t2 = &ep0Ring.trbs[ep0Ring.enq];
+    t2.p_lo = 0;
+    t2.p_hi = 0;
+    t2.st = 0;
+    t2.ctl = ttype(T_STATUS) | TIOC | ep0Ring.pcs;
+    const stPtr = physOf(t2);
+    ep0Ring.enq += 1;
+    doorbell(curSlot, 1);
+    var cc: u32 = 0;
+    var sl: u32 = 0;
+    const r = eventWait(&ering, stPtr, &cc, &sl);
+    return if (r < 0) -1 else @intCast(cc);
+}
+
+var ep0Ring: Ring = undefined;
+var curSlot: u32 = 0;
+
+// real probe — takes the pci.Device
+fn probeDev(d: *const pci.Device) u32 {
+    var found: u32 = 0;
+    const bar0 = pci.barPhys(d, 0);
     if (bar0 == 0) {
         stage("xhci: FAIL BAR0 unmapped");
-        return false;
+        return 0;
     }
-    // enable memory space + bus master
-    pci.setCommand(dev, pci.command(dev) | 0x6);
-    // runtime regs + doorbell array live at bar0+rtsoff / bar0+dboff and
-    // can sit well past 4K; map 64K to cover cap+op+runtime+doorbells.
+    pci.setCommand(d, pci.command(d) | 0x6); // mem space + bus master
     if (!hostmmio.map(bar0, 0x10000)) {
         stage("xhci: FAIL BAR0 map");
-        return false;
+        return 0;
     }
-    caplen = @intCast(capRd(0) & 0xFF);
+    const cap0 = rd32(bar0, 0);
+    const caplen: u64 = cap0 & 0xFF;
+    const hcs1 = rd32(bar0, CAP_HCSPARAMS);
+    const hcs2 = rd32(bar0, CAP_HCCPARAMS2);
+    const dboff = rd32(bar0, CAP_DBOFF) & ~@as(u32, 3);
+    const rtsoff = rd32(bar0, CAP_RTSOFF) & ~@as(u32, 0x1F);
     opbase = bar0 + caplen;
-    const hcsp = capRd(CAP_HCSPARAMS);
-    maxSlots = hcsp & 0xFF;
-    maxPorts = (hcsp >> 24) & 0xFF;
-    rtsbase = bar0 + @as(u64, capRd(CAP_RTSOFF));
-    dboff = capRd(CAP_DBOFF);
-    say("xhci: rtsoff="); hex32(capRd(CAP_RTSOFF)); say(" dboff="); hex32(dboff); say("\n");
-    say("xhci: caplen="); dec(caplen); say(" maxslots="); dec(maxSlots);
-    say(" maxports="); dec(maxPorts); say("\n");
+    rtsbase = bar0 + rtsoff;
+    dbbase = bar0 + dboff;
+    maxSlots = hcs1 & 0xFF;
+    maxPorts = (hcs1 >> 24) & 0xFF;
+    scratchBufs = (hcs2 >> 27) & 0x1F;
+    const hcver = (cap0 >> 16) & 0xFFFF;
+    say("xhci: ctrl "); dec(d.bus); say(":"); dec(d.slot); say("."); dec(d.func);
+    say(" hci v"); hex32(hcver >> 8); say("."); hex32(hcver & 0xFF);
+    say(" slots="); dec(maxSlots); say(" ints="); dec((hcs1 >> 8) & 0x7FF);
+    say(" ports="); dec(maxPorts); say(" scratch="); dec(scratchBufs);
+    say(" caplen="); dec(caplen); say(" dboff="); hex32(dboff);
+    say(" rtsoff="); hex32(rtsoff); say("\n");
     stage("xhci: caps read");
 
-    // dump the operational register head — ground truth for offsets
-    say("xhci: op regs:");
-    var o: u32 = 0;
-    while (o < 0x50) : (o += 4) {
-        say(" "); dec(o); say("="); hex32(opRd(o));
-    }
-    say("\n");
-    stage("xhci: op regs dumped");
-
-    // HC reset: set HCRST, wait CNR=0 then HCH=0, clear then set RS later.
+    // ---- reset ----
     opWr(OP_USBCMD, opRd(OP_USBCMD) | USBCMD_HCRST);
-    var spin: u64 = 0;
-    while ((opRd(OP_USBSTS) & USBSTS_CNR) != 0 and spin < 10_000_000) : (spin += 1) {}
-    spin = 0;
-    while ((opRd(OP_USBSTS) & USBSTS_HCH) != 0 and spin < 10_000_000) : (spin += 1) {}
-    say("xhci: reset done usbsts="); hex32(opRd(OP_USBSTS)); say("\n");
+    var i: u32 = 0;
+    while (i < 100000 and (opRd(OP_USBCMD) & USBCMD_HCRST) != 0) : (i += 1) {}
+    i = 0;
+    while (i < 100000 and (opRd(OP_USBSTS) & USBSTS_CNR) != 0) : (i += 1) {}
+    say("xhci: reset done sts="); hex32(opRd(OP_USBSTS)); say("\n");
     stage("xhci: HC reset");
 
-    // allocate DMA rings + DCBAA + scratchpad (page each, contiguous)
-    cmdRingPhys = pmm.allocContiguous(1, 1) orelse {
-        stage("xhci: FAIL cmdring alloc"); return false;
+    // ---- DCBAA + CONFIG ----
+    const dcbaaPage = allocPage() orelse {
+        stage("xhci: FAIL dcbaa alloc"); return 0;
     };
-    evtRingPhys = pmm.allocContiguous(1, 1) orelse {
-        stage("xhci: FAIL evtring alloc"); return false;
-    };
-    dcbaaPhys = pmm.allocContiguous(1, 1) orelse {
-        stage("xhci: FAIL dcbaa alloc"); return false;
-    };
-    scratchPhys = pmm.allocContiguous(1, 1) orelse {
-        stage("xhci: FAIL scratch alloc"); return false;
-    };
-    erstPhys = pmm.allocContiguous(1, 1) orelse {
-        stage("xhci: FAIL erst alloc"); return false;
-    };
-    // zero the rings + dcbaa (DCBAA entries = 0 = no context yet)
-    {
-        const cp: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(cmdRingPhys)));
-        var k: usize = 0;
-        while (k < (4096 / 8)) : (k += 1) cp[k] = 0;
-        const ep: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(evtRingPhys)));
-        k = 0;
-        while (k < (4096 / 8)) : (k += 1) ep[k] = 0;
-        const dp: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(dcbaaPhys)));
-        k = 0;
-        while (k < (4096 / 8)) : (k += 1) dp[k] = 0;
-        const ep2: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(erstPhys)));
-        k = 0;
-        while (k < (4096 / 8)) : (k += 1) ep2[k] = 0;
-    }
-    say("xhci: cmdring="); hex32(@intCast(cmdRingPhys)); say(" evtring=");
-    hex32(@intCast(evtRingPhys)); say(" dcbaa="); hex32(@intCast(dcbaaPhys)); say("\n");
-    stage("xhci: rings allocated");
+    dcbaaPhys = dcbaaPage;
+    dcbaa = @ptrFromInt(@as(usize, @intCast(dcbaaPhys)));
+    // CONFIG.MaxSlotsEnabled — enable up to 8 slots (enough for HID pair)
+    const cfgSlots: u32 = if (maxSlots < 8) maxSlots else 8;
+    opWr(OP_CONFIG, cfgSlots);
 
-    // scratchpad array: HCSPARAMS high bits give count; allocate buf array.
-    // For a first pass use a single page scratchpad (maxslots small).
-    // DCBAA[0] must point to scratchpad buffer array per spec.
-    {
-        const dp: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(dcbaaPhys)));
-        // scratchpad buffer array: one pointer per slot to a page buffer.
-        // allocate the array page and store phys of a data page.
-        dp[0] = scratchPhys; // slot-0 context -> scratch page (simplified)
+    // scratchpad buffers if the HC requires them (Intel does)
+    if (scratchBufs > 0) {
+        const arrPhys = allocPage() orelse {
+            stage("xhci: FAIL scratch array alloc"); return 0;
+        };
+        const arr: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(arrPhys)));
+        var k: u32 = 0;
+        while (k < scratchBufs) : (k += 1) {
+            const bp = allocPage() orelse {
+                stage("xhci: FAIL scratch buf alloc"); return 0;
+            };
+            arr[k] = bp;
+        }
+        dcbaa[0] = arrPhys;
+        say("xhci: scratchpad array="); dec(arrPhys); say(" n="); dec(scratchBufs); say("\n");
     }
-    opWr64(OP_DCBAAP, dcbaaPhys);
+    wr64(opbase, OP_DCBAAP, dcbaaPhys);
+    stage("xhci: DCBAAP+CONFIG set");
 
-    // event ring: 1 segment table entry -> evtRingPhys, dequeue=base.
-    // ERST is a separate structure: [base_addr(8), size(4), rsvd(4)].
-    // We place the segment table inside the evt ring page tail for now —
-    // but spec wants it separate; allocate via the dcbaa page? Use a
-    // dedicated approach: write ERSTBA to point at a small struct we
-    // place in the scratch page.
+    // ---- command + event rings ----
+    const cmdPhys = allocPage() orelse {
+        stage("xhci: FAIL cmdring alloc"); return 0;
+    };
+    const evtPhys = allocPage() orelse {
+        stage("xhci: FAIL evtring alloc"); return 0;
+    };
+    const erstPhys = allocPage() orelse {
+        stage("xhci: FAIL erst alloc"); return 0;
+    };
+    ringInit(&cring, cmdPhys, 64);
+    ringInit(&ering, evtPhys, 64);
+    // ERST: one segment -> evt ring, size = usable TRBs (n-1, link at end)
     {
-        // ERST lives in its OWN page now — scratchPhys[0] is DCBAA slot0,
-        // reusing it corrupted the context array. entry0={base,size,rsvd}.
-        const sp: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(erstPhys)));
-        sp[0] = evtRingPhys;                       // segment base addr
-        const spd: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(erstPhys + 8)));
-        spd[0] = RING_TRBS;                        // segment size (TRBs)
-        spd[1] = 0;
-        rtWr(RT_ERSTSZ, 1);                        // 1 segment
-        rtWr64(RT_ERSTBA, erstPhys);
-        rtWr64(RT_ERDP, evtRingPhys);              // dequeue = first TRB, EHB=0
-        evtDequeue = evtRingPhys;
+        const e: [*]volatile Trb = @ptrFromInt(@as(usize, @intCast(erstPhys)));
+        e[0].p_lo = @truncate(evtPhys & ~@as(u64, 0xF));
+        e[0].p_hi = @truncate((evtPhys & ~@as(u64, 0xF)) >> 32);
+        e[0].st = @intCast(ering.n - 1); // segment size in TRBs
+        e[0].ctl = 0;
+        wr32(rtsbase, RT_IR0 + IR_ERSTSZ, 1);
+        wr64(rtsbase, RT_IR0 + IR_ERSTBA, erstPhys);
+        wr64(rtsbase, RT_IR0 + IR_ERDP, evtPhys & ~@as(u64, 0xF));
     }
-    say("xhci: event ring armed\n");
-    stage("xhci: event ring armed");
+    // ack stale interrupt-pending, enable interrupter
+    wr32(rtsbase, RT_IR0 + IR_IMAN, rd32(rtsbase, RT_IR0 + IR_IMAN) | IMAN_IP | IMAN_IE);
+    // command ring: CRCR = base | RCS(bit0). CS is HC-managed.
+    wr64(opbase, OP_CRCR, (cmdPhys & ~@as(u64, 0x3F)) | 1);
+    opWr(OP_USBCMD, opRd(OP_USBCMD) | USBCMD_RS | USBCMD_INTE);
+    i = 0;
+    while (i < 100000 and (opRd(OP_USBSTS) & USBSTS_HCH) != 0) : (i += 1) {}
+    say("xhci: running sts="); hex32(opRd(OP_USBSTS)); say("\n");
+    say("xhci: cmdring="); dec(cmdPhys); say(" evtring="); dec(evtPhys); say("\n");
+    stage("xhci: rings armed, HC running");
 
-    // command ring: CRCR = base | RCS(bit0) | cycle in bit1? CRCR bit0=RCS,
-    // the producer cycle state is bit1 (CRCR_CRR? actually CRCR bits:
-    // [0]=RCS run, [1]=CRR consumer, producer cycle is elsewhere). The
-    // command ring cycle bit lives in the TRBs themselves; CRCR just needs
-    // the base + RCS. We set producer cycle=1 initially.
-    cmdProducer = 0;
-    opWr64(OP_CRCR, (cmdRingPhys & ~@as(u64,0x3F)) | (1<<1) | 1); // RCS=1 CS=1 (cycle matches TRB)
-    stage("xhci: command ring armed");
+    // ---- port scan + per-device enumeration ----
+    var port: u32 = 0;
+    while (port < maxPorts) : (port += 1) {
+        var ps = opRd(opPortSc(port));
+        const ccs = (ps & PSC_CCS) != 0;
+        say("xhci: port"); dec(port); say(" sc="); hex32(ps);
+        say(" ccs="); if (ccs) say("1") else say("0");
+        say(" speed="); hex32(pscSpeed(ps)); say("\n");
+        if (!ccs) continue;
 
-    // Enable Slot command (TRB type 9): param=0, no input. The command
-    // ring needs NO doorbell — the HC polls it once RCS=1.
-    {
-        const t = trbAt(cmdRingPhys, cmdProducer);
-        trbWr64(t, 0, 0, trbControl(9, 1)); // type 9, cycle 1
-        cmdProducer += 1;
+        // port reset (USB2 needs it; USB3 auto) — preserve CCS, set PR
+        opWr(opPortSc(port), (ps & ~PSC_WRC) | PSC_PR | (ps & PSC_CCS));
+        i = 0;
+        while (i < 1000000) : (i += 1) {
+            ps = opRd(opPortSc(port));
+            if ((ps & PSC_PR) == 0) break;
+        }
+        // drain port-status-change events
+        while (eventWait(&ering, 0, null, null) == T_PSC) {}
+        ps = opRd(opPortSc(port));
+        const speed = pscSpeed(ps);
+        say("xhci: port"); dec(port); say(" post-reset sc="); hex32(ps);
+        say(" ped="); if ((ps & PSC_PED) != 0) say("1") else say("0");
+        say(" speed="); hex32(speed); say("\n");
+
+        // ---- Enable Slot ----
+        const slotId = xcmd(0, 0, ttype(T_ENSLOT));
+        if (slotId <= 0) {
+            say("xhci: port"); dec(port); say(" enable-slot FAIL\n");
+            stage("xhci: FAIL enable slot");
+            continue;
+        }
+        curSlot = @intCast(slotId);
+        say("xhci: port"); dec(port); say(" slot="); dec(@as(u64, @intCast(slotId))); say("\n");
+        stage("xhci: slot allocated");
+
+        // ---- input context: add slot-ctx + ep0-ctx ----
+        const icPhys = allocPage() orelse {
+            stage("xhci: FAIL inputctx alloc"); return found;
+        };
+        const ic: *InputCtx = @ptrFromInt(@as(usize, @intCast(icPhys)));
+        ic.ctrl.d[0] = 0;      // drop flags
+        ic.ctrl.d[1] = 0x3;    // add flags: slot ctx (bit0) + ep0 ctx (bit1)
+        ic.slot.d[0] = sCtxEntries(1) | sCtxSpeed(speed);
+        ic.slot.d[1] = sCtxRhPort(port + 1); // 1-based root-hub port
+        const ep0Phys = allocPage() orelse {
+            stage("xhci: FAIL ep0ring alloc"); return found;
+        };
+        ringInit(&ep0Ring, ep0Phys, 32);
+        // control EP: type=ctrl, cerr=3, mps by speed (SS=512, HS=64, else 8)
+        const mps: u32 = if (speed == 4) 512 else if (speed == 3) 64 else 8;
+        ic.ep[0].d[0] = 0;
+        ic.ep[0].d[1] = EP_CTX_TYPE_CTRL | epCtxCerr(3) | epCtxMps(mps);
+        ic.ep[0].d[2] = @truncate(ep0Phys | 1); // dequeue ptr | DCS=1
+        ic.ep[0].d[3] = @truncate(ep0Phys >> 32);
+        ic.ep[0].d[4] = 8; // avg TRB len
+        // device context (output) -> dcbaa[slot]
+        const dcPhys = allocPage() orelse {
+            stage("xhci: FAIL devctx alloc"); return found;
+        };
+        dcbaa[@intCast(slotId)] = dcPhys;
+
+        const addrRc = xcmd(icPhys, 0, ttype(T_ADDR) | (@as(u32, @intCast(slotId)) << 24));
+        if (addrRc < 0) {
+            say("xhci: port"); dec(port); say(" address-device FAIL\n");
+            stage("xhci: FAIL address device");
+            continue;
+        }
+        say("xhci: port"); dec(port); say(" addressed slot="); dec(@as(u64, @intCast(slotId))); say("\n");
+        stage("xhci: device addressed");
+
+        // ---- GET_DESCRIPTOR(Device) ----
+        const bufPhys = allocPage() orelse {
+            stage("xhci: FAIL descbuf alloc"); return found;
+        };
+        const buf: [*]u8 = @ptrFromInt(@as(usize, @intCast(bufPhys)));
+        const cc = ep0GetDesc(bufPhys);
+        if (cc != 1) {
+            say("xhci: port"); dec(port); say(" getdesc cc="); hex32(@intCast(cc)); say("\n");
+            stage("xhci: FAIL get descriptor");
+            continue;
+        }
+        const vid = @as(u32, buf[8]) | (@as(u32, buf[9]) << 8);
+        const pid = @as(u32, buf[10]) | (@as(u32, buf[11]) << 8);
+        say("xhci: DEV port="); dec(port); say(" vid="); hex32(vid);
+        say(" pid="); hex32(pid); say(" len="); hex32(buf[0]); say("\n");
+        stage("xhci: device identified");
+        found += 1;
     }
-    // USBCFG.MaxSlotsEnabled (op+0x38) must be nonzero or slot alloc fails.
-    opWr(OP_CONFIG, maxSlots & 0xFF);
-    // RUN the host controller — without RS=1 the command ring is never
-    // fetched and no completion event is ever posted (the observed hang).
-    opWr(OP_USBCMD, opRd(OP_USBCMD) | USBCMD_RS);
-    stage("xhci: Enable Slot issued, HC running");
-    say("xhci: waiting for slot event...\n");
-    if (waitEvent()) |slot| {
-        say("xhci: SLOT ALLOCATED id="); dec(slot); say("\n");
-        stage("xhci: ==== SLOT ENUM BASE DONE ====");
-        return true;
+    if (found == 0) {
+        stage("xhci: no devices enumerated");
+    } else {
+        say("xhci: enumerated "); dec(found); say(" device(s)\n");
+        stage("xhci: ==== ENUM DONE ====");
     }
-    stage("xhci: FAIL no slot event (ring/ERDP/offsets?)");
-    return false;
+    return found;
+}
+
+// ---- entry: probe every XHCI controller -------------------------------------
+pub fn init() bool {
+    stage("xhci: ==== XHCI ENUM ====");
+    pci.init();
+    var any = false;
+    var i: usize = 0;
+    while (i < pci.count) : (i += 1) {
+        const d = &pci.devices[i];
+        if (d.class == 0x0C and d.subclass == 0x03 and d.progif == 0x30) {
+            if (probeDev(d) > 0) any = true;
+        }
+    }
+    if (!any) stage("xhci: no XHCI devices answered");
+    return any;
 }
