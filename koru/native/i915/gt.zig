@@ -138,23 +138,70 @@ fn dumpEngine(comptime tag: [*:0]const u8, base: u32) void {
     }
 }
 
-fn forcewake(name: [*:0]const u8, setReg: u32, ackReg: u32) bool {
-    const before = mmio.rd(ackReg);
-    mmio.wr(setReg, mmio.rd(setReg) | 1);
-    var ok = false;
-    var i: u32 = 0;
-    while (i < 50000) : (i += 1) {
-        if ((mmio.rd(ackReg) & 1) != 0) {
-            ok = true;
-            break;
-        }
+// Forcewake set-register format (intel_uncore.c fw_set/fw_clear +
+// include/drm/intel/reg_bits.h REG_MASKED_FIELD): ONE dword write =
+//   [31:16] bitmask of fields to touch, [15:0] values.
+// fw_set(d, FORCEWAKE_KERNEL=BIT0) -> (1<<16)|1 = 0x00010001
+// fw_clear(d, BIT0)               -> (1<<16)|0 = 0x00010000
+// Fallback kick (WaRsForcewakeAddDelayForAck:skl,bxt,kbl,glk,cfl,cnl,icl):
+//   set BIT15 -> (BIT15<<16)|BIT15 = 0x80008000 ; clear -> 0x80000000
+const FW_SET_KERN: u32 = 0x0001_0001;
+const FW_CLR_KERN: u32 = 0x0001_0000;
+const FW_SET_FB: u32 = 0x8000_8000;
+const FW_CLR_FB: u32 = 0x8000_0000;
+const FW_ACK_TIMEOUT_MS: u32 = 50;
+
+fn fwWait(ackReg: u32, bits: u32, wantSet: bool) bool {
+    const deadline = mmio.nowMs() + FW_ACK_TIMEOUT_MS;
+    while (mmio.nowMs() < deadline) {
+        const a = mmio.rd(ackReg);
+        if (wantSet) {
+            if ((a & bits) == bits) return true;
+        } else if ((a & bits) == 0) return true;
         asm volatile ("pause");
     }
-    mmio.say("gt: fw "); mmio.say(name); mmio.say(" ack ");
-    mmio.sayHex(before); mmio.say("->");
-    mmio.sayHex(mmio.rd(ackReg));
-    if (ok) mmio.say(" OK\n") else mmio.say(" TIMEOUT\n");
-    return ok;
+    return false;
+}
+
+fn dumpFw(comptime tag: [*:0]const u8, setReg: u32, ackReg: u32) void {
+    mmio.say("gt: "); mmio.say(tag); mmio.say(" set=");
+    mmio.sayHex(mmio.rd(setReg)); mmio.say(" ack=");
+    mmio.sayHex(mmio.rd(ackReg)); mmio.say("\n");
+}
+
+fn forcewake(name: [*:0]const u8, setReg: u32, ackReg: u32) bool {
+    dumpFw("pre ", setReg, ackReg);
+    // fw_domain_get: write mask/value pair, then poll ack bit0 (50ms).
+    mmio.wr(setReg, FW_SET_KERN);
+    dumpFw("req ", setReg, ackReg);
+    if (fwWait(ackReg, 1, true)) {
+        dumpFw("ack ", setReg, ackReg);
+        mmio.say("gt: fw "); mmio.say(name); mmio.say(" OK (primary)\n");
+        return true;
+    }
+    dumpFw("t/o ", setReg, ackReg);
+    // WaRsForcewakeAddDelayForAck fallback: toggle bit15 to kick the
+    // state machine; the lost bit0 ack rides along on retry (<=10 passes,
+    // 10us*pass delay between).
+    var pass: u32 = 1;
+    var kicked = false;
+    while (pass <= 10) : (pass += 1) {
+        _ = fwWait(ackReg, 0x8000, false);
+        mmio.wr(setReg, FW_SET_FB);
+        mmio.sleepUs(10 * pass);
+        _ = fwWait(ackReg, 0x8000, true);
+        const a = mmio.rd(ackReg);
+        kicked = (a & 1) != 0;
+        mmio.wr(setReg, FW_CLR_FB);
+        if (kicked) break;
+    }
+    dumpFw("fbk ", setReg, ackReg);
+    if (kicked) {
+        mmio.say("gt: fw "); mmio.say(name); mmio.say(" OK (fallback)\n");
+        return true;
+    }
+    mmio.say("gt: fw "); mmio.say(name); mmio.say(" TIMEOUT\n");
+    return false;
 }
 
 fn gtPower() bool {
