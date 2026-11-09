@@ -29,6 +29,7 @@ extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
 extern var stdout: ?*anyopaque;
 
 const MAX_BUFS: usize = 2;
+const MAX_FLIP_FAILS: u32 = 12;
 
 const Buf = struct {
     ok: bool = false,
@@ -47,6 +48,9 @@ var vb_armed: bool = false;
 var last_gen: u64 = 0;
 var last_mode_was_flip: bool = false;
 var retry_n: u64 = 0;
+var retry_wait: u64 = 64; // ensureFlip backoff — grows x4 per failure
+var flip_fails: u32 = 0;
+var flip_gave_up: bool = false; // latched until next gen change
 var flip_count: u64 = 0;
 var paint_count: u64 = 0;
 var pre_scanout: ?u32 = null; // foreign scanout to retire after first flip
@@ -373,13 +377,39 @@ pub fn tick() void {
         flip_pending = false;
         front = null;
         pre_scanout = null;
+        flip_fails = 0;
+        retry_wait = 64;
+        flip_gave_up = false; // new surface = fresh contiguous-alloc budget
         sayU("KORU scene: surface gen change — full damage, swapchain reset\n", .{});
     }
 
     const up = kms.device().up;
     if (up) {
         retry_n += 1;
-        if (!flipReady() and (retry_n & 63) == 0) _ = ensureFlip();
+        // ensureFlip -> dumbCreate -> pmm.allocContiguous(~2k frames) is
+        // an O(managed*n) bitmap scan on FAILURE — seconds per call.
+        // Retrying it every 64 ticks starved pollChar to death on T590
+        // (console rendered via immediateTick, heartbeats limped,
+        // keyboard dead). Back off x4 per fail and latch gave_up after
+        // MAX_FLIP_FAILS — immediate mode stays the named degrade until
+        // the next gen change resets the attempt budget.
+        if (!flipReady() and !flip_gave_up and (retry_n & (retry_wait - 1)) == 0) {
+            if (ensureFlip()) {
+                flip_fails = 0;
+                retry_wait = 64;
+            } else {
+                flip_fails += 1;
+                retry_wait = @min(retry_wait * 4, 1 << 22);
+                if (flip_fails == 1 or flip_fails % 8 == 0)
+                    sayU("KORU scene: flip alloc fail {d} — immediate mode, retry in {d} ticks\n",
+                        .{ flip_fails, retry_wait });
+                if (flip_fails >= MAX_FLIP_FAILS) {
+                    flip_gave_up = true;
+                    sayU("KORU scene: flip alloc gave up after {d} — immediate mode until gen change\n",
+                        .{flip_fails});
+                }
+            }
+        }
         if (flipReady()) {
             flipTick();
             last_mode_was_flip = true;

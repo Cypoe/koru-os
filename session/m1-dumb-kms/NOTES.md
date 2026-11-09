@@ -1183,3 +1183,40 @@ QEMU-VERIFIED (dist/koru-mc1r2-scene.iso): 'consmall' -> forced
 800x600 -> prompt+echo render; 'conresize' -> resized 1024x768 ->
 prompt returns + 'echo INBIG' renders (white glyph px in screendump).
 UNEXERCISED: real 1024->1920 modeset path (i915-only) — T590 debut.
+
+## MC-1r3 fix — dead keyboard post-kms (2026-11-09)
+
+T590 regression: post-'kms' console rendered (prompt + 'console still
+alive') but ALL keyboard input dead — typing showed nothing, shell
+unresponsive, heartbeats limped. Two independent defects, both fixed:
+
+1. STARVATION (primary suspect): present.tick retried ensureFlip()
+   every 64 ticks while flip bufs missing. Each attempt runs
+   kms.dumbCreate(1920x1080) -> pmm.allocContiguous(~2025 frames) —
+   an O(managed*n) per-frame bitmap scan that takes SECONDS on
+   failure (fragmented post-console-alloc RAM). No backoff, no
+   logging: the loop spent its life inside allocContiguous, pollChar
+   starved, console still painted via immediateTick, heartbeats
+   limped between multi-second scans. Fix: exponential backoff
+   (x4/fail, cap 2^22 ticks), MAX_FLIP_FAILS=12 then flip_gave_up
+   latch -> named immediate-mode degrade until next gen change
+   (which resets the budget). Failures now sayU-throttled so the
+   serial oracle names the cause.
+
+2. AUX WEDGE (real, independent): kbd.pollChar refuses AUX-flagged
+   8042 bytes expecting IRQ12/mouse_irq to drain them — but IRQ12 is
+   armed only inside mouse.init (cursor enable). Cursor never
+   enabled + any aux traffic = one byte sits in the output register
+   forever, every keystroke queued behind it. Fix: pollChar consumes
+   the aux byte itself when mouse.irqArmed()==false (no IRQ can fire
+   -> zero race) and feeds it to mouse.feedByte so the packet
+   assembler stays warm; armed case unchanged (IRQ drains).
+
+QEMU-VERIFIED (dist/koru-mc1r3-scene.iso): boot->scene->typed
+'consmall'->800x600 clip+text, 'echo CONSOK' renders, 'conresize'->
+1024x768 fresh console->prompt+'echo BIGOK' renders. Keyboard echo
+path exercised end-to-end.
+UNEXERCISED: the flip-alloc starvation itself is i915-only (QEMU has
+no kms.device().up) — T590 'kms' is the debut. If dumbs still fail,
+serial now shows 'flip alloc fail N' + 'gave up' markers instead of
+silently starving; immediate mode keeps console live either way.

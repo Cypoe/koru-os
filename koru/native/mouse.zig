@@ -107,6 +107,12 @@ pub const Diag = extern struct {
     por: u32,
     cfg: u32,
 };
+// IRQ12 armed = mouse_irq drains aux bytes from the 8042. False means
+// NOBODY drains them at runtime — kbd.pollChar consumes them itself.
+pub fn irqArmed() bool {
+    return irq_armed;
+}
+
 pub fn diag() Diag {
     return .{
         .tried = @intFromBool(init_tried),

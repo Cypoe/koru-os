@@ -137,7 +137,19 @@ pub fn pollChar() ?u8 {
     // dropping it desyncs the mouse's 3-byte packet frame (wild dx/dy =
     // the T590 cursor-jump bug). IRQ12 is armed whenever aux streams,
     // so the byte is drained there a few instructions later.
-    if (st & 0x20 != 0) return null; // aux/mouse byte — not ours, don't eat
+    if (st & 0x20 != 0) {
+        // ...but ONLY when IRQ12 is actually armed. With the cursor
+        // never enabled, mouse.init never ran, IRQ12 stays masked, and
+        // this byte would sit in the output register forever — every
+        // keystroke queued behind it, keyboard dead (the T590 post-kms
+        // report). irq_armed=false means no IRQ can fire, so consuming
+        // here races nothing; feed the packet assembler instead of
+        // dropping the byte.
+        if (!mouse.irqArmed()) {
+            mouse.feedByte(inb(DATA));
+        }
+        return null; // aux/mouse byte — not ours to map to ASCII
+    }
     const b = inb(DATA);
     const code = b & 0x7F;
     if (code == 0x2A or code == 0x36) { // shift make/break updates state
