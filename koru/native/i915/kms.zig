@@ -648,6 +648,16 @@ pub fn atomicTest(bufHandle: u32) bool {
     return true;
 }
 
+// atomicTestQuiet — the swapchain-flavour of atomicTest: same CHECK +
+// GTT PTE verification, zero stage()/say — flipSwap runs once per frame
+// and per-flip LED blinks + markers would strangle the cadence.
+pub fn atomicTestQuiet(bufHandle: u32) bool {
+    if (!atomicCheck(bufHandle)) return false;
+    const buf = gdev.dumbs[bufHandle].?;
+    const pte = mmio.readGtt(buf.gtt_page);
+    return pte.valid and pte.phys == buf.phys;
+}
+
 // flipSwap — the swapchain-safe commit: same check->test->commit as
 // flipCommit but the PREVIOUS scanout buffer is NOT destroyed. The
 // scene compositor owns a two-dumb swapchain; the retired front buffer
@@ -655,7 +665,7 @@ pub fn atomicTest(bufHandle: u32) bool {
 // scanned buffer via rebaseQuiet (no generation bump — a routine flip
 // is not a surface-identity change; no serial print — flip cadence).
 pub fn flipSwap(bufHandle: u32) bool {
-    if (!atomicTest(bufHandle)) return false;
+    if (!atomicTestQuiet(bufHandle)) return false;
     const buf = gdev.dumbs[bufHandle].?;
     // QUIET by contract: this runs once per frame in the scene
     // swapchain — no stage()/say/mark here (LED blink + UDP marker per

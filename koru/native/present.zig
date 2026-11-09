@@ -65,6 +65,7 @@ var con_buf: [*]volatile u32 = undefined;
 var con_pitch: u32 = 0;
 var con_w: u32 = 0;
 var con_h: u32 = 0;
+var console_reset: bool = false; // a realloc wiped console content — shell re-renders prompt
 
 fn consoleAlloc(w: u32, h: u32) bool {
     const bytes = @as(u64, w) * h * 4;
@@ -140,7 +141,26 @@ fn consoleRealloc(w: u32, h: u32) bool {
         return false;
     }
     consoleBind();
+    console_reset = true; // content wiped — caller decides how to repopulate
     return true;
+}
+
+// takeConsoleReset — shell polls once per loop iteration: true means the
+// console backing was reallocated since last take (fresh blank console —
+// re-print prompt + current input line). Consumed on read.
+pub fn takeConsoleReset() bool {
+    const r = console_reset;
+    console_reset = false;
+    return r;
+}
+
+// surfaceSync — the gen-change core WITHOUT the present-side teardown:
+// scene dims + console backing catch up to a new scanout. Dispatch calls
+// this right after a modeset/flip command returns so the "... returned"
+// puts + prompt land in the NEW backing instead of the doomed one.
+pub fn surfaceSync() void {
+    comp.syncDims();
+    consoleSync();
 }
 
 // consoleSync — the gen-change hook. Same dims -> the retained backing
@@ -344,8 +364,7 @@ pub fn tick() void {
     const g = fb.generation();
     if (g != last_gen) {
         last_gen = g;
-        comp.syncDims();  // scene geometry follows the new scanout FIRST
-        consoleSync();    // root backing resizes/re-attaches on dim change
+        surfaceSync(); // scene dims + console backing follow the new scanout
         var w: u32 = 0;
         var h: u32 = 0;
         comp.dims(&w, &h);

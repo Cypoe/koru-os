@@ -1156,3 +1156,30 @@ UNEXERCISED: comp.syncDims + the automatic gen-change trigger need a
 real modeset — QEMU has no i915. T590 'kms' is the debut: expect
 "comp: scene dims -> 1920x1080" + "console resized 1920x1080" +
 flip buffers up + console text visible.
+
+## MC-1r2 fix — console content + prompt survive gen-change (2026-11-09)
+
+T590 regression: post-'kms' the console resized to 1920x1080 but NO '>'
+prompt returned — blank backlight, heartbeats only. Root cause: the
+'kms returned' puts + prompt() were written BETWEEN modeset and
+present.tick's consoleSync — into the doomed 1024x768 backing freed
+one tick later. Fresh backing stayed blank; nothing re-rendered.
+Also found: flipSwap->atomicTest->stage() ran an LED blink + UDP marker
++ serial line PER FLIP (~30-60ms spin at frame cadence).
+
+Fix:
+- present.surfaceSync() = comp.syncDims + consoleSync, called in
+  dispatch right after runModeset/runFlip/runDmabuf return — the
+  "... returned" puts + prompt now land in the NEW backing.
+- present.console_reset flag + takeConsoleReset(): set on every
+  consoleRealloc; shell consumes it silently after dispatch (prompt()
+  already covers) and polls it after present.tick -> redrawPrompt()
+  re-prints "> " + line[0..n] for mid-line/tick-time resizes.
+- kms.atomicTestQuiet: atomicCheck + GTT PTE verify with zero
+  stage()/say — flipSwap uses it (per-frame cadence stays quiet).
+- present.tick gen branch now calls surfaceSync() (same core).
+
+QEMU-VERIFIED (dist/koru-mc1r2-scene.iso): 'consmall' -> forced
+800x600 -> prompt+echo render; 'conresize' -> resized 1024x768 ->
+prompt returns + 'echo INBIG' renders (white glyph px in screendump).
+UNEXERCISED: real 1024->1920 modeset path (i915-only) — T590 debut.

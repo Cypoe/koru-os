@@ -49,6 +49,7 @@ pub fn run() noreturn {
         comp.tick();      // scene input: press-edge focus/raise/drag
         win.tick();       // kwin: focus-titlebar repaints -> damage
         present.tick();   // drain damage -> composite -> present (A or B)
+        if (present.takeConsoleReset()) redrawPrompt(); // console reallocated mid-line
         // NOT hlt — IF=0 here, hlt halts the CPU on the first iteration.
         asm volatile ("pause");
     }
@@ -56,11 +57,19 @@ pub fn run() noreturn {
 fn prompt() void {
     text.puts("> ");
 }
+// redrawPrompt — after a console realloc wiped the backing, restore the
+// prompt + whatever the user had typed (line[] holds printable chars
+// only, so putc re-echo is safe). cx,cy were reset to 8,8 by syncDims.
+fn redrawPrompt() void {
+    text.puts("> ");
+    for (line[0..n]) |ch| text.putc(ch);
+}
 fn handle(c: u8) void {
     if (c == '\n') {
         text.newline();
         dispatch();
         n = 0;
+        _ = present.takeConsoleReset(); // dispatch's prompt() covers it
         prompt();
         return;
     }
@@ -100,6 +109,7 @@ fn dispatch() void {
     if (eq("kms")) { // M1 dumb-KMS: object model + dumb buffer + modeset
         text.puts("kms: M1 dumb-KMS — watch last line before death\n");
         kmsdrv.runModeset();
+        present.surfaceSync(); // scene dims + console backing catch up BEFORE the puts
         text.puts("kms returned — console still alive\n");
         return;
     }
@@ -112,12 +122,14 @@ fn dispatch() void {
     if (eq("kflip")) { // M2 atomic pageflip + vblank (needs live 'kms')
         text.puts("kflip: M2 atomic pageflip — watch last line\n");
         kmsdrv.runFlip();
+        present.surfaceSync();
         text.puts("kflip returned — console still alive\n");
         return;
     }
     if (eq("kdmabuf")) { // M3 dmabuf producer->scanout (needs live 'kms')
         text.puts("kdmabuf: M3 dmabuf import — watch last line\n");
         kmsdrv.runDmabuf();
+        present.surfaceSync();
         text.puts("kdmabuf returned — console still alive\n");
         return;
     }
