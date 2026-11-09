@@ -31,12 +31,51 @@ fn stage(comptime msg: [*:0]const u8) void {
     im.say(msg); im.say("\n");
     net.mark(std.mem.sliceTo(msg, 0));
 }
-fn say(s: [*:0]const u8) void { im.say(s); }
-fn hex32(v: u32) void { im.sayHex(v); }
-fn hex64(v: u64) void {
-    im.sayHex(@intCast(v >> 32)); im.sayHex(@intCast(v & 0xFFFFFFFF));
+// say/hex/dec dual-write: im.say -> serial+framebuffer, net.mirror -> UDP
+// wire (:47820). Real-T590 debugging happens over UDP, so every runtime
+// diagnostic token MUST take the mirror path or it is invisible on the wire.
+fn say(s: [*:0]const u8) void {
+    im.say(s);
+    net.mirror(std.mem.sliceTo(s, 0));
 }
-fn dec(v: u64) void { im.sayDec(v); }
+fn hex32(v: u32) void {
+    var b: [11]u8 = undefined;
+    b[0] = '0'; b[1] = 'x';
+    var i: usize = 2;
+    var k: usize = 8;
+    while (k > 0) : (k -= 1) {
+        const n = (v >> @intCast(4 * (k - 1))) & 0xF;
+        b[i] = "0123456789abcdef"[@intCast(n)];
+        i += 1;
+    }
+    b[10] = 0;
+    say(@ptrCast(&b));
+}
+fn hex64(v: u64) void {
+    var b: [19]u8 = undefined;
+    b[0] = '0'; b[1] = 'x';
+    var i: usize = 2;
+    var k: usize = 16;
+    while (k > 0) : (k -= 1) {
+        const n = (v >> @intCast(4 * (k - 1))) & 0xF;
+        b[i] = "0123456789abcdef"[@intCast(n)];
+        i += 1;
+    }
+    b[18] = 0;
+    say(@ptrCast(&b));
+}
+fn dec(v: u64) void {
+    var t: [20]u8 = undefined;
+    var k: usize = 20;
+    var n = v;
+    if (n == 0) { k -= 1; t[k] = '0'; }
+    else { while (n != 0) : (n /= 10) { k -= 1; t[k] = '0' + @as(u8, @intCast(n % 10)); } }
+    var z: [21]u8 = undefined;
+    var j: usize = 0;
+    while (k < 20) : (k += 1) { z[j] = t[k]; j += 1; }
+    z[j] = 0;
+    say(@ptrCast(&z));
+}
 
 // ---- capability regs (off 0 of BAR0) ----
 // cap0 dword: CAPLENGTH = &0xff, HCIVERSION = (>>16)&0xffff
@@ -467,6 +506,7 @@ fn probeDev(d: *const pci.Device) u32 {
 
         // dump the input context + ep0 ring base so a malformed ctx is
         // visible on the wire; trace events during the command.
+        say("xhci: addrdev port="); dec(port); say(" slot="); dec(@as(u64,@intCast(slotId))); say("\n");
         say("xhci: ic ctrl d0/d1="); hex32(ic.ctrl.d[0]); say("/"); hex32(ic.ctrl.d[1]);
         say(" slot d0="); hex32(ic.slot.d[0]); say(" d1="); hex32(ic.slot.d[1]);
         say(" ep0 d1="); hex32(ic.ep[0].d[1]); say(" d2="); hex32(ic.ep[0].d[2]);
@@ -477,8 +517,13 @@ fn probeDev(d: *const pci.Device) u32 {
         evtTrace = false;
         if (addrRc < 0) {
             const us = opRd(OP_USBSTS);
+            const ps2 = opRd(opPortSc(port));
             say("xhci: addr FAIL usbsts="); hex32(us);
-            say(" csec="); if ((us & (1 << 18)) != 0) say("1") else say("0"); say("\n");
+            say(" csec="); if ((us & (1 << 18)) != 0) say("1") else say("0");
+            say(" portsc="); hex32(ps2);
+            say(" ccs="); if ((ps2 & PSC_CCS) != 0) say("1") else say("0");
+            say(" ped="); if ((ps2 & PSC_PED) != 0) say("1") else say("0");
+            say(" pr="); if ((ps2 & PSC_PR) != 0) say("1") else say("0"); say("\n");
             // did the HC write anything into the device context?
             const dcp: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(dcPhys)));
             say("xhci: devctx[0..3]="); hex64(dcp[0]); say(" "); hex64(dcp[1]); say("\n");
