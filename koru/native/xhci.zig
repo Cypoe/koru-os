@@ -104,6 +104,7 @@ const USBSTS_CNR = 1 << 11;
 const PSC_CCS = 1 << 0;
 const PSC_PED = 1 << 1;
 const PSC_PR = 1 << 4;
+const PSC_PP = 1 << 16; // port power — MUST stay set or device drops
 fn pscSpeed(v: u32) u32 { return (v >> 10) & 0xF; }
 const PSC_WRC: u32 = (1 << 8) | (1 << 9) | (1 << 16) | (1 << 17) | (1 << 18) |
     (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22) | (1 << 23) | (1 << 24);
@@ -452,8 +453,11 @@ fn probeDev(d: *const pci.Device) u32 {
         say(" speed="); hex32(pscSpeed(ps)); say("\n");
         if (!ccs) continue;
 
-        // port reset (USB2 needs it; USB3 auto) — preserve CCS, set PR
-        opWr(opPortSc(port), (ps & ~PSC_WRC) | PSC_PR | (ps & PSC_CCS));
+        // port reset — write ps|PR|PP: preserves PP (bit16) so the port
+        // stays powered, preserves RW state, acks pending change bits.
+        // The reference's (ps & ~PSC_WRC) clears bit16=PP -> port powers
+        // off -> device disconnects on real silicon (QEMU tolerates it).
+        opWr(opPortSc(port), ps | PSC_PR | PSC_PP);
         i = 0;
         while (i < 1000000) : (i += 1) {
             ps = opRd(opPortSc(port));
@@ -461,11 +465,25 @@ fn probeDev(d: *const pci.Device) u32 {
         }
         // drain port-status-change events
         while (eventWait(&ering, 0, null, null) == T_PSC) {}
-        ps = opRd(opPortSc(port));
+        // wait for link retrain: CCS+PED+speed!=0. Reading speed right
+        // after PR-clear yields 0 on real HW (USB2 training is slow) ->
+        // slot-ctx speed=0 -> SET_ADDRESS transaction error.
+        var ready: u32 = 0;
+        i = 0;
+        while (i < 5000000) : (i += 1) {
+            ps = opRd(opPortSc(port));
+            if ((ps & PSC_CCS) != 0 and (ps & PSC_PED) != 0 and pscSpeed(ps) != 0) {
+                ready = ps;
+                break;
+            }
+        }
+        if (ready != 0) ps = ready;
         const speed = pscSpeed(ps);
+        const pls = (ps >> 5) & 0xF; // port link state for decode
         say("xhci: port"); dec(port); say(" post-reset sc="); hex32(ps);
+        say(" ccs="); if ((ps & PSC_CCS) != 0) say("1") else say("0");
         say(" ped="); if ((ps & PSC_PED) != 0) say("1") else say("0");
-        say(" speed="); hex32(speed); say("\n");
+        say(" pls="); hex32(pls); say(" speed="); hex32(speed); say("\n");
 
         // ---- Enable Slot ----
         const slotId = xcmd(0, 0, ttype(T_ENSLOT));
