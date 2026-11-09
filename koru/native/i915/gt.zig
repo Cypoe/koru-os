@@ -32,6 +32,7 @@ const pci = @import("pci");
 const hostmmio = @import("mmio");
 const led = @import("../led.zig");
 const text = @import("../text.zig");
+const kms = @import("kms.zig");
 
 fn stage(comptime msg: [*:0]const u8) void {
     mmio.say(msg); mmio.say("\n");
@@ -78,9 +79,39 @@ const PWRGT_MEDIA_BIT: u32 = 1 << 0;
 const MI_NOOP: u32 = 0x0000_0000;
 const MI_BATCH_BUFFER_END: u32 = 0x0500_0000; // MI_INSTR(0x0a,0)
 const MI_STORE_DWORD_IMM_GEN4_GGTT: u32 = 0x1040_0002; // 0x20<<23|2 | MI_USE_GGTT(1<<22)
+const MI_FLUSH: u32 = 0x0200_0000; // MI_INSTR(0x04,0)
+const MI_ARB_ON_OFF: u32 = 0x0400_0000; // MI_INSTR(0x08,0)
+const MI_ARB_ENABLE: u32 = 1;
+const MI_ARB_DISABLE: u32 = 0;
+const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
+
+fn miLri(count: u32) u32 {
+    // MI_LOAD_REGISTER_IMM(x) = MI_INSTR(0x22, 2x-1) = 0x22<<23 | (2x-1)
+    return (0x22 << 23) | (2 * count - 1);
+}
+
+// gen9+ engine regs not already covered above (intel_engine_regs.h)
+const OFF_ELSP: u32 = 0x230; // RING_ELSP — execlist context descriptor port
+const OFF_PDP0_LDW: u32 = 0x270;
+const PDP_STRIDE: u32 = 8;
+
+// Context descriptor flags (intel_lrc.h / intel_lrc.c lrc_descriptor)
+const GEN8_CTX_VALID: u64 = 1 << 0;
+const GEN8_CTX_FORCE_RESTORE: u64 = 1 << 2; // CTX_DESC_FORCE_RESTORE
+const GEN8_CTX_PRIVILEGE: u64 = 1 << 8;
+const GEN8_CTX_ADDRESSING_MODE_SHIFT: u6 = 3;
+const INTEL_LEGACY_32B_CONTEXT: u64 = 1; // 3-level PPGTT, 4GiB space
+
+// BLT command dwords (intel_gpu_commands.h + intel_migrate.c emit_clear,
+// the proven ver>=8 XY_COLOR_BLT emission — 7-dword command + NOOP pad)
+const XY_COLOR_BLT_CMD: u32 = (2 << 29) | (0x50 << 22); // 0x54000000
+const BLT_WRITE_RGBA: u32 = (1 << 20) | (2 << 20); // 0x300000
+const BLT_DEPTH_32: u32 = 3 << 24;
+const BLT_ROP_COLOR_COPY: u32 = 0xf0 << 16;
 
 const GTT_BASE_SLOT: u32 = 0x8000; // GTT page index — far above scanout PTEs
 const PROOF_MAGIC: u32 = 0xc0de_0001;
+const BCS_BASE: u32 = 0x22000;
 
 const Engine = struct {
     name: [*:0]const u8,
@@ -408,12 +439,281 @@ pub fn probe() void {
     mmio.say("gt4: proof[0]="); mmio.sayHex(proof[0]);
     if (proof[0] == PROOF_MAGIC) mmio.say(" GPU-WRITE-OK\n") else mmio.say(" no-gpu-write\n");
 
+    // blit phase: minimal LRC + ELSP + XY_COLOR_BLT on BCS (gt5 markers)
+    blitPhase(p);
+
     if (anyOk) {
         stage("gt: ==== SUBMISSION PROVEN — ring head advanced ====");
     } else {
         stage("gt: ==== SUBMISSION NOT PROVEN — see fin regs ====");
     }
     text.puts("gt: probe done\n");
+}
+
+// ---- blit phase: minimal LRC context + ELSP submit + XY_COLOR_BLT ----------
+// Oracle: linux i915 gt/intel_lrc.c (gen9_xcs_offsets, lrc_descriptor,
+// lrc_update_regs, init_common_regs/init_ppgtt_regs/__reset_stop_ring),
+// gt/intel_execlists_submission.c (write_desc -> RING_ELSP UDW-then-LDW,
+// emit_pdps), gt/gen8_ppgtt.c + gt/intel_gtt.h (gen8_pte/pde_encode),
+// gt/intel_gpu_commands.h + gt/intel_migrate.c emit_clear (XY_COLOR_BLT).
+
+// gen9_xcs_offsets[] verbatim from intel_lrc.c (u8-encoded reg-state
+// template). NOP(x)=0x80|x skips x dwords; LRI(c,posted)=(posted?0x40:0)|c;
+// REG/REG16 are varint-encoded MMIO byte offsets (decoded <<2).
+const gen9_xcs_offsets = [_]u8{
+    0x81, // NOP(1)
+    0x4e, // LRI(14, POSTED)
+    0x81, 0x11, 0x0d, 0x0c, 0x0e, 0x0f, 0x5a, 0x50, 0x44, 0x47, 0x45,
+    0x46, 0x70, 0x71, 0x72, // 14 regs: CTX_CTRL,HEAD,TAIL,START,CTL,BB*,INDIR*
+    0x83, // NOP(3)
+    0x49, // LRI(9, POSTED)
+    0x81, 0x6a, 0x81, 0x23, 0x81, 0x22, 0x81, 0x21, 0x81, 0x20, 0x81,
+    0x1f, 0x81, 0x1e, 0x81, 0x1d, 0x81, 0x1c, // TS,PDP3..PDP0 UDW/LDW
+    0x8d, // NOP(13)
+    0x41, // LRI(1, POSTED)
+    0x81, 0x00, // +0x200
+    0x8d, // NOP(13)
+    0x6c, // LRI(44, POSTED)
+    0x0a, 0x27, 0x30, 0x5e, 0x5f, 0x81, 0x56, 0x5c, 0x54, 0x55, 0x56,
+    0x82, 0x07, // +0x41c
+    0x83, 0x00, 0x83, 0x01, 0x83, 0x02, 0x83, 0x03, 0x83, 0x04, 0x83,
+    0x05, 0x83, 0x06, 0x83, 0x07, 0x83, 0x08, 0x83, 0x09, 0x83, 0x0a,
+    0x83, 0x0b, 0x83, 0x0c, 0x83, 0x0d, 0x83, 0x0e, 0x83, 0x0f, 0x83,
+    0x10, 0x83, 0x11, 0x83, 0x12, 0x83, 0x13, 0x83, 0x14, 0x83, 0x15,
+    0x83, 0x16, 0x83, 0x17, 0x83, 0x18, 0x83, 0x19, 0x83, 0x1a, 0x83,
+    0x1b, 0x83, 0x1c, 0x83, 0x1d, 0x83, 0x1e, 0x83, 0x1f, // GPRs 0x600+
+    0x1a, // +0x068
+    0x00, // END
+};
+
+const LRC_STATE_PAGE: usize = 1; // page 1 of ctx object = reg-state image
+
+// Decode the u8 template into MI_LOAD_REGISTER_IMM commands in dst[].
+// Returns dwords used (incl. BATCH_BUFFER_END terminator).
+fn buildLrcImage(dst: [*]u32, engineBase: u32) usize {
+    var r: usize = 0;
+    var di: usize = 0;
+    const data = &gen9_xcs_offsets;
+    while (data[di] != 0) {
+        const b = data[di];
+        di += 1;
+        if ((b & 0x80) != 0) { // NOP skip
+            r += b & 0x7f;
+            continue;
+        }
+        const count: u32 = b & 0x3f;
+        const posted = (b & 0x40) != 0;
+        var cmd = miLri(count);
+        if (posted) cmd |= MI_LRI_FORCE_POSTED;
+        dst[r] = cmd;
+        r += 1;
+        var k: u32 = 0;
+        while (k < count) : (k += 1) {
+            var off: u32 = 0;
+            while (true) {
+                const v = data[di];
+                di += 1;
+                off = (off << 7) | (v & 0x7f);
+                if ((v & 0x80) == 0) break;
+            }
+            dst[r] = engineBase + (off << 2);
+            r += 2; // addr dword + value dword
+        }
+    }
+    dst[r] = MI_BATCH_BUFFER_END;
+    r += 1;
+    return r;
+}
+
+// Patch (addr,value) slots in the built image. vals keyed by engine-rel off.
+fn lrcPatch(dst: [*]u32, used: usize, engineBase: u32, off: u32, val: u32) void {
+    const want = engineBase + off;
+    var j: usize = 0;
+    while (j + 1 < used) : (j += 1) {
+        if (dst[j] == want) dst[j + 1] = val;
+    }
+}
+
+fn blitPhase(p: Pages) void {
+    stage("gt5: ==== BCS blit-via-LRC begin ====");
+    const base = BCS_BASE;
+
+    // dst = live kms scanout if present, else a fresh dumb buffer.
+    var dstBuf: ?kms.DumbBuffer = null;
+    var owned: ?u32 = null;
+    const dev = kms.device();
+    if (dev.up and dev.scanout != null) {
+        dstBuf = dev.dumbs[dev.scanout.?];
+    }
+    if (dstBuf == null and dev.up) {
+        if (kms.dumbCreate(256, 256, 32)) |h| {
+            owned = h;
+            dstBuf = dev.dumbs[h];
+        } else {}
+    }
+    const buf = dstBuf orelse {
+        stage("gt5: FAIL no dst buffer (run kms first)");
+        return;
+    };
+    stage("gt5: dst buffer acquired");
+
+    const pitch: u32 = buf.pitch;
+    const rows: u32 = 250; // ~1.9MB top strip — inside one 2MiB PPGTT PT
+    const widthDw: u32 = pitch / 4;
+    const nPages: u32 = @intCast((@as(u64, rows) * pitch + 4095) / 4096);
+    mmio.say("gt5: dst w="); mmio.sayDec(buf.width);
+    mmio.say(" h="); mmio.sayDec(buf.height);
+    mmio.say(" pitch="); mmio.sayDec(pitch);
+    mmio.say(" rows="); mmio.sayDec(rows);
+    mmio.say(" ptes="); mmio.sayDec(nPages); mmio.say("\n");
+    if (nPages > 512) {
+        stage("gt5: FAIL pte overflow");
+        return;
+    }
+
+    // ---- memory: ctx object (2pg), PD page, PT page -------------------------
+    const ctxPhys = allocPages(2, 1) orelse {
+        stage("gt5: FAIL ctx alloc");
+        return;
+    };
+    const pdPhys = allocPages(1, 1) orelse {
+        stage("gt5: FAIL pd alloc");
+        return;
+    };
+    const ptPhys = allocPages(1, 1) orelse {
+        stage("gt5: FAIL pt alloc");
+        return;
+    };
+    _ = hostmmio.map(pdPhys, 4096);
+    _ = hostmmio.map(ptPhys, 4096);
+
+    const ctxGttSlot = GTT_BASE_SLOT + 24;
+    mmio.writeGtt(ctxGttSlot, ctxPhys, true);
+    mmio.writeGtt(ctxGttSlot + 1, ctxPhys + 4096, true);
+    const ctxGttOff: u64 = @as(u64, ctxGttSlot) * 4096;
+
+    // CPU views (identity physmap)
+    const ctxPages: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(ctxPhys)));
+    const lrc: [*]u32 = @ptrFromInt(@as(usize, @intCast(ctxPhys + 4096)));
+    const pd: [*]u64 = @ptrFromInt(@as(usize, @intCast(pdPhys)));
+    const pt: [*]u64 = @ptrFromInt(@as(usize, @intCast(ptPhys)));
+
+    // zero ctx object (HWS page + reg-state page)
+    var zi: usize = 0;
+    while (zi < 2048) : (zi += 1) ctxPages[zi] = 0;
+
+    // ---- PPGTT page tables (3-level; entries = PHYSICAL addrs) --------------
+    // PD[0] -> PT ; PT[i] -> dstPhys + i*4K  (VA 0..2MiB, PDE0/PTE i)
+    pd[0] = ptPhys | 3; // PRESENT|RW, PPAT_CACHED_PDE(0)
+    var pi: u32 = 0;
+    while (pi < nPages) : (pi += 1) {
+        pt[pi] = (buf.phys + @as(u64, pi) * 4096) | 0x83; // PRESENT|RW|PPAT_CACHED(_PAGE_PAT=0x80)
+    }
+    stage("gt5: lrc+pdpt built");
+
+    // ---- LRC reg-state image (page 1) ---------------------------------------
+    const used = buildLrcImage(lrc, base);
+    const ringGttOff: u32 = @truncate(@as(u64, p.ringGttSlot) * 4096);
+    const tailB = ringTailBytes();
+    lrcPatch(lrc, used, base, 0x034, 0); // HEAD
+    lrcPatch(lrc, used, base, 0x030, tailB); // TAIL
+    lrcPatch(lrc, used, base, 0x038, ringGttOff); // START (ggtt off)
+    lrcPatch(lrc, used, base, 0x03c, 0x1001); // CTL = 1<<12|VALID (2 pages)
+    lrcPatch(lrc, used, base, 0x244, 0x8); // CONTEXT_CONTROL: inhibit syn switch
+    lrcPatch(lrc, used, base, 0x09c, 0x0100_0000); // MI_MODE: STOP_RING<<16 set, bit8 clear
+    // PDP0..3 -> PD page (same PD for all four; we only use VA<4GiB)
+    const pdLo: u32 = @truncate(pdPhys);
+    const pdHi: u32 = @truncate(pdPhys >> 32);
+    lrcPatch(lrc, used, base, 0x28c, pdHi); // PDP3_UDW
+    lrcPatch(lrc, used, base, 0x288, pdLo); // PDP3_LDW
+    lrcPatch(lrc, used, base, 0x284, pdHi); // PDP2_UDW
+    lrcPatch(lrc, used, base, 0x280, pdLo); // PDP2_LDW
+    lrcPatch(lrc, used, base, 0x27c, pdHi); // PDP1_UDW
+    lrcPatch(lrc, used, base, 0x278, pdLo); // PDP1_LDW
+    lrcPatch(lrc, used, base, 0x274, pdHi); // PDP0_UDW
+    lrcPatch(lrc, used, base, 0x270, pdLo); // PDP0_LDW
+    mmio.say("gt5: lrc image "); mmio.sayDec(used);
+    mmio.say("dw ctx_gtt_off="); mmio.sayHex(ctxGttOff); mmio.say("\n");
+
+    // ---- ring batch: emit_pdps + XY_COLOR_BLT --------------------------------
+    const ring: [*]volatile u32 = @ptrFromInt(@as(usize, @intCast(p.ringPhys)));
+    var dw: usize = 0;
+    ring[dw] = MI_NOOP; dw += 1;
+    ring[dw] = MI_ARB_ON_OFF | MI_ARB_DISABLE; dw += 1;
+    ring[dw] = MI_NOOP; dw += 1;
+    ring[dw] = miLri(8) | MI_LRI_FORCE_POSTED; dw += 1;
+    var pdp: u32 = 3;
+    while (true) : (pdp -= 1) {
+        const a = base + OFF_PDP0_LDW + pdp * PDP_STRIDE;
+        ring[dw] = a + 4; ring[dw + 1] = pdHi; dw += 2; // UDW
+        ring[dw] = a; ring[dw + 1] = pdLo; dw += 2; // LDW
+        if (pdp == 0) break;
+    }
+    ring[dw] = MI_ARB_ON_OFF | MI_ARB_ENABLE; dw += 1;
+    ring[dw] = XY_COLOR_BLT_CMD | BLT_WRITE_RGBA | 5; dw += 1; // (7-2)
+    ring[dw] = BLT_DEPTH_32 | BLT_ROP_COLOR_COPY | pitch; dw += 1;
+    ring[dw] = 0; dw += 1;
+    ring[dw] = (rows << 16) | widthDw; dw += 1;
+    ring[dw] = 0; dw += 1; // dst addr lo (PPGTT VA 0)
+    ring[dw] = 0; dw += 1; // dst addr hi
+    ring[dw] = 0xffff_0000; dw += 1; // color: opaque red
+    ring[dw] = MI_NOOP; dw += 1;
+    ring[dw] = MI_BATCH_BUFFER_END; dw += 1;
+    while (dw % 2 != 0) : (dw += 1) ring[dw] = MI_NOOP;
+    const newTail: u32 = @intCast(dw * 4);
+    // NOTE: ringTailBytes()/computeTail scanned the OLD image; the batch
+    // tail for THIS submit is newTail — patch LRC TAIL slot + CTL.
+    lrcPatch(lrc, used, base, 0x030, newTail);
+
+    // arm ring regs the legacy way too (cheap; LRC restore overwrites)
+    ringReset(base);
+    wrAt(base, OFF_HWS_PGA, @truncate(@as(u64, p.hwspGttSlot) * 4096));
+    wrAt(base, OFF_IMR, 0xffff_ffff);
+    wrAt(base, OFF_MI_MODE, rdAt(base, OFF_MI_MODE) & ~(@as(u32, 1) << 8));
+    wrAt(base, OFF_START, ringGttOff);
+    wrAt(base, OFF_CTL, 0x1001);
+    mmio.postingRead(base + OFF_CTL);
+
+    // ---- ELSP submit: context descriptor = GGTT off of ctx obj | flags -----
+    const desc: u64 = ctxGttOff |
+        (INTEL_LEGACY_32B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT) |
+        GEN8_CTX_VALID | GEN8_CTX_PRIVILEGE | GEN8_CTX_FORCE_RESTORE;
+    mmio.say("gt5: elsp submit desc="); mmio.sayHex(desc); mmio.say("\n");
+    wrAt(base, OFF_ELSP, @truncate(desc >> 32)); // UDW first
+    wrAt(base, OFF_ELSP, @truncate(desc)); // LDW commits
+    stage("gt5: elsp written — polling");
+
+    const want = newTail & HEAD_ADDR_MASK;
+    var head: u32 = 0;
+    var i: u32 = 0;
+    while (i < 500000) : (i += 1) {
+        head = rdAt(base, OFF_HEAD) & HEAD_ADDR_MASK;
+        if (head == want) break;
+        asm volatile ("pause");
+    }
+    mmio.say("gt5: head="); mmio.sayHex(head);
+    mmio.say(" want="); mmio.sayHex(want);
+    if (head == want) mmio.say(" BLT-SUBMIT-OK\n") else mmio.say(" HEAD-STALLED\n");
+    dumpEngine("blt ", base);
+
+    // ---- readback: did the GPU write the color into the scanout? -----------
+    mmio.sleepUs(50000);
+    const px: [*]const volatile u32 = @ptrFromInt(@as(usize, @intCast(buf.phys)));
+    const rowDw: usize = @intCast(pitch / 4);
+    const samples = [_]usize{ 10 * rowDw + 10, 100 * rowDw + 100,
+        (@as(usize, rows) / 2) * rowDw + 500, 200 * rowDw + 900 };
+    var okCount: u32 = 0;
+    for (samples) |s| {
+        const v = px[s];
+        mmio.say("gt5: px="); mmio.sayHex(v); mmio.say("\n");
+        if ((v & 0xffff_0000) == 0xffff_0000) okCount += 1;
+    }
+    if (okCount > 0) {
+        stage("gt5: ==== GPU-DRAW PROVEN — blt color in scanout ====");
+    } else {
+        stage("gt5: ==== BLT submitted but no color readback ====");
+    }
+    if (owned) |h| _ = kms.dumbDestroy(h);
 }
 
 fn computeTail(p: Pages) u32 {
