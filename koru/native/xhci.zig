@@ -207,6 +207,12 @@ fn eventWait(ev: *Ring, want: u64, ccOut: ?*u32, slotOut: ?*u32) i32 {
         const ptr = (@as(u64, t.p_hi) << 32) | t.p_lo;
         const ty = (t.ctl >> 10) & 0x3F;
         const cc = (t.st >> 24) & 0xFF;
+        lastEvtPtr = ptr; lastEvtSt = t.st; lastEvtCtl = t.ctl; lastEvtTy = ty;
+        if (evtTrace) {
+            say("  evt ty="); hex32(ty); say(" cc="); hex32(cc);
+            say(" slot="); hex32((t.ctl >> 24) & 0xFF);
+            say(" ptr="); hex64(ptr); say("\n");
+        }
         ev.deq += 1;
         if (ev.deq >= ev.n - 1) {
             ev.deq = 0;
@@ -240,7 +246,9 @@ fn xcmd(p: u64, st: u32, ctl: u32) i32 {
     }
     if (cc != 1) {
         say("xhci: cmd type="); hex32((ctl >> 10) & 0x3F);
-        say(" cc="); hex32(cc); say("\n");
+        say(" cc="); hex32(cc); say(" slot="); hex32(sl);
+        say(" evtTy="); hex32(lastEvtTy); say(" evtPtr="); hex64(lastEvtPtr);
+        say(" evtSt="); hex32(lastEvtSt); say(" evtCtl="); hex32(lastEvtCtl); say("\n");
         return -1;
     }
     return @intCast(sl);
@@ -282,6 +290,12 @@ fn ep0GetDesc(bufPhys: u64) i32 {
 
 var ep0Ring: Ring = undefined;
 var curSlot: u32 = 0;
+// last consumed event TRB — captured for failure diagnostics
+var lastEvtPtr: u64 = 0;
+var lastEvtSt: u32 = 0;
+var lastEvtCtl: u32 = 0;
+var lastEvtTy: u32 = 0;
+var evtTrace: bool = false;
 
 // real probe — takes the pci.Device
 fn probeDev(d: *const pci.Device) u32 {
@@ -451,9 +465,23 @@ fn probeDev(d: *const pci.Device) u32 {
         };
         dcbaa[@intCast(slotId)] = dcPhys;
 
+        // dump the input context + ep0 ring base so a malformed ctx is
+        // visible on the wire; trace events during the command.
+        say("xhci: ic ctrl d0/d1="); hex32(ic.ctrl.d[0]); say("/"); hex32(ic.ctrl.d[1]);
+        say(" slot d0="); hex32(ic.slot.d[0]); say(" d1="); hex32(ic.slot.d[1]);
+        say(" ep0 d1="); hex32(ic.ep[0].d[1]); say(" d2="); hex32(ic.ep[0].d[2]);
+        say(" d4="); hex32(ic.ep[0].d[4]); say(" speed="); hex32(speed);
+        say(" mps="); hex32(mps); say(" icPhys="); hex64(icPhys); say("\n");
+        evtTrace = true;
         const addrRc = xcmd(icPhys, 0, ttype(T_ADDR) | (@as(u32, @intCast(slotId)) << 24));
+        evtTrace = false;
         if (addrRc < 0) {
-            say("xhci: port"); dec(port); say(" address-device FAIL\n");
+            const us = opRd(OP_USBSTS);
+            say("xhci: addr FAIL usbsts="); hex32(us);
+            say(" csec="); if ((us & (1 << 18)) != 0) say("1") else say("0"); say("\n");
+            // did the HC write anything into the device context?
+            const dcp: [*]volatile u64 = @ptrFromInt(@as(usize, @intCast(dcPhys)));
+            say("xhci: devctx[0..3]="); hex64(dcp[0]); say(" "); hex64(dcp[1]); say("\n");
             stage("xhci: FAIL address device");
             continue;
         }
