@@ -667,6 +667,13 @@ pub fn flipCommit(bufHandle: u32) bool {
     gdev.scanout = bufHandle;
     gdev.planes[0].fb = buf;
     stage("kms: flip COMMITTED — flip armed for next vblank");
+    // The console + cursor must live on the SCANNED surface: without
+    // this rebase, fb_base kept pointing at the modeset buffer whose
+    // frames dumbDestroy frees next — text and the mouse sprite drew
+    // into freed pmm memory while the panel showed the flip buffer
+    // (the T590 "black screen, no arrow" report). Rebase BEFORE the
+    // free so no draw ever targets the retired frames.
+    rebaseConsole(bufHandle);
     _ = dumbDestroy(prev); // retire old scanout frames
     return true;
 }

@@ -38,6 +38,7 @@ var moves: u64 = 0;
 var pressed_n: u32 = 0;
 var input_armed: bool = false;
 var pkt_marked: bool = false;
+var drawn_gen: u64 = 0; // fb.generation() the sprite was last drawn on
 
 // ensureInput — the shell path boots with fullBoot=false, so the doFull
 // init block (acpi/pci/ioapic/user/kbd/mouse/smp) never ran and
@@ -64,20 +65,23 @@ fn ensureInput() void {
     net.mark("in:mouse-done");
 }
 
-// 12x12 arrow sprite, tip at top-left. '1' = on-pixel (XOR'd).
+// 12x12 FILLED arrow, tip at top-left (the hotspot). Solid silhouette —
+// ~3x the on-pixels of the old 1px outline, unmistakable against console
+// text and the console's dark-blue background. Still XOR'd: draw and
+// erase are the same op, so it composites over any surface content.
 const SPRITE = [SPR_H]u16{
     0b100000000000,
     0b110000000000,
-    0b101000000000,
-    0b100100000000,
-    0b100010000000,
-    0b100011000000,
-    0b100001100000,
-    0b100000110000,
-    0b100000011000,
-    0b100000001100,
-    0b111111111100,
-    0b011111111000,
+    0b111000000000,
+    0b111100000000,
+    0b111110000000,
+    0b111111000000,
+    0b111111100000,
+    0b111111110000,
+    0b111111111000,
+    0b111111111111, // head bottom + tail top — bar extends right
+    0b111111111111,
+    0b011111111110, // tail bottom, slight taper
 };
 
 fn say(s: [*:0]const u8) void {
@@ -135,6 +139,7 @@ pub fn enable() void {
     hideSprite();
     drawSprite(cx, cy);
     shown = true;
+    drawn_gen = fb.generation();
     net.mark("cursor:sprite@50,50");
     net.mark("cursor: enabled");
 }
@@ -169,6 +174,27 @@ pub fn tick() bool {
     if (!pkt_marked and mouse.diag().packets != 0) {
         pkt_marked = true;
         net.mark("mouse:streaming");
+    }
+    // Surface generation: a kms modeset/flip repoints fb_base and frees
+    // the old buffer — the sprite can't be XOR-erased on a surface that
+    // no longer exists, so redraw fresh on the live one (even with no
+    // motion this tick). Without this the cursor drew into freed pmm
+    // frames after 'kflip'/'kdmabuf' — invisible on the T590 panel.
+    const g = fb.generation();
+    if (g != drawn_gen) {
+        const d0 = fb.cursorDims();
+        if (d0.live) {
+            const mx = @as(i32, @intCast(d0.w)) - @as(i32, SPR_W);
+            const my = @as(i32, @intCast(d0.h)) - @as(i32, SPR_H);
+            if (cx > mx) cx = mx;
+            if (cy > my) cy = my;
+            if (cx < 0) cx = 0;
+            if (cy < 0) cy = 0;
+            shown = false; // old surface is gone — nothing to erase
+            drawSprite(cx, cy);
+            shown = true;
+        }
+        drawn_gen = g;
     }
     if (!moved) return false;
     const d = fb.cursorDims();

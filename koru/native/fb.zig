@@ -30,6 +30,10 @@ var fb_base: [*]volatile u32 = undefined;
 var fb_width: u32 = 0;
 var fb_height: u32 = 0;
 var fb_pitch: u32 = 0; // bytes per scanline
+// Bumped every time fb_base is repointed (adopt/adoptRaw/rebase). The
+// cursor uses it to detect a surface swap — after a kms flip the old
+// buffer may be freed, so a stale sprite can't be XOR-erased there.
+var gen: u64 = 0;
 
 // --- port I/O ----------------------------------------------------------
 
@@ -155,6 +159,7 @@ fn adopt(phys: u64, pitch: u32, w: u32, h: u32) bool {
     fb_pitch = pitch;
     present = true;
     backend = .lfb;
+    gen += 1;
     return true;
 }
 
@@ -188,6 +193,7 @@ pub fn rebase(phys: u64, pitch: u32, w: u32, h: u32) void {
     fb_height = h;
     koru_say("fb: rebase phys="); koru_putdec(phys);
     koru_say(" pitch="); koru_putdec(pitch); koru_say("\n");
+    gen += 1;
 }
 
 pub fn scanout() ?Scanout {
@@ -219,6 +225,12 @@ pub fn cursorDims() struct { w: u32, h: u32, live: bool } {
     return .{ .w = fb_width, .h = fb_height, .live = present and backend != .vgpu };
 }
 
+// Surface generation — increments on every fb_base repoint. Cursor
+// compares against the generation its sprite was last drawn on.
+pub fn generation() u64 {
+    return gen;
+}
+
 // Adopt an already-mapped LFB without minting page tables — the
 // earlyfb oracle identity-maps the GRUB fb with static hi-memory pd
 // tables before pmm/mmio exist, then hands the window here so the
@@ -231,6 +243,7 @@ pub fn adoptRaw(phys: u64, pitch: u32, w: u32, h: u32) void {
     fb_height = h;
     present = true;
     backend = .lfb;
+    gen += 1;
 }
 
 extern fn koru_say(s: [*:0]const u8) void;
