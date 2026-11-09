@@ -689,19 +689,20 @@ const HidCand = struct {
     mps: u32 = 0,
     ival: u32 = 0,
     protoIf: u32 = 0, // bInterfaceProtocol (0=report-only 1=kbd 2=mouse boot)
+    cls: u32 = 0,     // bInterfaceClass — 3=HID, 0xFF=vendor, etc.
 };
 
-// scan config descriptor for EVERY HID interface's interrupt-IN
-// endpoints — multi-function HID devices (Elan touchpad, 945B report
-// desc) put the real report stream on a non-first interface/alt/EP.
-// cfgVal carries bConfigurationValue for SET_CONFIGURATION.
+// Walk the config descriptor ONCE: dump EVERY interface + endpoint
+// (any class — vendor-specific touch functions aren't class 3), and
+// collect EVERY interrupt-IN endpoint as a poll candidate. cfgVal
+// carries bConfigurationValue for SET_CONFIGURATION.
 fn parseHidAll(cfg: [*]const u8, len: usize, cfgVal: *u32, cands: []HidCand) usize {
     var n: usize = 0;
     var i: usize = 0;
     var iface: u32 = 0;
     var alt: u32 = 0;
     var protoIf: u32 = 0;
-    var isHid = false;
+    var cls: u32 = 0;
     while (i + 2 <= len) {
         const blen = cfg[i];
         const btype = cfg[i + 1];
@@ -710,20 +711,30 @@ fn parseHidAll(cfg: [*]const u8, len: usize, cfgVal: *u32, cands: []HidCand) usi
             cfgVal.* = cfg[i + 5];
         } else if (btype == 4 and blen >= 9) { // interface
             iface = cfg[i + 2];
-            alt = cfg[i + 3];   // bAlternateSetting — endpoint only
-                                // streams when this alt is SET_INTERFACE'd
+            alt = cfg[i + 3];
+            cls = cfg[i + 5];
             protoIf = cfg[i + 7];
-            isHid = cfg[i + 5] == 3; // bInterfaceClass == HID
-        } else if (btype == 5 and blen >= 7 and isHid) { // endpoint
-            const attr = cfg[i + 3] & 3;
-            if ((cfg[i + 2] & 0x80) != 0 and attr == 3 and n < cands.len) {
+            say("xhci: IF num="); hex32(iface); say(" alt="); hex32(alt);
+            say(" nep="); hex32(cfg[i + 4]);
+            say(" class="); hex32(cls); say(" sub="); hex32(cfg[i + 6]);
+            say(" proto="); hex32(protoIf); say("\n");
+        } else if (btype == 5 and blen >= 7) { // endpoint — ALL classes
+            const ea = cfg[i + 2];
+            const eattr = cfg[i + 3];
+            const et = eattr & 3;
+            const dir = if ((ea & 0x80) != 0) "IN " else "OUT";
+            const tname = if (et == 0) "ctrl" else if (et == 1) "iso " else if (et == 2) "bulk" else "int ";
+            say("xhci: EP addr=0x"); hex32(ea); say(" "); say(tname); say(dir);
+            say(" attr="); hex32(eattr); say(" mps=");
+            hex32(@as(u32, cfg[i + 4]) | (@as(u32, cfg[i + 5]) << 8));
+            say(" ivl="); hex32(cfg[i + 6]); say("\n");
+            // collect interrupt-IN endpoints on ANY interface — the
+            // touchpad's finger stream may sit on a vendor-class EP.
+            if ((ea & 0x80) != 0 and et == 3 and n < cands.len) {
                 cands[n] = .{
-                    .iface = iface,
-                    .alt = alt,
-                    .addr = cfg[i + 2],
+                    .iface = iface, .alt = alt, .addr = ea,
                     .mps = @as(u32, cfg[i + 4]) | (@as(u32, cfg[i + 5]) << 8),
-                    .ival = cfg[i + 6],
-                    .protoIf = protoIf,
+                    .ival = cfg[i + 6], .protoIf = protoIf, .cls = cls,
                 };
                 n += 1;
             }
@@ -869,8 +880,14 @@ fn hidStageB(port: u32, slotId: i32, speed: u32) void {
             // SET_INTERFACE(alt) — standard req 0x0B bmRT=0x01 (activate
             // this alt setting so its endpoints stream).
             _ = ctrlXfer(0x01, 0x0B, c.alt, c.iface, 0, 0, false);
-            const pcc = ctrlXfer(0x21, 0x0B, proto, c.iface, 0, 0, false);
-            const idleCc = ctrlXfer(0x21, 0x0A, 0, c.iface, 0, 0, false);
+            // HID class requests only apply to class-3 interfaces —
+            // vendor-class touch EPs get armed+polled without them.
+            var pcc: i32 = 1;
+            var idleCc: i32 = 1;
+            if (c.cls == 3) {
+                pcc = ctrlXfer(0x21, 0x0B, proto, c.iface, 0, 0, false);
+                idleCc = ctrlXfer(0x21, 0x0A, 0, c.iface, 0, 0, false);
+            }
             say("xhci: try iface="); hex32(c.iface); say(" alt="); hex32(c.alt);
             say(" dci="); hex32(dci); say(" proto="); hex32(proto);
             say(" setproto_cc="); hex32i(pcc); say(" idle_cc="); hex32i(idleCc); say("\n");
