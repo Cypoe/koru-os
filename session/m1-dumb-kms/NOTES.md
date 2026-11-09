@@ -898,3 +898,11 @@ is on vendor EP / second function / endpoint 0x02.
 T590 oracle: 'xusb' -> full IF/EP map + per-candidate try/WINNER.
 If a vendor int-IN EP yields reports -> that's the touch stream.
 Ship ISO: dist/koru-xhciF-*.iso.
+
+## METHOD — Linux-driver-as-oracle for device bring-up
+When bare-metal HW bring-up stalls (device enumerated but silent), diff
+against the Linux kernel driver for that device — it is the protocol
+ground truth. trackpoint.c (TP_* commands over PS/2 aux), hid-elan.c
+(ELAN_TP_USB_INTF=1 -> touch data on USB iface 1, not 0; elan_i2c
+0x5d path = I2C-HID), elantech.c. Consult raw.githubusercontent.com/
+torvalds/linux/master/drivers/... before inventing a sequence.
