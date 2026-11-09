@@ -717,6 +717,23 @@ pub fn surfaceOffset() u32 {
     return pipe.surfaceOffset();
 }
 
+// vblankDebug — dump every candidate vblank register so T590's kstat
+// names which oracle actually latches on Ironlake: engine IIRs
+// (DE/SDE), the per-pipe IIR, raw ISR statuses, and PIPE_FRMCNT.
+pub fn vblankDebug() void {
+    if (!device().up) {
+        mmio.say("kms:vb i915 down — no regs\n");
+        return;
+    }
+    mmio.say("kms:vb DEISR="); mmio.sayHex(mmio.rd(R.DEISR));
+    mmio.say(" DEIIR="); mmio.sayHex(mmio.rd(R.DEIIR));
+    mmio.say(" SDEISR="); mmio.sayHex(mmio.rd(R.SDEISR));
+    mmio.say(" SDEIIR="); mmio.sayHex(mmio.rd(R.SDEIIR));
+    mmio.say(" IIR28="); mmio.sayHex(mmio.rd(R.IIR));
+    mmio.say(" FRMCNT="); mmio.sayHex(mmio.rd(R.PIPE_FRMCNT_A));
+    mmio.say("\n");
+}
+
 // VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).
 // Returns events seen — 0 means the IIR didn't latch (still reports the
 // flip committed; the scanout swap is visible regardless).

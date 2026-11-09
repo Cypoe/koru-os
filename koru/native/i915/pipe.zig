@@ -187,5 +187,15 @@ pub fn vblankPoll() u32 {
     if (s != 0) mmio.wr(R.DEIIR, s); // write-1-to-clear the serviced bits
     const s2 = mmio.rd(R.SDEIIR);
     if (s2 != 0) mmio.wr(R.SDEIIR, s2);
+    // PIPE_FRMCNT_A is the hardware vblank oracle that needs NO
+    // interrupt enables: it increments once per frame scanned out.
+    // DEIIR stayed 0 on T590 (Ironlake — engine IIR path unproven);
+    // the frame counter cannot lie. Delta -> synthetic event bit31.
+    const fc = mmio.rd(R.PIPE_FRMCNT_A);
+    if (fc != last_frcnt) {
+        last_frcnt = fc;
+        return s | s2 | 0x8000_0000;
+    }
     return s | s2;
 }
+var last_frcnt: u32 = 0;

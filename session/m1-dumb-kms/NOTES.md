@@ -1381,3 +1381,50 @@ unchanged (verified r6/r7).
 UNEXERCISED: real fragmented-RAM timing is T590-only by definition —
 but the mechanism is removed, not retimed: spawn can no longer call
 allocContiguous at all.
+
+## MC-1 COMPOSITOR LANDED on T590 (2026-11-09)
+
+Multi-window desktop working on real hardware: kwin spawns N windows
+(backing=pool O(1) alloc, ~16ms), drag effortless, click-to-raise
+works, damage-tracked compositing (rects=1 steady state, no flicker),
+keyboard+pointer live, console retained root layer survives windows.
+
+Bugs fixed this arc: 3.7s spawn stall (allocContiguous on fragmented
+RAM -> pre-allocated backing pool), dead vblank oracle (DEIIR never
+fires -> timeout-driven ~10fps pacing), CCB translation kill (mouse
+init garbage bit6 -> deterministic 0x47), console resize blank
+(surfaceSync + consoleRealloc + prompt redraw), frozen swapchain
+(flip_pending timeout fallback), keyboard decode (set-2 vs set-1
+tables via translation bit), dead keyboard (flip-alloc backoff +
+aux wedge drain).
+
+Remaining: vblank DEIIR reads 0 on T590 (frame pacing timeout-driven
+~10fps instead of 60Hz), MC-2 vblank-sync, MC-3 oshun backend.
+
+## MC-1r9 — vblank root cause: FRMCNT oracle + reg dump (2026-11-09)
+
+~10fps on T590 = timeout-paced flips (vb_raw=0, DEIIR never fires).
+Root-cause dig on Ironlake (regs.zig is libgfxinit GMA-era):
+
+- DEIIR/DEIMR/DEIER/SDE* are ENGINE-level interrupt regs; per-pipe
+  vblank lives elsewhere. regs.zig also has IIR=0x044028 (per-pipe
+  interrupt IIR) — vblank's likely real home — and
+  PIPE_FRMCNT_A=0x070040: the frame counter, which increments once
+  per scanned frame with ZERO interrupt enables required.
+- M2's 'vblank events delivered' was NEVER proof: stage() fires
+  unconditionally and runFlip discards vblankWait's count — a dead
+  IIR was structurally invisible until the swapchain needed it.
+
+Fix (pipe.zig): vblankPoll now ALSO reads PIPE_FRMCNT_A — delta vs
+last read returns synthetic event bit31. Hardware-guaranteed 60Hz
+pacing regardless of interrupt state; DEIIR/SDEIIR still OR'd in.
+kms.vblankDebug() dumps DEISR/DEIIR/SDEISR/SDEIIR/IIR28/FRMCNT —
+kstat prints it (guarded: 'i915 down' when !device().up).
+
+Expected T590: flips at ~60Hz (FRMCNT delta every frame), timeouts
+stop climbing, vb_raw shows bit31 synthetic events. If FRMCNT also
+reads static -> display engine truly not scanning -> deeper modeset
+issue (would contradict visible output, so unlikely).
+
+QEMU-VERIFIED (dist/koru-mc1r9-scene.iso): kstat prints stat block +
+'kms:vb i915 down — no regs' (guard prevents MMIO fault, no i915).

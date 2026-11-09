@@ -420,6 +420,7 @@ pub fn stat() void {
     }
     sayU("  front={d} dspsurf={x} pre_scanout={d}\n",
         .{ front orelse 99, kms.surfaceOffset(), pre_scanout orelse 999 });
+    kms.vblankDebug(); // candidate vblank regs — names the live oracle on HW
 }
 
 pub fn tick() void {
