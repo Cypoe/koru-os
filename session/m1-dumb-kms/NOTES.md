@@ -779,3 +779,34 @@ QEMU-xhci VERIFICATION (test build auto-ran init at boot, then reverted):
 Real-T590 oracle: flash koru-xhci5-*.iso, run 'xusb'. Expect both HID
 devices on ctrl 0:20.0 (ports ~6,8) -> two 'DEV port=N vid=.. pid=..'
 lines. If it hangs, the stage markers + per-port PORTSC dump localize it.
+
+## XHCI STAGE B — interrupt-IN HID reports (2026-11-09, commit 56ff9c3)
+
+Ported koru-desktop providers/usb-hid/app/hid.c into xhci.zig (field-for-
+field): ctrlXfer (generic ep0 control xfer, hid.c TRT/status-dir rules),
+parseConfig (HID iface class=3 + interrupt-IN EP + bConfigurationValue),
+ConfigureEP input ctx (add slot+ep dci; ep ctx type=7 intr-IN cerr=3 mps,
+dequeue|DCS->32-TRB ring, interval clamp 1..16), SET_CONFIGURATION, then a
+bounded report poll posting NORMAL TRB IOC|ISP -> repbuf, doorbell(slot,dci),
+eventWaitXfer, hex-dump per completion (one say = one UDP datagram).
+
+BUG FIX (QEMU-measured): every IOC'd control TRB posts its own T_XFER
+event (data stage, then status stage). eventWaitXfer ate only the first
+-> stale event corrupted next transfer's cc (cfg-hdr showed 0x0d). Now
+ctrlXfer consumes exactly (wlen?2:1) events, returns last (status) cc —
+hid.c's st_ptr semantics without depending on evtPtr (real HW puts it on
+an earlier stage TRB, commit 60300fc).
+
+QEMU-verified (koru-xhciBtest-20261109-0223.iso, auto-run build reverted
+after): qemu-xhci + usb-kbd(port4/slot1) + usb-tablet(port5/slot2).
+Both enumerate; ConfigureEP rc=slot-id (success); SET_CONFIGURATION cc=1;
+interrupt-IN completions cc=1. usb-kbd: 14 reports, repbuf[2]=keycodes
+0x04..0x0a = 'a'..'g' press/release — REAL HID DATA over interrupt-IN.
+NOTE: event st reads len=0 on QEMU interrupt completions (st=0x01000000)
+— repbuf bytes are the truth; len decode unreliable on QEMU, re-check on
+T590. usb-tablet window missed injection (0 reports) — kbd proved path.
+
+SHIP ISO: dist/koru-xhciB-20261109-0228.iso — proven pipeline + corrected
+MBR. Real-T590 oracle: 'xusb' -> Elan 0x04F3:0x2901 + Lite-On 0x04CA:0x7070
+expect RPT lines with report bytes on :47820 when TrackPoint/touchpad move.
+NEXT (Stage C): decode mouse buttons + X/Y deltas -> cursor.zig feed.
