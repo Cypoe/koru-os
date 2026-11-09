@@ -1495,3 +1495,23 @@ path never runs without KMS; no MMIO faults). ISO
 dist/koru-mc1rc-scene.iso MBR 8300020010000000010000009b790000.
 T590: kstat 2x ~1s apart — watch LGCIIR/LGCISR toggle at 60Hz;
 if it latches, wire flip gating to it for true 60fps.
+
+## MC-1rd — vb: telemetry on the automatic stream (2026-11-09)
+
+T590 UX constraint: kstat can't be run mid-drag. flipTick now emits
+a compact 'vb:' pair every 65536 ticks (~1s) via sayU (serial+UDP
+dual-write) whenever flip mode is live — unreachable when i915 is
+down (flipTick only runs under device().up + flipReady), so QEMU
+emits nothing and can't fault on MMIO.
+
+Line 1: vb DE= DI= SD= SI= I28= GT=  (DEISR DEIIR SDEISR SDEIIR
+IIR@0x44028 GTIIR@0x44018)
+Line 2: vb FR= PS= IM= IS= II= +f= pd= to=
+(FRMCNT@0x70040 PSTAT24@0x70024 LGC_IMR LGC_ISR LGCIIR@0x20840,
++f=flips-this-interval=real fps while dragging, pd=flip_pending,
+to=timeout_clears). Diff consecutive samples ~1s apart: whichever
+reg toggles at ~60Hz is the vblank oracle.
+
+QEMU-verified: boot clean; 'kms' fails on Bochs 1234:1111 as
+expected; no vb lines, no MMIO access. ISO
+dist/koru-mc1rd-scene.iso MBR 830002001000000001000000df790000.

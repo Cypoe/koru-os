@@ -58,6 +58,8 @@ var front: ?usize = null; // index of last flipSwapped buffer
 var flip_pending: bool = false; // a flip is armed, vblank not yet seen
 var armed_frm: u32 = 0; // FRMCNT at arm time — delta = flip landed at a frame boundary
 var vb_armed: bool = false;
+var vb_emit_n: u64 = 0;   // ticks since last vb: telemetry line
+var vb_last_flips: u64 = 0; // flip_count at last emit — +f delta = fps
 var last_gen: u64 = 0;
 var last_mode_was_flip: bool = false;
 var retry_n: u64 = 0;
@@ -343,6 +345,23 @@ fn waitFrameEdge() void {
 }
 
 fn flipTick() void {
+    // Periodic vblank telemetry on the automatic stream — T590 can't
+    // run kstat mid-drag, so the candidate regs ride every ~1s (65536
+    // ticks at ~15-30us shell rate). sayU dual-writes serial+UDP.
+    // Diff consecutive samples: whichever reg toggles at ~60Hz is the
+    // real vblank oracle. +f = flips this interval = real fps.
+    vb_emit_n += 1;
+    if (vb_emit_n >= (1 << 16)) {
+        vb_emit_n = 0;
+        const vr = kms.vblankRegs();
+        const df = flip_count - vb_last_flips;
+        vb_last_flips = flip_count;
+        sayU("vb DE={x} DI={x} SD={x} SI={x} I28={x} GT={x}\n",
+            .{ vr[0], vr[1], vr[2], vr[3], vr[4], vr[5] });
+        sayU("vb FR={x} PS={x} IM={x} IS={x} II={x} +f={d} pd={d} to={d}\n",
+            .{ vr[6], vr[7], vr[8], vr[9], vr[10], df,
+               @intFromBool(flip_pending), timeout_clears });
+    }
     // vblank oracle FIRST: any latched DE event means >=1 vblank passed
     // since the last drain — an armed flip has landed, the old front is
     // safe to paint again. Timeout fallback: if DEIIR never latches
