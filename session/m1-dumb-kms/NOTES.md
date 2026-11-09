@@ -1428,3 +1428,21 @@ issue (would contradict visible output, so unlikely).
 
 QEMU-VERIFIED (dist/koru-mc1r9-scene.iso): kstat prints stat block +
 'kms:vb i915 down — no regs' (guard prevents MMIO fault, no i915).
+
+## MC-1ra — revert FRMCNT oracle, extend vblank probe (2026-11-09)
+
+r9 regression: PIPE_FRMCNT_A delta detected frames but committed
+flips mid-scan -> SCREEN TEARING (worse than r8's ~10fps timeout
+stutter). Frame counting proves scanout runs but gives no vblank
+INSTANT — reverted vblankPoll to DEIIR|SDEIIR only; present.zig's
+2048-tick timeout pacing is the stable baseline again.
+
+vblankDebug extended: now also dumps PSTAT24=mmio.rd(0x70024)
+(PIPEASTAT_A — ILK bit1=vblank/bit0=MPU, the classic per-pipe status
+regs.zig lacks) and GTIIR=0x44018 (third interrupt engine). kstat
+prints all candidates — T590 names which register actually moves
+during scanout. Next iteration wires flip gating to the live one.
+
+QEMU: build clean; code path = r8-verified timeout pacing + read-only
+debug reads (i915-down guarded). ISO dist/koru-mc1ra-scene.iso,
+MBR 830002001000000001000000a3790000.

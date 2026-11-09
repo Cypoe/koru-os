@@ -187,15 +187,11 @@ pub fn vblankPoll() u32 {
     if (s != 0) mmio.wr(R.DEIIR, s); // write-1-to-clear the serviced bits
     const s2 = mmio.rd(R.SDEIIR);
     if (s2 != 0) mmio.wr(R.SDEIIR, s2);
-    // PIPE_FRMCNT_A is the hardware vblank oracle that needs NO
-    // interrupt enables: it increments once per frame scanned out.
-    // DEIIR stayed 0 on T590 (Ironlake — engine IIR path unproven);
-    // the frame counter cannot lie. Delta -> synthetic event bit31.
-    const fc = mmio.rd(R.PIPE_FRMCNT_A);
-    if (fc != last_frcnt) {
-        last_frcnt = fc;
-        return s | s2 | 0x8000_0000;
-    }
+    // NOTE: PIPE_FRMCNT_A delta was tried as a vblank oracle — it
+    // proved frames scan but fires at the wrong phase, so flipSwap
+    // committed mid-scan and the panel tore (worse than the ~10fps
+    // timeout stutter). Reverted: frame counting can't time commits.
+    // Timeout pacing in present.zig is the stable baseline until a
+    // REAL vblank status register is identified on this Ironlake.
     return s | s2;
 }
-var last_frcnt: u32 = 0;

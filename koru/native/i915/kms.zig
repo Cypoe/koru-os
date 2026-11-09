@@ -731,6 +731,11 @@ pub fn vblankDebug() void {
     mmio.say(" SDEIIR="); mmio.sayHex(mmio.rd(R.SDEIIR));
     mmio.say(" IIR28="); mmio.sayHex(mmio.rd(R.IIR));
     mmio.say(" FRMCNT="); mmio.sayHex(mmio.rd(R.PIPE_FRMCNT_A));
+    // Per-pipe vblank candidates (literal offsets — regs.zig lacks
+    // PIPEASTAT): 0x70024 = PIPEASTAT_A (ILK: bit1=vblank, bit0=MPU),
+    // 0x44018 = GTIIR (GT-engine IIR — third interrupt engine).
+    mmio.say(" PSTAT24="); mmio.sayHex(mmio.rd(0x70024));
+    mmio.say(" GTIIR="); mmio.sayHex(mmio.rd(R.GTIIR));
     mmio.say("\n");
 }
 
