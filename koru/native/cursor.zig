@@ -31,6 +31,9 @@ const XOR: u32 = 0x00FFFFFF; // white XOR — inverts whatever is beneath
 
 var cx: i32 = 0;
 var cy: i32 = 0;
+var ox: i32 = 0; // last DRAWN pos — hide must erase here, not at cx,cy
+var oy: i32 = 0;
+var tick_n: u64 = 0;
 var init_d: bool = false;
 var shown: bool = false;
 var enabled: bool = false;
@@ -106,20 +109,19 @@ fn drawSprite(x: i32, y: i32) void {
 
 fn hideSprite() void {
     if (!shown) return;
-    drawSprite(cx, cy); // XOR again = erase
+    drawSprite(ox, oy); // XOR again = erase — at the DRAWN pos
     shown = false;
 }
 
 // Centre the cursor on the current surface and arm it.
-// M4 diagnostic: sprite is FORCED to a fixed corner (50,50) so a static
-// arrow on-panel proves the draw path reaches the visible surface even if
-// no mouse packets ever stream. Motion still moves it if packets arrive.
+// The sprite is composited by tick() every redraw — enable just parks
+// the logical position at screen centre and lets the first tick paint.
 pub fn enable() void {
     const d = fb.cursorDims();
     if (!d.live) return;
     ensureInput(); // lazy interrupt+aux bring-up (shell path skips doFull)
-    cx = 50;
-    cy = 50;
+    cx = @as(i32, @intCast(d.w / 2)) - @as(i32, @intCast(SPR_W / 2));
+    cy = @as(i32, @intCast(d.h / 2)) - @as(i32, @intCast(SPR_H / 2));
     enabled = true;
     init_d = true;
     // UDP markers split the two failure modes:
@@ -138,9 +140,11 @@ pub fn enable() void {
     if (dg.packets != 0) net.mark("cursor:pkts=live") else net.mark("cursor:pkts=0");
     hideSprite();
     drawSprite(cx, cy);
+    ox = cx;
+    oy = cy;
     shown = true;
     drawn_gen = fb.generation();
-    net.mark("cursor:sprite@50,50");
+    net.mark("cursor:sprite");
     net.mark("cursor: enabled");
 }
 
@@ -175,43 +179,36 @@ pub fn tick() bool {
         pkt_marked = true;
         net.mark("mouse:streaming");
     }
-    // Surface generation: a kms modeset/flip repoints fb_base and frees
-    // the old buffer — the sprite can't be XOR-erased on a surface that
-    // no longer exists, so redraw fresh on the live one (even with no
-    // motion this tick). Without this the cursor drew into freed pmm
-    // frames after 'kflip'/'kdmabuf' — invisible on the T590 panel.
-    const g = fb.generation();
-    if (g != drawn_gen) {
-        const d0 = fb.cursorDims();
-        if (d0.live) {
-            const mx = @as(i32, @intCast(d0.w)) - @as(i32, SPR_W);
-            const my = @as(i32, @intCast(d0.h)) - @as(i32, SPR_H);
-            if (cx > mx) cx = mx;
-            if (cy > my) cy = my;
-            if (cx < 0) cx = 0;
-            if (cy < 0) cy = 0;
-            shown = false; // old surface is gone — nothing to erase
-            drawSprite(cx, cy);
-            shown = true;
-        }
-        drawn_gen = g;
-    }
-    if (!moved) return false;
     const d = fb.cursorDims();
     if (!d.live) return false;
+    const g = fb.generation();
+    const stale = g != drawn_gen;
+    drawn_gen = g;
+    if (stale) shown = false; // old surface may be freed — nothing to erase
     const maxX = @as(i32, @intCast(d.w)) - @as(i32, SPR_W);
     const maxY = @as(i32, @intCast(d.h)) - @as(i32, SPR_H);
     if (cx < 0) cx = 0;
     if (cy < 0) cy = 0;
     if (cx > maxX) cx = maxX;
     if (cy > maxY) cy = maxY;
-    hideSprite();
-    drawSprite(cx, cy);
-    shown = true;
+    // Re-assert the sprite: erase at the last DRAWN pos (ox,oy — NOT the
+    // just-updated cx,cy: hiding at the new pos XOR-cancelled the draw,
+    // which is why the T590 arrow never appeared), then draw at the
+    // current one. Runs on motion, on surface swap, and every 32nd idle
+    // tick so console text printed under the sprite heals.
+    tick_n += 1;
+    const redraw = moved or stale or !shown or (tick_n & 31) == 0;
+    if (redraw) {
+        if (shown) drawSprite(ox, oy); // XOR-erase at last drawn pos
+        drawSprite(cx, cy);
+        ox = cx;
+        oy = cy;
+        shown = true;
+    }
     // UDP mirror on a stride + always the first motion so the oracle sees
     // the cursor alive immediately without flooding the listener.
-    if (moves == 1 or moves % 16 == 0) net.mark("cursor: move");
-    return true;
+    if (moved and (moves == 1 or moves % 16 == 0)) net.mark("cursor: move");
+    return moved;
 }
 
 // One-line status for the shell 'mouse' command — full diagnostic:

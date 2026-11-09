@@ -399,9 +399,23 @@ pub fn init() void {
     sayU("mouse: 8042 selftest={d}\n", .{st_selftest});
 
     // STEP 2 — read CCB (0x20): the controller's aux gating as found.
-    kbd.drainOut();
-    kbd.ctlWrite(0x20);
-    st_ccb = readResp();
+    // Validated: a legal CCB has bits 7 and 3 clear. A scancode or aux
+    // byte beating the reply would be misread as the CCB — and writing
+    // it back can set bit4 (kbd clock inhibit), which is exactly how the
+    // T590 keyboard died after 'mouse'. Invalid replies are retried;
+    // readResp already routed any real scancode to kbd.feedByte.
+    var ccb: u8 = 0xEE;
+    var ctries: u32 = 0;
+    while (ctries < 3) : (ctries += 1) {
+        kbd.drainOut();
+        kbd.ctlWrite(0x20);
+        const r = readResp();
+        if ((r & 0x88) == 0) {
+            ccb = r;
+            break;
+        }
+    }
+    st_ccb = ccb;
     sayU("mouse: CCB={d}\n", .{st_ccb});
 
     // STEP 3 — pulse the aux channel: 0xA7 disable / 0xA8 enable. These
@@ -413,13 +427,29 @@ pub fn init() void {
     kbd.drainOut();
     sayU("mouse: aux pulse A7/A8 auxen={d}\n", .{st_auxen});
 
-    // STEP 4 — CCB write 0x60: bit1 aux-IRQ on, bit5 aux-clk-off cleared.
-    var ccb = st_ccb;
-    if (ccb == 0xEE) ccb = 0x45; // sane default if the read timed out
-    ccb |= 0x02;
-    ccb &= ~@as(u8, 0x20);
+    // STEP 4 — CCB write 0x60: bit1 aux-IRQ on; bits 4+5 (kbd/aux clock
+    // inhibits) FORCED OFF — the sanitize means even a garbage CCB read
+    // can never write bit4=1 back and kill the keyboard (the T590
+    // regression). bit0 kbd-IRQ, bit6 translation, bit2 system stay
+    // exactly as read. 0xF6/TP commands below are all auxSendByte —
+    // each carries its own 0xD4 prefix, nothing reaches the kbd.
+    var cw: u8 = if ((ccb & 0x88) != 0) 0x45 else ccb; // invalid -> sane base
+    cw |= 0x02;
+    cw &= ~@as(u8, 0x30);
     kbd.ctlWrite(0x60);
-    kbd.dataWrite(ccb);
+    kbd.dataWrite(cw);
+    // readback verify — the write must land with the kbd clock enabled.
+    // bit4 still set means the controller refused/misread: retry once
+    // with a fully-known-good CCB (kbd+aux irq, system, translate).
+    kbd.drainOut();
+    kbd.ctlWrite(0x20);
+    const wb = readResp();
+    sayU("mouse: ccb wr={x} rb={x}\n", .{ cw, wb });
+    if ((wb & 0x10) != 0) {
+        kbd.ctlWrite(0x60);
+        kbd.dataWrite(0x47);
+        say("mouse: ccb bit4 stuck — rewrote 0x47\n");
+    }
 
     // STEP 5 — RESET_DIS 0xF6: reset the device and hold reporting off
     // while we interrogate it (Linux psmouse_probe's second command —
