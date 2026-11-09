@@ -168,16 +168,24 @@ pub const DE_IIR = R.DEIIR;
 
 // Unmask display-engine vblank + plane-flip-done interrupts.
 pub fn vblankEnable() void {
-    // DEIMR is active-low on SKL (0 = unmasked). Enable the vblank +
-    // flip sources for pipe A: bits are per-source; setting the mask to
-    // 0 unmasks everything the IIR can report — we then filter by which
-    // bits actually toggle. Conservative: unmask all, we only READ IIR.
+    // The DE*/SDE* interrupt quartets are ISR(status)/IMR(mask, active-
+    // low)/IIR(identity, write-1-clear)/IER(enable, active-high).
+    // vblankEnable historically wrote ONLY DEIMR=0 — on T590 (Ironlake,
+    // NOT the SKL the comments assumed) DEIER reads back 0, so no
+    // source was ever enabled and DEIIR stayed 0 forever (kstat
+    // vb_raw=0). Enable BOTH engines' IERs and unmask both IMRs; we
+    // only READ the IIRs so extra sources are harmless noise bits.
     mmio.wr(R.DEIMR, 0);
+    mmio.wr(R.DEIER, 0xFFFF_FFFF);
+    mmio.wr(R.SDEIMR, 0);
+    mmio.wr(R.SDEIER, 0xFFFF_FFFF);
 }
 
 // Read + clear the display-engine interrupt status. Returns raw IIR.
 pub fn vblankPoll() u32 {
     const s = mmio.rd(R.DEIIR);
     if (s != 0) mmio.wr(R.DEIIR, s); // write-1-to-clear the serviced bits
-    return s;
+    const s2 = mmio.rd(R.SDEIIR);
+    if (s2 != 0) mmio.wr(R.SDEIIR, s2);
+    return s | s2;
 }

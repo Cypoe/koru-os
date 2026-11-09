@@ -38,7 +38,7 @@ const MAX_FLIP_FAILS: u32 = 12;
 // engine applies each DSPASURF at vblank regardless, so a timed-out
 // re-arm still produces live (if tear-prone) flips instead of a
 // frozen frame.
-const FLIP_TIMEOUT_TICKS: u64 = 1 << 17;
+const FLIP_TIMEOUT_TICKS: u64 = 2048; // ~16-60ms at shell-loop rates — the pacer while DEIIR is unproven
 var flip_age: u64 = 0; // ticks since flip_pending armed
 var timeout_clears: u64 = 0;
 var last_vblank_raw: u32 = 0; // last DEIIR read — kstat oracle

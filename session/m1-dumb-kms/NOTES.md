@@ -1256,3 +1256,37 @@ alive, vb_raw nonzero + timeouts=0; if dead, timeouts climb and
 flips continue tear-prone. If flips STILL frozen with timeouts
 climbing, DSPASURF flips aren't applying -> next suspect is the
 atomic-commit property path vs legacy surface write.
+
+## MC-1r5 fix — DEIER never enabled + flip pacer too slow (2026-11-09)
+
+T590 kstat decode: vb_raw=0 (DEIIR dead), flips=3 timeouts=2,
+acc.n=1, px=console bg. Two real bugs:
+
+1. VBLANK ORACLE DEAD — regs.zig is libgfxinit IRONLAKE-era
+   (GMA/*_ILK suffixes); T590 is Arrandale/ILK not SKL as comments
+   assumed. The DE*/SDE* interrupt quartets are
+   ISR/IMR(active-low)/IIR(w1c)/IER(active-high). vblankEnable()
+   historically wrote ONLY DEIMR=0 — DEIER stayed 0 -> no source
+   enabled -> DEIIR reads 0 forever. M2 'worked' because
+   flipCommit's DSPASURF flip needs no IIR and runFlip DISCARDS
+   vblankWait's count; the 'vblank events delivered' stage() fires
+   unconditionally. Fix: vblankEnable now writes DEIMR=0 +
+   DEIER=0xFFFFFFFF + SDEIMR=0 + SDEIER=0xFFFFFFFF (both display
+   engines); vblankPoll reads+clears DEIIR|SDEIIR and ORs them.
+
+2. FLIP PACER — FLIP_TIMEOUT_TICKS was 1<<17 (~seconds at shell-loop
+   rates) -> flips=3 in a whole session -> typed chars waited
+   seconds for a composite -> 'invisible until Enter'. Now 2048
+   ticks (~16-60ms -> 15-60fps degrade while DEIIR unproven).
+
+   PER-KEYSTROKE DAMAGE WAS NEVER MISSING: handle->text.putc->
+   fillS(cell)->s.damage=comp.sceneDamage fires every char; glyph
+   pixels ride the same cell rect. acc.n=1 is Acc merge (a line of
+   echo unions to one rect) — expected, not a bug. Verified by
+   inspection + QEMU echo path.
+
+QEMU-VERIFIED (dist/koru-mc1r5-scene.iso): boot->kstat->echo->
+consmall->conresize->echo all render; serial markers clean.
+UNEXERCISED: DEIER/IER path + flip cadence are i915-only — T590
+debut. kstat now shows: vb_raw!=0 + timeouts=0 if IER fix lands;
+flips count = real frame rate either way.
