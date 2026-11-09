@@ -1541,3 +1541,36 @@ smear-not-ghosts). cursor motion needs TrackPoint — QEMU can't
 reproduce trails; verified no-regression only (boot/kwin/kstat).
 
 ISO dist/koru-mc1re-scene.iso MBR 830002001000000001000000df790000.
+
+## KNOWN-JANK — compositor sluggishness ledger (2026-11-09)
+
+Documented so the return is surgical. ~55fps FRMCNT-edge-aligned
+flips CONFIRMED on T590; cursor trails match macOS behavior
+(hardware cursor plane updates at its own cadence); MC-1 landed.
+
+CHEAP FIXES:
+- (a) waitFrameEdge spin adds up to ~16ms latency/flip —
+  present.zig flipTick():262144-iteration MMIO poll for the next
+  PIPE_FRMCNT_A increment, run INSIDE the shell loop (blocks input
+  polling). Tighten the detect->commit window or move the wait
+  off the critical path.
+- (b) vb:/kstat register reads are debug overhead in the hot path —
+  present.zig flipTick() emits a 2-line sayU dump every 65536 ticks
+  (~1s) while flip mode is live; vblankRegs() does 11 MMIO reads.
+  Gate behind a flag once the vblank oracle is settled.
+- (c) damage coalescing could be smarter during fast drag —
+  comp.zig Acc.add merges touching rects but fast flicks produce
+  disjoint rects -> MAX_DMG=32 overflow -> acc.full -> full
+  1920x1080 composite every flip (the drag-smear suspect).
+
+STRUCTURAL GAPS:
+- (a) CPU-only compositing — no GPU render engine; i915 display
+  engine does scanout/flips only, no 3D/render path.
+- (b) no hardware cursor plane — planes[1] sprite exists unwired
+  in the i915 object model; wiring it would kill trails AND free
+  the CPU sprite pass entirely.
+- (c) no real vblank IRQ — every probed register reads 0 on T590:
+  DEISR DEIIR SDEISR SDEIIR IIR28(0x44028) GTIIR(0x44018)
+  PSTAT24/PIPEASTAT_A(0x70024) LGC_IMR/LGC_ISR/LGC_IIR
+  (0x20820/0x20830/0x20840, enabled via LGC_IMR=0xFFFF0000).
+  PIPE_FRMCNT_A edge-align is the ceiling at ~55fps.
