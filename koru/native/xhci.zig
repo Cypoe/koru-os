@@ -321,12 +321,12 @@ fn xcmd(p: u64, st: u32, ctl: u32) i32 {
 
 // GET_DESCRIPTOR(Device) on ep0's transfer ring. bufPhys = DMA buf (18B).
 // returns completion code (1 = success) or -1.
-fn ep0GetDesc(bufPhys: u64) i32 {
+fn ep0GetDescG(wval: u64, widx: u64, bufPhys: u64, len: u32) i32 {
     var setup: u64 = 0;
     // bmRT=0x80, bReq=6 GET_DESCRIPTOR, wValue=0x0100 (device), wIndex=0,
     // wLength=18.
     setup = @as(u64, 0x80) | (@as(u64, 6) << 8) |
-        (@as(u64, 0x0100) << 16) | (@as(u64, 18) << 48);
+        (wval << 16) | (widx << 32) | (@as(u64, len) << 48);
     const t0 = &ep0Ring.trbs[ep0Ring.enq];
     t0.p_lo = @truncate(setup);
     t0.p_hi = @truncate(setup >> 32);
@@ -336,7 +336,7 @@ fn ep0GetDesc(bufPhys: u64) i32 {
     const t1 = &ep0Ring.trbs[ep0Ring.enq];
     t1.p_lo = @truncate(bufPhys);
     t1.p_hi = @truncate(bufPhys >> 32);
-    t1.st = 18;
+    t1.st = len;
     t1.ctl = ttype(T_DATA) | (1 << 16) | TIOC | ep0Ring.pcs; // DIR=in
     ep0Ring.enq += 1;
     const t2 = &ep0Ring.trbs[ep0Ring.enq];
@@ -356,6 +356,8 @@ fn ep0GetDesc(bufPhys: u64) i32 {
     say("xhci: xfer cc="); hex32(@intCast(cc)); say(" evtPtr="); hex64(lastEvtPtr); say("\n");
     return cc;
 }
+
+fn ep0GetDesc(bufPhys: u64) i32 { return ep0GetDescG(0x0100, 0, bufPhys, 18); }
 
 var ep0Ring: Ring = undefined;
 var ep0RingPhys: u64 = 0;
@@ -599,6 +601,7 @@ fn probeDev(d: *const pci.Device) u32 {
         say(" pid="); hex32(pid); say(" len="); hex32(buf[0]); say("\n");
         stage("xhci: device identified");
         found += 1;
+        enumHid(port, slotId);
     }
     if (found == 0) {
         stage("xhci: no devices enumerated");
@@ -607,6 +610,44 @@ fn probeDev(d: *const pci.Device) u32 {
         stage("xhci: ==== ENUM DONE ====");
     }
     return found;
+}
+
+// ---- STAGE A: HID descriptor enumeration ----------------------------------
+fn enumHid(port: u32, slotId: i32) void {
+    _ = port; _ = slotId;
+    // config descriptor (type 2) up to 255 bytes into a scratch page
+    const cfgPhys = allocPage() orelse return;
+    const cc = ep0GetDescG(0x0200, 0, cfgPhys, 255);
+    if (cc != 1) { say("xhci: cfgdesc cc="); hex32(@intCast(cc)); say("\n"); return; }
+    const cfg: [*]u8 = @ptrFromInt(@as(usize, @intCast(cfgPhys)));
+    const total = @as(usize, cfg[2]) | (@as(usize, cfg[3]) << 8);
+    say("xhci: cfg total="); hex32(@intCast(total)); say("\n");
+    var pos: usize = cfg[0]; // skip config header (9 bytes)
+    while (pos + 2 <= total and pos + 2 <= 255) {
+        const bl = cfg[pos];
+        const bt = cfg[pos + 1];
+        if (bl < 2) break;
+        if (bt == 4) { // interface
+            say("xhci: IF num="); hex32(cfg[pos+2]);
+            say(" alt="); hex32(cfg[pos+3]);
+            say(" nep="); hex32(cfg[pos+4]);
+            say(" class="); hex32(cfg[pos+5]);
+            say(" sub="); hex32(cfg[pos+6]);
+            say(" proto="); hex32(cfg[pos+7]); say("\n");
+        } else if (bt == 5) { // endpoint
+            say("xhci: EP addr="); hex32(cfg[pos+2]);
+            say(" attr="); hex32(cfg[pos+3]);
+            say(" mps="); hex32(@as(u32,cfg[pos+4]) | (@as(u32,cfg[pos+5])<<8));
+            say(" ivl="); hex32(cfg[pos+6]); say("\n");
+        } else if (bt == 0x21) { // HID
+            say("xhci: HID ver="); hex32(@as(u32,cfg[pos+2])|(@as(u32,cfg[pos+3])<<8));
+            say(" ndesc="); hex32(cfg[pos+5]);
+            // report descriptor length at +7/+8 if present
+            say(" rdlen="); hex32(@as(u32,cfg[pos+7])|(@as(u32,cfg[pos+8])<<8)); say("\n");
+        }
+        pos += bl;
+    }
+    stage("xhci: config parsed");
 }
 
 // ---- entry: probe every XHCI controller -------------------------------------

@@ -9,10 +9,10 @@ Building executable...
 ✓ Generated output_emitted.zig (29575 bytes)
 ✗ Compilation failed
 Error: error: undefined symbol: _koruos_fb_fill
-    note: referenced by .zig-cache/tmp/3b94895f35e7347a/a_zcu.o:_output_emitted.koru_koruos.koru_fb.fill_event.__koru_handler_impl
+    note: referenced by .zig-cache/tmp/950973608fd1808f/a_zcu.o:_output_emitted.koru_koruos.koru_fb.fill_event.__koru_handler_impl
 error: undefined symbol: _koruos_fb_info
-    note: referenced by .zig-cache/tmp/3b94895f35e7347a/a_zcu.o:_output_emitted.koru_koruos.koru_fb.info_event.handler
+    note: referenced by .zig-cache/tmp/950973608fd1808f/a_zcu.o:_output_emitted.koru_koruos.koru_fb.info_event.handler
 error: undefined symbol: _koruos_fb_present
-    note: referenced by .zig-cache/tmp/3b94895f35e7347a/a_zcu.o:_output_emitted.koru_koruos.koru_fb.present_event.__koru_handler_impl
+    note: referenced by .zig-cache/tmp/950973608fd1808f/a_zcu.o:_output_emitted.koru_koruos.koru_fb.present_event.__koru_handler_impl
 
 ✗ Backend execution failed
