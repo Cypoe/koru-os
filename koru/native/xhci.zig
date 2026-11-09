@@ -786,7 +786,7 @@ fn hidStageB(port: u32, slotId: i32, speed: u32) void {
     const ic: *InputCtx = @ptrFromInt(@as(usize, @intCast(icPhys)));
     ic.ctrl.d[1] = 1 | (@as(u32, 1) << @as(u5, @intCast(dci)));
     ic.slot.d[0] = dci << 27;
-    // interrupt-IN transfer ring (32 TRBs) + 4 rotating 1KB report bufs
+    // interrupt-IN transfer ring (32 TRBs) + 8 rotating 512B report bufs
     const intPhys = allocPage() orelse return;
     var intRing: Ring = undefined;
     ringInit(&intRing, intPhys, 32);
@@ -830,6 +830,20 @@ fn hidStageB(port: u32, slotId: i32, speed: u32) void {
     }
     stage("xhci: endpoint configured");
 
+    // OUTPUT device-context readback — did the HC actually mark this
+    // endpoint Running? dcbaa[slot] -> DevCtx (slot ctx @0 + ep ctxs
+    // @1..31); our endpoint is index dci. EP state = d[0]&7
+    // (0=Disabled 1=Running 2=Halted 3=Stopped per spec 6.2.3).
+    // This is the direct answer to "is the endpoint armed".
+    {
+        const dcp: [*]volatile Ctx32 = @ptrFromInt(@as(usize, @intCast(dcbaa[@intCast(slotId)])));
+        const oc = &dcp[@intCast(dci)];
+        say("xhci: outctx dci="); hex32(dci); say(" epstate="); hex32(oc.d[0] & 7);
+        say(" d0="); hex32(oc.d[0]); say(" d1="); hex32(oc.d[1]);
+        say(" dq="); hex64((@as(u64, oc.d[3]) << 32) | oc.d[2]);
+        say(" d4="); hex32(oc.d[4]); say("\n");
+    }
+
     // SET_CONFIGURATION — hid.c: bmRT=0 req=9 wVal=cfgVal, no data stage
     const scc = ctrlXfer(0x00, 9, e.cfgVal, 0, 0, 0, false);
     say("xhci: set-config "); hex32(e.cfgVal); say(" cc="); hex32i(scc); say("\n");
@@ -848,13 +862,15 @@ fn hidStageB(port: u32, slotId: i32, speed: u32) void {
     say("xhci: set-idle cc="); hex32i(idleCc); say("\n");
     stage("xhci: configured — polling interrupt-IN");
 
-    // interrupt report loop — 4 rotating 1KB buffers so a queued TD
-    // never overwrites a report we haven't consumed. Each event's TRB
-    // pointer names the buffer that completed. Prime 4 TDs, then re-arm
-    // the freed buffer per event; re-ring the doorbell on idle timeouts
-    // in case the HC dropped the endpoint's armed state.
-    const NBUF: usize = 4;
-    const BSZ: usize = 1024;
+    // interrupt-IN report loop. For interrupt-IN the host queues NAK'd
+    // TDs that the HC completes when the device has data — a NAK does
+    // NOT disarm a TD (it retries per endpoint interval), so the armed
+    // queue persists; we re-queue only the slot each completion frees
+    // (hid.c post_report_trb per poll). Prime NBUF TDs + doorbell once;
+    // per event re-arm freed buffer + re-ring; per idle timeout re-ring
+    // the doorbell so the HC re-scans the ring (insurance).
+    const NBUF: usize = 8;
+    const BSZ: usize = 512;
     var primed: usize = 0;
     while (primed < NBUF) : (primed += 1) {
         const bp = repBase + primed * BSZ;
@@ -862,14 +878,18 @@ fn hidStageB(port: u32, slotId: i32, speed: u32) void {
         ringPush(&intRing, repPhys + primed * BSZ, rptLen,
             ttype(T_NORMAL) | TIOC | T_ISP);
     }
+    say("xhci: armed tdq="); dec(NBUF); say(" dci="); hex32(dci);
+    say(" db=slot"); dec(@intCast(slotId)); say(":"); hex32(dci); say("\n");
     doorbell(@intCast(slotId), @intCast(dci));
     evtTrace = true;
     var reports: usize = 0;
     var polls: usize = 0;
     var errs: usize = 0;
+    var rearm: usize = 0;
     while (polls < 160 and reports < 48) : (polls += 1) {
         const cc = eventWaitXfer();
         if (cc < 0) {
+            doorbell(@intCast(slotId), @intCast(dci)); // keep ep kicked
             // heartbeat every 32 idle polls — proves the loop is alive
             // and shows whether the port/device is still enabled.
             if (polls % 32 == 31) {
@@ -900,11 +920,12 @@ fn hidStageB(port: u32, slotId: i32, speed: u32) void {
               rb[0], rb[1], rb[2], rb[3],
               rb[4], rb[5], rb[6], rb[7] }) catch return;
         say(s.ptr);
-        // re-arm the buffer that just completed
+        // re-arm the buffer that just completed (hid.c post_report_trb)
         @memset(rb[0..BSZ], 0);
         ringPush(&intRing, repPhys + bidx * BSZ, rptLen,
             ttype(T_NORMAL) | TIOC | T_ISP);
         doorbell(@intCast(slotId), @intCast(dci));
+        rearm += 1;
         if (cc == 1) {
             reports += 1;
             errs = 0;
@@ -918,7 +939,7 @@ fn hidStageB(port: u32, slotId: i32, speed: u32) void {
     }
     evtTrace = false;
     say("xhci: report-poll done reports="); dec(reports);
-    say(" polls="); dec(polls); say("\n");
+    say(" polls="); dec(polls); say(" rearm="); dec(rearm); say("\n");
     stage("xhci: hid reports done");
 }
 
