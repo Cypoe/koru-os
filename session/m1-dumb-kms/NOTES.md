@@ -1349,3 +1349,35 @@ screen (5580 px diff). Click-raise pixel-verify INCONCLUSIVE — QEMU
 mouse_move is relative from unknown cursor start, couldn't land on
 the 28px window strip reliably; raise path verified by inspection
 (z-change => damage => composite resolves new order).
+
+## MC-1r8 fix — 3.7s spawn stall: window backing pool (2026-11-09)
+
+T590 spawn marker exposed it: us alloc=3720366 — pmm.allocContiguous
+(63 pages) on RAM fragmented by 2x8MB scene dumbs + 2x8MB flip dumbs +
+8MB console = seconds-long bitmap scan INSIDE the shell loop -> frozen
+mouse+kbd, post-stall drag-state corruption. Window backings are
+CPU-composited only (display engine never scans them) — they need
+VA-contiguous memory, NOT physically-contiguous pages and NOT
+GTT/dmabuf mapping (the dmabuf path was pure overhead + same stall).
+
+Fix (win.zig + shell.zig):
+- win.poolInit() at shell init (after consoleUp, BEFORE any kms
+  command): ONE pmm.allocContiguous(500 pages)=2MB run + mmio.map,
+  sliced into MAX_WIN=8 backings of 320x200x4=256000B each.
+- spawn() = O(1) pool_free slice handout — no allocContiguous, no
+  dmabufCreate, no GTT writes, EVER. kind="pool" in marker.
+- freeWin returns the slice to pool_free — close/reopen reuses.
+- pool down/exhausted -> named refusal, never silent fallback.
+- kms import dropped from win.zig (no display-side consumer exists).
+
+Drag-after-spawn: the stall itself is gone (handout ~ns) — the
+press-edge/drag-arm desync was stall-induced (motion burst post-
+freeze), not a logic bug; no comp changes needed.
+
+QEMU-VERIFIED (dist/koru-mc1r8-scene.iso): 'backing pool up
+320x200B x8' at boot; spawn alloc=14us/18us/0us (was 3.7s-class on
+T590); kwclose->kwin respawn reuses slice cleanly. Drag path
+unchanged (verified r6/r7).
+UNEXERCISED: real fragmented-RAM timing is T590-only by definition —
+but the mechanism is removed, not retimed: spawn can no longer call
+allocContiguous at all.

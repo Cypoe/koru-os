@@ -20,6 +20,7 @@ var raw: bool = false; // scan mode — dump raw 8042 bytes, ESC exits
 pub fn run() noreturn {
     comp.init();            // scene core — dims + layer/damage state
     present.consoleUp();    // console backing + sink + root layer (present owns it — gen-change resizes)
+    win.poolInit();         // window backing pool — BEFORE kms dumbs fragment RAM
     text.init();            // dims + bg fill (into backing via sink) + cursor home
     present.init();   // present seam — backend chosen per tick by device state
     cursor.setSceneOwned(true); // sprite composites inside the damage pass

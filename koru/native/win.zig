@@ -1,7 +1,7 @@
 // koru/native/win — the "kwin" window PRODUCER for the scene core.
 //
 // MC-1: N windows, not one. Each window is a producer-owned backing
-// (dmabuf when the i915 device is up, pmm otherwise — kind named in the
+// (backing = pre-allocated pool slice — CPU-composited, never scanned).
 // marker, never silent) painted once with chrome (border + titlebar +
 // label + body), then registered with comp as a .window layer. The
 // compositor owns geometry/z/focus/drag through the placement
@@ -24,7 +24,7 @@ const mmio = @import("mmio");
 const net = @import("net");
 const text = @import("text.zig");
 const comp = @import("comp");
-const kms = @import("i915/kms.zig");
+// (i915/kms not imported — window backings are CPU-side pool slices)
 
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
 extern var stdout: ?*anyopaque;
@@ -51,14 +51,41 @@ const WinObj = struct {
     handle: i32 = -1, // comp layer handle (stable slot)
     buf: [*]volatile u32 = undefined,
     pitch: u32 = 0, // pixels per row
-    tok: ?u32 = null,
-    pphys: u64 = 0,
-    ppages: usize = 0,
+    pool_i: i32 = -1, // backing-pool slice index, -1 = none
     last_focus: bool = false,
 };
 var wins = [_]WinObj{.{}} ** MAX_WIN;
 var spawned: u64 = 0;
 var closed: u64 = 0;
+
+// Window backing pool — allocated ONCE at shell init, before 'kms'
+// dumbs fragment RAM. Window backings are CPU-composited only (the
+// display engine never scans them), so they need VA-contiguous
+// memory — NOT physically-contiguous pages and NOT GTT/dmabuf
+// mapping. One contiguous run sliced into MAX_WIN backings; spawn is
+// an O(1) handout. The per-spawn allocContiguous(63) scan cost 3.7
+// SECONDS on T590 post-modeset (fragmented freelist) — frozen shell,
+// corrupted drag state. Pool handout can't stall: ~ns.
+const POOL_BYTES: usize = @as(usize, WW) * WH * 4;
+var pool_buf: [*]volatile u32 = undefined;
+var pool_ready: bool = false;
+var pool_free = [_]bool{true} ** MAX_WIN;
+
+pub fn poolInit() void {
+    const pages: usize = @intCast((POOL_BYTES * MAX_WIN + 4095) / 4096);
+    const phys = pmm.allocContiguous(pages, 1) orelse {
+        sayU("KORU kwin: backing pool alloc failed\n", .{});
+        return;
+    };
+    if (!mmio.map(phys, @as(u64, POOL_BYTES) * MAX_WIN)) {
+        _ = pmm.freeBlock(phys, pages);
+        sayU("KORU kwin: backing pool map failed\n", .{});
+        return;
+    }
+    pool_buf = @ptrFromInt(@as(usize, @intCast(phys)));
+    pool_ready = true;
+    sayU("KORU kwin: backing pool up {d}x{d}B x{d}\n", .{ WW, WH, MAX_WIN });
+}
 
 fn sayU(comptime fmt: []const u8, args: anytype) void {
     var b: [224]u8 = undefined;
@@ -128,12 +155,9 @@ fn paintWindow(w: *WinObj, idx: usize) void {
 // ---- backing free ---------------------------------------------------------------
 
 fn freeWin(w: *WinObj) void {
-    if (w.tok) |t| {
-        kms.dmabufUnref(t);
-        w.tok = null;
-    } else if (w.pphys != 0) {
-        _ = pmm.freeBlock(w.pphys, w.ppages);
-        w.pphys = 0;
+    if (w.pool_i >= 0) {
+        pool_free[@intCast(w.pool_i)] = true;
+        w.pool_i = -1;
     }
     w.buf = undefined;
     w.pitch = 0;
@@ -166,42 +190,28 @@ pub fn spawn() void {
         return;
     };
     var w = WinObj{};
-    // try dmabuf first — need the token kept, so alloc inline
-    var kind: []const u8 = "pmm";
-    if (kms.device().up) {
-        if (kms.dmabufCreate(WW, WH)) |t| {
-            if (kms.dmabufMap(t)) |b| {
-                if (b.map) |m| {
-                    w.tok = t;
-                    w.buf = m;
-                    w.pitch = b.pitch / 4;
-                    kind = "dmabuf";
-                }
-            }
-            if (w.tok == null) kms.dmabufUnref(t);
+    if (!pool_ready) {
+        sayU("KORU kwin: backing pool down — spawn refused\n", .{});
+        text.puts("kwin: backing pool down\n");
+        return;
+    }
+    var pi: ?usize = null;
+    for (pool_free[0..], 0..) |f, i| {
+        if (f) {
+            pi = i;
+            break;
         }
     }
-    if (w.pitch == 0) {
-        const bytes = @as(u64, WW) * WH * 4;
-        const pages: usize = @intCast((bytes + 4095) / 4096);
-        const phys = pmm.allocContiguous(pages, 1) orelse {
-            sayU("KORU kwin: backing alloc failed\n", .{});
-            text.puts("kwin: alloc failed\n");
-            return;
-        };
-        if (!mmio.map(phys, bytes)) {
-            _ = pmm.freeBlock(phys, pages);
-            sayU("KORU kwin: backing map failed\n", .{});
-            text.puts("kwin: map failed\n");
-            return;
-        }
-        w.pphys = phys;
-        w.ppages = pages;
-        w.buf = @ptrFromInt(@as(usize, @intCast(phys)));
-        w.pitch = WW;
-        kind = "pmm";
-    }
-    const t1 = tsc(); // alloc done
+    const pidx = pi orelse {
+        sayU("KORU kwin: backing pool exhausted\n", .{});
+        text.puts("kwin: pool exhausted\n");
+        return;
+    };
+    pool_free[pidx] = false;
+    w.pool_i = @intCast(pidx);
+    w.buf = pool_buf + pidx * (POOL_BYTES / 4);
+    w.pitch = WW;
+    const t1 = tsc(); // alloc done (pool handout — ~ns)
     paintWindow(&w, si);
     const t2 = tsc(); // paint done
 
@@ -232,7 +242,7 @@ pub fn spawn() void {
     spawned += 1;
     const t3 = tsc(); // attach/scene done
     sayU("KORU kwin spawn {d} 320x200 handle={d} backing={s} us alloc={d} paint={d} attach={d}\n",
-        .{ si, handle, kind,
+        .{ si, handle, "pool",
            (t1 - t0) / 3000, (t2 - t1) / 3000, (t3 - t2) / 3000 });
     text.puts("kwin: window up — press+drag titlebar to move\n");
     if (!cursorMod.isEnabled()) cursorMod.enable();
