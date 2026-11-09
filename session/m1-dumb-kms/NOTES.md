@@ -1446,3 +1446,18 @@ during scanout. Next iteration wires flip gating to the live one.
 QEMU: build clean; code path = r8-verified timeout pacing + read-only
 debug reads (i915-down guarded). ISO dist/koru-mc1ra-scene.iso,
 MBR 830002001000000001000000a3790000.
+
+## MC-1rb — vblankDebug reaches the wire (2026-11-09)
+
+MC-1ra bug: kstat's register dump never appeared on the wire —
+kms.vblankDebug used mmio.say (serial-only). Present.stat now calls
+kms.vblankRegs() (new accessor returning the 8 candidate regs as
+values) and prints via sayU — serial+UDP dual-write like every other
+kstat line. i915-down prints 'vb i915 down — no regs'; i915-up
+prints 'vb DEISR= DEIIR= SDEISR= SDEIIR=' + 'vb IIR28= GTIIR=
+FRMCNT= PSTAT24=' (0x70024 PIPEASTAT_A literal). QEMU-verified:
+kstat emits the vb line (down path). T590: run kstat 2x ~1s apart —
+whichever reg toggles at ~60Hz is the real vblank oracle.
+
+ISO dist/koru-mc1rb-scene.iso, MBR
+8300020010000000010000008f790000.

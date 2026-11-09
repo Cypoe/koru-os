@@ -717,6 +717,20 @@ pub fn surfaceOffset() u32 {
     return pipe.surfaceOffset();
 }
 
+// vblankRegs — the 8 candidate vblank registers as values (for
+// present.stat's sayU dual-write; mmio.say was serial-only and never
+// reached the UDP wire). Order: DEISR DEIIR SDEISR SDEIIR IIR28
+// GTIIR FRMCNT PSTAT24(0x70024 PIPEASTAT_A). Zeros when i915 down.
+pub fn vblankRegs() [8]u32 {
+    if (!device().up) return @splat(0);
+    return .{
+        mmio.rd(R.DEISR), mmio.rd(R.DEIIR),
+        mmio.rd(R.SDEISR), mmio.rd(R.SDEIIR),
+        mmio.rd(R.IIR), mmio.rd(R.GTIIR),
+        mmio.rd(R.PIPE_FRMCNT_A), mmio.rd(0x70024),
+    };
+}
+
 // vblankDebug — dump every candidate vblank register so T590's kstat
 // names which oracle actually latches on Ironlake: engine IIRs
 // (DE/SDE), the per-pipe IIR, raw ISR statuses, and PIPE_FRMCNT.

@@ -420,7 +420,17 @@ pub fn stat() void {
     }
     sayU("  front={d} dspsurf={x} pre_scanout={d}\n",
         .{ front orelse 99, kms.surfaceOffset(), pre_scanout orelse 999 });
-    kms.vblankDebug(); // candidate vblank regs — names the live oracle on HW
+    // vblank candidate regs via kms.vblankRegs — sayU dual-writes
+    // serial+UDP (the earlier mmio.say path never reached the wire).
+    if (kms.device().up) {
+        const vr = kms.vblankRegs();
+        sayU("  vb DEISR={x} DEIIR={x} SDEISR={x} SDEIIR={x}\n",
+            .{ vr[0], vr[1], vr[2], vr[3] });
+        sayU("  vb IIR28={x} GTIIR={x} FRMCNT={x} PSTAT24={x}\n",
+            .{ vr[4], vr[5], vr[6], vr[7] });
+    } else {
+        sayU("  vb i915 down — no regs\n", .{});
+    }
 }
 
 pub fn tick() void {
