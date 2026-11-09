@@ -906,3 +906,42 @@ ground truth. trackpoint.c (TP_* commands over PS/2 aux), hid-elan.c
 (ELAN_TP_USB_INTF=1 -> touch data on USB iface 1, not 0; elan_i2c
 0x5d path = I2C-HID), elantech.c. Consult raw.githubusercontent.com/
 torvalds/linux/master/drivers/... before inventing a sequence.
+
+## TRACKPOINT PS/2 INIT + LAZY INPUT BRING-UP (2026-11-09, commit 08f75d0)
+
+ROOT CAUSE of every M4 "aux=0": fullBoot=false since ced3e26 -> the
+doFull init block (acpi/pci/ioapic/user/kbd/mouse/smp) NEVER ran on the
+shell path; mouse.init() was dead code and diag() reported zeroed
+defaults. The TrackPoint was never actually probed.
+
+FIX (two halves):
+- cursor.enable() lazily runs ensureInput() once: acpi.init(pmm.boot_mbi)
+  -> ioapic.init -> user.init (IDT+PIC+sti) -> mouse.init. kbd.init
+  skipped on purpose — IRQ1 would steal scancodes from shell pollChar.
+  IRQ12 reaches vec 0x2C via ioapic route(12) or PIC fallback.
+- mouse.init() rewritten on the Linux oracle (trackpoint.c/.h +
+  libps2.c): 8042 probe (selftest/CCB/A7-A8/CCB-write) -> 0xF6
+  RESET_DIS -> TP_READ_ID 0xE1 (bare, 2 results: variant+fw) ->
+  IBM-only POR E2 7F (expect AA 00) -> tpWrite defaults when not
+  freshly reset (non-IBM: sens only; IBM-fail: full TP_DEF table) ->
+  IBM ext-btn read -> SETRATE/SETRES/SETSCALE best-effort -> 0xF4.
+  tpCmd/auxSendByte/auxCollect = ps2_command semantics (per-byte 0xD4
+  + ACK, NAK resend x1, raw result collect, 1.5M-iter POR timeout).
+
+Dual-write everywhere: sayU=serial+net.mirror, net.mark tags
+tp-id/tp-por-ok|fail|skip/tp-id-none/aux-online/irq12-armed,
+cursor tick emits mouse:streaming on first packet.
+
+QEMU-VERIFIED (koru-tpinit-20261109-1409.iso, commit 08f75d0):
+boot->shell; 'mouse' -> selftest=55 ccb=61 auxen=1 f6=fa tp-id-none
+(QEMU ps2 mouse isn't a TrackPoint — generic path taken) cfg 3/3
+aux-online irq12-armed; monitor mouse_move -> mouse:streaming +
+cursor:move on wire, pkts=6, cursor:disabled report online=1 irq12=1.
+TP path (variant/fw/por) is T590-only — QEMU has no TrackPoint device.
+
+T590 ORACLE: flash dist/koru-tpinit-20261109-1409.iso -> 'mouse' ->
+UDP :47820 should show 'mouse: trackpoint variant=N fw=0xNN' +
+'tp-por-ok' (or tp-por-skip for non-IBM) + aux-online + irq12-armed;
+wiggle stick -> mouse:streaming + cursor:move + pkts>0. If
+tp-id-none on real HW too, the TrackPoint is NOT on 8042 aux (then
+it's the xhci/USB-HID path from the xhci* notes).
