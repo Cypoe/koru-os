@@ -1290,3 +1290,31 @@ consmall->conresize->echo all render; serial markers clean.
 UNEXERCISED: DEIER/IER path + flip cadence are i915-only — T590
 debut. kstat now shows: vb_raw!=0 + timeouts=0 if IER fix lands;
 flips count = real frame rate either way.
+
+## MC-1r6 fix — keyboard decode garbage post-mouse-init (2026-11-09)
+
+T590 regression: after enabling cursor, keys decoded wrong — 'a'
+showed Enter, only 'n' correct. Decode math: set-2 'a'=0x1C ==
+set-1 Enter=0x1C; set-2 'n'=0x31 == set-1 'n'=0x31 (coincidence).
+The keyboard emits scancode SET 2 and pollChar's tables are SET 1 —
+correct ONLY because 8042 CCB bit6 (translation, set-2->set-1)
+was ON. mouse.init's STEP-4 CCB write preserved "bits as read" —
+but the 0x20 CCB read validates only (r&0x88)==0, which PASSES for
+scancode make bytes; a keypress during the probe window got
+misread as CCB -> cw inherited garbage bit6=0 -> translation OFF
+-> raw set-2 hit set-1 tables. Shell path never runs consoleInit,
+so keyboard stays firmware-default set-2 + translate-ON — the
+config that must be preserved.
+
+Fix (mouse.zig STEP 4): write DETERMINISTIC CCB 0x47 (kbd-IRQ +
+aux-IRQ + system + translate, inhibits off) instead of read+preserve
+— immune to scancode-misread entirely. Readback verify now checks
+bit4==0 AND bit6==1, rewrites 0x47 on either failure.
+
+QEMU-VERIFIED (dist/koru-mc1r6-scene.iso): 'mouse' decoded (init
+ran: selftest=85, ccb wr=47 rb=47, aux online, irq12 armed) then
+'consmall' decoded post-write -> 'console forced 800x600' marker.
+Decode correct on both sides of the CCB write.
+UNEXERCISED: T590's actual CCB-read race (scancode landing mid-probe)
+is timing-dependent — the deterministic write removes the dependency
+entirely, so HW behavior can't regress from it.

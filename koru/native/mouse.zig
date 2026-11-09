@@ -438,28 +438,31 @@ pub fn init() void {
     kbd.drainOut();
     sayU("mouse: aux pulse A7/A8 auxen={d}\n", .{st_auxen});
 
-    // STEP 4 — CCB write 0x60: bit1 aux-IRQ on; bits 4+5 (kbd/aux clock
-    // inhibits) FORCED OFF — the sanitize means even a garbage CCB read
-    // can never write bit4=1 back and kill the keyboard (the T590
-    // regression). bit0 kbd-IRQ, bit6 translation, bit2 system stay
-    // exactly as read. 0xF6/TP commands below are all auxSendByte —
-    // each carries its own 0xD4 prefix, nothing reaches the kbd.
-    var cw: u8 = if ((ccb & 0x88) != 0) 0x45 else ccb; // invalid -> sane base
-    cw |= 0x02;
-    cw &= ~@as(u8, 0x30);
+    // STEP 4 — CCB write 0x60: DETERMINISTIC 0x47, not "read + preserve".
+    // The 0x20 read above can return a SCAN CODE byte, not the CCB —
+    // (r & 0x88)==0 passes for most make codes, and a keypress during
+    // the probe window lands exactly there. Preserving "bits as read"
+    // then wrote a garbage bit6: translation OFF while the keyboard
+    // still emits set-2 -> raw set-2 hit pollChar's set-1 tables
+    // ('a'=0x1C decoded as Enter, 'n'=0x31 coincidentally 'n' — the
+    // T590 r5 decode regression). The shell path never runs
+    // consoleInit, so the keyboard is set-2 + translation-ON by
+    // firmware default and MUST stay that way. 0x47 = kbd-IRQ(bit0)
+    // + aux-IRQ(bit1) + system(bit2) + translate(bit6), clock inhibits
+    // (bits4,5) off — the fully-known-good CCB, written blind.
     kbd.ctlWrite(0x60);
-    kbd.dataWrite(cw);
-    // readback verify — the write must land with the kbd clock enabled.
-    // bit4 still set means the controller refused/misread: retry once
-    // with a fully-known-good CCB (kbd+aux irq, system, translate).
+    kbd.dataWrite(0x47);
+    // readback verify — the write must land with the kbd clock enabled
+    // AND translation still on. bit4 set = refused/misread; bit6 clear
+    // = the translate bit didn't take (same dead-decode outcome).
     kbd.drainOut();
     kbd.ctlWrite(0x20);
     const wb = readResp();
-    sayU("mouse: ccb wr={x} rb={x}\n", .{ cw, wb });
-    if ((wb & 0x10) != 0) {
+    sayU("mouse: ccb wr=47 rb={x}\n", .{wb});
+    if ((wb & 0x10) != 0 or (wb & 0x40) == 0) {
         kbd.ctlWrite(0x60);
         kbd.dataWrite(0x47);
-        say("mouse: ccb bit4 stuck — rewrote 0x47\n");
+        say("mouse: ccb bad — rewrote 0x47\n");
     }
 
     // STEP 5 — RESET_DIS 0xF6: reset the device and hold reporting off
