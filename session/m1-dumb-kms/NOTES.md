@@ -810,3 +810,44 @@ SHIP ISO: dist/koru-xhciB-20261109-0228.iso — proven pipeline + corrected
 MBR. Real-T590 oracle: 'xusb' -> Elan 0x04F3:0x2901 + Lite-On 0x04CA:0x7070
 expect RPT lines with report bytes on :47820 when TrackPoint/touchpad move.
 NEXT (Stage C): decode mouse buttons + X/Y deltas -> cursor.zig feed.
+
+## XHCI STAGE B FIX — spec-correct endpoint ctx + class requests (2026-11-09, commit 8e48cd2)
+
+T590 device-1 (Elan touchpad): reports=0 — endpoint configured but ZERO
+interrupt-IN events in ~48s of polling. Device-2: PANIC "integer does
+not fit in destination type".
+
+ROOT CAUSES found vs Linux xhci-mem.c xhci_endpoint_init (hid.c was
+QEMU-invisible-wrong):
+- Interval field is EXPONENT 2^n*125us, not raw bInterval. hid.c wrote
+  bInterval; QEMU tablet bInterval=1 masked it. Fixed via epInterval()
+  (HS/SS: bInterval-1; FS/LS: fls(bInterval*8)-1 clamp[3,10]).
+- MaxBurst (d1[15:8]) = HS wMaxPacketSize[12:11]-1 — was 0.
+- tx_info d4 = MaxESITPayloadLo|AvgTrbLen — was 8; now rptLen.
+- TRB_LEN was 8 — now rptLen=clamp(pkt,8,255).
+- EP state stays 0 in input ctx — spec 4.6.6: HC sets output=Running.
+
+CLASS REQUESTS added post-SET_CONFIGURATION (real HID needs; QEMU
+tablet stalls/times-out harmlessly): SET_PROTOCOL(0x0B,wVal=1 report)
++ SET_IDLE(0x0A,wVal=0 infinite). Likely the touchpad reports=0 fix —
+device doesn't stream interrupt-IN until class-configured.
+
+PANIC: hex32(@intCast(i32)) on -1 timeout -> hex32i() prints 'tmo'.
+Applied at all i32 diagnostic sites. ctrlXfer TRB pushes -> ringPush
+(wrap-safe). QEMU-proven: tablet set-idle returned -1 -> 'tmo' printed,
+no panic (the exact T590 device-2 crash path).
+
+REPORT LOOP: 4 rotating 1KB bufs, event TRB ptr -> completed buf,
+prime4+rearm, doorbell re-ring, evtTrace, per-event cc/len24/epid/
+bytes, PORTSC heartbeat/32 idle polls, bail on 8 err ccs. Event decode:
+len=st[23:0] (was wrong 0x1FFFF mask), epid=ctl[20:16].
+
+QEMU (koru-xhciCtest ISO): usb-kbd reports=10 (a-e keycodes), ep=3,
+set-proto/idle cc=1; tablet stall+timeout handled, no panic.
+
+SHIP ISO: dist/koru-xhciC-20261109-0244.iso. T590 oracle: 'xusb' ->
+Elan 0x04F3:0x2901 should now emit RPT lines on touch; Lite-On
+0x04CA:0x7070 no longer panics. If still reports=0, next suspects:
+wrong HID iface selected (multi-function touchpad) or report-proto
+needing SET_PROTOCOL(0) boot — diagnostics now show cc/epid/portsc.
+NEXT (Stage C): decode report -> cursor.zig.
