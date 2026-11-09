@@ -1,0 +1,130 @@
+pmm: usable=1023MiB managed=262110 frames live=1626
+pmm: free refused phys=6b9000 (unowned)
+PMM selftest ok
+pci: 00:00.0 8086:1237 class=06/00/00 irq=00 caps=-
+pci: 00:01.0 8086:7000 class=06/01/00 irq=00 caps=-
+pci: 00:01.1 8086:7010 class=01/01/80 irq=00 caps=-
+pci: 00:01.3 8086:7113 class=06/80/00 irq=09 caps=-
+pci: 00:02.0 1234:1111 class=03/00/00 irq=00 caps=-
+pci: 00:03.0 8086:100e class=02/00/00 irq=0b caps=-
+pci: 00:04.0 1b36:000d class=0c/03/30 irq=0b caps=11
+pci: 07 devices enumerated
+e1000e: 0:3.0 dev=100e class=2/0 flags=0
+e1000e: mac reset only (140260/80080783 was 140240/80080783)
+e1000e: autoloaded mac 52:54:00:12:34:56
+e1000e: tx ring armed — link=true mac=52:54:00:12:34:56 st=80080783 cmd=107 tctl=400fa
+net: telemetry up — 192.168.99.1:47820 <- src 192.168.99.2
+net: N1 arp who-has on wire
+net: diag -> KORU diag st=6 bar=febc0000 cmd=107 st=80080783 tctl=400fa bal=29c000 len=200 dt=0 mac=52:54:00:12:34:56 msrc=1 link=1
+net: -> KORU N2 udp telemetry live
+fb: init mbi=9889808
+fb: tag8 addr=4244635648 pitch=4096 w=1024 h=768 bpp=32 type=1
+fb: adopt phys=4244635648 len=3145728
+fb: backend=mb2
+net: -> KORU fb-init
+net: -> KORU shell
+xhci: ==== XHCI ENUM ====
+net: -> KORU xhci: ==== XHCI ENUM ====
+xhci: ctrl 0:4.0 hci v0x00000001.0x00000000 slots=64 ints=16 ports=8 scratch=0 caplen=64 dboff=0x00002000 rtsoff=0x00001000
+xhci: caps read
+net: -> KORU xhci: caps read
+xhci: reset done sts=0x00000001
+xhci: HC reset
+net: -> KORU xhci: HC reset
+xhci: DCBAAP+CONFIG set
+net: -> KORU xhci: DCBAAP+CONFIG set
+xhci: running sts=0x00000000
+xhci: cmdring=7057408 evtring=7061504
+xhci: rings armed, HC running
+net: -> KORU xhci: rings armed, HC running
+xhci: port0 sc=0x000202a0 ccs=0 speed=0x00000000
+xhci: port1 sc=0x000202a0 ccs=0 speed=0x00000000
+xhci: port2 sc=0x000202a0 ccs=0 speed=0x00000000
+xhci: port3 sc=0x000202a0 ccs=0 speed=0x00000000
+xhci: port4 sc=0x00020ee1 ccs=1 speed=0x00000003
+xhci: port4 post-reset sc=0x00220e03 ccs=1 ped=1 pls=0x00000000 speed=0x00000003
+xhci: port4 slot=1
+xhci: slot allocated
+net: -> KORU xhci: slot allocated
+xhci: addrdev port=4 slot=1
+xhci: ic ctrl d0/d1=0x00000000/0x00000003 slot d0=0x08300000 d1=0x00050000 ep0 d1=0x00400026 d2=0x006bf001 d4=0x00000008 speed=0x00000003 mps=0x00000040 icPhys=0x00000000006be000
+  evt ty=0x00000021 cc=0x00000001 slot=0x00000001 ptr=0x00000000006bb010
+xhci: port4 addressed slot=1
+xhci: device addressed
+net: -> KORU xhci: device addressed
+xhci: ctrl bmrt=0x00000080 req=0x00000006 wval=0x00000100 wlen=0x00000012 stPtr=0x00000000006bf020 slot=0x00000001
+xhci: ctrl cc=0x00000001 evtPtr=0x00000000006bf020
+xhci: DEV port=4 vid=0x00000627 pid=0x00000001 len=0x00000012
+xhci: device identified
+net: -> KORU xhci: device identified
+xhci: ctrl bmrt=0x00000080 req=0x00000006 wval=0x00000200 wlen=0x000000ff stPtr=0x00000000006bf050 slot=0x00000001
+xhci: ctrl cc=0x00000001 evtPtr=0x00000000006bf050
+xhci: cfg total=0x00000022
+xhci: IF num=0x00000000 alt=0x00000000 nep=0x00000001 class=0x00000003 sub=0x00000001 proto=0x00000001
+xhci: HID ver=0x00000111 ndesc=0x00000001 rdlen=0x0000003f
+xhci: EP addr=0x00000081 attr=0x00000003 mps=0x00000008 ivl=0x00000007
+xhci: config parsed
+net: -> KORU xhci: config parsed
+xhci: stageB slot=0x00000001
+xhci: ctrl bmrt=0x00000080 req=0x00000006 wval=0x00000200 wlen=0x00000009 stPtr=0x00000000006bf080 slot=0x00000001
+xhci: ctrl cc=0x00000001 evtPtr=0x00000000006bf080
+xhci: ctrl bmrt=0x00000080 req=0x00000006 wval=0x00000200 wlen=0x00000022 stPtr=0x00000000006bf0b0 slot=0x00000001
+xhci: ctrl cc=0x00000001 evtPtr=0x00000000006bf0b0
+xhci: hid cfg total=0x00000022
+xhci: hid iface=0x00000000 proto=0x00000001 ep=0x0x00000081 mps=0x00000008 ival=0x00000007 cfg=0x00000001
+xhci: hid endpoint found
+net: -> KORU xhci: hid endpoint found
+xhci: dci=0x00000003
+xhci: cfgEP ic ctrl d1=0x00000009 slot d0=0x18000000 ep d0=0x00070000 d1=0x0008003e d2=0x006c5001 d4=0x00000008
+xhci: configure-ep dci=0x00000003 rc=0x00000001
+xhci: endpoint configured
+net: -> KORU xhci: endpoint configured
+xhci: ctrl bmrt=0x00000000 req=0x00000009 wval=0x00000001 wlen=0x00000000 stPtr=0x00000000006bf0d0 slot=0x00000001
+xhci: ctrl cc=0x00000001 evtPtr=0x00000000006bf0d0
+xhci: set-config 0x00000001 cc=0x00000001
+xhci: configured — polling interrupt-IN
+net: -> KORU xhci: configured — polling interrupt-IN
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 04 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 00 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 05 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 00 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 06 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 00 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 07 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 00 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 08 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 00 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 09 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 00 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 0a 00 00 00 00 00
+xhci: RPT slot=1 cc=1 len=0 st=1000000 b=00 00 00 00 00 00 00 00
+xhci: report-poll done reports=14
+xhci: hid reports done
+net: -> KORU xhci: hid reports done
+xhci: port5 sc=0x00020ee1 ccs=1 speed=0x00000003
+xhci: port5 post-reset sc=0x00220e03 ccs=1 ped=1 pls=0x00000000 speed=0x00000003
+xhci: port5 slot=2
+xhci: slot allocated
+net: -> KORU xhci: slot allocated
+xhci: addrdev port=5 slot=2
+xhci: ic ctrl d0/d1=0x00000000/0x00000003 slot d0=0x08300000 d1=0x00060000 ep0 d1=0x00400026 d2=0x006c8001 d4=0x00000008 speed=0x00000003 mps=0x00000040 icPhys=0x00000000006c7000
+  evt ty=0x00000021 cc=0x00000001 slot=0x00000002 ptr=0x00000000006bb040
+xhci: port5 addressed slot=2
+xhci: device addressed
+net: -> KORU xhci: device addressed
+xhci: ctrl bmrt=0x00000080 req=0x00000006 wval=0x00000100 wlen=0x00000012 stPtr=0x00000000006c8020 slot=0x00000002
+xhci: ctrl cc=0x00000001 evtPtr=0x00000000006c8010
+xhci: DEV port=5 vid=0x00000627 pid=0x00000001 len=0x00000012
+xhci: device identified
+net: -> KORU xhci: device identified
+xhci: ctrl bmrt=0x00000080 req=0x00000006 wval=0x00000200 wlen=0x000000ff stPtr=0x00000000006c8050 slot=0x00000002
+xhci: ctrl cc=0x0000000d evtPtr=0x00000000006c8040
+xhci: cfgdesc cc=0x0000000d
+xhci: port6 sc=0x000202a0 ccs=0 speed=0x00000000
+xhci: port7 sc=0x000202a0 ccs=0 speed=0x00000000
+xhci: enumerated 2 device(s)
+xhci: ==== ENUM DONE ====
+net: -> KORU xhci: ==== ENUM DONE ====
+net: -> KORU hb
+net: -> KORU hb
+net: -> KORU hb
