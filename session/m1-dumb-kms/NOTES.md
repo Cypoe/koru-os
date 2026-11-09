@@ -1515,3 +1515,29 @@ reg toggles at ~60Hz is the vblank oracle.
 QEMU-verified: boot clean; 'kms' fails on Bochs 1234:1111 as
 expected; no vb lines, no MMIO access. ISO
 dist/koru-mc1rd-scene.iso MBR 830002001000000001000000df790000.
+
+## MC-1re — cursor sprite damage hardening + pxIn BG fix (2026-11-09)
+
+T590 report: cursor trails / "10 copies" while dragging. Audit found
+the erase-old/draw-new coverage was ALREADY present — feedPointer
+damages the union of last-fed + current sprite rects every motion,
+and Acc.add merges so both endpoints always repaint. Changes:
+
+- feedPointer: union replaced by two explicit damage() calls (old
+  rect + new rect) — same coverage, honest contract.
+- comp.syncDims: spr_damaged=null on scene resize — stale tracked
+  pos can't skip erase coverage after modeset/rebuild.
+- pxIn REAL BUG: `if (!hit) return BG` returned BEFORE the sprite
+  XOR — cursor never composited over uncovered/background pixels
+  (vanished over gaps). Now sprite applies to BG too.
+
+NOT proven as trail root cause — erase coverage was already correct.
+Prime remaining suspect for perceived "trails" during drag: damage
+flood -> acc.full -> full 1920x1080 composite every flip + the
+~16ms waitFrameEdge stall = low effective fps = motion smear that
+reads as ghost copies. kstat's per-buffer acc.n/acc.full + the vb:
++f delta will confirm on T590 (acc.full=1 + low +f during drag =
+smear-not-ghosts). cursor motion needs TrackPoint — QEMU can't
+reproduce trails; verified no-regression only (boot/kwin/kstat).
+
+ISO dist/koru-mc1re-scene.iso MBR 830002001000000001000000df790000.

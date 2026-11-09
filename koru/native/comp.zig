@@ -184,11 +184,12 @@ pub fn feedPointer(x: i32, y: i32, on: bool, buttons: u32) void {
     if (cur) |c| {
         if (spr_damaged) |o| {
             if (o.x == c.x and o.y == c.y and o.w == c.w and o.h == c.h) return;
-            const nx = @min(o.x, c.x);
-            const ny = @min(o.y, c.y);
-            const nx1 = @max(o.x + o.w, c.x + c.w);
-            const ny1 = @max(o.y + o.h, c.y + c.h);
-            _ = damage(nx, ny, nx1 - nx, ny1 - ny);
+            // damage BOTH rects explicitly — erase where the arrow was
+            // last fed, repaint where it is now (Acc.add merges the
+            // pair into the covering union; separate adds keep the
+            // contract honest if merge rules ever change).
+            _ = damage(o.x, o.y, o.w, o.h);
+            _ = damage(c.x, c.y, c.w, c.h);
         } else {
             _ = damage(c.x, c.y, c.w, c.h);
         }
@@ -223,17 +224,16 @@ fn layerHit(l: *const Layer, x: u32, y: u32) bool {
 // topmost-wins over a candidate list sorted z-desc — first hit returns.
 fn pxIn(x: u32, y: u32, cands: []const *Layer) u32 {
     var c: u32 = BG;
-    var hit = false;
     for (cands) |l| {
         if (!layerHit(l, x, y)) continue;
         c = l.buf[@as(usize, @intCast(y - l.y)) * @as(usize, @intCast(l.pitch)) +
             @as(usize, @intCast(x - l.x))];
-        hit = true;
-        break;
+        break; // topmost hit wins — c stays BG when nothing covers
     }
-    if (!hit) return BG;
-    // cursor sprite — XOR over whatever the scene resolved (same visual
-    // as cursor.zig's direct fb XOR, now inside the damage pass).
+    // cursor sprite — XOR over whatever the scene resolved, INCLUDING
+    // bare background (the old `if (!hit) return BG` skipped the sprite
+    // entirely over uncovered pixels — cursor vanished over gaps).
+    // Same visual as cursor.zig's direct fb XOR, inside the damage pass.
     if (ptr_on) {
         if (spr_bits) |bits| {
             const dx = x -% @as(u32, @intCast(ptr_x));
@@ -497,6 +497,7 @@ pub fn syncDims() void {
     say("x");
     koru_putdec(H);
     say("\n");
+    spr_damaged = null; // buffers re-clip/rebuild — no stale sprite pos to erase
     for (layers[0..], 0..) |*l, i| {
         if (!l.live) continue;
         place(i, @intCast(l.x), @intCast(l.y)); // re-clamp into new scene
