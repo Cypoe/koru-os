@@ -257,7 +257,12 @@ fn freeCb(_: void, e: MmapEntry) void {
     }
 }
 
+// the multiboot2 info phys kmain was handed — retained so lazily-run
+// bring-up (acpi/ioapic on the shell path) can still find the MADT.
+pub var boot_mbi: u32 = 0;
+
 pub fn init(mbi_phys: u32) void {
+    boot_mbi = mbi_phys;
     @memset(&refs, 255); // reserved until a usable region says otherwise
 
     var probe = Probe{ .usable_end = 0, .usable_bytes = 0 };

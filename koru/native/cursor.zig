@@ -18,6 +18,11 @@
 const mouse = @import("mouse");
 const fb = @import("fb.zig");
 const net = @import("net");
+const text = @import("text.zig");
+const acpi = @import("acpi");
+const ioapic = @import("ioapic");
+const user = @import("user");
+const pmm = @import("pmm");
 
 extern var stdout: ?*anyopaque;
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
@@ -34,6 +39,24 @@ var shown: bool = false;
 var enabled: bool = false;
 var moves: u64 = 0;
 var pressed_n: u32 = 0;
+var input_armed: bool = false;
+var pkt_marked: bool = false;
+
+// ensureInput — the shell path boots with fullBoot=false, so the doFull
+// init block (acpi/pci/ioapic/user/kbd/mouse/smp) never ran and
+// mouse.init() was dead code: every M4 "aux=0" measured an un-run
+// driver. IRQ delivery needs user.init (IDT+PIC+sti); IRQ12 then routes
+// via ioapic when MADT exists, else the PIC fallback lands it on vec
+// 0x2C which irq_exc_dispatch already claims. kbd.init is deliberately
+// skipped — IRQ1 would steal scancodes from the shell's pollChar path.
+fn ensureInput() void {
+    if (input_armed) return;
+    input_armed = true;
+    acpi.init(pmm.boot_mbi); // MADT -> ioapic routes (no-op if absent)
+    ioapic.init();
+    user.init();  // IDT + PIC remap + LAPIC + sti — interrupts live
+    mouse.init(); // 8042 aux + TrackPoint sequence + IRQ12 unmask
+}
 
 // 12x12 arrow sprite, tip at top-left. '1' = on-pixel (XOR'd).
 const SPRITE = [SPR_H]u16{
@@ -84,6 +107,7 @@ fn hideSprite() void {
 pub fn enable() void {
     const d = fb.cursorDims();
     if (!d.live) return;
+    ensureInput(); // lazy interrupt+aux bring-up (shell path skips doFull)
     cx = 50;
     cy = 50;
     enabled = true;
@@ -134,6 +158,12 @@ pub fn tick() bool {
             if (ev.pressed != 0) pressed_n += 1 else if (pressed_n > 0) pressed_n -= 1;
         }
     }
+    // first decoded packet -> one UDP marker proving the stream is live
+    // (kept out of the IRQ path — net TX is not reentrant-safe there)
+    if (!pkt_marked and mouse.diag().packets != 0) {
+        pkt_marked = true;
+        net.mark("mouse:streaming");
+    }
     if (!moved) return false;
     const d = fb.cursorDims();
     if (!d.live) return false;
@@ -152,36 +182,53 @@ pub fn tick() bool {
     return true;
 }
 
-// One-line status for the shell 'mouse' command — full M4 diagnostic:
-// aux detect/enable, IRQ12 arm, cumulative packet/desync/overflow/drop
-// counters, plus cursor pos + move count.
+// One-line status for the shell 'mouse' command — full diagnostic:
+// aux detect/enable, IRQ12 arm, TrackPoint variant/fw/POR, packet/
+// desync/overflow/drop counters, plus cursor pos + move count.
+// Console path = text.* (panel + UDP mirror — the T590 oracle);
+// serial gets one compact line for QEMU logs.
 pub fn report() void {
     const d = fb.cursorDims();
     const dg = mouse.diag();
-    say("mouse: cursor ");
-    koru_putdec(@intCast(@max(cx, 0)));
-    say(",");
-    koru_putdec(@intCast(@max(cy, 0)));
-    say(" surface=");
-    koru_putdec(d.w);
-    say("x");
-    koru_putdec(d.h);
-    say(" moves=");
-    koru_putdec(moves);
-    say(" btns=");
-    koru_putdec(pressed_n);
-    say(" en=");
-    say(if (enabled) "1" else "0");
-    say("\nmouse: aux tried="); koru_putdec(dg.tried);
-    say(" online="); koru_putdec(dg.aux_online);
+    text.puts("mouse: cursor ");
+    text.putdec(@intCast(@max(cx, 0)));
+    text.putc(',');
+    text.putdec(@intCast(@max(cy, 0)));
+    text.puts(" surface=");
+    text.putdec(d.w);
+    text.putc('x');
+    text.putdec(d.h);
+    text.puts(" moves=");
+    text.putdec(moves);
+    text.puts(" btns=");
+    text.putdec(pressed_n);
+    text.puts(" en=");
+    text.puts(if (enabled) "1" else "0");
+    text.newline();
+    text.puts("mouse: aux tried="); text.putdec(dg.tried);
+    text.puts(" online="); text.putdec(dg.aux_online);
+    text.puts(" irq12="); text.putdec(dg.irq_armed);
+    text.puts(" pkts="); text.putdec(dg.packets);
+    text.puts(" desync="); text.putdec(dg.desyncs);
+    text.puts(" ovf="); text.putdec(dg.overflows);
+    text.puts(" drop="); text.putdec(dg.drops);
+    text.newline();
+    text.puts("mouse: 8042 selftest="); text.putdec(dg.selftest);
+    text.puts(" ccb="); text.putdec(dg.ccb);
+    text.puts(" auxen="); text.putdec(dg.auxen);
+    text.puts(" pollbytes="); text.putdec(dg.pollbytes);
+    text.puts(" f6="); text.putdec(dg.f6);
+    text.newline();
+    text.puts("mouse: tp variant="); text.putdec(dg.variant);
+    text.puts(" fw="); text.puthex(@intCast(dg.firmware));
+    text.puts(" por="); text.putdec(dg.por);
+    text.puts(" cfg="); text.putdec(dg.cfg);
+    text.newline();
+    // serial compact — QEMU -serial oracle
+    say("mouse: aux online="); koru_putdec(dg.aux_online);
     say(" irq12="); koru_putdec(dg.irq_armed);
     say(" pkts="); koru_putdec(dg.packets);
-    say(" desync="); koru_putdec(dg.desyncs);
-    say(" ovf="); koru_putdec(dg.overflows);
-    say(" drop="); koru_putdec(dg.drops);
-    say("\nmouse: 8042 selftest="); koru_putdec(dg.selftest);
-    say(" ccb="); koru_putdec(dg.ccb);
-    say(" auxen="); koru_putdec(dg.auxen);
-    say(" pollbytes="); koru_putdec(dg.pollbytes);
+    say(" tpv="); koru_putdec(dg.variant);
+    say(" por="); koru_putdec(dg.por);
     say("\n");
 }
