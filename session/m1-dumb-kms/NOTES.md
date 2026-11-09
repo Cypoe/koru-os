@@ -884,3 +884,17 @@ SET_INTERFACE+SET_PROTOCOL+SET_IDLE+poll48 filtered epid==dci. WINNER
 QEMU: usb-kbd -> proto=0 BOOT reports=10 (a-e). Boot mouse reports =
 Stage C cursor input. Ship ISO: dist/koru-xhciE-*.iso.
 T590 oracle: 'xusb' -> 'cand' lines per EP, 'try' per proto, WINNER.
+
+## XHCI ALL-CLASS ENDPOINT SCAN (commit pending)
+
+T590 xhciE: reports=0 on sole class-3 int-IN ep 0x81 despite epstate=1
++ armed + cc=1. Host proven; device silent there. nep=2 (0x81+0x02).
+
+xhciF: parseHidAll dumps EVERY interface+endpoint (any class) and
+collects ALL interrupt-IN endpoints as candidates (cls tags HID vs
+vendor). Class requests guarded to cls==3. Reveals whether touch data
+is on vendor EP / second function / endpoint 0x02.
+
+T590 oracle: 'xusb' -> full IF/EP map + per-candidate try/WINNER.
+If a vendor int-IN EP yields reports -> that's the touch stream.
+Ship ISO: dist/koru-xhciF-*.iso.
