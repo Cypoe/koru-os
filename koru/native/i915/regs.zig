@@ -792,6 +792,14 @@ pub const R = struct {
     pub const LGC_IMR: u32 = 0x020820;
     pub const LGC_ISR: u32 = 0x020830;
     pub const LGC_IIR: u32 = 0x020840;
+    // gen8+ per-pipe interrupt quartet — GEN8_DE_PIPE_{ISR,IMR,IIR,IER}
+    // at 0x44400+0x10*pipe. KBL (gen9.2) vblank lives HERE, not in the
+    // DE*/SDE* banks or the ILK LGC space — pipe.zig's ILK diagnosis
+    // was a misread; the real chain was never enabled.
+    pub const DE_PIPE_ISR_A: u32 = 0x044400;
+    pub const DE_PIPE_IMR_A: u32 = 0x044404;
+    pub const DE_PIPE_IIR_A: u32 = 0x044408;
+    pub const DE_PIPE_IER_A: u32 = 0x04440c;
     pub const PIPEASTAT_A: u32 = 0x070024;
     pub const PIPE_FRMCNT_A: u32 = 0x070040;
     pub const PIPE_FRMCNT_B: u32 = 0x071040;

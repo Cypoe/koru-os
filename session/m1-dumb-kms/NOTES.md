@@ -1808,3 +1808,50 @@ test gap-tolerant GAP=16 — near-rect flick damage merges instead of
 overflowing MAX_DMG -> acc.full.
 QEMU: mouse->cursor:enabled+cursor:ev, single boot no reset.
 T590 panel verdict pending — tearing/jank perception is the oracle.
+
+## VBLINE IRQ HUNT — state + enable chain (2026-11-10)
+
+Goal: replace FRMCNT polling (~55fps ceiling) with a real vblank IRQ.
+Previous probes all read 0 because NOTHING was ever enabled — status
+regs are clean when the source chain is off, not proof of absence.
+
+REGISTER MAP (regs.zig already has):
+- Per-pipe vblank GENERATION: VBLANK_A/B/C/EDP = 0x060010/0x061010/
+  0x062010/0x06f010 (+ TRANS_VBLANK_* 0x0e0010..) — the VBLANK_CTL
+  block; needs its interrupt-enable bit set or no vblank IRQ exists.
+- DE group: DEISR 0x044000 / DEIMR 0x044004 / DEIIR 0x044008 /
+  DEIER 0x04400c — IMR masks sub-sources, IIR identifies which fired.
+- GT group: 0x044010-0x04401c. SDE group: 0x0c4000-0x0c400c.
+- Master IIR: 0x044028.
+- ILK-era LGC bank 0x020820/30/40 is gen<=5 — NOT our path (KBL=gen9.2).
+
+ENABLE CHAIN to try (in order):
+1. VBLANK_CTL_A |= vblank-IRQ-enable bit (find bit def — i915_reg.h
+   PIPE_VBLANK_CTL / VBLANK_IRQ_ENABLE; not yet in regs.zig).
+2. DEIMR: unmask pipe-A vblank sub-source bit.
+3. DEIER/master: enable DE group output if required.
+4. CPU side: i915 interrupt reaches via IO-APIC — find GSI from ACPI
+   _PRT / PCI int-line (dev 00:02.0); acpi.zig already parses MADT
+   (ioapicPhys, ioapicGsiBase, ISOs) and ioapic.gsiFor exists;
+   user.zig setIdtGate + koru_irq_unmask are the install path (mouse
+   IRQ12 already proves it end-to-end).
+5. Handler: read DEIIR/DEISR to ack, bump a vblank counter the flip
+   path polls (or better — flag flipPending directly).
+
+RISKS: wrong GSI = spurious IRQ storms (IDT gate reports+halts —
+visible fail-loud, safe to probe); i915 may need GT-side power well
+awake for IRQ delivery (gt_early_pm already handles).
+
+## VBLINE IRQ STAGE-1 PROBE — vbirq command (2026-11-10, ISO koru-vbirq)
+
+pipe.zig's "T590=Ironlake gen5" diagnosis was WRONG — 0x3EA0 is KBL
+UHD630 gen9.2; the DE*/SDE*/LGC regs all read 0 because the gen8+
+chain was never enabled, not because ILK routing applied. Real chain
+from Linux i915 (display/intel_display_irq.c + i915_irq.c):
+PIPESTAT_A(0x70024) |= status|status<<16 for vblank(bit1) ->
+GEN8_DE_PIPE_IMR_A(0x44404) clear bit0 -> DEIER(0x4400c) bit31 ->
+DEIMR(0x44004) clear bit7. GEN8_MASTER_IRQ untouched = no CPU IRQ,
+pure-MMIO safe probe. 'vbirq' cmd dumps before/after + counts IIR
+edges vs FRMCNT delta. Edges~delta => generation proven -> stage 2
+= GSI/IDT routing. Edges=0 => chain still missing a step.
+QEMU: vbirq -> i915 down, clean return.

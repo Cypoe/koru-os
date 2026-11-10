@@ -831,6 +831,67 @@ pub fn vblankDebug() void {
     mmio.say("\n");
 }
 
+// vbirqProbe — stage-1 of the real vblank IRQ: arm the gen8+ chain
+// (the path pipe.zig's ILK misdiagnosis never wrote) and count IIR
+// edges. GEN8_MASTER_IRQ is deliberately NOT touched — that gates the
+// CPU-facing IRQ line, so this probe cannot storm the IDT; it only
+// proves vblank EVENTS latch at ~frame rate. Stage 2 routes the IRQ.
+pub fn vbirqProbe() void {
+    if (!device().up) {
+        mmio.say("vbirq: i915 down\n");
+        return;
+    }
+    mmio.say("vbirq: before PSTAT="); mmio.sayHex(mmio.rd(R.PIPEASTAT_A));
+    mmio.say(" PISR="); mmio.sayHex(mmio.rd(R.DE_PIPE_ISR_A));
+    mmio.say(" PIMR="); mmio.sayHex(mmio.rd(R.DE_PIPE_IMR_A));
+    mmio.say(" PIIR="); mmio.sayHex(mmio.rd(R.DE_PIPE_IIR_A));
+    mmio.say(" PIER="); mmio.sayHex(mmio.rd(R.DE_PIPE_IER_A));
+    mmio.say(" DEIER="); mmio.sayHex(mmio.rd(R.DEIER));
+    mmio.say(" DEIMR="); mmio.sayHex(mmio.rd(R.DEIMR));
+    mmio.say(" DEIIR="); mmio.sayHex(mmio.rd(R.DEIIR));
+    mmio.say(" FRMCNT="); mmio.sayHex(mmio.rd(R.PIPE_FRMCNT_A));
+    mmio.say("\n");
+    // enable chain (i915 gen8+ display_irq path):
+    // 1. PIPESTAT pipestat-enable: status_mask=PIPE_VBLANK_INTERRUPT_
+    //    STATUS(bit1), enable = status<<16 -> RMW |0x00020002
+    mmio.wr(R.PIPEASTAT_A, mmio.rd(R.PIPEASTAT_A) | 0x0002_0002);
+    // 2. per-pipe IMR: bit0 = GEN8_PIPE_VBLANK, IMR bit=1 masks -> clear
+    mmio.wr(R.DE_PIPE_IMR_A, mmio.rd(R.DE_PIPE_IMR_A) & ~@as(u32, 1));
+    // 3. DEIER master: DE_MASTER_IRQ_CONTROL = bit31
+    mmio.wr(R.DEIER, mmio.rd(R.DEIER) | 0x8000_0000);
+    // 4. DEIMR top-level: DE_PIPE_VBLANK(pipeA) = bit7, active-low
+    mmio.wr(R.DEIMR, mmio.rd(R.DEIMR) & ~@as(u32, 0x80));
+    mmio.say("vbirq: armed — polling IIR edges\n");
+    const f0 = mmio.rd(R.PIPE_FRMCNT_A);
+    var edges: u32 = 0;
+    var de_edges: u32 = 0;
+    var spins: u32 = 4_000_000;
+    while (spins > 0) : (spins -= 1) {
+        const iir = mmio.rd(R.DE_PIPE_IIR_A);
+        if (iir != 0) {
+            edges += 1;
+            mmio.wr(R.DE_PIPE_IIR_A, iir); // W1C
+        }
+        const diir = mmio.rd(R.DEIIR);
+        if ((diir & 0x80) != 0) {
+            de_edges += 1;
+            mmio.wr(R.DEIIR, diir & 0x80);
+        }
+    }
+    const f1 = mmio.rd(R.PIPE_FRMCNT_A);
+    mmio.say("vbirq: pipeIIR edges="); mmio.sayDec(edges);
+    mmio.say(" DEIIR edges="); mmio.sayDec(de_edges);
+    mmio.say(" FRMCNT delta="); mmio.sayDec(f1 -% f0);
+    mmio.say("\n");
+    mmio.say("vbirq: after PISR="); mmio.sayHex(mmio.rd(R.DE_PIPE_ISR_A));
+    mmio.say(" PIMR="); mmio.sayHex(mmio.rd(R.DE_PIPE_IMR_A));
+    mmio.say(" PIIR="); mmio.sayHex(mmio.rd(R.DE_PIPE_IIR_A));
+    mmio.say(" DEIER="); mmio.sayHex(mmio.rd(R.DEIER));
+    mmio.say(" DEIMR="); mmio.sayHex(mmio.rd(R.DEIMR));
+    mmio.say(" DEIIR="); mmio.sayHex(mmio.rd(R.DEIIR));
+    mmio.say("\n");
+}
+
 // VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).
 // Returns events seen — 0 means the IIR didn't latch (still reports the
 // flip committed; the scanout swap is visible regardless).

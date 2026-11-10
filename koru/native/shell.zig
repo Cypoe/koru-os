@@ -138,6 +138,12 @@ fn dispatch() void {
         text.puts("kdmabuf returned — console still alive\n");
         return;
     }
+    if (eq("vbirq")) { // gen8+ vblank IRQ chain probe — pure MMIO
+        text.puts("vbirq: arming gen8+ vblank chain — watch UDP\n");
+        kmsdrv.vbirqProbe();
+        text.puts("vbirq returned — console still alive\n");
+        return;
+    }
     if (eq("gpu")) { // GEN9 render-engine probe: forcewake+DC off, ring submit
         text.puts("gpu: render-engine probe — watch UDP markers\n");
         gtdrv.probe();
