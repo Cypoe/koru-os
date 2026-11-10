@@ -213,12 +213,17 @@ fn armInner() bool {
 }
 
 // re-poke the registers a foreign writer (gt probe's ringReset/ringArm)
-// could have clobbered. START+CTL pin the ring image; HWS_PGA left as-is
+// could have clobbered. Compare-then-write: START only gets rewritten
+// when it actually differs — a gratuitous START write on a live ring is
+// not something i915 ever does, so don't either. HWS_PGA left as-is
 // (probe's hwsp page is equally valid mapped memory).
 fn repoke() void {
     const base = gt.BCS_BASE;
-    wrAt(base, gt.OFF_START, @truncate(ring_gtt_off));
-    wrAt(base, gt.OFF_CTL, ((RING_PAGES - 1) << 12) | 1);
+    const wantStart: u32 = @truncate(ring_gtt_off);
+    if (rdAt(base, gt.OFF_START) != wantStart) {
+        wrAt(base, gt.OFF_START, wantStart);
+        wrAt(base, gt.OFF_CTL, ((RING_PAGES - 1) << 12) | 1);
+    }
 }
 
 // ---- layer backing -> GGTT -----------------------------------------------------

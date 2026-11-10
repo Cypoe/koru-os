@@ -1693,7 +1693,7 @@ blit/frame/map counts, submit/fence FAIL with CPU-fallback note;
 `gcomp` shell cmd + present.stat gpu=/cpu= frame split. kstat readback
 px unchanged.
 
-ISO: dist/koru-gpub-20261110-0128.iso (ReleaseSmall layout, .data
+ISO: dist/koru-gpub-20261110-0130.iso (ReleaseSmall layout, .data
 0x141000 < 0x168000 threshold; corrected MBR 830002001000000001000000
 bb5e0000). QEMU boot verified to shell+hb (non-i915 => CPU path).
 T590 validation pending: 'kms' then drag a kwin window — expect
