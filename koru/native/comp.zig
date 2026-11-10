@@ -692,6 +692,44 @@ pub fn applySprite(t: *const Target, x: u32, y: u32, w: u32, h: u32) void {
     }
 }
 
+// applySpriteRects — the GPU path's once-per-pixel sprite pass over a
+// damage SET. Per-rect applySprite calls double-XOR sprite pixels covered
+// by overlapping damage (cursor old+new motion rects) -> corrupted
+// sprite. Here each sprite pixel XORs at most once, iff some damage rect
+// actually repainted under it — identical coverage, no double-hit.
+pub fn applySpriteRects(t: *const Target, rects: []const Rect) void {
+    if (!live or !ptr_on or spr_bits == null) return;
+    const bits = spr_bits.?;
+    const x1 = @min(W, t.w);
+    const y1 = @min(H, t.h);
+    const px0 = @as(u32, @intCast(ptr_x));
+    const py0 = @as(u32, @intCast(ptr_y));
+    var dy: u32 = 0;
+    while (dy < 12) : (dy += 1) {
+        const rowbits = bits[dy];
+        var dx: u32 = 0;
+        while (dx < 12) : (dx += 1) {
+            if (((rowbits >> @intCast(11 - dx)) & 1) == 0) continue;
+            const px = px0 + dx;
+            const py = py0 + dy;
+            if (px >= x1 or py >= y1) continue;
+            var covered = false;
+            for (rects) |r| {
+                if (px >= r.x and px < r.x + r.w and
+                    py >= r.y and py < r.y + r.h)
+                {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) continue;
+            const d = @as(usize, @intCast(py)) * @as(usize, @intCast(t.pitch)) +
+                @as(usize, @intCast(px));
+            t.px[d] ^= XOR;
+        }
+    }
+}
+
 // ---- producer-side queries (MC-3) ---------------------------------------------
 // win.zig's ui windows need pointer pos + their own scene origin for
 // CmdView hit-testing — comp owns both, so it hands them out read-only.

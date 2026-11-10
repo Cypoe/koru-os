@@ -1718,3 +1718,30 @@ corrected MBR). QEMU-verified: `mouse` -> full in:user-done/mouse-done/
 cursor:enabled sequence, single boot, no reset.
 LESSON: any inline asm using a fixed scratch register MUST declare it
 clobbered — -O level changes allocation and detonate latent bugs.
+
+## T590 gpubfix RUN — GPU compositor verified, sprite corruption found (2026-11-10)
+
+ISO dist/koru-gpubfix-20261110.iso on T590: input fix holds on silicon
+(cursor:ev streaming, kwin spawns, no reset). GPU path: present gpu=169
+cpu=0, gpucomp ready=1 frames=169->240 blits=602->949 fails=0
+mapfails=0 maps<=3/40, per-rect flips (rects=1 full=0). Mechanism
+proven; "smoother" NOT demonstrated — jank ledger suspects are
+CPU-side pacing (waitFrameEdge spin, vb: telemetry, damage coalescing),
+orthogonal to blit backend.
+
+DEFECT (new): cursor sprite corrupted during motion — "not the same
+triangle". Cause: gpublt.zig paintFrame calls comp.applySprite PER
+DAMAGE RECT (for rects |r| applySprite(...r...)) — XOR is not
+idempotent; sprite spanning multiple damage rects (cursor old+new
+motion damage) gets XOR'd 2+ times -> erased/corrupted sprite.
+FIX DIRECTION: apply sprite XOR once per frame over the union of
+damage (or sprite rect ∩ damage), not per-rect.
+
+## SPRITE FIX — applySpriteRects once-per-pixel (2026-11-10)
+
+gpublt paintFrame now calls comp.applySpriteRects(spriteT, rects) —
+each sprite pixel XORs at most once iff covered by >=1 damage rect.
+Replaces per-rect applySprite (double-XOR on overlap -> corrupted
+sprite in motion). ISO dist/koru-gpubfix2-20261110.iso; QEMU-verified:
+mouse -> cursor:enabled, mouse_move -> cursor:ev stream + edge
+markers, single boot no reset. T590 flash pending.

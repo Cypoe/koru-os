@@ -463,10 +463,9 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc, spriteT: *const comp.Tar
         return false;
     }
 
-    // cursor XOR over each damage rect — post-fence, same coverage as pxIn
-    for (rects) |r| {
-        comp.applySprite(spriteT, r.x, r.y, r.w, r.h);
-    }
+    // cursor XOR over the damage SET — post-fence, once per pixel
+    // (per-rect calls double-XOR overlap -> corrupted sprite in motion)
+    comp.applySpriteRects(spriteT, rects);
 
     blit_count += emitted;
     frame_count += 1;
