@@ -1630,3 +1630,32 @@ runtime in-kernel — large, not attempted.
 
 FILES: koru/native/cmdview.zig (new), ui_cmds.txt (embedded dump),
 win.zig, comp.zig, shell.zig. Oshun: koruos/ui_probe.k, koruos/koru.json.
+
+## GPU-DRAW LANDED — GEN9.2 render engine executes our commands (2026-11-10)
+
+MILESTONE: first visible GPU-rendered pixels on the T590 panel.
+`gpu` probe -> gt5b context-free bare-ring GGTT XY_COLOR_BLT wrote a
+solid red rect (readback 12/12 red) + 32-dword magenta
+MI_STORE_DWORD_IMM|GGTT stripe (4/4) into the LIVE kms scanout
+buffer — user confirmed red blob bottom + magenta strip top on panel.
+GEN9.2 BCS blit engine runs our hand-built ring batch with NO execlist
+context: dst = GGTT byte offset of scanned phys, pitch/rows/width_dw
+per intel_migrate.c emit_clear ver>=8 layout.
+
+Context: gt5a LRC+ELSP+PPGTT path built (gen9_xcs_offsets image, 3-level
+PD/PT hand-mapped, descriptor VALID|PRIVILEGE|FORCE_RESTORE|LEGACY_32B)
+submits and head advances, but PDP0=0 post-run -> context did NOT
+engage (HEAD-STALLED on the PPGTT batch). Submission plumbing proven
+earlier (gt3/gt4 head advanced + GGTT store proof). Execlist context
+engagement = next rung (descriptor ctxid=0? FORCE_PD_RESTORE? GuC
+absent?).
+
+Geometry fix this round: blt dst was page-aligned but MID-ROW (pitch
+7680 vs page 4096 realign every 8 rows/15 pages) -> top edge stepped,
+right edge off ~1px. Now row0 snapped to the row/page cycle
+(alignRows=4096/gcd(pitch,4096)=8) -> dst row+page aligned, bottom
+256 rows (824..1079) full-width clean rect.
+
+NEXT: fix blit geometry on-panel -> PPGTT context engagement -> real
+surfaces -> shaders. QEMU can't test i915 — T590-only.
+ISO: dist/koru-gtblit3-20261110.iso (proven pipeline + corrected MBR).

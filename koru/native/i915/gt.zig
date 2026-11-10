@@ -566,6 +566,17 @@ fn dumpEngineU(comptime tag: []const u8, base: u32) void {
         rdAt(base, OFF_PDP0_LDW), rdAt(base, 0x244) });
 }
 
+fn gcdU32(a: u32, b: u32) u32 {
+    var x = a;
+    var y = b;
+    while (y != 0) {
+        const t = x % y;
+        x = y;
+        y = t;
+    }
+    return x;
+}
+
 fn pollHead(base: u32, want: u32, ms: u32) u32 {
     const deadline = mmio.nowMs() + ms;
     var head: u32 = 0;
@@ -848,22 +859,28 @@ fn blitPhase(p: Pages) void {
     sayU("gt5: dst w={d} h={d} pitch={d} phys={x} gtt_off={x} frames={d}\n", .{
         buf.width, buf.height, buf.pitch, buf.phys, buf.gtt_offset, buf.frames });
 
-    // Geometry: bottom ~250 rows of the buffer — far from the console
-    // titlebar/text damage so the compositor can't erase the proof before
-    // a frame flips. startByte is page-aligned so one PT covers it.
+    // Geometry: bottom ~250 rows, ROW-ALIGNED. XY_COLOR_BLT walks `rows`
+    // strips of `pitch` bytes from dst — a page-aligned-but-mid-row dst
+    // (7680 doesn't divide 4096; they realign every 8 rows/15 pages)
+    // steps the top edge mid-row and throws the right edge off. Snap
+    // row0 down to the row/page cycle so dst is both row- and
+    // page-aligned: row0*pitch % 4096 == 0 by construction.
     const pitch: u32 = buf.pitch;
-    if (pitch == 0 or buf.frames == 0) {
+    const height: u32 = buf.height;
+    if (pitch == 0 or buf.frames == 0 or height == 0) {
         stage("gt5: FAIL degenerate buffer");
         return;
     }
+    const alignRows: u32 = 4096 / gcdU32(pitch, 4096);
+    const wantRows: u32 = @min(250, height);
+    const row0: u32 = if (alignRows <= height)
+        ((height - wantRows) / alignRows) * alignRows else 0;
+    var rows: u32 = height - row0;
+    const startByte: u64 = @as(u64, row0) * pitch; // page-aligned by construction
+    const startPage: u32 = @intCast(startByte / 4096);
     const totalPages: usize = buf.frames;
-    const startPage: u32 = if (totalPages > 520)
-        @intCast(totalPages - 469) else 0;
-    const availBytes: u64 = @as(u64, totalPages - @as(usize, startPage)) * 4096;
-    var rows: u32 = @intCast(@min(availBytes / pitch, @as(u64, 250)));
-    if (rows == 0) rows = 1;
-    var nPages: u32 = @intCast((@as(u64, rows) * pitch + 4095) / 4096);
     const maxPages: u32 = @intCast(totalPages - @as(usize, startPage));
+    var nPages: u32 = @intCast((@as(u64, rows) * pitch + 4095) / 4096);
     if (nPages > maxPages) {
         nPages = maxPages;
         rows = @intCast((@as(u64, nPages) * 4096) / pitch);
@@ -875,9 +892,8 @@ fn blitPhase(p: Pages) void {
         nPages = @intCast((@as(u64, rows) * pitch + 4095) / 4096);
     }
     const widthDw: u32 = pitch / 4;
-    const startByte: u64 = @as(u64, startPage) * 4096;
-    sayU("gt5: geom startPage={d} startByte={x} rows={d} nPages={d} widthDw={d}\n", .{
-        startPage, startByte, rows, nPages, widthDw });
+    sayU("gt5: geom row0={d} startByte={x} rows={d} nPages={d} widthDw={d} alignRows={d}\n", .{
+        row0, startByte, rows, nPages, widthDw, alignRows });
 
     // baseline readback BEFORE any submit — what does the surface hold now?
     readback("gt5pre", buf, startByte, rows, pitch, 0);
