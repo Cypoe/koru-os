@@ -692,6 +692,26 @@ pub fn applySprite(t: *const Target, x: u32, y: u32, w: u32, h: u32) void {
     }
 }
 
+// flushSpriteBox — clflush every cache line the sprite XOR will touch.
+// The GPU path's blits write the scene dumb through GGTT while the
+// cursor pass RMWs the identity CPU map (WB-cached): without a flush,
+// stale lines can feed the XOR a pre-blit pixel -> corrupted sprite.
+// clflush does writeback+invalidate, so pending CPU writes are safe.
+fn flushSpriteBox(t: *const Target, x0: u32, y0: u32, x1: u32, y1: u32) void {
+    var y = y0;
+    while (y <= y1) : (y += 1) {
+        const row = @intFromPtr(t.px) +
+            @as(usize, @intCast(y)) * @as(usize, @intCast(t.pitch)) * 4;
+        var a = (row + @as(usize, @intCast(x0)) * 4) & ~@as(usize, 63);
+        const end = row + (@as(usize, @intCast(x1)) + 1) * 4;
+        while (a < end) : (a += 64)
+            asm volatile ("clflush (%[p])"
+                :
+                : [p] "r" (a)
+                : .{ .memory = true });
+    }
+}
+
 // applySpriteRects — the GPU path's once-per-pixel sprite pass over a
 // damage SET. Per-rect applySprite calls double-XOR sprite pixels covered
 // by overlapping damage (cursor old+new motion rects) -> corrupted
@@ -702,32 +722,53 @@ pub fn applySpriteRects(t: *const Target, rects: []const Rect) void {
     const bits = spr_bits.?;
     const x1 = @min(W, t.w);
     const y1 = @min(H, t.h);
-    const px0 = @as(u32, @intCast(ptr_x));
-    const py0 = @as(u32, @intCast(ptr_y));
+    const px0 = @as(u32, @bitCast(ptr_x)); // wrap-safe like applySprite's -%
+    const py0 = @as(u32, @bitCast(ptr_y)); // negative ptr still lands right
+    var cov: [12]u16 = @splat(0);
+    var xlo: u32 = x1;
+    var xhi: u32 = 0;
+    var ylo: u32 = y1;
+    var yhi: u32 = 0;
     var dy: u32 = 0;
     while (dy < 12) : (dy += 1) {
         const rowbits = bits[dy];
         var dx: u32 = 0;
         while (dx < 12) : (dx += 1) {
             if (((rowbits >> @intCast(11 - dx)) & 1) == 0) continue;
-            const px = px0 + dx;
-            const py = py0 + dy;
+            const px = px0 +% dx;
+            const py = py0 +% dy;
             if (px >= x1 or py >= y1) continue;
-            var covered = false;
             for (rects) |r| {
                 if (px >= r.x and px < r.x + r.w and
                     py >= r.y and py < r.y + r.h)
                 {
-                    covered = true;
+                    cov[dy] |= @as(u16, 1) << @intCast(dx);
+                    if (px < xlo) xlo = px;
+                    if (px > xhi) xhi = px;
+                    if (py < ylo) ylo = py;
+                    if (py > yhi) yhi = py;
                     break;
                 }
             }
-            if (!covered) continue;
+        }
+    }
+    if (yhi < ylo) return; // no covered sprite pixel — nothing to XOR
+    flushSpriteBox(t, xlo, ylo, xhi, yhi); // drop stale pre-blit lines
+    dy = 0;
+    while (dy < 12) : (dy += 1) {
+        const m = cov[dy];
+        if (m == 0) continue;
+        const py = py0 +% dy;
+        var dx: u32 = 0;
+        while (dx < 12) : (dx += 1) {
+            if (((m >> @intCast(dx)) & 1) == 0) continue;
+            const px = px0 +% dx;
             const d = @as(usize, @intCast(py)) * @as(usize, @intCast(t.pitch)) +
                 @as(usize, @intCast(px));
             t.px[d] ^= XOR;
         }
     }
+    flushSpriteBox(t, xlo, ylo, xhi, yhi); // push XORed lines to DRAM
 }
 
 // ---- producer-side queries (MC-3) ---------------------------------------------

@@ -1745,3 +1745,29 @@ Replaces per-rect applySprite (double-XOR on overlap -> corrupted
 sprite in motion). ISO dist/koru-gpubfix2-20261110.iso; QEMU-verified:
 mouse -> cursor:enabled, mouse_move -> cursor:ev stream + edge
 markers, single boot no reset. T590 flash pending.
+
+## SPRITE FIX INSUFFICIENT — per-buffer stale XOR suspect (2026-11-10)
+
+gpubfix2 on T590: sprite still corrupted — "club triangle" flickering
+in/out. Double-XOR fix (applySpriteRects) was necessary but NOT the
+whole story. Deeper suspect: alternating swapchain — each back buffer
+retains sprite XOR at positions from 2 frames ago; spr_damaged tracks
+only last-position (one frame of history), so the OTHER buffer's stale
+sprite pixels never get repainted -> buffers disagree -> flicker.
+Fix direction: per-buffer sprite-pos tracking, or damage must reach
+back across the swapchain period. Wire during run: gpucomp frames
+720->840 blits=2120->2480 fails=0, cursor:move ~120Hz, flips rects=1.
+
+## SPRITE FIX v3 — coherency flush + wrap-safe coords + spr@ oracle (2026-11-10)
+
+comp.applySpriteRects reworked: coverage bitmap cov[12]u16 (each sprite
+pixel XOR'd at most once iff inside a damage rect), wrap-safe coords
+(@bitCast ptr + +% — negative ptr handled like applySprite's -%), and
+flushSpriteBox clflush invalidate-before + writeback-after around the
+covered box. THEORY: identity CPU map is WB-cached while GPU blits
+write via GGTT — RMW could read pre-blit stale lines -> corrupted
+sprite, per-buffer divergence -> flicker. Unproven until T590 panel.
+present.stat now dumps spr@=<px> per buffer — buf0/buf1 divergence at
+the cursor pixel is the flicker oracle on the wire.
+ISO dist/koru-gpubfix3-20261110.iso; QEMU smoke: mouse->cursor:enabled,
+mouse_move->cursor:ev, single boot no reset.

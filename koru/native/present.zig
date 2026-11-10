@@ -469,18 +469,30 @@ pub fn stat() void {
            last_vblank_raw, flip_fails, @intFromBool(flip_gave_up),
            gpu_frames, cpu_frames });
     gpublt.stat();
+    var sx: i32 = 0;
+    var sy: i32 = 0;
+    var son: bool = false;
+    var sbtn: u32 = 0;
+    comp.pointerPos(&sx, &sy, &son, &sbtn);
     for (bufs, 0..) |b, i| {
         if (!b.ok) {
             sayU("  buf{d}: down\n", .{i});
             continue;
         }
-        // readback: center + top-left pixels of the composited surface
+        // readback: center + top-left pixels of the composited surface,
+        // plus the cursor pixel — buf0/buf1 divergence here = the
+        // sprite-flicker oracle (each buffer must agree on XOR state).
         const cx = @as(usize, b.h / 2) * b.pitch + @as(usize, b.w / 2);
         const tl = @as(usize, 8) * b.pitch + 8;
         const pc: u32 = b.map[cx];
         const pt: u32 = b.map[tl];
-        sayU("  buf{d}: h={d} acc.n={d} acc.full={d} px@center={x} px@8,8={x}\n",
-            .{ i, b.handle, b.acc.n, @intFromBool(b.acc.full), pc, pt });
+        var spx: u32 = 0;
+        if (son and sx >= 0 and sy >= 0 and
+            @as(u32, @intCast(sx)) < b.w and @as(u32, @intCast(sy)) < b.h)
+            spx = b.map[@as(usize, @intCast(sy)) * b.pitch +
+                @as(usize, @intCast(sx))];
+        sayU("  buf{d}: h={d} acc.n={d} acc.full={d} px@center={x} px@8,8={x} spr@={x}\n",
+            .{ i, b.handle, b.acc.n, @intFromBool(b.acc.full), pc, pt, spx });
     }
     sayU("  front={d} dspsurf={x} pre_scanout={d}\n",
         .{ front orelse 99, kms.surfaceOffset(), pre_scanout orelse 999 });
