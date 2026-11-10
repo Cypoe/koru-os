@@ -5,7 +5,7 @@
 // MC-1 per session/m1-dumb-kms/COMPOSITOR-DESIGN.md: ONE scene core on
 // the live shell path. This module stays dependency-free (externs only)
 // — it is a -M module with no deps, so cursor/kms/text state arrives
-// through feedPointer/setSprite/sink callbacks, never imports.
+// through feedPointer/cursorAttach/sink callbacks, never imports.
 //
 // Rulings (carried from the contract):
 // - z decides pixels, never present order. Layers carry an explicit
@@ -23,10 +23,9 @@
 //   chrome/focus; kind=.window adds WinState; kind=.root is the console
 //   backing — a retained layer, so covering console text no longer
 //   destroys it (the occlusion loss that forced kwin's heal stride).
-// - The cursor is NOT a layer: pointer state arrives via feedPointer,
-//   the sprite bitmap via setSprite; composite applies it last (XOR
-//   over the resolved scene pixel — same visual as cursor.zig's direct
-//   XOR, now damage-tracked).
+// - The cursor IS a layer: pointer state arrives via feedPointer (which
+//   place()s the cursor layer — damage-tracked like every layer), the
+//   arrow backing via cursorAttach. CURSOR_CLEAR px are transparent.
 // - Opaque XRGB8888 only — the seam carries no alpha.
 
 extern fn koruos_fb_info(out: *Info) callconv(.c) u8;
@@ -49,9 +48,14 @@ const ScanoutInfo = extern struct {
 
 pub const MAX_LAYERS = 16;
 const BG: u32 = 0x00000000; // root fallback when no root layer is live
-const XOR: u32 = 0x00FFFFFF; // cursor sprite invert — cursor.zig's colour
 
-pub const Kind = enum { root, window, surface };
+// cursor layer contract: px == CURSOR_CLEAR is transparent (the pixel
+// resolves to whatever layer sits below); any other value composites
+// verbatim. The layer's z is pinned above all z_next churn.
+pub const CURSOR_CLEAR: u32 = 0;
+const CURSOR_Z: u32 = 0xFFFF_0000;
+
+pub const Kind = enum { root, window, surface, cursor };
 
 // compositor-side window state — chrome geometry for hit-testing,
 // focus, drag. Position is NOT here: layers own x/y through the
@@ -166,44 +170,41 @@ var ptr_buttons: u32 = 0;
 var ptr_prev_held: bool = false;
 var drag_handle: i32 = -1;
 
-var spr_bits: ?*const [12]u16 = null; // cursor.zig's SPRITE, registered once
-var spr_damaged: ?Rect = null; // sprite rect last fed — chains move damage
+var cur_handle: i32 = -1; // cursor layer slot — -1 until cursorAttach
 
 pub fn feedPointer(x: i32, y: i32, on: bool, buttons: u32) void {
+    const was_on = ptr_on;
     ptr_x = x;
     ptr_y = y;
     ptr_on = on;
     ptr_buttons = buttons;
-    // sprite damage: the rect the screen must repaint so the arrow
-    // erases at its old spot and draws at its new one. acc accumulates,
-    // so chaining unions per feed is correct across composites.
-    const cur: ?Rect = if (on and spr_bits != null)
-        Rect{ .x = @intCast(@max(x, 0)), .y = @intCast(@max(y, 0)), .w = 12, .h = 12 }
-    else
-        null;
-    if (cur) |c| {
-        if (spr_damaged) |o| {
-            if (o.x == c.x and o.y == c.y and o.w == c.w and o.h == c.h) return;
-            // damage BOTH rects explicitly — erase where the arrow was
-            // last fed, repaint where it is now (Acc.add merges the
-            // pair into the covering union; separate adds keep the
-            // contract honest if merge rules ever change).
-            _ = damage(o.x, o.y, o.w, o.h);
-            _ = damage(c.x, c.y, c.w, c.h);
-        } else {
-            _ = damage(c.x, c.y, c.w, c.h);
-        }
-        spr_damaged = c;
-    } else if (spr_damaged) |o| {
-        _ = damage(o.x, o.y, o.w, o.h);
-        spr_damaged = null;
+    // the cursor is a scene layer now — place() damages the vacated +
+    // destination rects itself; a visibility flip repaints its rect so
+    // hide/show composites correctly. pxIn/collectLayers gate .cursor
+    // layers on ptr_on, so "off" needs only the repaint.
+    if (cur_handle >= 0) {
+        const l = &layers[@intCast(cur_handle)];
+        if (on != was_on) _ = damage(l.x, l.y, l.w, l.h);
+        if (on) place(@intCast(cur_handle), x, y);
     }
 }
 
-// register the cursor sprite bitmap (cursor.zig's 12x12 arrow, MSB-left
-// bit order per row) — composite applies it over the resolved scene px.
-pub fn setSprite(bits: *const [12]u16) void {
-    spr_bits = bits;
+// cursorAttach — the pointer's scene presence is a topmost layer with
+// CURSOR_CLEAR transparency, not an XOR overlay. Called once at shell
+// init with cursor.zig's expanded arrow backing.
+pub fn cursorAttach(buf: [*]u32, pitch: u32, w: u32, h: u32) i32 {
+    var sx: u32 = 0;
+    var sy: u32 = 0;
+    const hnd = attach(buf, pitch, w, h, 0, 0, .cursor, 0, &sx, &sy);
+    if (hnd >= 0) {
+        cur_handle = hnd;
+        layers[@intCast(hnd)].z = CURSOR_Z; // above all z_next churn
+    }
+    return hnd;
+}
+
+pub fn pointerOn() bool {
+    return ptr_on;
 }
 
 // feedMotion — kbd.zig's input-queue seam calls this on the dormant
@@ -226,24 +227,18 @@ fn pxIn(x: u32, y: u32, cands: []const *Layer) u32 {
     var c: u32 = BG;
     for (cands) |l| {
         if (!layerHit(l, x, y)) continue;
+        if (l.kind == .cursor) {
+            if (!ptr_on) continue; // hidden — resolve what's beneath
+            const px = l.buf[@as(usize, @intCast(y - l.y)) *
+                @as(usize, @intCast(l.pitch)) +
+                @as(usize, @intCast(x - l.x))];
+            if (px == CURSOR_CLEAR) continue; // transparent — next layer
+            c = px;
+            break;
+        }
         c = l.buf[@as(usize, @intCast(y - l.y)) * @as(usize, @intCast(l.pitch)) +
             @as(usize, @intCast(x - l.x))];
         break; // topmost hit wins — c stays BG when nothing covers
-    }
-    // cursor sprite — XOR over whatever the scene resolved, INCLUDING
-    // bare background (the old `if (!hit) return BG` skipped the sprite
-    // entirely over uncovered pixels — cursor vanished over gaps).
-    // Same visual as cursor.zig's direct fb XOR, inside the damage pass.
-    if (ptr_on) {
-        if (spr_bits) |bits| {
-            const dx = x -% @as(u32, @intCast(ptr_x));
-            const dy = y -% @as(u32, @intCast(ptr_y));
-            if (dx < 12 and dy < 12 and
-                ((bits[dy] >> @intCast(11 - dx)) & 1) != 0)
-            {
-                c ^= XOR;
-            }
-        }
     }
     return c;
 }
@@ -497,7 +492,6 @@ pub fn syncDims() void {
     say("x");
     koru_putdec(H);
     say("\n");
-    spr_damaged = null; // buffers re-clip/rebuild — no stale sprite pos to erase
     for (layers[0..], 0..) |*l, i| {
         if (!l.live) continue;
         place(i, @intCast(l.x), @intCast(l.y)); // re-clamp into new scene
@@ -665,112 +659,6 @@ pub fn layerView(i: usize) ?LayerView {
     };
 }
 
-// applySprite — the cursor XOR pass for one scene rect, run by the GPU
-// composite path AFTER its blits land (the CPU path applies the same
-// XOR inside pxIn). Identical coverage: sprite bits over whatever the
-// scene resolved — BG or layer pixels.
-pub fn applySprite(t: *const Target, x: u32, y: u32, w: u32, h: u32) void {
-    if (!live or !ptr_on or spr_bits == null or w == 0 or h == 0) return;
-    const bits = spr_bits.?;
-    const x1 = @min(@min(x + w, W), t.w);
-    const y1 = @min(@min(y + h, H), t.h);
-    if (x >= x1 or y >= y1) return;
-    var yy = y;
-    while (yy < y1) : (yy += 1) {
-        const dy = yy -% @as(u32, @intCast(ptr_y));
-        if (dy >= 12) continue;
-        const rowbits = bits[dy];
-        var xx = x;
-        while (xx < x1) : (xx += 1) {
-            const dx = xx -% @as(u32, @intCast(ptr_x));
-            if (dx < 12 and ((rowbits >> @intCast(11 - dx)) & 1) != 0) {
-                const d = @as(usize, @intCast(yy)) * @as(usize, @intCast(t.pitch)) +
-                    @as(usize, @intCast(xx));
-                t.px[d] ^= XOR;
-            }
-        }
-    }
-}
-
-// flushSpriteBox — clflush every cache line the sprite XOR will touch.
-// The GPU path's blits write the scene dumb through GGTT while the
-// cursor pass RMWs the identity CPU map (WB-cached): without a flush,
-// stale lines can feed the XOR a pre-blit pixel -> corrupted sprite.
-// clflush does writeback+invalidate, so pending CPU writes are safe.
-fn flushSpriteBox(t: *const Target, x0: u32, y0: u32, x1: u32, y1: u32) void {
-    var y = y0;
-    while (y <= y1) : (y += 1) {
-        const row = @intFromPtr(t.px) +
-            @as(usize, @intCast(y)) * @as(usize, @intCast(t.pitch)) * 4;
-        var a = (row + @as(usize, @intCast(x0)) * 4) & ~@as(usize, 63);
-        const end = row + (@as(usize, @intCast(x1)) + 1) * 4;
-        while (a < end) : (a += 64)
-            asm volatile ("clflush (%[p])"
-                :
-                : [p] "r" (a)
-                : .{ .memory = true });
-    }
-}
-
-// applySpriteRects — the GPU path's once-per-pixel sprite pass over a
-// damage SET. Per-rect applySprite calls double-XOR sprite pixels covered
-// by overlapping damage (cursor old+new motion rects) -> corrupted
-// sprite. Here each sprite pixel XORs at most once, iff some damage rect
-// actually repainted under it — identical coverage, no double-hit.
-pub fn applySpriteRects(t: *const Target, rects: []const Rect) void {
-    if (!live or !ptr_on or spr_bits == null) return;
-    const bits = spr_bits.?;
-    const x1 = @min(W, t.w);
-    const y1 = @min(H, t.h);
-    const px0 = @as(u32, @bitCast(ptr_x)); // wrap-safe like applySprite's -%
-    const py0 = @as(u32, @bitCast(ptr_y)); // negative ptr still lands right
-    var cov: [12]u16 = @splat(0);
-    var xlo: u32 = x1;
-    var xhi: u32 = 0;
-    var ylo: u32 = y1;
-    var yhi: u32 = 0;
-    var dy: u32 = 0;
-    while (dy < 12) : (dy += 1) {
-        const rowbits = bits[dy];
-        var dx: u32 = 0;
-        while (dx < 12) : (dx += 1) {
-            if (((rowbits >> @intCast(11 - dx)) & 1) == 0) continue;
-            const px = px0 +% dx;
-            const py = py0 +% dy;
-            if (px >= x1 or py >= y1) continue;
-            for (rects) |r| {
-                if (px >= r.x and px < r.x + r.w and
-                    py >= r.y and py < r.y + r.h)
-                {
-                    cov[dy] |= @as(u16, 1) << @intCast(dx);
-                    if (px < xlo) xlo = px;
-                    if (px > xhi) xhi = px;
-                    if (py < ylo) ylo = py;
-                    if (py > yhi) yhi = py;
-                    break;
-                }
-            }
-        }
-    }
-    if (yhi < ylo) return; // no covered sprite pixel — nothing to XOR
-    flushSpriteBox(t, xlo, ylo, xhi, yhi); // drop stale pre-blit lines
-    dy = 0;
-    while (dy < 12) : (dy += 1) {
-        const m = cov[dy];
-        if (m == 0) continue;
-        const py = py0 +% dy;
-        var dx: u32 = 0;
-        while (dx < 12) : (dx += 1) {
-            if (((m >> @intCast(dx)) & 1) == 0) continue;
-            const px = px0 +% dx;
-            const d = @as(usize, @intCast(py)) * @as(usize, @intCast(t.pitch)) +
-                @as(usize, @intCast(px));
-            t.px[d] ^= XOR;
-        }
-    }
-    flushSpriteBox(t, xlo, ylo, xhi, yhi); // push XORed lines to DRAM
-}
-
 // ---- producer-side queries (MC-3) ---------------------------------------------
 // win.zig's ui windows need pointer pos + their own scene origin for
 // CmdView hit-testing — comp owns both, so it hands them out read-only.
@@ -803,7 +691,7 @@ pub fn init() void {
     pending.clear();
     drag_handle = -1;
     ptr_prev_held = false;
-    spr_damaged = null;
+    cur_handle = -1;
     live = true;
     say("comp: scene live ");
     koru_putdec(W);

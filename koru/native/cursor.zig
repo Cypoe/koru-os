@@ -92,6 +92,57 @@ const SPRITE = [SPR_H]u16{
     0b011111111110, // tail bottom, slight taper
 };
 
+// ---- scene backing -------------------------------------------------------
+// The cursor is a comp layer now — an opaque arrow with a CURSOR_CLEAR
+// surround, not an XOR overlay. Expand the 1bpp SPRITE once into a static
+// u32 backing: set bits -> white fill, unset 8-neighbours of set bits ->
+// dark outline, everything else -> transparent. .bss sits inside the
+// identity map (VA==PA) so gpublt's mapBacking GGTT-maps it like any
+// other layer backing — no pmm needed for 576 bytes.
+pub const CURSOR_W: u32 = 12;
+pub const CURSOR_H: u32 = 12;
+const FILL: u32 = 0xFFFF_FFFF;
+const OUTLINE: u32 = 0xFF11_1111;
+// px == 0 is comp.CURSOR_CLEAR — the transparent sentinel both backends
+// honour (pxIn falls through, gpublt skips the run).
+
+var cursor_px: [144]u32 = undefined;
+var cursor_ready: bool = false;
+
+pub fn backingInit() void {
+    if (cursor_ready) return;
+    for (0..144) |i| {
+        const dx: usize = i % 12;
+        const dy: usize = i / 12;
+        const set = ((SPRITE[dy] >> @intCast(11 - dx)) & 1) != 0;
+        if (set) {
+            cursor_px[i] = FILL;
+            continue;
+        }
+        var edge = false;
+        var ey: i32 = -1;
+        while (ey <= 1 and !edge) : (ey += 1) {
+            var ex: i32 = -1;
+            while (ex <= 1 and !edge) : (ex += 1) {
+                if (ex == 0 and ey == 0) continue;
+                const nx = @as(i32, @intCast(dx)) + ex;
+                const ny = @as(i32, @intCast(dy)) + ey;
+                if (nx < 0 or ny < 0 or nx >= 12 or ny >= 12) continue;
+                const nset = ((SPRITE[@intCast(ny)] >>
+                    @intCast(11 - @as(usize, @intCast(nx)))) & 1) != 0;
+                if (nset) edge = true;
+            }
+        }
+        cursor_px[i] = if (edge) OUTLINE else 0;
+    }
+    cursor_ready = true;
+}
+
+pub fn backing() ?[*]u32 {
+    if (!cursor_ready) return null;
+    return @ptrCast(&cursor_px);
+}
+
 fn say(s: [*:0]const u8) void {
     _ = fputs(s, stdout);
 }
@@ -207,11 +258,6 @@ pub fn sprite() Sprite {
         .on = enabled and init_d,
     };
 }
-// the bitmap rows for comp.setSprite — same MSB-left bit order per row.
-pub fn spriteBits() *const [SPR_H]u16 {
-    return &SPRITE;
-}
-
 // composite suspend/resume — a non-XOR writer (the window blit) is
 // about to repaint a rect that may contain the sprite. Erase now so
 // the blit sees pure scene pixels; redraw on top afterwards. Both are

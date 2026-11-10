@@ -26,7 +26,9 @@ pub fn run() noreturn {
     text.init();            // dims + bg fill (into backing via sink) + cursor home
     present.init();   // present seam — backend chosen per tick by device state
     cursor.setSceneOwned(true); // sprite composites inside the damage pass
-    comp.setSprite(cursor.spriteBits());
+    cursor.backingInit();
+    if (cursor.backing()) |cbuf|
+        _ = comp.cursorAttach(cbuf, cursor.CURSOR_W, cursor.CURSOR_W, cursor.CURSOR_H);
     text.puts("KORU OS - native shell\n");
     text.puts("type 'help'\n\n");
     prompt();

@@ -417,7 +417,7 @@ fn flipTick() void {
     // paintFrame returns false on any named degrade (engine down, GTT
     // map refused, fence timeout) — the CPU composite below is the
     // explicit honest fallback, counted, never silent.
-    if (gpublt.paintFrame(b.handle, &b.acc, &t)) {
+    if (gpublt.paintFrame(b.handle, &b.acc)) {
         gpu_frames += 1;
     } else {
         comp.compositeAcc(&t, &b.acc);
@@ -487,10 +487,14 @@ pub fn stat() void {
         const pc: u32 = b.map[cx];
         const pt: u32 = b.map[tl];
         var spx: u32 = 0;
-        if (son and sx >= 0 and sy >= 0 and
-            @as(u32, @intCast(sx)) < b.w and @as(u32, @intCast(sy)) < b.h)
-            spx = b.map[@as(usize, @intCast(sy)) * b.pitch +
-                @as(usize, @intCast(sx))];
+        // sample the tail-bar centre (sprite row 10 is all-ones — a
+        // guaranteed SET bit, so a live XOR must differ from scene BG)
+        const gx = sx + 5;
+        const gy = sy + 10;
+        if (son and gx >= 0 and gy >= 0 and
+            @as(u32, @intCast(gx)) < b.w and @as(u32, @intCast(gy)) < b.h)
+            spx = b.map[@as(usize, @intCast(gy)) * b.pitch +
+                @as(usize, @intCast(gx))];
         sayU("  buf{d}: h={d} acc.n={d} acc.full={d} px@center={x} px@8,8={x} spr@={x}\n",
             .{ i, b.handle, b.acc.n, @intFromBool(b.acc.full), pc, pt, spx });
     }

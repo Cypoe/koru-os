@@ -1771,3 +1771,28 @@ present.stat now dumps spr@=<px> per buffer — buf0/buf1 divergence at
 the cursor pixel is the flicker oracle on the wire.
 ISO dist/koru-gpubfix3-20261110.iso; QEMU smoke: mouse->cursor:enabled,
 mouse_move->cursor:ev, single boot no reset.
+
+## DECISION — hardware cursor plane replaces XOR sprite (2026-11-10)
+
+gpubfix5 (flushSrc layer-read flush) did NOT fix sprite — wire proved
+CPU maps correct (spr@=e5e5d1 both bufs). All CPU-side theories dead.
+Lars called it: XOR sprite is scaffolding from pre-modeset era; i915
+has a dedicated cursor plane (DSPCURVE/DSPCURBASE/DSPCURPOS/DSPCURCTRL)
+that scans as HW overlay — zero fb writes, no damage/coherency/flicker.
+pipe.zig already touches CUR_WM_A_0 + cursorOff() — groundwork exists.
+NEXT: implement cursor plane (ARGB bitmap upload once, pos feed from
+cursor.zig), retire comp sprite path. gpubfix5 ISO = last XOR build.
+
+## CURSOR AS LAYER — XOR sprite retired (2026-11-10)
+
+comp.Kind gains .cursor; cursor is a normal topmost layer (z pinned
+CURSOR_Z=0xFFFF0000) with CURSOR_CLEAR=0 transparency. cursor.zig
+expands SPRITE 1bpp -> static u32 backing (white fill + dark outline +
+transparent surround; .bss is identity-mapped so gpublt GGTT-maps it).
+feedPointer place()s the layer (damage-tracked); pxIn falls through
+CURSOR_CLEAR px; gpublt blits cursor runs skipping CLEAR px.
+DELETED: spr_bits/spr_damaged/setSprite/applySprite/applySpriteRects/
+flushSpriteBox/XOR — the whole XOR special-case class.
+ISO dist/koru-gpcursor-20261110.iso; QEMU: attach 12x12 layer, mouse ->
+cursor:enabled + cursor:ev, single boot no reset. GPU per-run blit path
+is T590-only — panel verdict pending.

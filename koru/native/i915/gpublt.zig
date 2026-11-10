@@ -23,10 +23,10 @@
 //
 // Scene semantics stay in comp.zig: this module reads layers via
 // comp.layerView, emits BG fill + z-asc copies per damage rect (opaque
-// XRGB8888 painter's algorithm == pxIn topmost-wins), then a fence
-// store, then the cursor XOR pass via comp.applySprite after the fence
-// lands. Sync = in-order engine + MI_STORE_DWORD_IMM|GGTT seq marker;
-// the CPU polls the fence page — blits are complete before return.
+// XRGB8888 painter's algorithm == pxIn topmost-wins; .cursor layers
+// blit as CURSOR_CLEAR-skipping runs), then a fence store. Sync =
+// in-order engine + MI_STORE_DWORD_IMM|GGTT seq marker; the CPU polls
+// the fence page — blits are complete before return.
 //
 // HONEST LIMITS:
 //   - Context-free GGTT addressing only (the proven gt5b mode). No PPGTT.
@@ -291,6 +291,25 @@ fn emitFill(dstGtt: u64, dstPitchB: u32, x: u32, y: u32, w: u32, h: u32, color: 
     return true;
 }
 
+// flushSrc — clflush the layer-backing src rect the next blit will read.
+// Layer backings are CPU-written through the WB identity map; the BCS
+// reads them via GGTT. Without a flush the engine can copy stale lines
+// (frozen console text, wrong pixels under the cursor -> sprite blob).
+fn flushSrc(buf: [*]u32, pitch: u32, x: u32, y: u32, w: u32, h: u32) void {
+    var yy = y;
+    while (yy < y + h) : (yy += 1) {
+        const row = @intFromPtr(buf) +
+            @as(usize, @intCast(yy)) * @as(usize, @intCast(pitch)) * 4;
+        var a = (row + @as(usize, @intCast(x)) * 4) & ~@as(usize, 63);
+        const end = row + (@as(usize, @intCast(x)) + @as(usize, @intCast(w))) * 4;
+        while (a < end) : (a += 64)
+            asm volatile ("clflush (%[p])"
+                :
+                : [p] "r" (a)
+                : .{ .memory = true });
+    }
+}
+
 // XY_SRC_COPY_BLT — copy src rect (layer px) to dst origin (scene px).
 fn emitCopy(dstGtt: u64, dstPitchB: u32,
             sx: u32, sy: u32, w: u32, h: u32, dx: u32, dy: u32,
@@ -377,6 +396,7 @@ fn collectLayers(r: comp.Rect, out: *[comp.MAX_LAYERS]comp.LayerView) usize {
     const rye = r.y + r.h;
     for (0..comp.layerSlots()) |i| {
         const lv = comp.layerView(i) orelse continue;
+        if (lv.kind == .cursor and !comp.pointerOn()) continue;
         const ix = lv.x < rxe and rxs < lv.x + lv.w;
         const iy = lv.y < rye and rys < lv.y + lv.h;
         if (!ix or !iy) continue;
@@ -389,10 +409,10 @@ fn collectLayers(r: comp.Rect, out: *[comp.MAX_LAYERS]comp.LayerView) usize {
 }
 
 // paintFrame — composite one back buffer's damage acc through BCS.
-// dstHandle = the scene dumb being painted; spriteT = CPU Target for
-// the post-fence cursor pass. Returns false => caller runs the CPU
-// composite (named degrade, never silent).
-pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc, spriteT: *const comp.Target) bool {
+// The cursor is just the topmost layer: CURSOR_CLEAR px blit as
+// per-run skips so transparency survives. Returns false => caller runs
+// the CPU composite (named degrade, never silent).
+pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
     if (!ready) {
         if (!arm()) return false;
     }
@@ -444,10 +464,45 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc, spriteT: *const comp.Tar
             const sy = iy - lv.y;
             const w = ix1 - ix;
             const h = iy1 - iy;
-            ok = emitCopy(dstGtt, dstPitchB,
-                sx, sy, w, h, ix, iy,
-                sg, lv.pitch * 4);
-            emitted += 1;
+            flushSrc(lv.buf, lv.pitch, sx, sy, w, h);
+            if (lv.kind == .cursor) {
+                // CURSOR_CLEAR px are transparent — per-run blits skip
+                // them so the scene beneath survives (a verbatim copy
+                // would paint a black box).
+                var ry: u32 = 0;
+                while (ry < h) : (ry += 1) {
+                    const srcY = sy + ry;
+                    const rowIdx = @as(usize, @intCast(srcY)) *
+                        @as(usize, @intCast(lv.pitch));
+                    const dstY = iy + ry;
+                    var rx = sx;
+                    const xEnd = sx + w;
+                    while (rx < xEnd) {
+                        if (lv.buf[rowIdx + @as(usize, @intCast(rx))] ==
+                            comp.CURSOR_CLEAR)
+                        {
+                            rx += 1;
+                            continue;
+                        }
+                        const runX = rx;
+                        while (rx < xEnd and
+                            lv.buf[rowIdx + @as(usize, @intCast(rx))] !=
+                            comp.CURSOR_CLEAR) rx += 1;
+                        ok = emitCopy(dstGtt, dstPitchB,
+                            runX, srcY, rx - runX, 1,
+                            ix + (runX - sx), dstY,
+                            sg, lv.pitch * 4);
+                        emitted += 1;
+                        if (!ok) break;
+                    }
+                    if (!ok) break;
+                }
+            } else {
+                ok = emitCopy(dstGtt, dstPitchB,
+                    sx, sy, w, h, ix, iy,
+                    sg, lv.pitch * 4);
+                emitted += 1;
+            }
             if (!ok) break;
         }
         if (!ok) break;
@@ -462,10 +517,6 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc, spriteT: *const comp.Tar
             sayU("gpucomp: submit/fence FAIL n={d} — CPU fallback\n", .{fail_count});
         return false;
     }
-
-    // cursor XOR over the damage SET — post-fence, once per pixel
-    // (per-rect calls double-XOR overlap -> corrupted sprite in motion)
-    comp.applySpriteRects(spriteT, rects);
 
     blit_count += emitted;
     frame_count += 1;
