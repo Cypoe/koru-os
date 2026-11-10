@@ -236,6 +236,7 @@ fn teardown() void {
     front = null;
     flip_pending = false;
     flip_age = 0;
+    commit_armed = false;
     pre_scanout = null;
 }
 
@@ -331,30 +332,29 @@ fn immediateTick() void {
             .{ p.n, @intFromBool(p.full), s.w, s.h });
 }
 
-// waitFrameEdge — bounded spin for the next PIPE_FRMCNT_A increment.
-// FRMCNT ticks once per scanned frame at the frame boundary (~vblank);
-// returning the instant it changes lets flipTick land DSPASURF within
-// microseconds of vblank instead of at a random mid-scan phase (the
-// r9 tearing). ~260k MMIO reads ≈ 30-50ms — over one full 60Hz frame
-// period, so a live counter always catches its edge; a dead counter
-// costs one bounded stall then commits anyway.
-fn waitFrameEdge() void {
-    const c0 = kms.frameCount();
-    var budget: u32 = 262_144;
-    while (kms.frameCount() == c0) {
-        budget -= 1;
-        if (budget == 0) return;
-    }
-}
+// Deferred flip commit — replaces the waitFrameEdge spin that parked
+// the shell loop for up to a full frame period (~30-50ms of dead input
+// polling per flip, KNOWN-JANK a). Composite lands, commit arms, and
+// the edge is caught on a later tick: DSPASURF writes within ~1 tick
+// (~15-30us) of the FRMCNT edge — still inside vblank, zero blocking.
+var commit_armed: bool = false;
+var commit_handle: u32 = 0;
+var commit_back: usize = 0;
+var commit_frm: u32 = 0;
+var commit_age: u32 = 0;
+var commit_rects: u32 = 0;
+var commit_full: bool = false;
+const COMMIT_TIMEOUT_TICKS: u32 = 4096; // ~3+ frames — dead-FRMCNT degrade
 
 fn flipTick() void {
     // Periodic vblank telemetry on the automatic stream — T590 can't
-    // run kstat mid-drag, so the candidate regs ride every ~1s (65536
-    // ticks at ~15-30us shell rate). sayU dual-writes serial+UDP.
+    // run kstat mid-drag, so the candidate regs ride sparsely (1<<20
+    // ticks ≈ every ~20-30s at shell rate — the vblank oracle hunt is
+    // still open, but 1s cadence was pure overhead in the hot path).
     // Diff consecutive samples: whichever reg toggles at ~60Hz is the
     // real vblank oracle. +f = flips this interval = real fps.
     vb_emit_n += 1;
-    if (vb_emit_n >= (1 << 16)) {
+    if (vb_emit_n >= (1 << 20)) {
         vb_emit_n = 0;
         const vr = kms.vblankRegs();
         const df = flip_count - vb_last_flips;
@@ -397,6 +397,38 @@ fn flipTick() void {
 
     fanDamage(comp.takePending());
 
+    // deferred commit — edge seen (or dead-counter timeout) => land
+    // DSPASURF now; otherwise damage keeps accumulating in the accs.
+    if (commit_armed) {
+        commit_age += 1;
+        if (kms.frameCount() != commit_frm or
+            commit_age >= COMMIT_TIMEOUT_TICKS)
+        {
+            if (kms.flipSwapFast(commit_handle)) {
+                armed_frm = kms.frameCount();
+                if (front == null) {
+                    if (pre_scanout) |m| {
+                        if (m != commit_handle) _ = kms.dumbDestroy(m);
+                    }
+                    pre_scanout = null;
+                }
+                front = commit_back;
+                flip_pending = true;
+                flip_age = 0;
+                flip_count += 1;
+                if (flip_count == 1 or flip_count % 120 == 0)
+                    sayU("KORU scene: flip {d} back={d} rects={d} full={d}\n",
+                        .{ flip_count, commit_back, commit_rects,
+                           @intFromBool(commit_full) });
+            } else {
+                sayU("KORU scene: flipSwap refused handle={d}\n",
+                    .{commit_handle});
+            }
+            commit_armed = false;
+        }
+        return; // still waiting on the edge — nothing else to do
+    }
+
     if (flip_pending) return; // armed buffer still in flight — damage waits in accs
 
     const back: usize = if (front) |f| 1 - f else 0;
@@ -427,31 +459,15 @@ fn flipTick() void {
     const nr = b.acc.n;
     b.acc.clear();
 
-    // FRMCNT-edge-aligned commit: r9 proved mid-scan DSPASURF writes
-    // tear. Composite is already done (back buffer isn't scanned), so
-    // spin for the next frame boundary and land the write within ~µs
-    // of it — flipSwapFast skips the atomic re-check that would push
-    // the commit off vblank. Bounded: if FRMCNT stalls we commit
-    // anyway rather than freeze the scene.
-    waitFrameEdge();
-    if (!kms.flipSwapFast(b.handle)) {
-        sayU("KORU scene: flipSwap refused handle={d}\n", .{b.handle});
-        return; // acc already cleared — buffer content is correct for next flip
-    }
-    armed_frm = kms.frameCount();
-    if (front == null) {
-        if (pre_scanout) |m| {
-            if (m != b.handle) _ = kms.dumbDestroy(m); // retire modeset/test buffer
-        }
-        pre_scanout = null;
-    }
-    front = back;
-    flip_pending = true;
-    flip_age = 0;
-    flip_count += 1;
-    if (flip_count == 1 or flip_count % 120 == 0)
-        sayU("KORU scene: flip {d} back={d} rects={d} full={d}\n",
-            .{ flip_count, back, nr, @intFromBool(was_full) });
+    // Arm the deferred commit — the edge is caught on a later flipTick,
+    // so the shell loop never stalls waiting for vblank (KNOWN-JANK a).
+    commit_armed = true;
+    commit_handle = b.handle;
+    commit_back = back;
+    commit_frm = kms.frameCount();
+    commit_age = 0;
+    commit_rects = @intCast(nr);
+    commit_full = was_full;
 }
 
 pub fn init() void {
@@ -526,6 +542,7 @@ pub fn tick() void {
         _ = comp.damage(0, 0, w, h); // modeset/surface swap = whole damage
         teardown();
         flip_pending = false;
+        commit_armed = false;
         front = null;
         pre_scanout = null;
         flip_fails = 0;

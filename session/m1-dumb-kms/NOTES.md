@@ -1796,3 +1796,15 @@ flushSpriteBox/XOR — the whole XOR special-case class.
 ISO dist/koru-gpcursor-20261110.iso; QEMU: attach 12x12 layer, mouse ->
 cursor:enabled + cursor:ev, single boot no reset. GPU per-run blit path
 is T590-only — panel verdict pending.
+
+## KNOWN-JANK cheap fixes landed (2026-11-10, ISO koru-jank1)
+
+(a) waitFrameEdge spin DELETED — deferred flip commit: composite arms
+commit_armed, edge caught on later flipTick (~1 tick ≈15-30us past
+FRMCNT edge, inside vblank), zero shell-loop stall. COMMIT_TIMEOUT_
+TICKS=4096 dead-counter degrade. (b) vb: telemetry 1<<16 -> 1<<20
+ticks (~20-30s cadence, oracle hunt still open). (c) Acc.add touch
+test gap-tolerant GAP=16 — near-rect flick damage merges instead of
+overflowing MAX_DMG -> acc.full.
+QEMU: mouse->cursor:enabled+cursor:ev, single boot no reset.
+T590 panel verdict pending — tearing/jank perception is the oracle.

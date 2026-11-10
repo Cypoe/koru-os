@@ -122,8 +122,14 @@ pub const Acc = struct {
         while (merged) {
             merged = false;
             for (a.rects[0..a.n], 0..) |*o, i| {
-                const touch = m.x <= o.x + o.w and o.x <= m.x + m.w and
-                    m.y <= o.y + o.h and o.y <= m.y + m.h;
+                // gap-tolerant touch: fast-flick damage lands as disjoint
+                // rects that used to overflow MAX_DMG -> full-screen
+                // composite (KNOWN-JANK c). Merging near-rects repaints
+                // a bounded margin instead — cheaper than acc.full.
+                const GAP: u32 = 16;
+                const touch = m.x <= o.x + o.w + GAP and
+                    o.x <= m.x + m.w + GAP and
+                    m.y <= o.y + o.h + GAP and o.y <= m.y + m.h + GAP;
                 if (!touch) continue;
                 const nx = @min(m.x, o.x);
                 const ny = @min(m.y, o.y);
