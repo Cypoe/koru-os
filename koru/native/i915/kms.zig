@@ -831,6 +831,16 @@ pub fn vblankDebug() void {
     mmio.say("\n");
 }
 
+// vw — dual-write serial + UDP (mmio.say alone never reached the wire;
+// the first vbirq run proved it — T590 saw only the shell echoes).
+fn vw(comptime fmt: []const u8, args: anytype) void {
+    var b: [256]u8 = undefined;
+    const s = std.fmt.bufPrint(&b, fmt, args) catch return;
+    b[s.len] = 0;
+    mmio.say(@as([*:0]const u8, @ptrCast(&b)));
+    net.mirror(s);
+}
+
 // vbirqProbe — stage-1 of the real vblank IRQ: arm the gen8+ chain
 // (the path pipe.zig's ILK misdiagnosis never wrote) and count IIR
 // edges. GEN8_MASTER_IRQ is deliberately NOT touched — that gates the
@@ -838,19 +848,15 @@ pub fn vblankDebug() void {
 // proves vblank EVENTS latch at ~frame rate. Stage 2 routes the IRQ.
 pub fn vbirqProbe() void {
     if (!device().up) {
-        mmio.say("vbirq: i915 down\n");
+        vw("vbirq: i915 down\n", .{});
         return;
     }
-    mmio.say("vbirq: before PSTAT="); mmio.sayHex(mmio.rd(R.PIPEASTAT_A));
-    mmio.say(" PISR="); mmio.sayHex(mmio.rd(R.DE_PIPE_ISR_A));
-    mmio.say(" PIMR="); mmio.sayHex(mmio.rd(R.DE_PIPE_IMR_A));
-    mmio.say(" PIIR="); mmio.sayHex(mmio.rd(R.DE_PIPE_IIR_A));
-    mmio.say(" PIER="); mmio.sayHex(mmio.rd(R.DE_PIPE_IER_A));
-    mmio.say(" DEIER="); mmio.sayHex(mmio.rd(R.DEIER));
-    mmio.say(" DEIMR="); mmio.sayHex(mmio.rd(R.DEIMR));
-    mmio.say(" DEIIR="); mmio.sayHex(mmio.rd(R.DEIIR));
-    mmio.say(" FRMCNT="); mmio.sayHex(mmio.rd(R.PIPE_FRMCNT_A));
-    mmio.say("\n");
+    vw("vbirq: before PSTAT={x} PISR={x} PIMR={x} PIIR={x} PIER={x} DEIER={x} DEIMR={x} DEIIR={x} FRMCNT={x}\n", .{
+        mmio.rd(R.PIPEASTAT_A), mmio.rd(R.DE_PIPE_ISR_A),
+        mmio.rd(R.DE_PIPE_IMR_A), mmio.rd(R.DE_PIPE_IIR_A),
+        mmio.rd(R.DE_PIPE_IER_A), mmio.rd(R.DEIER),
+        mmio.rd(R.DEIMR), mmio.rd(R.DEIIR), mmio.rd(R.PIPE_FRMCNT_A),
+    });
     // enable chain (i915 gen8+ display_irq path):
     // 1. PIPESTAT pipestat-enable: status_mask=PIPE_VBLANK_INTERRUPT_
     //    STATUS(bit1), enable = status<<16 -> RMW |0x00020002
@@ -861,7 +867,7 @@ pub fn vbirqProbe() void {
     mmio.wr(R.DEIER, mmio.rd(R.DEIER) | 0x8000_0000);
     // 4. DEIMR top-level: DE_PIPE_VBLANK(pipeA) = bit7, active-low
     mmio.wr(R.DEIMR, mmio.rd(R.DEIMR) & ~@as(u32, 0x80));
-    mmio.say("vbirq: armed — polling IIR edges\n");
+    vw("vbirq: armed — polling IIR edges\n", .{});
     const f0 = mmio.rd(R.PIPE_FRMCNT_A);
     var edges: u32 = 0;
     var de_edges: u32 = 0;
@@ -879,17 +885,14 @@ pub fn vbirqProbe() void {
         }
     }
     const f1 = mmio.rd(R.PIPE_FRMCNT_A);
-    mmio.say("vbirq: pipeIIR edges="); mmio.sayDec(edges);
-    mmio.say(" DEIIR edges="); mmio.sayDec(de_edges);
-    mmio.say(" FRMCNT delta="); mmio.sayDec(f1 -% f0);
-    mmio.say("\n");
-    mmio.say("vbirq: after PISR="); mmio.sayHex(mmio.rd(R.DE_PIPE_ISR_A));
-    mmio.say(" PIMR="); mmio.sayHex(mmio.rd(R.DE_PIPE_IMR_A));
-    mmio.say(" PIIR="); mmio.sayHex(mmio.rd(R.DE_PIPE_IIR_A));
-    mmio.say(" DEIER="); mmio.sayHex(mmio.rd(R.DEIER));
-    mmio.say(" DEIMR="); mmio.sayHex(mmio.rd(R.DEIMR));
-    mmio.say(" DEIIR="); mmio.sayHex(mmio.rd(R.DEIIR));
-    mmio.say("\n");
+    vw("vbirq: pipeIIR edges={d} DEIIR edges={d} FRMCNT delta={d}\n", .{
+        edges, de_edges, f1 -% f0,
+    });
+    vw("vbirq: after PISR={x} PIMR={x} PIIR={x} DEIER={x} DEIMR={x} DEIIR={x}\n", .{
+        mmio.rd(R.DE_PIPE_ISR_A), mmio.rd(R.DE_PIPE_IMR_A),
+        mmio.rd(R.DE_PIPE_IIR_A), mmio.rd(R.DEIER),
+        mmio.rd(R.DEIMR), mmio.rd(R.DEIIR),
+    });
 }
 
 // VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).

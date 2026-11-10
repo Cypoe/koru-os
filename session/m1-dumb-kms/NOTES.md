@@ -1855,3 +1855,10 @@ pure-MMIO safe probe. 'vbirq' cmd dumps before/after + counts IIR
 edges vs FRMCNT delta. Edges~delta => generation proven -> stage 2
 = GSI/IDT routing. Edges=0 => chain still missing a step.
 QEMU: vbirq -> i915 down, clean return.
+
+## VBLINE vbirq2 — wire fix (2026-11-10, ISO koru-vbirq2)
+
+First vbirq run: probe RAN but mmio.say is serial-only — T590 saw
+only shell echoes. Added vw() dual-write (serial + net.mirror) and
+converted all vbirqProbe output. koru-vbirq2-20261110.iso ready;
+same 'kms -> vbirq' drill, wire now carries the reg dumps.
