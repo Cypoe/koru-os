@@ -144,6 +144,12 @@ fn dispatch() void {
         text.puts("vbirq returned — console still alive\n");
         return;
     }
+    if (eq("vbirq2")) { // stage-2: per-pipe IER + CPU IRQ recon
+        text.puts("vbirq2: CPU-routing recon — watch UDP\n");
+        kmsdrv.vbirqStage2();
+        text.puts("vbirq2 returned — console still alive\n");
+        return;
+    }
     if (eq("gpu")) { // GEN9 render-engine probe: forcewake+DC off, ring submit
         text.puts("gpu: render-engine probe — watch UDP markers\n");
         gtdrv.probe();

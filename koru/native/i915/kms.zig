@@ -895,6 +895,44 @@ pub fn vbirqProbe() void {
     });
 }
 
+// vbirqStage2 — the CPU-routing recon: stage-1 proved GEN8_DE_PIPE_IIR_A
+// edges 1:1 with FRMCNT. Now enable the per-pipe IER output bit and
+// dump the CPU-side facts: 0x44028 (GEN8_MASTER_IRQ candidate — the
+// gen8 master that gates the i915 IRQ line to the CPU) and the PCI
+// irq_line/irq_pin the firmware routed. Master IRQ NOT written yet —
+// asserting it before the GSI/IDT route exists would storm vectors.
+pub fn vbirqStage2() void {
+    if (!device().up) {
+        vw("vbirq2: i915 down\n", .{});
+        return;
+    }
+    vw("vbirq2: before PIER={x} MIRQ28={x} irq_line={d} irq_pin={d}\n", .{
+        mmio.rd(R.DE_PIPE_IER_A), mmio.rd(R.IIR),
+        gdev.pdev.irq_line, gdev.pdev.irq_pin,
+    });
+    // per-pipe IER: GEN8_PIPE_VBLANK = bit0, IER bit=1 enables output
+    mmio.wr(R.DE_PIPE_IER_A, mmio.rd(R.DE_PIPE_IER_A) | 0x0000_0001);
+    // keep the stage-1 chain armed (idempotent) so events keep latching
+    mmio.wr(R.PIPEASTAT_A, mmio.rd(R.PIPEASTAT_A) | 0x0002_0002);
+    mmio.wr(R.DE_PIPE_IMR_A, mmio.rd(R.DE_PIPE_IMR_A) & ~@as(u32, 1));
+    mmio.wr(R.DEIER, mmio.rd(R.DEIER) | 0x8000_0000);
+    mmio.wr(R.DEIMR, mmio.rd(R.DEIMR) & ~@as(u32, 0x80));
+    vw("vbirq2: PIER after={x} MIRQ28={x}\n", .{
+        mmio.rd(R.DE_PIPE_IER_A), mmio.rd(R.IIR),
+    });
+    // edge sanity — same self-clearing count, short window
+    var edges: u32 = 0;
+    var spins: u32 = 1_000_000;
+    while (spins > 0) : (spins -= 1) {
+        const iir = mmio.rd(R.DE_PIPE_IIR_A);
+        if (iir != 0) {
+            edges += 1;
+            mmio.wr(R.DE_PIPE_IIR_A, iir);
+        }
+    }
+    vw("vbirq2: pipeIIR edges={d} (IER armed)\n", .{edges});
+}
+
 // VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).
 // Returns events seen — 0 means the IIR didn't latch (still reports the
 // flip committed; the scanout swap is visible regardless).

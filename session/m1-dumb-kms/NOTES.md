@@ -1862,3 +1862,14 @@ First vbirq run: probe RAN but mmio.say is serial-only — T590 saw
 only shell echoes. Added vw() dual-write (serial + net.mirror) and
 converted all vbirqProbe output. koru-vbirq2-20261110.iso ready;
 same 'kms -> vbirq' drill, wire now carries the reg dumps.
+
+## VBLINE STAGE-1 RESULT + STAGE-2 RECON (2026-11-10, ISO koru-vbirq3)
+
+STAGE-1 PROVEN: pipeIIR edges=167 == FRMCNT delta=167 — gen8+ vblank
+generation latches 1:1 per frame. DEIER writes don't stick (reads 0),
+DEIIR never aggregates (per-pipe IIR is the oracle, not DEIIR).
+STAGE-2 (vbirq2 cmd): enables DE_PIPE_IER_A bit0 (per-pipe IRQ
+output), dumps PIER + 0x44028 (GEN8_MASTER_IRQ candidate) + PCI
+irq_line/irq_pin — the CPU-routing facts. Master IRQ still unwritten
+(no GSI yet). Next: read wire -> GSI via acpi/ioapic -> IDT gate +
+handler -> GEN8_MASTER_IRQ write -> real vblank IRQ.
