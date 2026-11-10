@@ -1698,3 +1698,23 @@ ISO: dist/koru-gpub-20261110-0130.iso (ReleaseSmall layout, .data
 bb5e0000). QEMU boot verified to shell+hb (non-i915 => CPU path).
 T590 validation pending: 'kms' then drag a kwin window — expect
 gpucomp:armed + frame blits=N markers and visibly smoother drag.
+
+## INPUT-BRINGUP RESET — undeclared asm clobber, ReleaseSmall-only (2026-11-10)
+
+T590 + QEMU: `mouse`/`kwin` -> ensureInput -> user.init died between
+in:user and in:user-done; QEMU -d int showed #GP e=0010 @0x10929a then
+double->triple fault -> reset. Root cause: loadTables/koru_ap_arm asm
+used %ax as scratch for ds/es/ss loads WITHOUT declaring the clobber;
+ReleaseSmall's allocator put the TSS selector (0x28+16*cpu) in ax, so
+`mov ax,0x10` clobbered it and `ltr ax` loaded selector 0x10 (the DATA
+segment) -> #GP. ReleaseSafe allocated sel elsewhere -> latent, not new.
+GPU compositor EXONERATED: gpucomp armed + frame 1 blits=2 fine; `mouse`
+before kms hung identically.
+
+FIX (user.zig, both sites): `.rax = true` added to asm clobbers —
+allocator now keeps sel out of rax (verified: sel->ecx, `ltr cx`).
+ISO: dist/koru-gpubfix-20261110.iso (same ReleaseSmall ELF size,
+corrected MBR). QEMU-verified: `mouse` -> full in:user-done/mouse-done/
+cursor:enabled sequence, single boot, no reset.
+LESSON: any inline asm using a fixed scratch register MUST declare it
+clobbered — -O level changes allocation and detonate latent bugs.

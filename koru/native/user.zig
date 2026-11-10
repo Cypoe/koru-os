@@ -783,7 +783,10 @@ fn loadTables() void {
         \\ ltr %[s]
         :
         : [s] "r" (sel)
-        : .{ .memory = true });
+        : .{ .memory = true, .rax = true }); // rax clobber: %ax is asm
+                                              // scratch — undeclared, the
+                                              // allocator put sel in ax and
+                                              // ltr loaded 0x10 (ReleaseSmall)
     const rsp0: u64 = @intFromPtr(&kstack) + kstack.len;
     @memcpy(tss[cpu][4..12], std.mem.asBytes(&rsp0)); // TSS.rsp0 — byte
                                                     // offset 4, no align trick
@@ -810,7 +813,9 @@ export fn koru_ap_arm() callconv(.c) void {
         \\ ltr %[s]
         :
         : [s] "r" (sel)
-        : .{ .memory = true });
+        : .{ .memory = true, .rax = true }); // same ax-scratch clobber as
+                                              // loadTables — sel must not
+                                              // share ax with the 0x10 loads
     {
         const rsp0: u64 = @intFromPtr(&kstack) + kstack.len;
         @memcpy(tss[cpu][4..12], std.mem.asBytes(&rsp0));
