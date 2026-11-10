@@ -57,22 +57,23 @@ fn stage(comptime msg: [*:0]const u8) void {
 // ---- registers not already in regs.zig ------------------------------------
 // (regs.zig carries the legacy RING_BUFFER_* names for RCS/VCS/BCS tails;
 //  the per-engine block layout below is the gen8+ intel_engine_regs.h map.)
-const OFF_TAIL: u32 = 0x030;
-const OFF_HEAD: u32 = 0x034;
-const OFF_START: u32 = 0x038;
-const OFF_CTL: u32 = 0x03c;
+// pub: gpublt.zig drives the same BCS block for persistent compositing.
+pub const OFF_TAIL: u32 = 0x030;
+pub const OFF_HEAD: u32 = 0x034;
+pub const OFF_START: u32 = 0x038;
+pub const OFF_CTL: u32 = 0x03c;
 const OFF_EXCC: u32 = 0x028;
 const OFF_IPEIR: u32 = 0x064;
 const OFF_IPEHR: u32 = 0x068;
 const OFF_INSTDONE: u32 = 0x06c;
 const OFF_ACTHD: u32 = 0x074;
-const OFF_HWS_PGA: u32 = 0x080;
+pub const OFF_HWS_PGA: u32 = 0x080;
 const OFF_ID: u32 = 0x08c;
 const OFF_NOPID: u32 = 0x094;
-const OFF_MI_MODE: u32 = 0x09c;
-const OFF_IMR: u32 = 0x0a8;
+pub const OFF_MI_MODE: u32 = 0x09c;
+pub const OFF_IMR: u32 = 0x0a8;
 
-const HEAD_ADDR_MASK: u32 = 0x001f_ffff; // HEAD_ADDR field (wrap count in high bits)
+pub const HEAD_ADDR_MASK: u32 = 0x001f_ffff; // HEAD_ADDR field (wrap count in high bits)
 const RING_CTL_SIZE_MASK: u32 = 0x001f_f000; // RING_NR_PAGES field
 const RING_VALID: u32 = 0x1;
 
@@ -90,9 +91,9 @@ const PWRGT_RENDER_BIT: u32 = 1 << 1;
 const PWRGT_MEDIA_BIT: u32 = 1 << 0;
 
 // MI command dwords (intel_gpu_commands.h)
-const MI_NOOP: u32 = 0x0000_0000;
-const MI_BATCH_BUFFER_END: u32 = 0x0500_0000; // MI_INSTR(0x0a,0)
-const MI_STORE_DWORD_IMM_GEN4_GGTT: u32 = 0x1040_0002; // 0x20<<23|2 | MI_USE_GGTT(1<<22)
+pub const MI_NOOP: u32 = 0x0000_0000;
+pub const MI_BATCH_BUFFER_END: u32 = 0x0500_0000; // MI_INSTR(0x0a,0)
+pub const MI_STORE_DWORD_IMM_GEN4_GGTT: u32 = 0x1040_0002; // 0x20<<23|2 | MI_USE_GGTT(1<<22)
 const MI_FLUSH: u32 = 0x0200_0000; // MI_INSTR(0x04,0)
 const MI_ARB_ON_OFF: u32 = 0x0400_0000; // MI_INSTR(0x08,0)
 const MI_ARB_ENABLE: u32 = 1;
@@ -118,14 +119,14 @@ const INTEL_LEGACY_32B_CONTEXT: u64 = 1; // 3-level PPGTT, 4GiB space
 
 // BLT command dwords (intel_gpu_commands.h + intel_migrate.c emit_clear,
 // the proven ver>=8 XY_COLOR_BLT emission — 7-dword command + NOOP pad)
-const XY_COLOR_BLT_CMD: u32 = (2 << 29) | (0x50 << 22); // 0x54000000
-const BLT_WRITE_RGBA: u32 = (1 << 20) | (2 << 20); // 0x300000
-const BLT_DEPTH_32: u32 = 3 << 24;
-const BLT_ROP_COLOR_COPY: u32 = 0xf0 << 16;
+pub const XY_COLOR_BLT_CMD: u32 = (2 << 29) | (0x50 << 22); // 0x54000000
+pub const BLT_WRITE_RGBA: u32 = (1 << 20) | (2 << 20); // 0x300000
+pub const BLT_DEPTH_32: u32 = 3 << 24;
+pub const BLT_ROP_COLOR_COPY: u32 = 0xf0 << 16;
 
 const GTT_BASE_SLOT: u32 = 0x8000; // GTT page index — far above scanout PTEs
 const PROOF_MAGIC: u32 = 0xc0de_0001;
-const BCS_BASE: u32 = 0x22000;
+pub const BCS_BASE: u32 = 0x22000;
 
 const Engine = struct {
     name: [*:0]const u8,
@@ -423,6 +424,20 @@ fn ringTailBytes() u32 {
 
 // ---- public probe -------------------------------------------------------------
 
+var engine_ready = false;
+
+// ensureUp — idempotent render-engine bring-up for the persistent blit
+// path (gpublt.zig): BAR0 + forcewake domains + DC_STATE_EN off, exactly
+// what probe()'s gt0 stage does. Safe to call from the compositor loop;
+// first call pays the power sequence, later calls are one branch.
+pub fn ensureUp() bool {
+    if (engine_ready) return true;
+    if (!ensureBar0()) return false;
+    if (!gtPower()) return false;
+    engine_ready = true;
+    return true;
+}
+
 pub fn probe() void {
     text.puts("gt: render-engine probe — watch UDP markers\n");
     if (!ensureBar0()) return;
@@ -433,6 +448,7 @@ pub fn probe() void {
         stage("gt: FAIL power domains");
         return;
     }
+    engine_ready = true;
     stage("gt0: power domains up");
 
     const p = setupMemory() orelse return;

@@ -4,6 +4,7 @@ const text = @import("text.zig");
 const i915drv = @import("i915/i915.zig");
 const kmsdrv = @import("i915/kms.zig");
 const gtdrv = @import("i915/gt.zig");
+const gpublt = @import("i915/gpublt.zig");
 const kbd = @import("kbd");
 const mouse = @import("mouse");
 const cursor = @import("cursor.zig");
@@ -93,7 +94,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n  gcomp\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -159,6 +160,10 @@ fn dispatch() void {
     }
     if (eq("consmall")) { // diagnostic: force console root to 800x600
         present.consoleForce(800, 600);
+        return;
+    }
+    if (eq("gcomp")) { // GPU compositor oracle: BCS blit engine state
+        gpublt.stat();
         return;
     }
     if (eq("kstat")) { // flip-path oracle: swapchain + DEIIR + readback px

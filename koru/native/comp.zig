@@ -47,7 +47,7 @@ const ScanoutInfo = extern struct {
     h: u32,
 };
 
-const MAX_LAYERS = 16;
+pub const MAX_LAYERS = 16;
 const BG: u32 = 0x00000000; // root fallback when no root layer is live
 const XOR: u32 = 0x00FFFFFF; // cursor sprite invert — cursor.zig's colour
 
@@ -623,6 +623,71 @@ pub fn tick() void {
             place(@intCast(drag_handle),
                 @as(i64, ptr_x) - @as(i64, l.win.grab_dx),
                 @as(i64, ptr_y) - @as(i64, l.win.grab_dy));
+        }
+    }
+}
+
+// ---- GPU composite seam (gpublt.zig) ------------------------------------------
+// The scene core stays the authority on z/damage semantics; the GPU blit
+// backend reads layers through this read-only view and emits copies in
+// z-asc painter's order (opaque XRGB8888 == pxIn topmost-wins).
+
+pub const LayerView = struct {
+    buf: [*]u32,
+    pitch: u32, // pixels per row
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    z: u32,
+    kind: Kind,
+};
+
+pub fn layerSlots() usize {
+    return MAX_LAYERS;
+}
+
+// live layer at slot i, or null — slot order is NOT z order; callers
+// sort by .z themselves.
+pub fn layerView(i: usize) ?LayerView {
+    if (i >= MAX_LAYERS) return null;
+    const l = &layers[i];
+    if (!l.live) return null;
+    return .{
+        .buf = l.buf,
+        .pitch = l.pitch,
+        .x = l.x,
+        .y = l.y,
+        .w = l.w,
+        .h = l.h,
+        .z = l.z,
+        .kind = l.kind,
+    };
+}
+
+// applySprite — the cursor XOR pass for one scene rect, run by the GPU
+// composite path AFTER its blits land (the CPU path applies the same
+// XOR inside pxIn). Identical coverage: sprite bits over whatever the
+// scene resolved — BG or layer pixels.
+pub fn applySprite(t: *const Target, x: u32, y: u32, w: u32, h: u32) void {
+    if (!live or !ptr_on or spr_bits == null or w == 0 or h == 0) return;
+    const bits = spr_bits.?;
+    const x1 = @min(@min(x + w, W), t.w);
+    const y1 = @min(@min(y + h, H), t.h);
+    if (x >= x1 or y >= y1) return;
+    var yy = y;
+    while (yy < y1) : (yy += 1) {
+        const dy = yy -% @as(u32, @intCast(ptr_y));
+        if (dy >= 12) continue;
+        const rowbits = bits[dy];
+        var xx = x;
+        while (xx < x1) : (xx += 1) {
+            const dx = xx -% @as(u32, @intCast(ptr_x));
+            if (dx < 12 and ((rowbits >> @intCast(11 - dx)) & 1) != 0) {
+                const d = @as(usize, @intCast(yy)) * @as(usize, @intCast(t.pitch)) +
+                    @as(usize, @intCast(xx));
+                t.px[d] ^= XOR;
+            }
         }
     }
 }

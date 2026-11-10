@@ -20,6 +20,7 @@ const std = @import("std");
 const comp = @import("comp");
 const fb = @import("fb.zig");
 const kms = @import("i915/kms.zig");
+const gpublt = @import("i915/gpublt.zig");
 const net = @import("net");
 const pmm = @import("pmm");
 const mmio = @import("mmio");
@@ -67,6 +68,8 @@ var retry_wait: u64 = 64; // ensureFlip backoff — grows x4 per failure
 var flip_fails: u32 = 0;
 var flip_gave_up: bool = false; // latched until next gen change
 var flip_count: u64 = 0;
+var gpu_frames: u64 = 0; // frames composited via BCS blits
+var cpu_frames: u64 = 0; // frames CPU-composited (named fallback)
 var paint_count: u64 = 0;
 var pre_scanout: ?u32 = null; // foreign scanout to retire after first flip
 
@@ -409,7 +412,17 @@ fn flipTick() void {
     }
 
     const t = comp.Target{ .px = b.map, .pitch = b.pitch, .w = b.w, .h = b.h };
-    comp.compositeAcc(&t, &b.acc);
+    // GPU path first: damage rects -> BCS XY_SRC_COPY_BLT into the scene
+    // dumb's GGTT mapping, fence-polled, then the cursor XOR pass.
+    // paintFrame returns false on any named degrade (engine down, GTT
+    // map refused, fence timeout) — the CPU composite below is the
+    // explicit honest fallback, counted, never silent.
+    if (gpublt.paintFrame(b.handle, &b.acc, &t)) {
+        gpu_frames += 1;
+    } else {
+        comp.compositeAcc(&t, &b.acc);
+        cpu_frames += 1;
+    }
     const was_full = b.acc.full;
     const nr = b.acc.n;
     b.acc.clear();
@@ -451,9 +464,11 @@ pub fn init() void {
 // each scene buffer's CPU map — proving whether composite wrote
 // content into the buffer the display engine is pointed at.
 pub fn stat() void {
-    sayU("present: flips={d} pending={d} age={d} timeouts={d} vb_raw={x} fails={d} gaveup={d}\n",
+    sayU("present: flips={d} pending={d} age={d} timeouts={d} vb_raw={x} fails={d} gaveup={d} gpu={d} cpu={d}\n",
         .{ flip_count, @intFromBool(flip_pending), flip_age, timeout_clears,
-           last_vblank_raw, flip_fails, @intFromBool(flip_gave_up) });
+           last_vblank_raw, flip_fails, @intFromBool(flip_gave_up),
+           gpu_frames, cpu_frames });
+    gpublt.stat();
     for (bufs, 0..) |b, i| {
         if (!b.ok) {
             sayU("  buf{d}: down\n", .{i});

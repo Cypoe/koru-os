@@ -319,6 +319,47 @@ pub fn dumbGet(handle: u32) ?*const DumbBuffer {
     return if (gdev.dumbs[handle]) |*b| b else null;
 }
 
+// ---- GTT page allocator for non-dumb GPU consumers -------------------------
+// gpublt.zig's persistent ring/fence and comp layer-backing mappings share
+// the SAME gtt_next bump as dumbCreate — one allocator, no collisions.
+// gt.zig's probe owns fixed slots at GTT_BASE_SLOT=0x8000 (page 32768);
+// every bump allocation must stay below that or it would overwrite the
+// probe's ring/hwsp/proof PTEs.
+pub const GTT_SAFE_LIMIT: u32 = 0x8000;
+
+// gttAlloc — reserve `pages` GTT aperture pages (+ the DUMMY_GTT_PAGES
+// VT-d prefetch tail, same convention as dumbCreate). Returns the first
+// page index or null when the aperture budget is spent.
+pub fn gttAlloc(pages: u32) ?u32 {
+    if (!gdev.up) return null;
+    if (pages == 0 or pages > GTT_SAFE_LIMIT) return null;
+    const p = gdev.gtt_next;
+    if (p + pages + DUMMY_GTT_PAGES > GTT_SAFE_LIMIT) {
+        mmio.say("kms: gttAlloc refused — aperture budget ");
+        mmio.sayDec(p);
+        mmio.say("+"); mmio.sayDec(pages); mmio.say("\n");
+        return null;
+    }
+    gdev.gtt_next += pages + DUMMY_GTT_PAGES;
+    return p;
+}
+
+// gttMapPhys — write PTEs for `nPages` contiguous phys pages starting at
+// GTT page `firstPage`, then the dummy tail aliasing the last page.
+// Caller owns the phys lifetime (pmm block must outlive the mapping).
+pub fn gttMapPhys(firstPage: u32, phys: u64, nPages: u64) void {
+    var i: u64 = 0;
+    while (i < nPages) : (i += 1) {
+        mmio.writeGtt(firstPage + @as(u32, @intCast(i)), phys + i * 4096, true);
+    }
+    if (nPages == 0) return;
+    const lastPhys = phys + (nPages - 1) * 4096;
+    var d: u32 = 0;
+    while (d < DUMMY_GTT_PAGES) : (d += 1) {
+        mmio.writeGtt(firstPage + @as(u32, @intCast(nPages)) + d, lastPhys, true);
+    }
+}
+
 // ---- test pattern ---------------------------------------------------------------
 // Written through the dumb buffer's CPU mapping — the "first pixels" of
 // the M1 path. Deliberately unlike the M0 checkerboard: eight vertical

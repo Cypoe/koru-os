@@ -1659,3 +1659,42 @@ right edge off ~1px. Now row0 snapped to the row/page cycle
 NEXT: fix blit geometry on-panel -> PPGTT context engagement -> real
 surfaces -> shaders. QEMU can't test i915 — T590-only.
 ISO: dist/koru-gtblit3-20261110.iso (proven pipeline + corrected MBR).
+
+## GPU COMPOSITING — scene damage through BCS blits (2026-11-10)
+
+`koru/native/i915/gpublt.zig` — persistent BCS copy-blit compositor
+backend on the proven gt5b context-free GGTT path. present.flipTick
+routes each back buffer's damage acc through it when armed; CPU
+compositeAcc remains the named fallback (paintFrame false => cpu_frames++,
+never silent). Auto-arms on first flip when kms.device().up; refused
+arms retry at 0.5Hz.
+
+Per damage rect: XY_COLOR_BLT BG fill + XY_SRC_COPY_BLT per live layer
+in z-asc painter's order (comp.layerView read-only seam; opaque
+XRGB8888 == pxIn topmost-wins), then MI_STORE_DWORD_IMM|GGTT fence seq
+polled on a dedicated page — blits complete before return, then
+comp.applySprite does the cursor XOR pass on the CPU map.
+
+Ring: 64KiB pmm+GGTT, emit_off byte cursor, wrap = NOOP-pad to ring end
++ restart at offset 8 (i915 intel_ring_begin semantics; tail never 0).
+repoke() rewrites START/CTL every submit so a `gpu` probe re-arm can't
+strand it. Layer backings GGTT-mapped lazily keyed by (phys,span) —
+win pool 256000B slices are 2048B-shifted, aperture offset carries the
+sub-page delta. GTT budget shares kms.gttAlloc bump, capped below
+gt.zig's fixed 0x8000 probe slots.
+
+Command oracle: XY_SRC_COPY_BLT 10dw — DW1 depth|ROP|dst_pitchB,
+DW2/3 dst origin/extent (y<<16|x), DW4/5 dst addr, DW6 src origin,
+DW7 src_pitchB, DW8/9 src addr (intel_migrate.c emit_copy +
+i915_gem_client_blt.c + sna_blt.c agree on ver>=8 layout).
+
+Telemetry: `gpucomp:` markers serial+UDP — armed, per-120-frame
+blit/frame/map counts, submit/fence FAIL with CPU-fallback note;
+`gcomp` shell cmd + present.stat gpu=/cpu= frame split. kstat readback
+px unchanged.
+
+ISO: dist/koru-gpub-20261110-0128.iso (ReleaseSmall layout, .data
+0x141000 < 0x168000 threshold; corrected MBR 830002001000000001000000
+bb5e0000). QEMU boot verified to shell+hb (non-i915 => CPU path).
+T590 validation pending: 'kms' then drag a kwin window — expect
+gpucomp:armed + frame blits=N markers and visibly smoother drag.
