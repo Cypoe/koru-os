@@ -150,6 +150,12 @@ fn dispatch() void {
         text.puts("vbirq2 returned — console still alive\n");
         return;
     }
+    if (eq("vbirq3")) { // real vblank IRQ: chain + unmask + GEN8_MASTER_IRQ
+        text.puts("vbirq3: arming real vblank IRQ — watch UDP\n");
+        kmsdrv.vbirq3();
+        text.puts("vbirq3 returned — console still alive\n");
+        return;
+    }
     if (eq("gpu")) { // GEN9 render-engine probe: forcewake+DC off, ring submit
         text.puts("gpu: render-engine probe — watch UDP markers\n");
         gtdrv.probe();

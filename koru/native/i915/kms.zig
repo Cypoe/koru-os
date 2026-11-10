@@ -933,6 +933,139 @@ pub fn vbirqStage2() void {
     vw("vbirq2: pipeIIR edges={d} (IER armed)\n", .{edges});
 }
 
+// ---- gen8+ vblank IRQ — the real CPU path --------------------------------
+// Stage-3: vbirq proved generation (pipeIIR edges == FRMCNT 1:1), vbirq2
+// proved the per-pipe IER write sticks. The missing gate was the master:
+// on gen8+ (skl/kbl, DISPLAY_VER>=8) the CPU-facing interrupt control is
+// GEN8_MASTER_IRQ at 0x44200 — NOT 0x44028 (that is GEN6_PMIIR, the GT
+// power-management IIR, which is why MIRQ28 always read 0) and NOT
+// DEIER/DEIMR/DEIIR (0x4400c/04/08 — the ILK-path DE bank; writes don't
+// stick on gen9.2, confirmed on T590). Only bit31 of 0x44200 is writable
+// (GEN8_MASTER_IRQ_CONTROL, the IER bit); bits 0-30 are read-only
+// pending-source indications — GEN8_DE_PIPE_A_IRQ=bit16, _B=17, _C=18,
+// DE_PORT=20, DE_MISC=22, DE_PCH=23, GT engines=0-6. Linux:
+// i915_irq.c gen8_master_intr_enable writes exactly
+// GEN8_MASTER_IRQ_CONTROL; gvt/interrupt.c confirms only bit31 is
+// IER-writable. Full chain now: PIPESTAT pipestat-enable ->
+// GEN8_DE_PIPE_IMR unmask -> GEN8_DE_PIPE_IER enable -> pipe IIR pending
+// -> GEN8_MASTER_IRQ bit16 indication -> bit31 gates the PCI intline.
+
+const GEN8_MASTER_IRQ: u32 = 0x044200;
+const GEN8_MASTER_IRQ_CONTROL: u32 = 0x8000_0000;
+const DE_PIPE_IIR_BASE: u32 = 0x044408; // +0x10 per pipe (A=0,B=1,C=2)
+const DE_PORT_IIR: u32 = 0x044448;
+const DE_MISC_IIR: u32 = 0x044468;
+const GEN8_GT_IIR_BASE: u32 = 0x044308; // +0x10 per group (0..3)
+
+extern fn koru_irq_unmask(irq: u8) void;
+
+// IRQ-side state — written only inside i915_vblank_irq (BSP context,
+// IF=0, bkl held by the dispatcher), read by vbirq3's report window.
+// No allocation, no say/net — MMIO + counters only.
+var vb_irq_hits: u64 = 0; // vec deliveries on the i915 line
+var vb_irq_events: u64 = 0; // deliveries carrying pipe-A IIR bits
+var vb_irq_last_iir: u32 = 0;
+var vb_irq_last_master: u32 = 0;
+var vb_irq_last_deiir: u32 = 0;
+
+// i915_vb_irq_line — the IRQ line user.zig's dispatch claims
+// (f.vec == 0x20 + line). 0xFF = inert; vbirq3 publishes it only after
+// the whole chain is armed, so stray vec-0x2B deliveries before then
+// still hit the unclaimed-line path.
+pub export var i915_vb_irq_line: u8 = 0xFF;
+
+// i915_vblank_irq — the IDT thunk target (extern'd by user.zig). Drains
+// every gen8 interrupt-identity register the master can name so a
+// non-vblank source can't hold the level line asserted after EOI:
+// pipe IIRs A/B/C, DE port/misc IIRs, the legacy DEIIR, and — only when
+// the master names a GT source (bits0-6) — the four GT engine-group
+// IIRs. W1C = write back the read value. IRQ-safe by construction.
+pub export fn i915_vblank_irq() callconv(.c) void {
+    const master = mmio.rd(GEN8_MASTER_IRQ);
+    var iir_a: u32 = 0;
+    var p: usize = 0;
+    while (p < 3) : (p += 1) {
+        const off = DE_PIPE_IIR_BASE + @as(u32, @intCast(p)) * 0x10;
+        const iir = mmio.rd(off);
+        if (iir != 0) {
+            mmio.wr(off, iir);
+            if (p == 0) iir_a = iir;
+        }
+    }
+    const dport = mmio.rd(DE_PORT_IIR);
+    if (dport != 0) mmio.wr(DE_PORT_IIR, dport);
+    const dmisc = mmio.rd(DE_MISC_IIR);
+    if (dmisc != 0) mmio.wr(DE_MISC_IIR, dmisc);
+    const deiir = mmio.rd(R.DEIIR);
+    if (deiir != 0) mmio.wr(R.DEIIR, deiir);
+    if ((master & 0x7F) != 0) {
+        var g: usize = 0;
+        while (g < 4) : (g += 1) {
+            const off = GEN8_GT_IIR_BASE + @as(u32, @intCast(g)) * 0x10;
+            const giir = mmio.rd(off);
+            if (giir != 0) mmio.wr(off, giir);
+        }
+    }
+    vb_irq_hits += 1;
+    if (iir_a != 0) vb_irq_events += 1;
+    vb_irq_last_iir = iir_a;
+    vb_irq_last_master = master;
+    vb_irq_last_deiir = deiir;
+}
+
+// vblankIrqCount — IRQ-driven vblank deliveries; the flipTick oracle
+// the next step wires in (0 until vbirq3 arms the chain).
+pub fn vblankIrqCount() u64 {
+    return vb_irq_hits;
+}
+
+// vbirq3 — stage-3: the real vblank IRQ end to end. Arms the proven
+// gen8 chain, publishes the PCI IRQ line to the dispatch, unmasks it at
+// the IOAPIC (T590: irq 11 -> vec 0x2B, LAPIC-delivered, eoiVec picks
+// the LAPIC EOI automatically), THEN writes GEN8_MASTER_IRQ_CONTROL —
+// handler+gate live before the device-side gate opens. ~2s count
+// window: irq_hits should track the FRMCNT delta ~1:1 at 60Hz.
+pub fn vbirq3() void {
+    if (!device().up) {
+        vw("vbirq3: i915 down\n", .{});
+        return;
+    }
+    const irq = gdev.pdev.irq_line;
+    vw("vbirq3: irq_line={d} irq_pin={d} -> vec {x}\n", .{
+        irq, gdev.pdev.irq_pin, @as(u64, irq) + 0x20,
+    });
+    if (irq == 0 or irq == 0xFF) {
+        vw("vbirq3: no IRQ line — refusing to arm\n", .{});
+        return;
+    }
+    // gen8 chain — the vbirq/vbirq2-proven writes. DEIER/DEIMR/DEIIR are
+    // the ILK path and don't stick on gen9.2; deliberately skipped.
+    mmio.wr(R.PIPEASTAT_A, mmio.rd(R.PIPEASTAT_A) | 0x0002_0002);
+    mmio.wr(R.DE_PIPE_IMR_A, mmio.rd(R.DE_PIPE_IMR_A) & ~@as(u32, 1));
+    mmio.wr(R.DE_PIPE_IER_A, mmio.rd(R.DE_PIPE_IER_A) | 0x0000_0001);
+    // drain a stale latched event so the window counts fresh edges only
+    const stale = mmio.rd(R.DE_PIPE_IIR_A);
+    if (stale != 0) mmio.wr(R.DE_PIPE_IIR_A, stale);
+    // CPU door first: handler claim published, line unmasked, then the
+    // device-side master opens. A level line stays asserted until the
+    // IIR clears, so even a missed first edge re-delivers.
+    i915_vb_irq_line = irq;
+    koru_irq_unmask(irq);
+    mmio.wr(GEN8_MASTER_IRQ, GEN8_MASTER_IRQ_CONTROL);
+    vw("vbirq3: armed MIRQ44200={x} (bit31 ctl | pending srcs)\n", .{
+        mmio.rd(GEN8_MASTER_IRQ),
+    });
+    const f0 = mmio.rd(R.PIPE_FRMCNT_A);
+    const h0 = vb_irq_hits;
+    const e0 = vb_irq_events;
+    mmio.sleepMs(2000);
+    vw("vbirq3: irq_hits={d} vb_events={d} FRMCNT delta={d} last_iir={x} last_master={x} deiir={x}\n", .{
+        vb_irq_hits - h0, vb_irq_events - e0,
+        mmio.rd(R.PIPE_FRMCNT_A) -% f0,
+        vb_irq_last_iir, vb_irq_last_master, vb_irq_last_deiir,
+    });
+}
+
 // VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).
 // Returns events seen — 0 means the IIR didn't latch (still reports the
 // flip committed; the scanout swap is visible regardless).

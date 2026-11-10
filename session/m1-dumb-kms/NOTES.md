@@ -1873,3 +1873,60 @@ output), dumps PIER + 0x44028 (GEN8_MASTER_IRQ candidate) + PCI
 irq_line/irq_pin — the CPU-routing facts. Master IRQ still unwritten
 (no GSI yet). Next: read wire -> GSI via acpi/ioapic -> IDT gate +
 handler -> GEN8_MASTER_IRQ write -> real vblank IRQ.
+
+## VBLINE STAGE-2 RESULT (2026-11-10, ISO koru-vbirq3)
+
+Wire: PIER=0->1 (per-pipe IER armed, write sticks), MIRQ28(0x44028)=0
+always (not the gen8 master or write-only — master value still
+unconfirmed), irq_line=11 irq_pin=1 (i915 INTx INTA -> ISA IRQ 11),
+pipeIIR edges=20 with IER armed (still latching).
+CPU route: IRQ 11 -> ioapic.gsiFor(11) -> GSI -> IDT vec -> handler
+reads+acks DE_PIPE_IIR_A/DEIIR -> GEN8_MASTER_IRQ write -> real
+vblank IRQ. Plumbing exists: ioapic.gsiFor, user.zig setIdtGate +
+thunk pattern (mouse_irq vec 0x2C), PIC remap 0x20-0x2F, LAPIC
+vec>=0x30. NEXT ISO: i915_irq thunk + handler + unmask + master.
+
+## VBLINE STAGE-3 — real vblank IRQ (2026-11-10, ISO koru-vbirqirq)
+
+MASTER REGISTER RESOLVED: GEN8_MASTER_IRQ is 0x44200, NOT 0x44028.
+Linux mirror (koru-desktop m6-i915): include/drm/intel/
+intel_gmd_interrupt_regs.h:43 — GEN8_MASTER_IRQ=_MMIO(0x44200),
+GEN8_MASTER_IRQ_CONTROL=(1<<31). 0x44028 is GEN6_PMIIR (GT PM IIR —
+why MIRQ28 always read 0). Only bit31 of 0x44200 is writable
+(gvt/interrupt.c: "only bit 31 is allowed to be modified and treated
+as an IER bit"); bits0-30 are read-only pending-source indications:
+DE_PIPE_A/B/C_IRQ=16/17/18, DE_PORT=20, DE_MISC=22, DE_PCH=23,
+GT engines=0-6. DEIER/DEIMR/DEIIR (0x4400c/04/08) are the ILK-path
+bank — writes don't stick on gen9.2, skipped entirely.
+
+Chain (all stages now proven or Linux-canonical):
+PIPESTAT_A |= 0x00020002 -> GEN8_DE_PIPE_IMR_A &= ~1 ->
+GEN8_DE_PIPE_IER_A |= 1 -> pipe IIR pending -> GEN8_MASTER_IRQ
+bit16 indication -> bit31 gates PCI intline.
+
+CPU route: i915 irq_line=11 irq_pin=1 -> ioapic.init already routed
+it at boot (pciLine -> vec 0x20+11=0x2B, level/low, dest BSP).
+'vbirq3' cmd: publishes i915_vb_irq_line=11, koru_irq_unmask(11)
+(IOAPIC unmask — gsiFor hits, LAPIC door), THEN writes
+GEN8_MASTER_IRQ=0x80000000. No new IDT gate needed — all 64 vecs
+already stubbed to irq_exc_dispatch; dispatch arm added after the
+virtio check. eoiVec auto-picks lapicEoi (isLapic(11)).
+
+Handler i915_vblank_irq (kms.zig, IRQ-safe: MMIO+counters only)
+drains every gen8 IIR the master can name — pipe IIRs A/B/C
+(0x44408+0x10n), DE port/misc (0x44448/0x44468), legacy DEIIR, and
+GT IIRs (0x44308+0x10n) when master bits0-6 fire — W1C write-back,
+so a non-vblank source can't hold the level line asserted.
+Counters: vb_irq_hits (deliveries), vb_irq_events (pipe-A IIR
+nonzero), last_iir/last_master/last_deiir. vblankIrqCount() is the
+seam present.flipTick wires next.
+
+Wire proof on T590: 'kms' -> 'vbirq3' ->
+  vbirq3: irq_line=11 irq_pin=1 -> vec 2b
+  vbirq3: armed MIRQ44200=8001xxxx
+  vbirq3: irq_hits=N vb_events=N FRMCNT delta=N ...
+PASS = irq_hits ~= vb_events ~= FRMCNT delta (~120 per 2s at 60Hz).
+hits>>events or hits=0 = master/source mismatch, iterate.
+
+QEMU: vbirq3 -> i915 down, clean return (no i915 in QEMU — HW gate
+is T590). ISO dist/koru-vbirqirq-20261110.iso, MBR patched.
