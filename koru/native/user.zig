@@ -439,6 +439,11 @@ extern fn mouse_irq() void;
 extern var i915_vb_irq_line: u8;
 extern fn i915_vblank_irq() void;
 
+// i915/kms.zig's MSI vector — the display interrupt's message-signaled
+// door (T590: no reachable IO-APIC, edge-only PIC can't carry level
+// INTx; MSI writes the LAPIC directly). 0xFF until 'vbirq' arms it.
+extern var i915_msi_vec: u8;
+
 // gpu.zig exports these once MSI-X is armed; 0xFF = unconfigured. The
 // device's used-ring retirements arrive as the LAPIC vector, not a
 // PIC line — the arm below EOI's the LAPIC and wakes the .gpu park.
@@ -563,6 +568,8 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             schedPreempt(f); // a tick on an AP holding user code rotates too
         } else if (f.vec == smp.RESCHED_VEC) {
             smp.reschedSeen += 1; // pure wake — schedLoop's next poll is the work
+        } else if (i915_msi_vec != 0xFF and f.vec == i915_msi_vec) {
+            i915_vblank_irq(); // gen8+ display IRQ via MSI — MMIO ack inside
         } else if (gpu_msix_vec != 0xFF and f.vec == gpu_msix_vec) {
             gpu_irq_ack();
             gpu_msix_seen += 1;

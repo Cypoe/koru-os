@@ -1158,7 +1158,74 @@ pub fn vbirq4() void {
 // the box that runs them; the unsuffixed command always runs the
 // NEWEST stage. Future stages: add the fn, point this at it.
 pub fn vbirqLatest() void {
-    vbirq5();
+    vbirq6();
+}
+
+// i915_msi_vec — the MSI door's IDT vector, published to user.zig's
+// vec>=0x30 dispatch arm. 0xFF = unarmed; vbirq6 sets it once the MSI
+// message is programmed so stray deliveries before then still report.
+pub export var i915_msi_vec: u8 = 0xFF;
+
+const I915_MSI_VEC: u8 = 0x32; // free: 0x30 gpu-msix, 0x3D/0x3E smp
+
+// vbirq6 — the MSI door. vbirq5 measured the real wall: T590 has no
+// reachable IO-APIC (the 0xFEC00000 direct probe refused too — no
+// sane VER) and the 8259 is edge-only, so level-held PCI INTx has no
+// legal door. But vbirq4 measured msi_cap=1: the i915 has an MSI
+// capability — the device writes the LAPIC directly, bypassing both
+// controllers. That is the path Linux i915 uses by default.
+// Program: msg addr 0xFEE00000 (BSP, phys dest) + data=vec, honour
+// 64-bit layout when the cap offers it, clear PVM mask if present,
+// THEN enable MSI + INTx-disable, with the dispatch arm already live.
+// irq_hits>0 closes the vblank-IRQ rung.
+pub fn vbirq6() void {
+    if (!device().up) {
+        vw("vbirq6: i915 down\n", .{});
+        return;
+    }
+    const cap = pci.capFind(&gdev.pdev, 0x05);
+    if (cap == 0) {
+        vw("vbirq6: no MSI cap\n", .{});
+        return;
+    }
+    const d = &gdev.pdev;
+    const ctrl = pci.read16(d.bus, d.slot, d.func, cap + 2);
+    const is64 = (ctrl & 0x80) != 0;
+    const dataOff: u8 = if (is64) 0x0C else 0x08;
+    const maskOff: u8 = if (is64) 0x10 else 0x0A;
+    vw("vbirq6: msi cap={x} ctrl={x} is64={} pvm={} vec={x}\n", .{
+        cap, ctrl, @intFromBool(is64), @intFromBool(ctrl & 0x100 != 0),
+        I915_MSI_VEC,
+    });
+    // program while disabled — addr, data, mask — then publish the
+    // vector, enable MSI, INTx-disable the pin.
+    pci.write32(d.bus, d.slot, d.func, cap + 4, 0xFEE00000);
+    if (is64) pci.write32(d.bus, d.slot, d.func, cap + 8, 0);
+    pci.write16(d.bus, d.slot, d.func, cap + dataOff, I915_MSI_VEC);
+    if (ctrl & 0x100 != 0) pci.write16(d.bus, d.slot, d.func, cap + maskOff, 0);
+    i915_msi_vec = I915_MSI_VEC;
+    pci.write16(d.bus, d.slot, d.func, cap + 2, ctrl | 0x0001);
+    pci.setCommand(d, pci.command(d) | 0x0400);
+    vw("vbirq6: msi armed ctrl={x} cmd={x}\n", .{
+        pci.read16(d.bus, d.slot, d.func, cap + 2), pci.command(d),
+    });
+    // proven gen8 chain + master — same writes as vbirq3/5.
+    mmio.wr(R.PIPEASTAT_A, mmio.rd(R.PIPEASTAT_A) | 0x0002_0002);
+    mmio.wr(R.DE_PIPE_IMR_A, mmio.rd(R.DE_PIPE_IMR_A) & ~@as(u32, 1));
+    mmio.wr(R.DE_PIPE_IER_A, mmio.rd(R.DE_PIPE_IER_A) | 0x0000_0001);
+    const stale = mmio.rd(R.DE_PIPE_IIR_A);
+    if (stale != 0) mmio.wr(R.DE_PIPE_IIR_A, stale);
+    mmio.wr(GEN8_MASTER_IRQ, GEN8_MASTER_IRQ_CONTROL);
+    vw("vbirq6: counting\n", .{});
+    const f0 = mmio.rd(R.PIPE_FRMCNT_A);
+    const h0 = vb_irq_hits;
+    const e0 = vb_irq_events;
+    mmio.sleepMs(2000);
+    vw("vbirq6: irq_hits={d} vb_events={d} FRMCNT delta={d} last_iir={x} last_master={x}\n", .{
+        vb_irq_hits - h0, vb_irq_events - e0,
+        mmio.rd(R.PIPE_FRMCNT_A) -% f0,
+        vb_irq_last_iir, vb_irq_last_master,
+    });
 }
 
 // vbirq5 — the route fix. vbirq4 proved generation reaches the master

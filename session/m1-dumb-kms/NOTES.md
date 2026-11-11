@@ -2058,3 +2058,32 @@ LIVE. If hits still 0 with live=1: next suspects are LAPIC delivery
 QEMU: ioapic MADT path unchanged (QEMU has MADT — direct probe only
 fires when MADT absent). ISO dist/koru-vbirq5-20261111.iso rebuilt,
 MBR patched. T590 drill: 'kms' -> 'vbirq'.
+
+## VBLINE STAGE-6 — the MSI door (2026-11-11, ISO koru-vbirq6)
+
+vbirq5 second-run wire: acpi found=0 tables=0 | ioapic live=0 —
+initDirect's 0xFEC00000 probe ALSO refused (implausible VER). T590
+genuinely has no reachable IO-APIC; the 8259 is the only legacy
+door and it is edge-only — level INTx has no legal path through it.
+
+PIVOT: vbirq4 measured msi_cap=1 — the i915 has MSI. MSI bypasses
+IO-APIC and PIC entirely: the device writes the LAPIC directly.
+That is the path Linux i915 uses by default; INTx was never the
+required door.
+
+vbirq6: pci.capFind(pdev,0x05) -> program msg addr 0xFEE00000
+(BSP phys dest, 64-bit layout honoured via ctrl bit7) + data=vec
+0x32 (free: 0x30 gpu-msix, 0x3D/0x3E smp IPI/timer), PVM mask
+cleared if offered, i915_msi_vec published to user.zig's
+vec>=0x30 dispatch arm (new extern + arm calling the existing
+IRQ-safe i915_vblank_irq), MSI enable + PCI command INTx-disable
+(0x400), then the proven gen8 chain + GEN8_MASTER_IRQ_CONTROL,
+2s count. vb_irq_hits counts deliveries regardless of door.
+
+PASS = irq_hits ~= vb_events ~= FRMCNT delta (~120/2s). If the MSI
+cap turns out write-refusing or hits stay 0, remaining suspects:
+LAPIC itself not really armed on this box (xAPIC SVR), or the
+display IRQ needing a different enable than INTx path provided.
+
+QEMU: i915 down, clean. ISO dist/koru-vbirq6-20261111.iso, MBR
+patched. T590 drill: 'kms' -> 'vbirq'.
