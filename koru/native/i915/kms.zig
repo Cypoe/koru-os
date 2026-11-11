@@ -1188,8 +1188,10 @@ pub fn vbirq9() void {
     const lp = koru_lapic_probe();
     const lapid: u32 = @intCast(lp >> 32);
     const dest: u32 = if (lp == 0) 0 else (lapid >> 24) & 0xFF;
-    vw("vbirq9: pmm managed={d} live={d} | lapic probe={x} apicid={d} msi_any={d}\n", .{
-        ps.managed, ps.live, lp, dest, msi_any_seen,
+    vw("vbirq9: pmm managed={d} live={d} | lapic={x} apicid={d} | ioapic ok={} id={x} ver={x} pins={d} live={} | msi_any={d}\n", .{
+        ps.managed, ps.live, lp, dest,
+        @intFromBool(ioapic.probeOk), ioapic.probeId, ioapic.probeVer,
+        ioapic.probePins, @intFromBool(ioapic.isLive()), msi_any_seen,
     });
     const cap = pci.capFind(&gdev.pdev, 0x05);
     if (cap == 0) {

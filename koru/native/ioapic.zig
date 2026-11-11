@@ -175,6 +175,15 @@ fn inb(port: u16) u8 {
 // directly, validate VER's pin count before claiming, and route
 // NOTHING: callers forceRoute the lines they need. ISA lines already
 // working on the PIC keep their door until deliberately migrated.
+// Probe-face state — initDirect validates the window and records what
+// it found WITHOUT going live. vbirq9 armed both APICs at once and the
+// wire died after kms; this isolates whether the IO-APIC's live state
+// (vs the LAPIC's) is the killer before either is trusted.
+pub var probeOk = false;
+pub var probeId: u32 = 0;
+pub var probeVer: u32 = 0;
+pub var probePins: u32 = 0;
+
 pub fn initDirect() bool {
     if (live) return true;
     if (acpi.ioapicPhys != 0) return false; // MADT path owns it
@@ -191,22 +200,17 @@ pub fn initDirect() bool {
         iobase = 0;
         return false;
     }
-    npins = pins;
-    bspId = @truncate(
-        @as(*volatile u32, @ptrFromInt(@as(usize, @intCast(0xFEE00000)) + 0x20)).* >> 24);
-    live = true;
-    // Mask EVERY RTE before claiming the door: UEFI firmware leaves
-    // live routes pointing at vectors our IDT never claimed — with the
-    // LAPIC now armed (static pd pool fixed the GB3 map) those fire
-    // into dispatch uninvited and corrupt driver state. This is the
-    // vbirq9 wire-death shape: kernel+shell alive, UDP TX dead.
-    for (0..npins) |g| {
-        const r: u8 = @intCast(0x10 + g * 2);
-        ioWr(r, ioRd(r) | (1 << 16));
-    }
-    sayf("ioapic: direct base={x} id={x} pins={d} bsp={d} rte-masked (no MADT)\n", .{
-        iobase, id >> 24, npins, bspId,
+    // Record the finding; deliberately NOT live, NOT masked, NOT
+    // routed — the vbirq9 wire-death fork decides which APIC is safe
+    // to arm before either goes live for real.
+    probeOk = true;
+    probeId = id;
+    probeVer = ver;
+    probePins = pins;
+    sayf("ioapic: direct @{x} id={x} ver={x} pins={d} — probe only, not live\n", .{
+        iobase, id, ver, pins,
     });
+    iobase = 0; // leave the window unmapped-state clean for now
     return true;
 }
 

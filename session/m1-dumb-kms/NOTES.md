@@ -2189,3 +2189,26 @@ the MSI count. If wire STILL dies -> the killer is in the
 flip/gpucomp path, not interrupts — next probe isolates that.
 
 QEMU clean. Drill: 'kms' -> 'vbirq'.
+
+## VBLINE STAGE-9c — isolate which APIC kills the wire (2026-11-11)
+
+vbirq9b run: RTE+LVT masks did NOT save the wire — same signature,
+kms complete then total UDP silence, shell alive. Stale-firmware-
+IRQ theory disproven (or masks never ran). The real delta vs the
+working vbirq8: BOTH APICs are live for the first time — LAPIC
+armed (static pd pool fixed GB3) AND ioapic.initDirect succeeded.
+
+FORK: initDirect is now a pure validator — reads ID/VER/pins at
+0xFEC00000, records probeOk/probeId/probeVer/probePins for the
+wire, deliberately NOT live, NOT masked, NOT routed. LAPIC stays
+armed (MSI needs it). vbirq9 dumps the full APIC state line.
+
+Reading: wire survives past kms -> IO-APIC-live was the killer
+(investigate what about it — wrong device at 0xFEC00000? RTE mask
+writes corrupting a neighbor? just being live+LAPIC armed?).
+Wire dies again -> LAPIC-armed ALONE kills UDP TX — much stranger,
+points at the armed LAPIC itself (SVR/LVT state) or an
+unmasked delivery path we haven't found.
+
+QEMU clean. ISO dist/korq-vbirq9-20261111.iso (same name),
+MBR patched. Drill: 'kms' -> 'vbirq'.
