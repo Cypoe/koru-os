@@ -2462,3 +2462,16 @@ perf emitter now TSC-based: 'perf f=<flips> t=<tsc delta> gpu= cpu='
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt (TSC perf). Drill:
 'kms'->'kwin'->drag ~10s -> read 'perf f=' lines = real fps.
+
+## VBLINE STAGE-9p — timeout_clears oracle added (2026-11-11)
+
+TSC perf confirmed ~2.3fps real flip rate (f=2 per ~0.86s). The
+~430ms/flip matches COMMIT_TIMEOUT_TICKS=4096 if flipTick runs
+~9.5k/sec — i.e. the edge oracle (frameCount/irqc) may NEVER fire
+in the flip loop and every commit rides the timeout. Added
+'to=<timeout_clears>' to the perf line: if to climbs with f, the
+vblank edge oracle is dead in flipTick -> the armed vblank IRQ
+(vbirq) is the fix, or FRMCNT stalls in this mode.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
+drag -> read 'perf f= t= to=' — to climbing = timeout-bound.

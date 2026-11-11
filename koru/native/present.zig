@@ -389,6 +389,7 @@ fn flipTick() void {
         perf_last_tsc = tnow;
         text.puts("perf f="); text.putdec(df);
         text.puts(" t="); text.putdec(dt);
+        text.puts(" to="); text.putdec(timeout_clears);
         text.puts(" gpu="); text.putdec(gpu_frames);
         text.puts(" cpu="); text.putdec(cpu_frames); text.puts("\n");
     }
