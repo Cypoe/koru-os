@@ -1013,6 +1013,11 @@ pub export fn i915_vblank_irq() callconv(.c) void {
     vb_irq_last_iir = iir_a;
     vb_irq_last_master = master;
     vb_irq_last_deiir = deiir;
+    // GEN8_MASTER_IRQ pending bits are W1C — Linux acks them by writing
+    // the read value back. Without this the indications stay set after
+    // the sources drain and a live door re-fires forever (the vbirq7
+    // hang shape). bit31 rides along set, so the IER survives.
+    mmio.wr(GEN8_MASTER_IRQ, master);
 }
 
 // vblankIrqCount — IRQ-driven vblank deliveries; the flipTick oracle
@@ -1158,10 +1163,76 @@ pub fn vbirq4() void {
 // the box that runs them; the unsuffixed command always runs the
 // NEWEST stage. Future stages: add the fn, point this at it.
 pub fn vbirqLatest() void {
-    vbirq7();
+    vbirq8();
 }
 
 extern var msi_any_seen: u64;
+extern fn koru_lapic_probe() u64;
+
+// vbirq8 — vbirq7's hang fix + same recon. vbirq7's first act was a
+// raw 0xFEE00020/0xFEE000F0 deref: if the LAPIC window never mapped on
+// T590 that is an immediate page fault -> frozen screen, zero output —
+// exactly what the wire showed. koru_lapic_probe answers the same
+// question through user.zig's lapicArmed guard (0 = unarmed, no
+// deref). The handler also gained the GEN8_MASTER_IRQ W1C ack — the
+// pending indications are write-1-to-clear and were sticking set,
+// which is the storm shape if MSI ever did deliver. msi_any_seen
+// still splits 'wrong vector' from 'no arrival'.
+pub fn vbirq8() void {
+    if (!device().up) {
+        vw("vbirq8: i915 down\n", .{});
+        return;
+    }
+    const lp = koru_lapic_probe();
+    const lapid: u32 = @intCast(lp >> 32);
+    const dest: u32 = if (lp == 0) 0 else (lapid >> 24) & 0xFF;
+    vw("vbirq8: lapic probe={x} apicid={d} msi_any={d}\n", .{
+        lp, dest, msi_any_seen,
+    });
+    const cap = pci.capFind(&gdev.pdev, 0x05);
+    if (cap == 0) {
+        vw("vbirq8: no MSI cap\n", .{});
+        return;
+    }
+    const d = &gdev.pdev;
+    const ctrl = pci.read16(d.bus, d.slot, d.func, cap + 2);
+    const is64 = (ctrl & 0x80) != 0;
+    const dataOff: u8 = if (is64) 0x0C else 0x08;
+    const maskOff: u8 = if (is64) 0x10 else 0x0A;
+    const maddr: u32 = 0xFEE00000 | (dest << 12);
+    vw("vbirq8: cap={x} ctrl={x} is64={} pvm={} dest={x} maddr={x}\n", .{
+        cap, ctrl, @intFromBool(is64), @intFromBool(ctrl & 0x100 != 0),
+        dest, maddr,
+    });
+    pci.write32(d.bus, d.slot, d.func, cap + 4, maddr);
+    if (is64) pci.write32(d.bus, d.slot, d.func, cap + 8, 0);
+    pci.write16(d.bus, d.slot, d.func, cap + dataOff, I915_MSI_VEC);
+    if (ctrl & 0x100 != 0) pci.write16(d.bus, d.slot, d.func, cap + maskOff, 0);
+    i915_msi_vec = I915_MSI_VEC;
+    pci.write16(d.bus, d.slot, d.func, cap + 2, ctrl | 0x0001);
+    pci.setCommand(d, pci.command(d) | 0x0400);
+    vw("vbirq8: armed ctrl={x} addr={x} data={x}\n", .{
+        pci.read16(d.bus, d.slot, d.func, cap + 2),
+        pci.read32(d.bus, d.slot, d.func, cap + 4),
+        pci.read16(d.bus, d.slot, d.func, cap + dataOff),
+    });
+    mmio.wr(R.PIPEASTAT_A, mmio.rd(R.PIPEASTAT_A) | 0x0002_0002);
+    mmio.wr(R.DE_PIPE_IMR_A, mmio.rd(R.DE_PIPE_IMR_A) & ~@as(u32, 1));
+    mmio.wr(R.DE_PIPE_IER_A, mmio.rd(R.DE_PIPE_IER_A) | 0x0000_0001);
+    const stale = mmio.rd(R.DE_PIPE_IIR_A);
+    if (stale != 0) mmio.wr(R.DE_PIPE_IIR_A, stale);
+    mmio.wr(GEN8_MASTER_IRQ, GEN8_MASTER_IRQ_CONTROL);
+    vw("vbirq8: master={x} counting\n", .{ mmio.rd(GEN8_MASTER_IRQ) });
+    const f0 = mmio.rd(R.PIPE_FRMCNT_A);
+    const h0 = vb_irq_hits;
+    const e0 = vb_irq_events;
+    const a0 = msi_any_seen;
+    mmio.sleepMs(2000);
+    vw("vbirq8: irq_hits={d} vb_events={d} msi_any={d} FRMCNT delta={d} last_master={x}\n", .{
+        vb_irq_hits - h0, vb_irq_events - e0, msi_any_seen - a0,
+        mmio.rd(R.PIPE_FRMCNT_A) -% f0, vb_irq_last_master,
+    });
+}
 
 // vbirq7 — MSI arrived nowhere: vbirq6 armed the cap cleanly
 // (ctrl 0->1, INTx disabled) yet irq_hits stayed 0. Three things were

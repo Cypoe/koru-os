@@ -2110,3 +2110,28 @@ on the wire. Reading:
 
 QEMU clean. ISO dist/koru-vbirq7-20261111.iso, MBR patched.
 Drill: 'kms' -> 'vbirq'.
+
+## VBLINE STAGE-8 — vbirq7 hung; two suspects fixed (2026-11-11)
+
+vbirq7 wire: '> vbirq' + 'latest IRQ probe' then NOTHING — user saw
+a hang. vbirq7's first act was a raw 0xFEE00020/0xFEE000F0 deref:
+if the LAPIC window never mapped on T590 that is an immediate #PF
+-> frozen screen, zero output. Fits exactly. Second suspect: the
+handler never W1C-acked GEN8_MASTER_IRQ — pending bits are
+write-1-to-clear (Linux writes the read value back); stuck
+indications + a live MSI door = re-fire storm = same hang shape.
+
+vbirq8 fixes both: user.zig exports koru_lapic_probe() (returns
+(idreg<<32)|svr, or 0 when lapicArmed=false — no raw deref from
+kms), i915_vblank_irq now writes GEN8_MASTER_IRQ back (bit31 rides
+along, IER survives), and the probe keeps vbirq7's recon — real
+apic dest in the MSI message, register readback, msi_any_seen.
+
+Reading the wire: lapic probe=0 -> LAPIC never mapped, MSI has no
+receiving door and INTx is the only (broken) path — bigger rethink.
+lapic probe!=0 + msi_any>0 + irq_hits=0 -> MSI arrives wrong vec.
+All counters 0 -> device output never asserts; next suspect is a
+missing display-side enable beyond GEN8_MASTER_IRQ bit31.
+
+QEMU clean. ISO dist/koru-vbirq8-20261111.iso, MBR patched.
+Drill: 'kms' -> 'vbirq'.

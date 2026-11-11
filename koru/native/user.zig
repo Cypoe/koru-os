@@ -733,6 +733,15 @@ fn lapicEoi() void {
     lapic[0xB0 / 4] = 0;
 }
 
+// koru_lapic_probe — wire-visible LAPIC state for probes running on
+// boxes with no serial. Returns (idreg<<32)|svr, or 0 when the LAPIC
+// window never mapped — callers must NOT deref 0xFEE00000 themselves:
+// vbirq7's raw reads are the leading hang suspect on T590.
+pub export fn koru_lapic_probe() u64 {
+    if (!lapicArmed) return 0;
+    return (@as(u64, lapic[0x20 / 4]) << 32) | @as(u64, lapic[0xF0 / 4]);
+}
+
 // Called once from kmain, before the program runs: PIC remapped, every
 // gate populated, interrupts on.
 pub fn init() void {
