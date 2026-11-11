@@ -61,6 +61,10 @@ var armed_frm: u32 = 0; // FRMCNT at arm time — delta = flip landed at a frame
 var vb_armed: bool = false;
 var vb_emit_n: u64 = 0;   // ticks since last vb: telemetry line
 var vb_last_flips: u64 = 0; // flip_count at last emit — +f delta = fps
+var perf_emit_n: u64 = 0;   // faster cadence — objective jank oracle
+var perf_last_flips: u64 = 0;
+var perf_last_irqs: u64 = 0;
+extern var irq_ticks: u64; // PIT deliveries — interrupt-rate signal
 var last_gen: u64 = 0;
 var last_mode_was_flip: bool = false;
 var retry_n: u64 = 0;
@@ -366,6 +370,23 @@ fn flipTick() void {
         sayU("vb FR={x} PS={x} IM={x} IS={x} II={x} +f={d} pd={d} to={d}\n",
             .{ vr[6], vr[7], vr[8], vr[9], vr[10], df,
                @intFromBool(flip_pending), timeout_clears });
+    }
+    // perf — objective jank oracle on the panel (wire dies post-kms).
+    // flips-delta per window = real flip throughput; irq-delta = PIT
+    // delivery rate. Drag for ~10s and read several lines: high flips
+    // + high irq = render keeps up, jank is input-side; low flips =
+    // the compositor/flip path is the bottleneck.
+    perf_emit_n += 1;
+    if (perf_emit_n >= (1 << 18)) {
+        perf_emit_n = 0;
+        const df = flip_count - perf_last_flips;
+        perf_last_flips = flip_count;
+        const di = irq_ticks - perf_last_irqs;
+        perf_last_irqs = irq_ticks;
+        text.puts("perf +f="); text.putdec(df);
+        text.puts(" irq+="); text.putdec(di);
+        text.puts(" gpu="); text.putdec(gpu_frames);
+        text.puts(" cpu="); text.putdec(cpu_frames); text.puts("\n");
     }
     // vblank oracle FIRST: any latched DE event means >=1 vblank passed
     // since the last drain — an armed flip has landed, the old front is

@@ -2424,3 +2424,21 @@ smp.init may need lapicInit — not on shell path, revisit if SMP lands.
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
 mouse ONLY (no vbirq) — smooth = LAPIC was it.
+
+## VBLINE STAGE-9n — objective jank oracle (2026-11-11)
+
+vbirq9m: LAPIC-off-input bisect did NOT fix the jank — mouse still
+laggy with pure PIC. Always-on deltas vs jank1 are now negligible
+(static pool ~equivalent, counters, one count read/tick), so either
+the baseline feel was always like this or the regression is in the
+compositor/flip path, not interrupts. User now unsure of baseline —
+stop guessing from feel, measure.
+
+ADDED: perf emitter in flipTick — every 1<<18 ticks prints to the
+PANEL (wire dead post-kms): 'perf +f=<flip delta> irq+=<PIT delta>
+gpu=<cum> cpu=<cum>'. Drag ~10s, read several lines. High +f with
+high irq+ = render keeps up -> jank is input-side; low +f = flip/
+compositor is the bottleneck. gpu vs cpu split names the path.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
+drag ~10s -> read 'perf' lines on screen.
