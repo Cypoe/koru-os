@@ -396,6 +396,7 @@ fn flipTick() void {
         text.puts(" fw="); text.putdec(if (gpublt.fw_n == 0) 0 else gpublt.fw_tsc / gpublt.fw_n);
         text.puts(" fb="); text.putdec(gpublt.flush_bytes);
         text.puts(" ec="); text.putdec(gpublt.emit_count);
+        text.puts(" bd="); text.putdec(if (gpublt.build_n == 0) 0 else gpublt.build_tsc / gpublt.build_n);
         text.puts(" gpu="); text.putdec(gpu_frames);
         text.puts(" cpu="); text.putdec(cpu_frames); text.puts("\n");
     }

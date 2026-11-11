@@ -99,6 +99,10 @@ pub var fw_n: u64 = 0;
 // per frame; splits the ~24ms CPU emit into clflush volume vs cmd count.
 pub var flush_bytes: u64 = 0;
 pub var emit_count: u64 = 0;
+// build-phase timing — rdtsc around the damage-rect emit loop, splits
+// paintFrame into 'build commands' vs 'submit/fence'.
+pub var build_tsc: u64 = 0;
+pub var build_n: u64 = 0;
 
 fn rdtsc() u64 {
     var lo: u32 = undefined;
@@ -306,15 +310,13 @@ fn emitFill(dstGtt: u64, dstPitchB: u32, x: u32, y: u32, w: u32, h: u32, color: 
     return true;
 }
 
-// flushSrc — write back the layer-backing src rect the next blit reads.
+// flushSrc — clflush the layer-backing src rect the next blit will read.
 // Layer backings are CPU-written through the WB identity map; the BCS
 // reads them via GGTT. Without a flush the engine can copy stale lines
 // (frozen console text, wrong pixels under the cursor -> sprite blob).
-// clwb (not clflush): write-back WITHOUT invalidate — the engine only
-// needs the lines in memory; the CPU's cached copy stays valid. On the
-// mostly-clean backings a drag produces, clwb skips clean lines far
-// cheaper than clflush's unconditional invalidate. T590 (Coffee Lake)
-// and QEMU both implement CLWB.
+// clwb was tried (write-back w/o invalidate) but HUNG kms on T590 —
+// reverted to clflush; the real fix is dirty-tracking so unchanged
+// backings skip this entirely instead of paying clflush volume.
 fn flushSrc(buf: [*]u32, pitch: u32, x: u32, y: u32, w: u32, h: u32) void {
     var yy = y;
     while (yy < y + h) : (yy += 1) {
@@ -323,7 +325,7 @@ fn flushSrc(buf: [*]u32, pitch: u32, x: u32, y: u32, w: u32, h: u32) void {
         var a = (row + @as(usize, @intCast(x)) * 4) & ~@as(usize, 63);
         const end = row + (@as(usize, @intCast(x)) + @as(usize, @intCast(w))) * 4;
         while (a < end) : (a += 64) {
-            asm volatile ("clwb (%[p])"
+            asm volatile ("clflush (%[p])"
                 :
                 : [p] "r" (a)
                 : .{ .memory = true });
@@ -467,6 +469,7 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
     var ok = true;
     var cands: [comp.MAX_LAYERS]comp.LayerView = undefined;
 
+    const b0 = rdtsc();
     for (rects) |r| {
         // clip to scene + target like compositeRect does
         const x1 = @min(@min(r.x + r.w, sw), db.width);
@@ -537,6 +540,9 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
         }
         if (!ok) break;
     }
+
+    build_tsc += rdtsc() - b0;
+    build_n += 1;
 
     if (ok) ok = finishBatch();
     if (ok) ok = emitFence();
