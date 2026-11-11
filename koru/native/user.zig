@@ -734,6 +734,7 @@ var lapicArmed = false;
 pub export var lapicMapResult: u64 = 0;
 
 fn lapicInit() void {
+    if (lapicArmed) return; // idempotent — ensureInput and i915 both reach it
     const ok = mmio.map(0xFEE00000, 0x1000);
     lapicMapResult = if (ok) 1 else 2;
     if (!ok) return;
@@ -779,6 +780,7 @@ pub export fn koru_lapic_armed() u64 {
 // the i915 IRQ probes in either order.
 pub export fn koru_irq_ensure() void {
     init();
+    lapicInit(); // i915 MSI needs the LAPIC armed — input path stays PIC
 }
 
 var irqInfraUp = false;
@@ -791,7 +793,10 @@ pub fn init() void {
     if (irqInfraUp) return;
     irqInfraUp = true;
     picInit();
-    lapicInit();
+    // lapicInit is NOT here — the LAPIC is armed lazily by
+    // koru_irq_ensure for the i915 MSI path only. Arming it on the
+    // generic input path routes every PIC IRQ through LINT0->LAPIC and
+    // measurably degraded T590 mouse delivery; input wants pure PIC.
     // v3 must be DPL=3 — #BP is raised by int3 from user code and the
     // DPL check applies
     for (0..64) |v| setIdtGate(v, irqstub_table[v], v == 3);

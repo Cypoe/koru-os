@@ -2401,3 +2401,26 @@ now fully acknowledged on both doors.
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
 mouse — expect smooth cursor again (jank1 parity or better).
+
+## VBLINE STAGE-9m — LAPIC bisect: arm it only for i915 MSI (2026-11-11)
+
+vbirq9l: EOI fix didn't cure the ~5fps uneven mouse lag. Bisect:
+lapicInit moved OUT of user.init (shared input path) into
+koru_irq_ensure (i915 MSI path only). Rationale: input wants pure
+PIC (8259 direct); the LAPIC is needed ONLY for MSI delivery.
+Arming it on the generic path routes every PIC IRQ through
+LINT0->LAPIC and is the prime suspect for the degradation — the
+EOI fix covered in-service bits but armed-LAPIC may add arbitration
+latency or residual LINT1/spurious noise the PIC path never had.
+
+If mouse returns to jank1-smooth -> armed-LAPIC-on-PIC confirmed;
+then solve MSI+mouse coexistence deliberately (correct LINT0
+ExtINT delivery mode, or accept PIC for input + LAPIC only for MSI
+with careful EOI). If still laggy -> NOT the LAPIC; look at the
+compositor/flip path or mmio.map side effects instead.
+
+lapicInit now idempotent (lapicArmed guard). NOTE: doFull path's
+smp.init may need lapicInit — not on shell path, revisit if SMP lands.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
+mouse ONLY (no vbirq) — smooth = LAPIC was it.
