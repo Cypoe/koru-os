@@ -2365,3 +2365,23 @@ without a manual vbirq; fix the separate post-kms UDP-TX death.
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'vbirq'
 (read panel) -> drag. The IRQ oracle is live after vbirq arms it.
+
+## VBLINE STAGE-9k — mouse fix: LVT mask was severing the PIC (2026-11-11)
+
+vbirq9j: irq_hits=120 confirmed (fixed 2s window @60Hz = correct,
+not stuck). flipTick now races vblankIrqCount vs FRMCNT.
+
+REGRESSION: mouse dead even WITHOUT vbirq -> not the i915 MSI.
+Root cause: lapicInit's LVT mask loop covered 0x320-0x380 which
+INCLUDES LINT0(0x350)/LINT1(0x360) — the legacy 8259 PIC passthrough
+pins. Masking LINT0 severed IRQ12(mouse)/IRQ0(timer) delivery. The
+mask was dead code while mmio.map refused GB3; once the static-pool
+counter fix made the map succeed, the mask executed and killed PIC.
+Keyboard survived only because it's polled (kbd.init skipped).
+
+FIX: mask only LAPIC-local sources {0x320 timer,0x330 thermal,
+0x340 perfmon,0x370 error}; leave LINT0/LINT1 open for the PIC
+cascade. Mouse should return; LAPIC still arms for MSI.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
+mouse (no vbirq needed to test input). Then 'vbirq'->drag.

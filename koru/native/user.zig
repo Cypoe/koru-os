@@ -732,12 +732,16 @@ fn lapicInit() void {
     lapicMapResult = if (ok) 1 else 2;
     if (!ok) return;
     lapic = @ptrFromInt(0xFEE00000);
-    // Mask every LVT before arming: firmware may leave timer/thermal/
-    // LINT/error sources live, and an armed LAPIC would deliver them
-    // into our IDT unclaimed — same uninvited-interrupt hazard as the
-    // IO-APIC's stale RTEs. smp reconfigures the timer LVT it needs.
-    var off: u32 = 0x320;
-    while (off <= 0x380) : (off += 0x10) {
+    // Mask the LAPIC-LOCAL LVT sources before arming: firmware may
+    // leave timer/thermal/perfmon/error live, and an armed LAPIC would
+    // deliver them into our IDT unclaimed. CRITICAL: do NOT mask
+    // LINT0 (0x350) / LINT1 (0x360) — those are the legacy 8259 PIC
+    // passthrough pins; masking them severed IRQ12/IRQ0 delivery and
+    // killed the mouse the moment mmio.map started succeeding (the
+    // mask had been dead code while the LAPIC window refused to map).
+    // smp reconfigures the timer LVT it needs.
+    const lvt_masked = [_]u32{ 0x320, 0x330, 0x340, 0x370 };
+    for (lvt_masked) |off| {
         lapic[off / 4] = lapic[off / 4] | (1 << 16);
     }
     lapic[0xF0 / 4] = lapic[0xF0 / 4] | 0x1FF; // software enable + spurious 0xFF
