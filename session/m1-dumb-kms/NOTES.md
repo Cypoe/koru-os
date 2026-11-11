@@ -2343,3 +2343,25 @@ User reads irq_hits/lapic/msi directly off the display.
 
 Drill: 'kms' -> 'vbirq' -> READ THE SCREEN (wire may be dead).
 Looking for: lapic probe=real, irq_hits ~= vb_events ~= FRMCNT.
+
+## VBLINE STAGE-9j — VBLANK IRQ ALIVE + wired into flipTick (2026-11-11)
+
+vbirq9h screen read (wire dead, panel oracle):
+  irq_hits=120 vb_events=120 msi_any=120 FRMCNT delta=120
+  lapic=1ff apicid=0 — LAPIC armed, MSI delivering 1:1:1:1 with
+  frames. REAL vblank interrupt on T590 silicon. Root cause of the
+  whole hunt: fullBoot=false DIAG scaffold meant user.init (IDT+PIC+
+  sti) never ran — no interrupt delivery existed to probe.
+
+flipTick now takes vblankIrqCount() as a SECOND oracle alongside
+FRMCNT — whichever edge fires first wins; unarmed paths (QEMU,
+pre-vbirq) keep FRMCNT fallback since the count stays 0. commit_irq
++ armed_irq snapshots added. Once vbirq arms MSI the chain stays
+armed -> flips pace on real interrupts.
+
+NEXT: bigger console font (user request — screen is now an oracle);
+auto-arm the i915 IRQ chain at kms modeset so flips are IRQ-driven
+without a manual vbirq; fix the separate post-kms UDP-TX death.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'vbirq'
+(read panel) -> drag. The IRQ oracle is live after vbirq arms it.

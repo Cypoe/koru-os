@@ -341,6 +341,8 @@ var commit_armed: bool = false;
 var commit_handle: u32 = 0;
 var commit_back: usize = 0;
 var commit_frm: u32 = 0;
+var commit_irq: u64 = 0; // vblankIrqCount at arm — IRQ-edge oracle (0-safe)
+var armed_irq: u64 = 0;  // vblankIrqCount when flip_pending armed
 var commit_age: u32 = 0;
 var commit_rects: u32 = 0;
 var commit_full: bool = false;
@@ -374,12 +376,13 @@ fn flipTick() void {
     const ev = kms.vblankDrain();
     last_vblank_raw = ev;
     const frm = kms.frameCount();
+    const irqc = kms.vblankIrqCount(); // 0 until vbirq arms MSI — safe oracle
     if (flip_pending) {
-        // Clear on: real IIR event, OR FRMCNT advanced past armed_frm
-        // (the armed flip landed at a frame boundary — FRMCNT ticks
-        // once per frame at ~vblank, proven 60Hz on T590), OR the
-        // bounded timeout if both oracles are dead.
-        if (ev != 0 or frm != armed_frm) {
+        // Clear on: real IIR event, OR FRMCNT advanced past armed_frm,
+        // OR the vblank IRQ count advanced past armed_irq (interrupt-
+        // driven edge — the T590 MSI path proves 1:1 with FRMCNT), OR
+        // the bounded timeout if all oracles are dead.
+        if (ev != 0 or frm != armed_frm or irqc != armed_irq) {
             flip_pending = false;
             flip_age = 0;
         } else {
@@ -401,11 +404,12 @@ fn flipTick() void {
     // DSPASURF now; otherwise damage keeps accumulating in the accs.
     if (commit_armed) {
         commit_age += 1;
-        if (kms.frameCount() != commit_frm or
+        if (kms.frameCount() != commit_frm or irqc != commit_irq or
             commit_age >= COMMIT_TIMEOUT_TICKS)
         {
             if (kms.flipSwapFast(commit_handle)) {
                 armed_frm = kms.frameCount();
+                armed_irq = kms.vblankIrqCount();
                 if (front == null) {
                     if (pre_scanout) |m| {
                         if (m != commit_handle) _ = kms.dumbDestroy(m);
@@ -465,6 +469,7 @@ fn flipTick() void {
     commit_handle = b.handle;
     commit_back = back;
     commit_frm = kms.frameCount();
+    commit_irq = kms.vblankIrqCount();
     commit_age = 0;
     commit_rects = @intCast(nr);
     commit_full = was_full;
