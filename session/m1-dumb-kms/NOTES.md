@@ -2279,3 +2279,20 @@ needs the x2APIC dest format). ioapic probe may finally read a
 real VER at 0xFEC00000.
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'vdiag' only.
+
+## VBLINE STAGE-9g — call-count truth (2026-11-11)
+
+vdiag still showed pdpt=0 lapPde=0 ioaPde=0 lapicArmed=0 AFTER
+the mintPd counter fix — identical bytes. Either the flashed ISO
+predates the counter, or map() genuinely never reaches the
+pdpt[gb] write. Added counters to split it: mmio.mapCalls (entry
+count), mmio.pdInstalled (pdpt assigns), user.lapicMapResult
+(0=not run,1=map true,2=map false). vdiag dumps all three plus
+the PDE bits.
+
+Reading: mapCalls=0 -> nothing ever calls mmio.map (init path
+dead). mapCalls>0 pdInst=0 lapMap=2 -> map runs, mintPd/pool
+still refusing. lapMap=1 + pdpt=0 -> installed then cleared
+(corruption). lapMap=0 -> lapicInit not reached.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'vdiag' only.

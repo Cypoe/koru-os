@@ -723,8 +723,14 @@ const mmio = @import("mmio");
 var lapic: [*]volatile u32 = undefined;
 var lapicArmed = false;
 
+// 0 = lapicInit's map never ran, 1 = map true, 2 = map false —
+// vdiag splits 'not called' from 'called and refused'.
+pub export var lapicMapResult: u64 = 0;
+
 fn lapicInit() void {
-    if (!mmio.map(0xFEE00000, 0x1000)) return;
+    const ok = mmio.map(0xFEE00000, 0x1000);
+    lapicMapResult = if (ok) 1 else 2;
+    if (!ok) return;
     lapic = @ptrFromInt(0xFEE00000);
     // Mask every LVT before arming: firmware may leave timer/thermal/
     // LINT/error sources live, and an armed LAPIC would deliver them

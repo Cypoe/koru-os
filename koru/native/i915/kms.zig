@@ -1170,6 +1170,7 @@ extern var msi_any_seen: u64;
 extern var irq_ticks: u64;
 extern fn koru_lapic_probe() u64;
 extern fn koru_lapic_armed() u64;
+extern var lapicMapResult: u64;
 
 // vdiag — kms-independent state dump. The wire only dies AFTER kms,
 // so boot-time APIC/pmm truth must be readable at the bare shell:
@@ -1194,9 +1195,9 @@ pub fn vdiag() void {
     // present|rw|PCD|PS (0x93-ish) for the window to reach silicon.
     const lapIdx: u32 = @intCast((0xFEE00000 >> 21) & 0x1FF);
     const ioaIdx: u32 = @intCast((0xFEC00000 >> 21) & 0x1FF);
-    vw("vdiag: GB3 pdpt={x} lapPde={x} ioaPde={x} lapicArmed={}\n", .{
+    vw("vdiag: GB3 pdpt={x} lapPde={x} ioaPde={x} lapicArmed={} mapCalls={} pdInst={} lapMap={}\n", .{
         hostmmio.pdptEntry(3), hostmmio.pdEntry(3, lapIdx), hostmmio.pdEntry(3, ioaIdx),
-        koru_lapic_armed(),
+        koru_lapic_armed(), hostmmio.mapCalls, hostmmio.pdInstalled, lapicMapResult,
     });
 }
 

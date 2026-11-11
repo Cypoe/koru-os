@@ -50,7 +50,13 @@ fn mintPd() ?* [512]u64 {
 // map [phys, phys+len) with 2 MiB pages. Identity map — the returned VA
 // IS the physical address. False only when the page-table budget runs
 // out, and it says so — the window is never silently absent.
+// Call/install counters — vdiag reads these to split 'map never
+// called' from 'called but refused' from 'installed but pdpt reads 0'.
+pub var mapCalls: u64 = 0;
+pub var pdInstalled: u64 = 0;
+
 pub fn map(phys: u64, len: u64) bool {
+    mapCalls += 1;
     const first = phys & ~@as(u64, 0x1FFFFF);
     const last = (phys + len + 0x1FFFFF) & ~@as(u64, 0x1FFFFF);
     var p = first;
@@ -68,6 +74,7 @@ pub fn map(phys: u64, len: u64) bool {
                 // VA==PA identity: the pool's link-time address IS the
                 // physical address the pdpt entry needs.
                 pdpt[gb] = @intFromPtr(t) | 0x3;
+                pdInstalled += 1;
             }
             table = @ptrFromInt(pdpt[gb] & ~@as(u64, 0xFFF));
         }
