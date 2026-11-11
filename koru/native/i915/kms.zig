@@ -1158,7 +1158,75 @@ pub fn vbirq4() void {
 // the box that runs them; the unsuffixed command always runs the
 // NEWEST stage. Future stages: add the fn, point this at it.
 pub fn vbirqLatest() void {
-    vbirq6();
+    vbirq7();
+}
+
+extern var msi_any_seen: u64;
+
+// vbirq7 — MSI arrived nowhere: vbirq6 armed the cap cleanly
+// (ctrl 0->1, INTx disabled) yet irq_hits stayed 0. Three things were
+// never verified: the LAPIC's own state (id/svr — is the receiving
+// door even armed, and is dest=0 the right target), whether the MSI
+// register writes actually stuck (never read back), and whether ANY
+// vec>=0x30 delivery reaches the CPU at all (stray reports are
+// serial-only — msi_any_seen is the wire-visible count). This probe
+// dumps all three, reprograms the message with the REAL bsp apic id
+// in the dest field, and recounts.
+pub fn vbirq7() void {
+    if (!device().up) {
+        vw("vbirq7: i915 down\n", .{});
+        return;
+    }
+    const lapid = @as(*volatile u32, @ptrFromInt(@as(usize, 0xFEE00020))).*;
+    const svr = @as(*volatile u32, @ptrFromInt(@as(usize, 0xFEE000F0))).*;
+    const dest: u32 = (lapid >> 24) & 0xFF;
+    vw("vbirq7: lapic idreg={x} apicid={d} svr={x} msi_any={d}\n", .{
+        lapid, dest, svr, msi_any_seen,
+    });
+    const cap = pci.capFind(&gdev.pdev, 0x05);
+    if (cap == 0) {
+        vw("vbirq7: no MSI cap\n", .{});
+        return;
+    }
+    const d = &gdev.pdev;
+    const ctrl = pci.read16(d.bus, d.slot, d.func, cap + 2);
+    const is64 = (ctrl & 0x80) != 0;
+    const dataOff: u8 = if (is64) 0x0C else 0x08;
+    const maskOff: u8 = if (is64) 0x10 else 0x0A;
+    const maddr: u32 = 0xFEE00000 | (dest << 12);
+    vw("vbirq7: cap={x} ctrl={x} is64={} pvm={} dest={x} maddr={x}\n", .{
+        cap, ctrl, @intFromBool(is64), @intFromBool(ctrl & 0x100 != 0),
+        dest, maddr,
+    });
+    pci.write32(d.bus, d.slot, d.func, cap + 4, maddr);
+    if (is64) pci.write32(d.bus, d.slot, d.func, cap + 8, 0);
+    pci.write16(d.bus, d.slot, d.func, cap + dataOff, I915_MSI_VEC);
+    if (ctrl & 0x100 != 0) pci.write16(d.bus, d.slot, d.func, cap + maskOff, 0);
+    i915_msi_vec = I915_MSI_VEC;
+    pci.write16(d.bus, d.slot, d.func, cap + 2, ctrl | 0x0001);
+    pci.setCommand(d, pci.command(d) | 0x0400);
+    // readback — did the device actually keep the message?
+    vw("vbirq7: armed ctrl={x} addr={x} data={x}\n", .{
+        pci.read16(d.bus, d.slot, d.func, cap + 2),
+        pci.read32(d.bus, d.slot, d.func, cap + 4),
+        pci.read16(d.bus, d.slot, d.func, cap + dataOff),
+    });
+    mmio.wr(R.PIPEASTAT_A, mmio.rd(R.PIPEASTAT_A) | 0x0002_0002);
+    mmio.wr(R.DE_PIPE_IMR_A, mmio.rd(R.DE_PIPE_IMR_A) & ~@as(u32, 1));
+    mmio.wr(R.DE_PIPE_IER_A, mmio.rd(R.DE_PIPE_IER_A) | 0x0000_0001);
+    const stale = mmio.rd(R.DE_PIPE_IIR_A);
+    if (stale != 0) mmio.wr(R.DE_PIPE_IIR_A, stale);
+    mmio.wr(GEN8_MASTER_IRQ, GEN8_MASTER_IRQ_CONTROL);
+    vw("vbirq7: master={x} counting\n", .{ mmio.rd(GEN8_MASTER_IRQ) });
+    const f0 = mmio.rd(R.PIPE_FRMCNT_A);
+    const h0 = vb_irq_hits;
+    const e0 = vb_irq_events;
+    const a0 = msi_any_seen;
+    mmio.sleepMs(2000);
+    vw("vbirq7: irq_hits={d} vb_events={d} msi_any={d} FRMCNT delta={d} last_master={x}\n", .{
+        vb_irq_hits - h0, vb_irq_events - e0, msi_any_seen - a0,
+        mmio.rd(R.PIPE_FRMCNT_A) -% f0, vb_irq_last_master,
+    });
 }
 
 // i915_msi_vec — the MSI door's IDT vector, published to user.zig's

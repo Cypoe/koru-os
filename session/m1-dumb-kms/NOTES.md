@@ -2087,3 +2087,26 @@ display IRQ needing a different enable than INTx path provided.
 
 QEMU: i915 down, clean. ISO dist/koru-vbirq6-20261111.iso, MBR
 patched. T590 drill: 'kms' -> 'vbirq'.
+
+## VBLINE STAGE-7 — MSI armed but silent; LAPIC-side recon (2026-11-11)
+
+vbirq6 wire: msi cap=ac ctrl=0->1 cmd=407 (enable+INTx-dis stuck),
+yet irq_hits=0 vb_events=0 FRMCNT delta=120. MSI programmed but
+nothing arrived — and two things were never verified: the LAPIC's
+own state (id/svr — dest was hardcoded 0) and whether ANY vec>=0x30
+delivery reaches the CPU (stray reports are serial-only).
+
+vbirq7 adds: direct LAPIC ID/SVR dump (0xFEE00020/0xFEE000F0),
+reprograms msg addr with the REAL bsp apic id in dest bits19:12,
+reads back ctrl/addr/data to prove the writes stuck, and a new
+user.zig msi_any_seen counter (every vec>=0x30 delivery) readable
+on the wire. Reading:
+- msi_any>0 & irq_hits=0 -> MSI arrives at the wrong vec (readback
+  names what the device kept).
+- msi_any=0 & irq_hits=0 -> nothing reaches the LAPIC at all:
+  suspect the receiving door (svr/ICR state) or the device's
+  interrupt output never asserting despite master pending.
+- apicid!=0 explains vbirq6's silent loss outright.
+
+QEMU clean. ISO dist/koru-vbirq7-20261111.iso, MBR patched.
+Drill: 'kms' -> 'vbirq'.

@@ -423,6 +423,10 @@ fn eoiVec(vec: u64) void {
 
 pub export var irq_ticks: u64 = 0;
 var virtio_seen: u64 = 0;
+// msi_any_seen — every vec>=0x30 delivery (LAPIC-local + MSI/MSI-X).
+// The T590 has no serial: probes read this to distinguish 'MSI
+// arrived at the wrong vector' from 'nothing arrived at all'.
+pub export var msi_any_seen: u64 = 0;
 
 // virtio.zig exports these once the device is found; 0xFF = unconfigured.
 extern var virtio_irq_line: u8;
@@ -563,6 +567,7 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
         // hardware (each AP's own tick — roster substrate), RESCHED is
         // the claim kick, MSI is the device writing the vector. All
         // take the LAPIC EOI.
+        msi_any_seen += 1;
         if (f.vec == smp.TIMER_VEC) {
             smp.lapicTick();
             schedPreempt(f); // a tick on an AP holding user code rotates too
