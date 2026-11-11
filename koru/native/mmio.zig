@@ -27,23 +27,24 @@ fn say(s: [*:0]const u8) void {
 // Page directories for hi-GiB windows are PERMANENT kernel metadata —
 // once installed in pdpt[gb] they live for the boot. They come from a
 // static pool, not pmm.alloc: the frame allocator made every hi-GiB
-// window hostage to memory-map bringup succeeding first, and on the
-// T590's UEFI-booted GRUB path pmm found no mb2 mmap tag (managed=0,
-// alloc()=null forever) — so the LAPIC and IO-APIC windows at GB3
-// stayed unmapped and the box had no PCI interrupt door at all.
-// Measured: vbirq8 lapic probe=0, ioapic initDirect refused.
+// window hostage to memory-map bringup succeeding first. Measured on
+// T590 (vdiag): pmm is healthy (managed=262144), yet pdpt[3] stayed 0 —
+// the LAPIC and IO-APIC windows at GB3 never mapped, so the box had no
+// PCI interrupt door at all while GB0 i915 regs kept modeset working.
 const PD_POOL_N: usize = 16; // GB1..GB16 windows; APIC sits in GB3
 var pdPool: [PD_POOL_N][512]u64 = undefined;
-var pdUsed: [PD_POOL_N]bool = .{false} ** PD_POOL_N;
+var pdNext: usize = 0;
 
+// Monotonic handout — page directories are permanent once installed,
+// so a counter is the honest allocator. (The earlier for(&pdUsed,0..)
+// scan read every slot as used on first call: pdpt[3] stayed 0 and
+// every hi-GiB map refused — vdiag measured it. Hi-GiB mapping had
+// simply never been exercised before the APIC probes.)
 fn mintPd() ?* [512]u64 {
-    for (&pdUsed, 0..) |*u, i| {
-        if (!u.*) {
-            u.* = true;
-            return &pdPool[i];
-        }
-    }
-    return null;
+    if (pdNext >= PD_POOL_N) return null;
+    const i = pdNext;
+    pdNext += 1;
+    return &pdPool[i];
 }
 
 // map [phys, phys+len) with 2 MiB pages. Identity map — the returned VA

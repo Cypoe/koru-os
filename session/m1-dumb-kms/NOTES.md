@@ -2258,3 +2258,24 @@ IO-APIC at 0xFEC00000 on this PCH.
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'vdiag' only —
 no kms needed, wire stays alive.
+
+## VBLINE STAGE-9f — THE BUG: mintPd's for-loop read all slots used
+
+vdiag page-table truth (no kms): GB3 pdpt=0 lapPde=0 ioaPde=0
+lapicArmed=0. pmm healthy. So mmio.map(0xFEE00000) returned false
+before installing pdpt[3] — the ONLY such path is mintPd()=null,
+i.e. all 16 pdUsed slots read true on the FIRST call. The
+for(&pdUsed,0..) scan was the defect — and it means hi-GiB mmio.map
+has NEVER worked on any image (QEMU never exercised it: PIC covers
+ISA, LAPIC/MSI-X unverified). First real use = APIC probes.
+
+FIX: mintPd is now a monotonic counter (pdNext) — page directories
+are permanent, counter is the honest allocator. No iteration
+semantics to get wrong.
+
+Expected now: vdiag shows pdpt[3]!=0, lapPde/ioaPde=0x93-ish,
+lapicArmed=1, lapic probe=real id/svr (or 0 if x2APIC — then MSI
+needs the x2APIC dest format). ioapic probe may finally read a
+real VER at 0xFEC00000.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'vdiag' only.
