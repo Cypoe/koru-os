@@ -227,6 +227,13 @@ pub fn free(phys: u64) bool {
     return true;
 }
 
+pub const State = struct { managed: u64, live: u64, limit: u64, maxframes: usize };
+// Wire-visible allocator state — probes dump this to name 'no memory
+// map' vs 'exhausted' without serial (the T590 has none).
+pub fn state() State {
+    return .{ .managed = managed, .live = live, .limit = LIMIT, .maxframes = MAXFRAMES };
+}
+
 pub fn heldCount(phys: u64) u8 {
     const i = frameNo(phys);
     if (i >= managed) return 0;

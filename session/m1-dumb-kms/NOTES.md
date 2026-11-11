@@ -2135,3 +2135,30 @@ missing display-side enable beyond GEN8_MASTER_IRQ bit31.
 
 QEMU clean. ISO dist/koru-vbirq8-20261111.iso, MBR patched.
 Drill: 'kms' -> 'vbirq'.
+
+## VBLINE STAGE-9 — root cause: pmm dead on UEFI boot -> GB3 unmapped
+
+vbirq8 wire: lapic probe=0 apicid=0 msi_any=0 — the LAPIC was never
+armed; vbirq7's hang was its raw deref of the unmapped window.
+mmio.map(0xFEE00000) failed because LAPIC+IO-APIC sit in GB3 and
+hi-GiB windows mint their page directory via pmm.alloc — which
+returns null forever when pmm.init finds no mb2 mmap tag. QEMU's
+BIOS-booted GRUB passes tag 6 (usable=1023MiB managed=262144); the
+T590's UEFI-booted GRUB apparently does not — managed=0, alloc()
+dead, every GB3 map refused. i915 regs live in GB0 (pd[] direct,
+no pmm) which is why modeset always worked.
+
+FIX: mmio.zig mints hi-GiB page directories from a static pool —
+they are permanent kernel metadata, not managed RAM; pmm was the
+wrong tool and made every hi window hostage to RAM-map bringup.
+pmm.state() added for wire dumps (managed/live/limit/maxframes).
+At boot on T590 now: LAPIC arms (lapicArmed=true), ioapic.initDirect
+maps 0xFEC00000 for real and probably goes live — vbirq9 dumps all
+of it plus the MSI recon + 2s count.
+
+pmm's missing memory map on UEFI is a REAL separate bug (nothing
+allocates on T590 yet so it stayed invisible) — queued as its own
+rung: find where GRUB-UEFI hides the map or parse EFI memory map.
+
+QEMU clean (static pool is path-independent). ISO
+dist/koru-vbirq9-20261111.iso, MBR patched. Drill: 'kms'->'vbirq'.

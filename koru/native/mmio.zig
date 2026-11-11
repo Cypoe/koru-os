@@ -13,12 +13,38 @@
 // Entries are cache-disabled (PCD) — fb and MMIO want write-combining
 // at minimum; honest uncached until PAT setup exists.
 
-const pmm = @import("pmm");
+const std = @import("std");
 
 extern var pd: [512]u64; // boot.zig's 2 MiB-page table (identity map, GB 0)
 extern var pdpt: [512]u64; // boot.zig's pdpt — pd covers GB 0
 
 extern fn koru_say(s: [*:0]const u8) void;
+
+fn say(s: [*:0]const u8) void {
+    koru_say(s);
+}
+
+// Page directories for hi-GiB windows are PERMANENT kernel metadata —
+// once installed in pdpt[gb] they live for the boot. They come from a
+// static pool, not pmm.alloc: the frame allocator made every hi-GiB
+// window hostage to memory-map bringup succeeding first, and on the
+// T590's UEFI-booted GRUB path pmm found no mb2 mmap tag (managed=0,
+// alloc()=null forever) — so the LAPIC and IO-APIC windows at GB3
+// stayed unmapped and the box had no PCI interrupt door at all.
+// Measured: vbirq8 lapic probe=0, ioapic initDirect refused.
+const PD_POOL_N: usize = 16; // GB1..GB16 windows; APIC sits in GB3
+var pdPool: [PD_POOL_N][512]u64 = undefined;
+var pdUsed: [PD_POOL_N]bool = .{false} ** PD_POOL_N;
+
+fn mintPd() ?* [512]u64 {
+    for (&pdUsed, 0..) |*u, i| {
+        if (!u.*) {
+            u.* = true;
+            return &pdPool[i];
+        }
+    }
+    return null;
+}
 
 // map [phys, phys+len) with 2 MiB pages. Identity map — the returned VA
 // IS the physical address. False only when the page-table budget runs
@@ -33,13 +59,14 @@ pub fn map(phys: u64, len: u64) bool {
         if (gb != 0) {
             if (gb >= 512) return false;
             if (pdpt[gb] == 0) {
-                const f = pmm.alloc() orelse {
-                    koru_say("mmio: hi window refused — no frame for pd\n");
+                const t = mintPd() orelse {
+                    say("mmio: pd pool exhausted — hi window refused\n");
                     return false;
                 };
-                const t: *[512]u64 = @ptrFromInt(f);
                 @memset(t, 0);
-                pdpt[gb] = f | 0x3;
+                // VA==PA identity: the pool's link-time address IS the
+                // physical address the pdpt entry needs.
+                pdpt[gb] = @intFromPtr(t) | 0x3;
             }
             table = @ptrFromInt(pdpt[gb] & ~@as(u64, 0xFFF));
         }
