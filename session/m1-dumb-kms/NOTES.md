@@ -2212,3 +2212,21 @@ unmasked delivery path we haven't found.
 
 QEMU clean. ISO dist/korq-vbirq9-20261111.iso (same name),
 MBR patched. Drill: 'kms' -> 'vbirq'.
+
+## VBLINE STAGE-9d — LAPIC innocent at idle; vdiag added (2026-11-11)
+
+Idle test (user left ISO running, no kms): KORU hb every 10s,
+wire alive indefinitely — the armed LAPIC is INNOCENT at boot.
+The killer is specifically armed-LAPIC x post-kms flip/gpucomp.
+
+New command 'vdiag' — kms-independent state dump runnable at the
+bare shell while the wire is alive: pmm managed/live/limit/maxf,
+lapic probe (idreg<<32|svr), ioapic probeOk/id/ver/pins/live/
+gsiFor11, msi_any, irq_ticks. Gets the boot baseline BEFORE kms
+kills the wire.
+
+Drill: flash -> boot -> 'vdiag' (no kms) -> read baseline ->
+then 'kms' -> wire dies -> we know the delta is kms-path x
+armed-LAPIC, and have the pre-kms truth on record.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. QEMU clean.

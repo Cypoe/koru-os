@@ -138,6 +138,12 @@ fn dispatch() void {
         text.puts("kdmabuf returned — console still alive\n");
         return;
     }
+    if (eq("vdiag")) { // kms-independent APIC/pmm state dump — wire alive pre-kms
+        text.puts("vdiag: state dump — watch UDP\n");
+        kmsdrv.vdiag();
+        text.puts("vdiag returned — console still alive\n");
+        return;
+    }
     if (eq("vbirq")) { // newest vblank-IRQ probe (digit keys are dead on T590)
         text.puts("vbirq: latest IRQ probe — watch UDP\n");
         kmsdrv.vbirqLatest();

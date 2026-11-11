@@ -1169,6 +1169,28 @@ pub fn vbirqLatest() void {
 extern var msi_any_seen: u64;
 extern fn koru_lapic_probe() u64;
 
+// vdiag — kms-independent state dump. The wire only dies AFTER kms,
+// so boot-time APIC/pmm truth must be readable at the bare shell:
+// pmm managed/live (is the allocator really dead on UEFI?), lapic
+// probe (armed? real id/svr?), ioapic probe (found? live?), and the
+// any-MSI counter. No i915 dependency — run before kms.
+pub fn vdiag() void {
+    const ps = pmm.state();
+    const lp = koru_lapic_probe();
+    vw("vdiag: pmm managed={d} live={d} limit={d} maxf={d}\n", .{
+        ps.managed, ps.live, ps.limit, ps.maxframes,
+    });
+    vw("vdiag: lapic probe={x} (idreg<<32|svr; 0=unarmed)\n", .{lp});
+    vw("vdiag: ioapic ok={} id={x} ver={x} pins={d} live={} gsiFor11={}\n", .{
+        @intFromBool(ioapic.probeOk), ioapic.probeId, ioapic.probeVer,
+        ioapic.probePins, @intFromBool(ioapic.isLive()),
+        ioapic.gsiFor(11) orelse 0xFFFF,
+    });
+    vw("vdiag: msi_any={d} irq_ticks={d}\n", .{ msi_any_seen, irq_ticks });
+}
+
+extern var irq_ticks: u64;
+
 // vbirq9 — the mmio.map fix. vbirq8 measured lapic probe=0: the LAPIC
 // (and IO-APIC) windows sit in GB3, and mmio.map minted their page
 // directories via pmm.alloc — which returns null forever when pmm.init
