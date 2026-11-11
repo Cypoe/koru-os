@@ -162,6 +162,12 @@ fn dispatch() void {
         text.puts("vbirq4 returned — console still alive\n");
         return;
     }
+    if (eq("vbirq5")) { // force-route irq11 + MADT dump + arm+count
+        text.puts("vbirq5: force-route + arm vblank IRQ — watch UDP\n");
+        kmsdrv.vbirq5();
+        text.puts("vbirq5 returned — console still alive\n");
+        return;
+    }
     if (eq("gpu")) { // GEN9 render-engine probe: forcewake+DC off, ring submit
         text.puts("gpu: render-engine probe — watch UDP markers\n");
         gtdrv.probe();

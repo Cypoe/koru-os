@@ -28,6 +28,7 @@ const R = mmio.R;
 const hostmmio = @import("mmio"); // host page-table mapper (identity VA==PA)
 const pci = @import("pci"); // module root
 const ioapic = @import("ioapic"); // module root
+const acpi = @import("acpi"); // module root
 const pmm = @import("pmm"); // module root
 const net = @import("net"); // module root
 const dp = @import("dp.zig");
@@ -1150,6 +1151,69 @@ pub fn vbirq4() void {
     } else {
         vw("vbirq4: no IRQ line — phase B skipped\n", .{});
     }
+}
+
+// vbirq5 — the route fix. vbirq4 proved generation reaches the master
+// (master0=80010000, bit16 pending while pipeIIR=1) AND proved irq11
+// has NO IO-APIC route: gsiFor(11)=null, so koru_irq_unmask fell back
+// to the PIC door — masked shut since boot. The INTx was asserted the
+// whole time with no route to carry it. This probe dumps the MADT
+// facts that made route(11) refuse (ISO table, npins, gsi-base, the
+// full irq->gsi table), force-routes irq11 at gsi=irq with PCI INTx
+// defaults (level/low — the ISA-conformant answer; IRQ11 essentially
+// never has a real override), then runs the proven arm+unmask+count.
+// irq_hits>0 closes the vblank-IRQ rung.
+pub fn vbirq5() void {
+    if (!device().up) {
+        vw("vbirq5: i915 down\n", .{});
+        return;
+    }
+    const irq = gdev.pdev.irq_line;
+    vw("vbirq5: ioapic live={} pins={d} gsi-base={d} isos={d} npci={d}\n", .{
+        @intFromBool(ioapic.isLive()), ioapic.pinCount(),
+        acpi.ioapicGsiBase, acpi.isos, pci.count,
+    });
+    for (acpi.isoList[0..@min(acpi.isos, 32)]) |e| {
+        vw("vbirq5: iso src={d} gsi={d} flags={x}\n", .{ e.src, e.gsi, e.flags });
+    }
+    for (0..16) |l| {
+        const r = ioapic.lineRoute(@intCast(l));
+        if (r.gsi >= 0)
+            vw("vbirq5: line {d} -> gsi {d} lapic={}\n", .{
+                l, r.gsi, @intFromBool(r.lapic),
+            });
+    }
+    if (!ioapic.forceRoute(irq, irq)) {
+        vw("vbirq5: forceRoute irq={d} gsi={d} refused\n", .{ irq, irq });
+        return;
+    }
+    vw("vbirq5: irq={d} force-routed gsi={d}\n", .{ irq, irq });
+    if (ioapic.rteRead(irq)) |rte| {
+        vw("vbirq5: rte_lo={x} rte_hi={x} vec={x} mask={d} lvl={d} low={d} dst={x}\n", .{
+            rte.lo, rte.hi, rte.lo & 0xFF, (rte.lo >> 16) & 1,
+            (rte.lo >> 15) & 1, (rte.lo >> 13) & 1, (rte.hi >> 24) & 0xFF,
+        });
+    }
+    // proven arm sequence (vbirq3): pipe chain -> drain stale -> claim
+    // line -> unmask -> master control LAST.
+    mmio.wr(R.PIPEASTAT_A, mmio.rd(R.PIPEASTAT_A) | 0x0002_0002);
+    mmio.wr(R.DE_PIPE_IMR_A, mmio.rd(R.DE_PIPE_IMR_A) & ~@as(u32, 1));
+    mmio.wr(R.DE_PIPE_IER_A, mmio.rd(R.DE_PIPE_IER_A) | 0x0000_0001);
+    const stale = mmio.rd(R.DE_PIPE_IIR_A);
+    if (stale != 0) mmio.wr(R.DE_PIPE_IIR_A, stale);
+    i915_vb_irq_line = irq;
+    koru_irq_unmask(irq);
+    mmio.wr(GEN8_MASTER_IRQ, GEN8_MASTER_IRQ_CONTROL);
+    vw("vbirq5: armed — counting\n", .{});
+    const f0 = mmio.rd(R.PIPE_FRMCNT_A);
+    const h0 = vb_irq_hits;
+    const e0 = vb_irq_events;
+    mmio.sleepMs(2000);
+    vw("vbirq5: irq_hits={d} vb_events={d} FRMCNT delta={d} last_iir={x} last_master={x}\n", .{
+        vb_irq_hits - h0, vb_irq_events - e0,
+        mmio.rd(R.PIPE_FRMCNT_A) -% f0,
+        vb_irq_last_iir, vb_irq_last_master,
+    });
 }
 
 // VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).

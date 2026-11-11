@@ -31,6 +31,7 @@ fn sayf(comptime fmt: []const u8, args: anytype) void {
 var iobase: usize = 0;
 var npins: u32 = 0;
 var live = false;
+var bspId: u8 = 0;
 
 // irq# -> gsi; -1 means the line has no route here (PIC's word stands).
 var gsiForLine: [16]i32 = .{-1} ** 16;
@@ -43,6 +44,20 @@ pub fn gsiFor(irq: u8) ?u32 {
 }
 pub fn isLapic(irq: u8) bool {
     return live and irq < 16 and lapicLine[irq];
+}
+
+// Probe face: raw routing-table state for wire dumps (vbirq5 asked why
+// irq11 had no route — the answer lives in these three).
+pub fn isLive() bool {
+    return live;
+}
+pub fn pinCount() u32 {
+    return npins;
+}
+pub const LineRoute = struct { gsi: i32, lapic: bool };
+pub fn lineRoute(irq: u8) LineRoute {
+    if (irq >= 16) return .{ .gsi = -1, .lapic = false };
+    return .{ .gsi = gsiForLine[irq], .lapic = lapicLine[irq] };
 }
 
 // IOREGSEL/IOWIN — indexed register pair.
@@ -66,6 +81,24 @@ pub fn rteRead(irq: u8) ?Rte {
         .lo = ioRd(@intCast(0x10 + gsi * 2)),
         .hi = ioRd(@intCast(0x11 + gsi * 2)),
     };
+}
+
+// forceRoute — probe escape hatch: write irq#'s RTE at an explicit GSI
+// with PCI INTx defaults (level/low, fixed delivery, vec 0x20+irq, dest
+// BSP phys mode), bypassing the ISO lookup that refused the line at
+// init. Starts masked; the caller unmasks via the normal path once the
+// device chain is armed. Refuses a line already routed to a DIFFERENT
+// gsi — two pins claiming one irq would double-deliver.
+pub fn forceRoute(irq: u8, gsi: u32) bool {
+    if (!live or irq >= 16 or gsi >= npins) return false;
+    if (gsiForLine[irq] >= 0 and gsiForLine[irq] != @as(i32, @intCast(gsi)))
+        return false;
+    const lo: u32 = (0x20 + @as(u32, irq)) | (1 << 13) | (1 << 15) | (1 << 16);
+    ioWr(@intCast(0x10 + gsi * 2), lo);
+    ioWr(@intCast(0x11 + gsi * 2), @as(u32, bspId) << 24);
+    gsiForLine[irq] = @intCast(gsi);
+    lapicLine[irq] = true;
+    return true;
 }
 
 // IOREDTBL[gsi]: the lo dword's mask bit is the unmask knob — same
@@ -142,6 +175,7 @@ pub fn init() void {
     });
     const bsp: u8 = @truncate(
         @as(*volatile u32, @ptrFromInt(@as(usize, @intCast(acpi.lapicPhys)) + 0x20)).* >> 24);
+    bspId = bsp;
 
     // ISA lines the kernel claims, then every PCI device intline — a
     // line left PIC-routed is dead the moment the PIC mask drops.

@@ -1977,3 +1977,37 @@ Reading the wire:
 QEMU: boots to shell clean (vbirq4 -> i915 down, expected — HW gate
 is T590). ISO dist/koru-vbirq4-20261110.iso, MBR patched to the
 verified pattern (0x1BE=83, 0x1C2=10, CHS-end=0, LBA=1).
+
+## VBLINE STAGE-4 RESULT + STAGE-5 (2026-11-11, ISOs koru-vbirq4/vbirq5)
+
+vbirq4 wire (the decisive dump):
+  irq=11 — no IO-APIC route          <- gsiFor(11)=null: route(11)
+                                        NEVER completed at init
+  sharers=20 cmd=7 intx_dis=0 msi_cap=1 msix_cap=0
+  master0=80010000 master1=80010000 pipeIIR=1 dport=0 dmisc=0
+  irq_hits=0 vb_events=0 FRMCNT delta=122
+
+VERDICT: generation reaches the master — GEN8_MASTER_IRQ bit16
+(DE_PIPE_A pending indication) was SET while pipeIIR=1, with the
+CPU door masked. The i915 chain is COMPLETE; nothing was missing
+between IER and 0x44200. The failure was purely routing: irq11 has
+no IO-APIC entry, so koru_irq_unmask took the PIC fallback — and
+the PIC is masked shut since boot (ioapic.init closes it). INTx was
+asserted the whole time; no door carried it.
+
+Why route(11) refused: only refuse path is gsi>=npins — MADT almost
+certainly carries an Interrupt Source Override for IRQ11 pointing at
+a GSI the IO-APIC lacks, and the refusal sayf went to serial only.
+vbirq5 dumps isos/npins/gsi-base/full line table on the wire, then
+ioapic.forceRoute(11,11) writes the RTE directly (vec 0x2B, level/
+low, dest BSP, starts masked) — IRQ11->GSI11 is the ISA-conformant
+answer; real IRQ11 overrides essentially don't exist. Then the
+proven arm sequence: pipe chain -> drain stale -> claim line ->
+koru_irq_unmask -> GEN8_MASTER_IRQ_CONTROL -> 2s count.
+
+PASS = irq_hits ~= vb_events ~= FRMCNT delta (~120/2s). The dump
+also names the true IRQ11 GSI if gsi=11 turns out wrong — next move
+would be forceRoute at that pin instead.
+
+QEMU: boots to shell clean (i915 down). ISO
+dist/koru-vbirq5-20261111.iso, MBR patched.
