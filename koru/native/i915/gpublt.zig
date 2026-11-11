@@ -103,6 +103,10 @@ pub var emit_count: u64 = 0;
 // paintFrame into 'build commands' vs 'submit/fence'.
 pub var build_tsc: u64 = 0;
 pub var build_n: u64 = 0;
+// pre-loop timing — arm()/dumbGet/dims/rects-setup, the unmeasured
+// region between paintFrame entry and the emit loop.
+pub var pre_tsc: u64 = 0;
+pub var pre_n: u64 = 0;
 
 fn rdtsc() u64 {
     var lo: u32 = undefined;
@@ -445,6 +449,7 @@ fn collectLayers(r: comp.Rect, out: *[comp.MAX_LAYERS]comp.LayerView) usize {
 // per-run skips so transparency survives. Returns false => caller runs
 // the CPU composite (named degrade, never silent).
 pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
+    const pf0 = rdtsc();
     if (!ready) {
         if (!arm()) return false;
     }
@@ -470,6 +475,8 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
     var cands: [comp.MAX_LAYERS]comp.LayerView = undefined;
 
     const b0 = rdtsc();
+    pre_tsc += b0 - pf0;
+    pre_n += 1;
     for (rects) |r| {
         // clip to scene + target like compositeRect does
         const x1 = @min(@min(r.x + r.w, sw), db.width);
