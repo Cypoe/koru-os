@@ -27,6 +27,7 @@ const mmio = @import("mmio.zig"); // i915 reg + GTT layer
 const R = mmio.R;
 const hostmmio = @import("mmio"); // host page-table mapper (identity VA==PA)
 const pci = @import("pci"); // module root
+const ioapic = @import("ioapic"); // module root
 const pmm = @import("pmm"); // module root
 const net = @import("net"); // module root
 const dp = @import("dp.zig");
@@ -1064,6 +1065,91 @@ pub fn vbirq3() void {
         mmio.rd(R.PIPE_FRMCNT_A) -% f0,
         vb_irq_last_iir, vb_irq_last_master, vb_irq_last_deiir,
     });
+}
+
+// vbirq4 — the delivery-vs-generation split. vbirq3 armed the whole
+// chain and got irq_hits=0 with FRMCNT still ticking: either an enable
+// is still missing between the pipe IER and GEN8_MASTER_IRQ (the
+// master never sees a pending source) or the INTx->IO-APIC->LAPIC leg
+// is broken. Phase A answers the first: the chain and bit31 are armed
+// while the IO-APIC RTE stays masked — INTx may assert at the pin but
+// nothing can deliver — then GEN8_MASTER_IRQ's read-only pending
+// indications are sampled. bit16 (DE_PIPE_A) set while pipe IIR is
+// pending proves generation reaches the master. Phase B dumps the RTE
+// (mask/trigger/polarity/vector/dest), sharers on the line, and the
+// PCI INTx-disable bit, then unmasks and counts hits: hits=0 after a
+// proven-pending master is a pure delivery failure.
+pub fn vbirq4() void {
+    if (!device().up) {
+        vw("vbirq4: i915 down\n", .{});
+        return;
+    }
+    const irq = gdev.pdev.irq_line;
+    if (ioapic.rteRead(irq)) |rte| {
+        vw("vbirq4: irq={d} gsi={d} rte_lo={x} rte_hi={x} vec={x} mask={d} lvl={d} low={d} dmode={x} dst={x}\n", .{
+            irq, rte.gsi, rte.lo, rte.hi, rte.lo & 0xFF,
+            (rte.lo >> 16) & 1, (rte.lo >> 15) & 1, (rte.lo >> 13) & 1,
+            (rte.lo >> 8) & 7, (rte.hi >> 24) & 0xFF,
+        });
+    } else {
+        vw("vbirq4: irq={d} — no IO-APIC route\n", .{irq});
+    }
+    var sharers: u32 = 0;
+    for (pci.devices[0..pci.count]) |d| {
+        if (d.irq_line == irq and d.irq_pin != 0) {
+            sharers += 1;
+            vw("vbirq4: sharer {x}:{x}.{x} pin={d}\n", .{
+                d.bus, d.slot, d.func, d.irq_pin,
+            });
+        }
+    }
+    const cmd = pci.command(&gdev.pdev);
+    vw("vbirq4: sharers={d} cmd={x} intx_dis={d} msi_cap={x} msix_cap={x}\n", .{
+        sharers, cmd, (cmd >> 10) & 1,
+        @intFromBool(pci.capFind(&gdev.pdev, 0x05) != 0),
+        @intFromBool(pci.capFind(&gdev.pdev, 0x11) != 0),
+    });
+    // Phase A — pending-at-master with the CPU door still shut.
+    mmio.wr(R.PIPEASTAT_A, mmio.rd(R.PIPEASTAT_A) | 0x0002_0002);
+    mmio.wr(R.DE_PIPE_IMR_A, mmio.rd(R.DE_PIPE_IMR_A) & ~@as(u32, 1));
+    mmio.wr(R.DE_PIPE_IER_A, mmio.rd(R.DE_PIPE_IER_A) | 0x0000_0001);
+    const stale = mmio.rd(R.DE_PIPE_IIR_A);
+    if (stale != 0) mmio.wr(R.DE_PIPE_IIR_A, stale);
+    const f0 = mmio.rd(R.PIPE_FRMCNT_A);
+    mmio.wr(GEN8_MASTER_IRQ, GEN8_MASTER_IRQ_CONTROL);
+    mmio.sleepMs(100);
+    const mast0 = mmio.rd(GEN8_MASTER_IRQ);
+    const iir0 = mmio.rd(R.DE_PIPE_IIR_A);
+    const dport = mmio.rd(DE_PORT_IIR);
+    const dmisc = mmio.rd(DE_MISC_IIR);
+    const f1 = mmio.rd(R.PIPE_FRMCNT_A);
+    // W1C the pipe IIR and re-read ~instantly: bit16 dropping with the
+    // source cleared is the causality check (next vblank is ~16ms out).
+    if (iir0 != 0) mmio.wr(R.DE_PIPE_IIR_A, iir0);
+    const mast1 = mmio.rd(GEN8_MASTER_IRQ);
+    vw("vbirq4: master0={x} master1={x} pipeIIR={x} dport={x} dmisc={x} FRMCNT delta={d}\n", .{
+        mast0, mast1, iir0, dport, dmisc, f1 -% f0,
+    });
+    // Phase B — delivery. Claim the line, unmask the RTE, count.
+    if (irq != 0 and irq != 0xFF) {
+        i915_vb_irq_line = irq;
+        koru_irq_unmask(irq);
+        if (ioapic.rteRead(irq)) |rte| {
+            vw("vbirq4: post-unmask rte_lo={x} mask={d}\n", .{
+                rte.lo, (rte.lo >> 16) & 1,
+            });
+        }
+        const h0 = vb_irq_hits;
+        const e0 = vb_irq_events;
+        mmio.sleepMs(2000);
+        vw("vbirq4: irq_hits={d} vb_events={d} FRMCNT delta={d} last_master={x}\n", .{
+            vb_irq_hits - h0, vb_irq_events - e0,
+            mmio.rd(R.PIPE_FRMCNT_A) -% f1,
+            vb_irq_last_master,
+        });
+    } else {
+        vw("vbirq4: no IRQ line — phase B skipped\n", .{});
+    }
 }
 
 // VBLANK: enable DE interrupts, then poll IIR for `n` events (bounded).

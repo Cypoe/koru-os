@@ -55,6 +55,19 @@ fn ioWr(reg: u8, v: u32) void {
     @as(*volatile u32, @ptrFromInt(iobase + 0x10)).* = v;
 }
 
+// rteRead — the raw IOREDTBL pair for irq#'s GSI. Diagnostic face for
+// probes that must see mask/trigger/polarity/vector/destination without
+// changing them; setMasked stays the only writer.
+pub const Rte = struct { gsi: u32, lo: u32, hi: u32 };
+pub fn rteRead(irq: u8) ?Rte {
+    const gsi = gsiFor(irq) orelse return null;
+    return .{
+        .gsi = gsi,
+        .lo = ioRd(@intCast(0x10 + gsi * 2)),
+        .hi = ioRd(@intCast(0x11 + gsi * 2)),
+    };
+}
+
 // IOREDTBL[gsi]: the lo dword's mask bit is the unmask knob — same
 // semantic as the PIC's IMR, different door.
 pub fn setMasked(gsi: u32, masked: bool) void {

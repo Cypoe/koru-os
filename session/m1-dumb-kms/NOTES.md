@@ -1930,3 +1930,50 @@ hits>>events or hits=0 = master/source mismatch, iterate.
 
 QEMU: vbirq3 -> i915 down, clean return (no i915 in QEMU — HW gate
 is T590). ISO dist/koru-vbirqirq-20261110.iso, MBR patched.
+
+## VBLINE STAGE-3 RESULT — irq_hits=0 (2026-11-10, ISO koru-vbirqirq)
+
+vbirq3 wire: irq_line=11->vec2b armed MIRQ44200=80000000, then
+irq_hits=0 vb_events=0 FRMCNT delta=120 last_iir=0 last_master=0
+deiir=0. Generation proven (stage-1 IIR edges), CPU route armed,
+but the IRQ NEVER reached the handler. Suspects: (a) IO-APIC entry
+for IRQ11 wrong polarity/mask for level-active-low INTx; (b) i915
+output-enable chain incomplete (DE-group -> master source bits);
+(c) KBL display IRQ may not ride PCI INTx at all. Next: dump IO-APIC
+RTE for IRQ11 gsi + try GEN8_MASTER_IRQ source bits / DEIER path.
+
+## VBLINE STAGE-4 — delivery-vs-generation split (2026-11-11, ISO koru-vbirq4)
+
+'vbirq4' splits the irq_hits=0 failure into its two remaining worlds.
+Phase A (generation->master): arms the proven pipe chain +
+GEN8_MASTER_IRQ_CONTROL with the IO-APIC RTE still MASKED — INTx may
+assert at the pin but cannot deliver — then samples the master's
+read-only pending indications (bit16=DE_PIPE_A, 17/18=B/C, 20=PORT,
+22=MISC) plus pipe IIR_A/deport/dmisc over 100ms, then W1Cs the pipe
+IIR and re-reads master ~instantly: bit16 dropping with the source
+cleared is the causality check (next vblank ~16ms out).
+Phase B (delivery): dumps the IO-APIC RTE for IRQ11's GSI via new
+ioapic.rteRead() — lo/hi raw + decoded vec/mask/lvl/low/dmode/dst —
+plus every PCI device sharing irq_line 11, the i915 PCI command reg
+INTx-disable bit (0x400), and MSI/MSI-X cap presence. Then claims
+i915_vb_irq_line, koru_irq_unmask(11), re-dumps rte_lo mask bit, and
+counts irq_hits/vb_events over 2s.
+
+Reading the wire:
+- master0 bit16=1 & pipeIIR!=0 -> pending reaches the master; phase B
+  hits=0 then isolates IO-APIC/LAPIC delivery (RTE mask/trig/pol/dest
+  or shared-line weirdness).
+- master0=0 with pipeIIR!=0 -> an enable is still missing between
+  DE_PIPE_IER and 0x44200 — iterate the chain (DEIER-style second
+  level, DE port/misc bank).
+- master0 bit16=1 but m1 stays 1 after IIR W1C -> indication doesn't
+  track the pipe source (different semantics than assumed).
+- rte_lo mask=1 after unmask -> koru_irq_unmask didn't reach the RTE
+  (gsiFor miss -> PIC fallback, which boot masked shut).
+- sharers>1 -> IRQ11 is shared; first deliveries may be another
+  device's — handler claims by vec so i915 still drains, but stray
+  masking before vbirq4's claim could have killed the line earlier.
+
+QEMU: boots to shell clean (vbirq4 -> i915 down, expected — HW gate
+is T590). ISO dist/koru-vbirq4-20261110.iso, MBR patched to the
+verified pattern (0x1BE=83, 0x1C2=10, CHS-end=0, LBA=1).

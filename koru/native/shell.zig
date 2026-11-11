@@ -156,6 +156,12 @@ fn dispatch() void {
         text.puts("vbirq3 returned — console still alive\n");
         return;
     }
+    if (eq("vbirq4")) { // delivery-vs-generation split: master pending + RTE dump
+        text.puts("vbirq4: master-pending + IO-APIC RTE probe — watch UDP\n");
+        kmsdrv.vbirq4();
+        text.puts("vbirq4 returned — console still alive\n");
+        return;
+    }
     if (eq("gpu")) { // GEN9 render-engine probe: forcewake+DC off, ring submit
         text.puts("gpu: render-engine probe — watch UDP markers\n");
         gtdrv.probe();
