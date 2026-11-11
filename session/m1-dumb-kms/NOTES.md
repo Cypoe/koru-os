@@ -2475,3 +2475,22 @@ vblank edge oracle is dead in flipTick -> the armed vblank IRQ
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
 drag -> read 'perf f= t= to=' — to climbing = timeout-bound.
+
+## VBLINE STAGE-9q — paintFrame timing oracle (2026-11-11)
+
+perf fields so far: to=0 constant (commits land on REAL vblank edges,
+never timeout), f=16-19 drag / f=2 idle (idle low is expected — no
+damage), cpu=0 (BCS path, no fallback), gpu tracks f. Shell loop is
+tight while(true)+pause, no sleep — flipTick runs every iteration.
+So the ~16-19fps cap is composite THROUGHPUT, not oracle/loop/input.
+Prime suspect: gpublt.paintFrame ~50ms/frame (collectLayers +
+emitFill/emitCopy per rect/layer + mapBacking GTT + flushSrc clflush
++ batch submit + fence poll).
+
+ADDED: 'pt=<avg paintFrame tsc ticks>' — rdtsc around paintFrame,
+paint_tsc/paint_n. Read it: pt ~1.2e8 (~50ms @2.5GHz) confirms paint
+is the cap -> optimize emit/mapBacking/flushSrc; pt small -> the
+cost is elsewhere in the flip cycle (fanDamage/commit/flipSwapFast).
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
+drag -> read 'perf f= t= to= pt='.

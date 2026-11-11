@@ -63,6 +63,8 @@ var vb_emit_n: u64 = 0;   // ticks since last vb: telemetry line
 var vb_last_flips: u64 = 0; // flip_count at last emit — +f delta = fps
 var perf_last_flips: u64 = 0;
 var perf_last_tsc: u64 = 0;
+var paint_tsc: u64 = 0;   // cumulative rdtsc inside paintFrame
+var paint_n: u64 = 0;     // paintFrame calls — avg = paint_tsc/paint_n
 
 fn rdtsc() u64 {
     var lo: u32 = undefined;
@@ -390,6 +392,7 @@ fn flipTick() void {
         text.puts("perf f="); text.putdec(df);
         text.puts(" t="); text.putdec(dt);
         text.puts(" to="); text.putdec(timeout_clears);
+        text.puts(" pt="); text.putdec(if (paint_n == 0) 0 else paint_tsc / paint_n);
         text.puts(" gpu="); text.putdec(gpu_frames);
         text.puts(" cpu="); text.putdec(cpu_frames); text.puts("\n");
     }
@@ -479,12 +482,15 @@ fn flipTick() void {
     // paintFrame returns false on any named degrade (engine down, GTT
     // map refused, fence timeout) — the CPU composite below is the
     // explicit honest fallback, counted, never silent.
+    const p0 = rdtsc();
     if (gpublt.paintFrame(b.handle, &b.acc)) {
         gpu_frames += 1;
     } else {
         comp.compositeAcc(&t, &b.acc);
         cpu_frames += 1;
     }
+    paint_tsc += rdtsc() - p0;
+    paint_n += 1;
     const was_full = b.acc.full;
     const nr = b.acc.n;
     b.acc.clear();
