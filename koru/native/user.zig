@@ -750,6 +750,13 @@ pub export fn koru_lapic_probe() u64 {
     return (@as(u64, lapic[0x20 / 4]) << 32) | @as(u64, lapic[0xF0 / 4]);
 }
 
+// Raw armed flag — koru_lapic_probe returns 0 BOTH when unarmed and
+// when armed-but-reading-zero (x2APIC mode leaves 0xFEE00000 dead).
+// vdiag needs the flag to split those cases.
+pub export fn koru_lapic_armed() u64 {
+    return if (lapicArmed) 1 else 0;
+}
+
 // Called once from kmain, before the program runs: PIC remapped, every
 // gate populated, interrupts on.
 pub fn init() void {

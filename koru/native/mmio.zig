@@ -78,3 +78,21 @@ pub fn map(phys: u64, len: u64) bool {
         : .{ .rax = true, .memory = true });
     return true;
 }
+
+// Page-table truth for probes — reads the tables themselves, never the
+// device, so it cannot fault on an absent window. vdiag needs to split
+// 'map() refused' from 'mapped but device silent' (x2APIC LAPIC reads
+// 0 at 0xFEE00000 even when armed).
+pub fn pdptEntry(gb: u32) u64 {
+    if (gb >= 512) return 0;
+    return pdpt[gb];
+}
+
+pub fn pdEntry(gb: u32, idx: u32) u64 {
+    if (idx >= 512) return 0;
+    if (gb == 0) return pd[idx];
+    const e = pdpt[gb];
+    if (e == 0) return 0;
+    const t: [*]const u64 = @ptrFromInt(e & ~@as(u64, 0xFFF));
+    return t[idx];
+}

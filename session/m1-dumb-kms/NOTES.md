@@ -2230,3 +2230,31 @@ then 'kms' -> wire dies -> we know the delta is kms-path x
 armed-LAPIC, and have the pre-kms truth on record.
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. QEMU clean.
+
+## VBLINE STAGE-9e — pmm was never dead; probe=0 is ambiguous (2026-11-11)
+
+vdiag wire (no kms, wire alive):
+  pmm managed=262144 live=2843 limit=1GiB maxf=262144  <- HEALTHY
+  lapic probe=0   <- ambiguous: unarmed OR armed+reads-0
+  ioapic ok=0     <- 0xFEC00000 VER still implausible
+  irq_ticks=0
+
+The 'UEFI hides mb2 mmap -> pmm dead' theory is DEAD. pmm works.
+So mmio.map(0xFEE00000) either still fails for a non-pmm reason,
+or succeeds but the LAPIC reads 0 — x2APIC mode leaves 0xFEE00000
+undecoded even though the page is mapped, and koru_lapic_probe
+returns (id<<32)|svr = 0 in that case too. probe=0 cannot split
+'unarmed' from 'armed-but-dead-window'.
+
+vdiag now dumps page-table TRUTH (reads tables, never the device —
+cannot fault): hostmmio.pdptEntry(3), pdEntry for the LAPIC and
+IO-APIC 2MiB pages, plus koru_lapic_armed() raw flag.
+
+Reading: pdpt[3]=0 or PDE=0 -> map never installed GB3 (mmio.map
+bug). PDE=0x93-ish + lapicArmed=1 + probe=0 -> LAPIC window mapped
+but device silent = x2APIC or wrong address -> MSI needs the
+x2APIC address format instead. PDE good + ioapic ok=0 -> no
+IO-APIC at 0xFEC00000 on this PCH.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'vdiag' only —
+no kms needed, wire stays alive.

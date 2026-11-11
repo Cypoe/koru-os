@@ -1167,7 +1167,9 @@ pub fn vbirqLatest() void {
 }
 
 extern var msi_any_seen: u64;
+extern var irq_ticks: u64;
 extern fn koru_lapic_probe() u64;
+extern fn koru_lapic_armed() u64;
 
 // vdiag — kms-independent state dump. The wire only dies AFTER kms,
 // so boot-time APIC/pmm truth must be readable at the bare shell:
@@ -1187,9 +1189,16 @@ pub fn vdiag() void {
         ioapic.gsiFor(11) orelse 0xFFFF,
     });
     vw("vdiag: msi_any={d} irq_ticks={d}\n", .{ msi_any_seen, irq_ticks });
+    // Page-table truth — splits 'map refused' from 'mapped, device
+    // silent'. pdpt[3] must be nonzero and each 2MiB PDE must carry
+    // present|rw|PCD|PS (0x93-ish) for the window to reach silicon.
+    const lapIdx: u32 = @intCast((0xFEE00000 >> 21) & 0x1FF);
+    const ioaIdx: u32 = @intCast((0xFEC00000 >> 21) & 0x1FF);
+    vw("vdiag: GB3 pdpt={x} lapPde={x} ioaPde={x} lapicArmed={}\n", .{
+        hostmmio.pdptEntry(3), hostmmio.pdEntry(3, lapIdx), hostmmio.pdEntry(3, ioaIdx),
+        koru_lapic_armed(),
+    });
 }
-
-extern var irq_ticks: u64;
 
 // vbirq9 — the mmio.map fix. vbirq8 measured lapic probe=0: the LAPIC
 // (and IO-APIC) windows sit in GB3, and mmio.map minted their page
