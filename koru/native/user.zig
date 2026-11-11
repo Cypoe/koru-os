@@ -726,6 +726,14 @@ var lapicArmed = false;
 fn lapicInit() void {
     if (!mmio.map(0xFEE00000, 0x1000)) return;
     lapic = @ptrFromInt(0xFEE00000);
+    // Mask every LVT before arming: firmware may leave timer/thermal/
+    // LINT/error sources live, and an armed LAPIC would deliver them
+    // into our IDT unclaimed — same uninvited-interrupt hazard as the
+    // IO-APIC's stale RTEs. smp reconfigures the timer LVT it needs.
+    var off: u32 = 0x320;
+    while (off <= 0x380) : (off += 0x10) {
+        lapic[off / 4] = lapic[off / 4] | (1 << 16);
+    }
     lapic[0xF0 / 4] = lapic[0xF0 / 4] | 0x1FF; // software enable + spurious 0xFF
     lapicArmed = true;
 }

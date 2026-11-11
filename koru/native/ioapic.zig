@@ -195,7 +195,16 @@ pub fn initDirect() bool {
     bspId = @truncate(
         @as(*volatile u32, @ptrFromInt(@as(usize, @intCast(0xFEE00000)) + 0x20)).* >> 24);
     live = true;
-    sayf("ioapic: direct base={x} id={x} pins={d} bsp={d} (no MADT)\n", .{
+    // Mask EVERY RTE before claiming the door: UEFI firmware leaves
+    // live routes pointing at vectors our IDT never claimed — with the
+    // LAPIC now armed (static pd pool fixed the GB3 map) those fire
+    // into dispatch uninvited and corrupt driver state. This is the
+    // vbirq9 wire-death shape: kernel+shell alive, UDP TX dead.
+    for (0..npins) |g| {
+        const r: u8 = @intCast(0x10 + g * 2);
+        ioWr(r, ioRd(r) | (1 << 16));
+    }
+    sayf("ioapic: direct base={x} id={x} pins={d} bsp={d} rte-masked (no MADT)\n", .{
         iobase, id >> 24, npins, bspId,
     });
     return true;

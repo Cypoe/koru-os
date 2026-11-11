@@ -2162,3 +2162,30 @@ rung: find where GRUB-UEFI hides the map or parse EFI memory map.
 
 QEMU clean (static pool is path-independent). ISO
 dist/koru-vbirq9-20261111.iso, MBR patched. Drill: 'kms'->'vbirq'.
+
+## VBLINE STAGE-9b — wire died after kms; stale firmware IRQs (2026-11-11)
+
+vbirq9 run: kms completed 03:30:43 then TOTAL wire silence — no
+flip/gpucomp lines, no '> vbirq', no hb — yet the shell stayed
+alive ('console still alive' on a second vbirq run). The kernel
+is fine; UDP TX specifically died during post-kms bring-up.
+
+Cause hypothesis: the static pd pool let lapicInit AND
+ioapic.initDirect actually succeed at boot for the first time —
+LAPIC armed, IO-APIC live carrying UEFI firmware's leftover RTEs.
+Firmware routes fire into our IDT unclaimed -> corrupt driver
+state (net TX). This is exactly what IO-APIC/LAPIC bringup masks
+exist for.
+
+FIX: initDirect now masks EVERY RTE (bit16) before claiming the
+door; lapicInit masks every LVT (0x320-0x380 step 0x10) before
+arming SVR. Nothing delivers until a route explicitly claims it.
+smp reconfigures the timer LVT it needs.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. If the wire survives
+past kms this time, vbirq's dump shows pmm managed (expect 0 =
+UEFI mmap theory confirmed), lapic probe (expect nonzero), and
+the MSI count. If wire STILL dies -> the killer is in the
+flip/gpucomp path, not interrupts — next probe isolates that.
+
+QEMU clean. Drill: 'kms' -> 'vbirq'.
