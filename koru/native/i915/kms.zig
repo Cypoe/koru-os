@@ -1153,6 +1153,14 @@ pub fn vbirq4() void {
     }
 }
 
+// vbirqLatest — the plain 'vbirq' command's target. The T590 keyboard
+// has a dead '5' key, so digit-suffixed probe names are untypeable on
+// the box that runs them; the unsuffixed command always runs the
+// NEWEST stage. Future stages: add the fn, point this at it.
+pub fn vbirqLatest() void {
+    vbirq5();
+}
+
 // vbirq5 — the route fix. vbirq4 proved generation reaches the master
 // (master0=80010000, bit16 pending while pipeIIR=1) AND proved irq11
 // has NO IO-APIC route: gsiFor(11)=null, so koru_irq_unmask fell back

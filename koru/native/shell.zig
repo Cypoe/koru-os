@@ -138,9 +138,9 @@ fn dispatch() void {
         text.puts("kdmabuf returned — console still alive\n");
         return;
     }
-    if (eq("vbirq")) { // gen8+ vblank IRQ chain probe — pure MMIO
-        text.puts("vbirq: arming gen8+ vblank chain — watch UDP\n");
-        kmsdrv.vbirqProbe();
+    if (eq("vbirq")) { // newest vblank-IRQ probe (digit keys are dead on T590)
+        text.puts("vbirq: latest IRQ probe — watch UDP\n");
+        kmsdrv.vbirqLatest();
         text.puts("vbirq returned — console still alive\n");
         return;
     }

@@ -2011,3 +2011,16 @@ would be forceRoute at that pin instead.
 
 QEMU: boots to shell clean (i915 down). ISO
 dist/koru-vbirq5-20261111.iso, MBR patched.
+
+## KEYBOARD CONSTRAINT — command names must avoid digits (2026-11-11)
+
+T590 keyboard has a DEAD '5' key (hardware fault) — digit-suffixed
+probe names (vbirq2..vbirq5) are untypeable on the box that runs
+them. Fix: plain 'vbirq' now calls kmsdrv.vbirqLatest() -> vbirq5();
+digit branches remain for archaeology but are unreachable here.
+Future probes: no digits in shell command names; update
+vbirqLatest() to point at the newest stage. kms/kwin/etc are
+alphanumeric already.
+
+ISO dist/koru-vbirq5-20261111.iso rebuilt with the repoint —
+T590 drill is 'kms' -> 'vbirq' (no digits).
