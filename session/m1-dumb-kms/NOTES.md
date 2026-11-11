@@ -2024,3 +2024,37 @@ alphanumeric already.
 
 ISO dist/koru-vbirq5-20261111.iso rebuilt with the repoint —
 T590 drill is 'kms' -> 'vbirq' (no digits).
+
+## VBLINE STAGE-5 ROOT CAUSE — no ACPI at all on T590 (2026-11-11)
+
+vbirq wire (second run):
+  acpi-side: ioapic live=0 pins=0 gsi-base=0 isos=0 npci=28
+  vbirq5: forceRoute irq=11 gsi=11 refused
+
+VERDICT: the IO-APIC was NEVER live — acpi.isos=0, gsi-base=0 means
+ioapic.init() early-returned: no MADT. RSDP was never found (mb2
+tags carry none on this GRUB path; EBDA + 0xE0000-0xFFFFF scans
+empty — UEFI keeps RSDP outside legacy regions). EVERY line on the
+box rides the 8259 PIC. irq_hits=0 explained completely: the 8259
+is EDGE-triggered, PCI INTx is LEVEL-held — once asserted it never
+makes a new edge, so PIC delivery of irq11 is impossible by
+construction. vbirq4's master0=80010000 proved generation reached
+GEN8_MASTER_IRQ; nothing was ever wrong on the i915 side.
+
+FIX (this ISO): ioapic.initDirect() — MADT-less bringup probing the
+PCH's fixed IO-APIC window 0xFEC00000, VER pin-count validated,
+LAPIC-bsp id read at 0xFEE00020. Routes NOTHING at init — surgical:
+only forceRoute'd lines move doors; ISA lines (0/1/12) keep the
+proven PIC path until deliberately migrated. vbirq5 now also
+ioapic.picMask(irq) before koru_irq_unmask so a level INTx can't
+double-deliver through both doors, and dumps acpi.found/ntables.
+
+Expected wire: 'ioapic: direct base=fec00000 ... pins=N' on serial,
+vbirq5 dump shows live=1, force-routed gsi=11, rte_lo level/low,
+then irq_hits ~= vb_events ~= FRMCNT delta (~120/2s) = VBLANK IRQ
+LIVE. If hits still 0 with live=1: next suspects are LAPIC delivery
+(xAPIC armed?) or INTx never asserting despite master pending.
+
+QEMU: ioapic MADT path unchanged (QEMU has MADT — direct probe only
+fires when MADT absent). ISO dist/koru-vbirq5-20261111.iso rebuilt,
+MBR patched. T590 drill: 'kms' -> 'vbirq'.

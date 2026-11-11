@@ -160,10 +160,60 @@ fn outb(port: u16, v: u8) void {
           [p] "{dx}" (port),
         : .{ .memory = true });
 }
+fn inb(port: u16) u8 {
+    return asm volatile ("inb %[p], %[r]"
+        : [r] "={al}" (-> u8),
+        : [p] "{dx}" (port),
+        : .{ .memory = true });
+}
+
+// initDirect — MADT-less bringup. T590 measured: no RSDP reachable via
+// mb2 tags / EBDA / BIOS window -> no MADT -> this init early-returned
+// -> every line PIC-routed, and level-held PCI INTx can never make the
+// edge the 8259 needs (vbirq4/5: master pending set, irq_hits=0). The
+// PCH's IO-APIC lives at the fixed window 0xFEC00000 — probe it
+// directly, validate VER's pin count before claiming, and route
+// NOTHING: callers forceRoute the lines they need. ISA lines already
+// working on the PIC keep their door until deliberately migrated.
+pub fn initDirect() bool {
+    if (live) return true;
+    if (acpi.ioapicPhys != 0) return false; // MADT path owns it
+    _ = mmio.map(0xFEC00000, 0x1000);
+    _ = mmio.map(0xFEE00000, 0x1000); // bsp's lapic id lives here
+    iobase = 0xFEC00000;
+    const id = ioRd(0);
+    const ver = ioRd(1);
+    const pins = ((ver >> 16) & 0xFF) + 1;
+    if (ver == 0 or ver == 0xFFFF_FFFF or pins < 16 or pins > 64) {
+        sayf("ioapic: direct @{x} implausible id={x} ver={x} — refused\n", .{
+            iobase, id, ver,
+        });
+        iobase = 0;
+        return false;
+    }
+    npins = pins;
+    bspId = @truncate(
+        @as(*volatile u32, @ptrFromInt(@as(usize, @intCast(0xFEE00000)) + 0x20)).* >> 24);
+    live = true;
+    sayf("ioapic: direct base={x} id={x} pins={d} bsp={d} (no MADT)\n", .{
+        iobase, id >> 24, npins, bspId,
+    });
+    return true;
+}
+
+// picMask — keep the legacy door shut on a line the IO-APIC now owns;
+// without it a level INTx can double-deliver through both doors.
+pub fn picMask(irq: u8) void {
+    if (irq >= 16) return;
+    const port: u16 = if (irq < 8) 0x21 else 0xA1;
+    const bit: u3 = @intCast(irq & 7);
+    outb(port, inb(port) | (@as(u8, 1) << bit));
+}
 
 pub fn init() void {
     if (acpi.nioapics == 0 or acpi.ioapicPhys == 0) {
         say("ioapic: none in MADT — PIC door stands\n");
+        _ = initDirect(); // T590 path: probe the PCH window anyway
         return;
     }
     _ = mmio.map(acpi.ioapicPhys, 0x1000);

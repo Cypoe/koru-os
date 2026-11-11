@@ -1177,7 +1177,8 @@ pub fn vbirq5() void {
         return;
     }
     const irq = gdev.pdev.irq_line;
-    vw("vbirq5: ioapic live={} pins={d} gsi-base={d} isos={d} npci={d}\n", .{
+    vw("vbirq5: acpi found={} tables={d} | ioapic live={} pins={d} gsi-base={d} isos={d} npci={d}\n", .{
+        @intFromBool(acpi.found), acpi.ntables,
         @intFromBool(ioapic.isLive()), ioapic.pinCount(),
         acpi.ioapicGsiBase, acpi.isos, pci.count,
     });
@@ -1210,6 +1211,7 @@ pub fn vbirq5() void {
     const stale = mmio.rd(R.DE_PIPE_IIR_A);
     if (stale != 0) mmio.wr(R.DE_PIPE_IIR_A, stale);
     i915_vb_irq_line = irq;
+    ioapic.picMask(irq); // one door only — level INTx must not double-deliver
     koru_irq_unmask(irq);
     mmio.wr(GEN8_MASTER_IRQ, GEN8_MASTER_IRQ_CONTROL);
     vw("vbirq5: armed — counting\n", .{});
