@@ -2325,3 +2325,21 @@ FRMCNT delta if MSI delivers. irq_ticks should also climb (PIT
 IRQ0 unmasked by user.init).
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'vbirq'.
+
+## VBLINE STAGE-9i — wire death is a SEPARATE flip-path bug (2026-11-11)
+
+vbirq9h run: kms complete 13:04:01 then total UDP silence AGAIN —
+but this time it's DEFINITIVELY unrelated to IRQs: koru_irq_ensure
+only runs inside vbirq9 (on command), so it cannot affect the
+automatic post-kms flip/gpucomp bring-up that dies first. The
+wire-death is a real pre-existing bug in the flip/console-resize
+path killing UDP TX while fb console stays alive. It predates and
+is orthogonal to the whole IRQ hunt — probably why every
+post-kms probe has been blind.
+
+UNBLOCK: vw() now also text.puts — every probe line mirrors to the
+T590 panel. The screen is a second oracle when the wire is dark.
+User reads irq_hits/lapic/msi directly off the display.
+
+Drill: 'kms' -> 'vbirq' -> READ THE SCREEN (wire may be dead).
+Looking for: lapic probe=real, irq_hits ~= vb_events ~= FRMCNT.

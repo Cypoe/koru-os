@@ -839,8 +839,13 @@ fn vw(comptime fmt: []const u8, args: anytype) void {
     var b: [256]u8 = undefined;
     const s = std.fmt.bufPrint(&b, fmt, args) catch return;
     b[s.len] = 0;
-    mmio.say(@as([*:0]const u8, @ptrCast(&b)));
+    const z: [*:0]const u8 = @ptrCast(&b);
+    mmio.say(z);
     net.mirror(s);
+    // The post-kms flip path can kill UDP TX while the console stays
+    // alive — mirror every probe line to the panel so the T590 screen
+    // is a second oracle when the wire goes dark.
+    text.puts(z);
 }
 
 // vbirqProbe — stage-1 of the real vblank IRQ: arm the gen8+ chain
