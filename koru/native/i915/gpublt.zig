@@ -91,6 +91,17 @@ var fence_phys: u64 = 0;
 var fence_gtt_off: u64 = 0;
 var fence: [*]volatile u32 = undefined;
 var fence_seq: u32 = 0;
+// fence-wait timing oracle — splits paintFrame's ~40ms into CPU emit
+// vs engine fence wait. present.zig reports the average on the panel.
+pub var fw_tsc: u64 = 0;
+pub var fw_n: u64 = 0;
+
+fn rdtsc() u64 {
+    var lo: u32 = undefined;
+    var hi: u32 = undefined;
+    asm volatile ("rdtsc" : [lo] "={eax}" (lo), [hi] "={edx}" (hi));
+    return (@as(u64, hi) << 32) | lo;
+}
 
 // layer backing -> GGTT aperture byte offset of pixel (0,0). Keyed by
 // phys (identity VA==PA) + span so a reused comp slot or a realloc'd
@@ -376,10 +387,17 @@ fn submit() bool {
     // fence poll — engine is in-order; seq seen => every blit landed.
     const want = fence_seq;
     const deadline = mmio.nowMs() + FENCE_TIMEOUT_MS;
+    const f0 = rdtsc();
     while (mmio.nowMs() < deadline) {
-        if (fence[0] == want) return true;
+        if (fence[0] == want) {
+            fw_tsc += rdtsc() - f0;
+            fw_n += 1;
+            return true;
+        }
         asm volatile ("pause");
     }
+    fw_tsc += rdtsc() - f0;
+    fw_n += 1;
     return false;
 }
 

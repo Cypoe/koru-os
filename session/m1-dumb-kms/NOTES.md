@@ -2494,3 +2494,16 @@ cost is elsewhere in the flip cycle (fanDamage/commit/flipSwapFast).
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
 drag -> read 'perf f= t= to= pt='.
+
+## VBLINE STAGE-9r — split paintFrame: CPU emit vs engine fence (2026-11-11)
+
+pt=101530006 (~40ms) confirmed paintFrame is the composite cap.
+mapBacking RULED OUT (caches gtt_off per backing). Remaining:
+flushSrc clflush volume, emit command volume, or the BCS fence
+wait (engine taking ~40ms to chew the batch — huge cmd count or
+engine stall). Added fw=<avg fence-wait tsc> inside submit():
+pt-fw ~= CPU emit+submit cost; fw ~= engine wait. fw~40ms =>
+engine/batch problem; fw small + pt-fw~40ms => CPU emit/flushSrc.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
+drag -> read 'perf f= t= to= pt= fw='.
