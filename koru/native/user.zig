@@ -763,9 +763,23 @@ pub export fn koru_lapic_armed() u64 {
     return if (lapicArmed) 1 else 0;
 }
 
+// koru_irq_ensure — bring up IDT+PIC+LAPIC+sti on demand for callers
+// outside the doFull block (the consoleMode shell path). Idempotent
+// via init()'s irqInfraUp guard — safe to call from ensureInput and
+// the i915 IRQ probes in either order.
+pub export fn koru_irq_ensure() void {
+    init();
+}
+
+var irqInfraUp = false;
+
 // Called once from kmain, before the program runs: PIC remapped, every
-// gate populated, interrupts on.
+// gate populated, interrupts on. Idempotent — cursor.ensureInput and
+// the i915 IRQ probes both need it on the fullBoot=false shell path,
+// and whichever fires first wins; the second is a no-op.
 pub fn init() void {
+    if (irqInfraUp) return;
+    irqInfraUp = true;
     picInit();
     lapicInit();
     // v3 must be DPL=3 — #BP is raised by int3 from user code and the

@@ -2296,3 +2296,32 @@ still refusing. lapMap=1 + pdpt=0 -> installed then cleared
 (corruption). lapMap=0 -> lapicInit not reached.
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'vdiag' only.
+
+## VBLINE STAGE-9h — ROOT CAUSE: fullBoot=false, no interrupt infra (2026-11-11)
+
+vdiag counters: mapCalls=4 pdInst=1 lapMap=0. lapMap=0 ->
+lapicInit's map line NEVER ran -> user.init() never ran -> the
+doFull block is gated by fullBoot=false (boot.zig:403, DIAG
+consoleMode scaffold). The T590 has run the stripped DIAG path
+all along: no acpi/pci-doFull/ioapic/user.init/kbd/mouse/smp —
+no IDT, no PIC, no sti, IF=0, purely polled. acpi found=0 was
+never a firmware failure — acpi.init never ran. cursor.zig's
+ensureInput is the lazy seam (calls user.init on demand, skips
+acpi/ioapic because acpi.init HUNG twice on T590 tables).
+
+Every IRQ probe failure was structural: there was no interrupt
+delivery to probe. The post-kms wire death is a SEPARATE
+flip/gpucomp bug — none of the APIC changes even execute inside
+doFull.
+
+FIX: user.init() is now idempotent (irqInfraUp guard) +
+koru_irq_ensure() export. vbirq9 calls koru_irq_ensure() BEFORE
+the dump -> IDT+PIC+lapicInit+sti run on demand -> LAPIC arms
+(mmio.map counter fix works) -> MSI programs against a real
+armed LAPIC -> i915 chain -> count. MSI needs no IO-APIC/ACPI.
+
+Expected: lapic probe=real id/svr, irq_hits ~= vb_events ~=
+FRMCNT delta if MSI delivers. irq_ticks should also climb (PIT
+IRQ0 unmasked by user.init).
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'vbirq'.

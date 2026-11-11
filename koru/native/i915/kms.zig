@@ -1170,6 +1170,7 @@ extern var msi_any_seen: u64;
 extern var irq_ticks: u64;
 extern fn koru_lapic_probe() u64;
 extern fn koru_lapic_armed() u64;
+extern fn koru_irq_ensure() void;
 extern var lapicMapResult: u64;
 
 // vdiag — kms-independent state dump. The wire only dies AFTER kms,
@@ -1216,6 +1217,12 @@ pub fn vbirq9() void {
         vw("vbirq9: i915 down\n", .{});
         return;
     }
+    // The consoleMode shell path boots fullBoot=false — the doFull
+    // block (user.init: IDT+PIC+lapic+sti) never ran, so there is no
+    // interrupt delivery at all until now. MSI needs only the LAPIC
+    // armed; no IO-APIC/ACPI required. Ensure it BEFORE the state dump
+    // so lapic probe/dest reflect the armed LAPIC.
+    koru_irq_ensure();
     const ps = pmm.state();
     const lp = koru_lapic_probe();
     const lapid: u32 = @intCast(lp >> 32);
