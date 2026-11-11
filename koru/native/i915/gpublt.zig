@@ -95,6 +95,10 @@ var fence_seq: u32 = 0;
 // vs engine fence wait. present.zig reports the average on the panel.
 pub var fw_tsc: u64 = 0;
 pub var fw_n: u64 = 0;
+// emit-cost oracles — flushSrc bytes flushed + blit commands emitted
+// per frame; splits the ~24ms CPU emit into clflush volume vs cmd count.
+pub var flush_bytes: u64 = 0;
+pub var emit_count: u64 = 0;
 
 fn rdtsc() u64 {
     var lo: u32 = undefined;
@@ -313,11 +317,13 @@ fn flushSrc(buf: [*]u32, pitch: u32, x: u32, y: u32, w: u32, h: u32) void {
             @as(usize, @intCast(yy)) * @as(usize, @intCast(pitch)) * 4;
         var a = (row + @as(usize, @intCast(x)) * 4) & ~@as(usize, 63);
         const end = row + (@as(usize, @intCast(x)) + @as(usize, @intCast(w))) * 4;
-        while (a < end) : (a += 64)
+        while (a < end) : (a += 64) {
             asm volatile ("clflush (%[p])"
                 :
                 : [p] "r" (a)
                 : .{ .memory = true });
+            flush_bytes += 64;
+        }
     }
 }
 
@@ -336,6 +342,7 @@ fn emitCopy(dstGtt: u64, dstPitchB: u32,
     if (!emitDw(srcPitchB)) return false;
     if (!emitDw(@truncate(srcGtt))) return false;
     if (!emitDw(@truncate(srcGtt >> 32))) return false;
+    emit_count += 1;
     return true;
 }
 
