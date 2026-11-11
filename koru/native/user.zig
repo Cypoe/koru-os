@@ -416,9 +416,15 @@ fn eoiVec(vec: u64) void {
     const l = vec - 0x20;
     if (l < 16 and ioapic.isLapic(@intCast(l))) {
         lapicEoi();
-    } else {
-        picEoi(vec);
+        return;
     }
+    picEoi(vec);
+    // With the LAPIC armed, PIC lines physically arrive via LINT0 ->
+    // LAPIC, so the LAPIC holds an in-service bit for them too. Missing
+    // that EOI intermittently blocks same-priority delivery — the
+    // uneven ~5fps mouse lag measured on T590. A stray LAPIC EOI with
+    // nothing in service is a no-op, so send it whenever armed.
+    if (lapicArmed) lapicEoi();
 }
 
 pub export var irq_ticks: u64 = 0;

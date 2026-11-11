@@ -2385,3 +2385,19 @@ cascade. Mouse should return; LAPIC still arms for MSI.
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
 mouse (no vbirq needed to test input). Then 'vbirq'->drag.
+
+## VBLINE STAGE-9l — mouse lag: missing LAPIC EOI on PIC lines (2026-11-11)
+
+vbirq9k: LINT fix restored IRQ12 (cursor responds) but ~5fps UNEVEN
+lag. Cause: with LAPIC armed, PIC interrupts arrive via LINT0->LAPIC,
+so the LAPIC holds an in-service bit per PIC vector — but eoiVec sent
+only picEoi for vec 0x20-0x2F (ioapic.isLapic false on shell path).
+Missing LAPIC EOI -> ISR bit accumulates -> same-priority interrupts
+intermittently blocked -> uneven starvation.
+
+FIX: eoiVec now sends lapicEoi() alongside picEoi() whenever
+lapicArmed — stray EOI with nothing in service is a no-op. IRQ12/IRQ0
+now fully acknowledged on both doors.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
+mouse — expect smooth cursor again (jank1 parity or better).
