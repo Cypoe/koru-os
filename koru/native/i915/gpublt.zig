@@ -306,10 +306,15 @@ fn emitFill(dstGtt: u64, dstPitchB: u32, x: u32, y: u32, w: u32, h: u32, color: 
     return true;
 }
 
-// flushSrc — clflush the layer-backing src rect the next blit will read.
+// flushSrc — write back the layer-backing src rect the next blit reads.
 // Layer backings are CPU-written through the WB identity map; the BCS
 // reads them via GGTT. Without a flush the engine can copy stale lines
 // (frozen console text, wrong pixels under the cursor -> sprite blob).
+// clwb (not clflush): write-back WITHOUT invalidate — the engine only
+// needs the lines in memory; the CPU's cached copy stays valid. On the
+// mostly-clean backings a drag produces, clwb skips clean lines far
+// cheaper than clflush's unconditional invalidate. T590 (Coffee Lake)
+// and QEMU both implement CLWB.
 fn flushSrc(buf: [*]u32, pitch: u32, x: u32, y: u32, w: u32, h: u32) void {
     var yy = y;
     while (yy < y + h) : (yy += 1) {
@@ -318,7 +323,7 @@ fn flushSrc(buf: [*]u32, pitch: u32, x: u32, y: u32, w: u32, h: u32) void {
         var a = (row + @as(usize, @intCast(x)) * 4) & ~@as(usize, 63);
         const end = row + (@as(usize, @intCast(x)) + @as(usize, @intCast(w))) * 4;
         while (a < end) : (a += 64) {
-            asm volatile ("clflush (%[p])"
+            asm volatile ("clwb (%[p])"
                 :
                 : [p] "r" (a)
                 : .{ .memory = true });
