@@ -61,10 +61,15 @@ var armed_frm: u32 = 0; // FRMCNT at arm time — delta = flip landed at a frame
 var vb_armed: bool = false;
 var vb_emit_n: u64 = 0;   // ticks since last vb: telemetry line
 var vb_last_flips: u64 = 0; // flip_count at last emit — +f delta = fps
-var perf_emit_n: u64 = 0;   // faster cadence — objective jank oracle
 var perf_last_flips: u64 = 0;
-var perf_last_irqs: u64 = 0;
-extern var irq_ticks: u64; // PIT deliveries — interrupt-rate signal
+var perf_last_tsc: u64 = 0;
+
+fn rdtsc() u64 {
+    var lo: u32 = undefined;
+    var hi: u32 = undefined;
+    asm volatile ("rdtsc" : [lo] "={eax}" (lo), [hi] "={edx}" (hi));
+    return (@as(u64, hi) << 32) | lo;
+}
 var last_gen: u64 = 0;
 var last_mode_was_flip: bool = false;
 var retry_n: u64 = 0;
@@ -372,19 +377,18 @@ fn flipTick() void {
                @intFromBool(flip_pending), timeout_clears });
     }
     // perf — objective jank oracle on the panel (wire dies post-kms).
-    // flips-delta per window = real flip throughput; irq-delta = PIT
-    // delivery rate. Drag for ~10s and read several lines: high flips
-    // + high irq = render keeps up, jank is input-side; low flips =
-    // the compositor/flip path is the bottleneck.
-    perf_emit_n += 1;
-    if (perf_emit_n >= (1 << 18)) {
-        perf_emit_n = 0;
+    // TSC wall-clock window: f= flips in window, t= tsc ticks elapsed
+    // — fps = f / (t / tsc_hz). Drag ~10s, read several lines. High fps
+    // + gpu climbing = render keeps up -> jank is input-side; low fps
+    // = the flip/compositor path is the bottleneck.
+    const tnow = rdtsc();
+    if (tnow - perf_last_tsc >= 0x80000000) { // ~1-2s at ~2-4GHz TSC
         const df = flip_count - perf_last_flips;
+        const dt = tnow - perf_last_tsc;
         perf_last_flips = flip_count;
-        const di = irq_ticks - perf_last_irqs;
-        perf_last_irqs = irq_ticks;
-        text.puts("perf +f="); text.putdec(df);
-        text.puts(" irq+="); text.putdec(di);
+        perf_last_tsc = tnow;
+        text.puts("perf f="); text.putdec(df);
+        text.puts(" t="); text.putdec(dt);
         text.puts(" gpu="); text.putdec(gpu_frames);
         text.puts(" cpu="); text.putdec(cpu_frames); text.puts("\n");
     }

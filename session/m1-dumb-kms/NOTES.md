@@ -2442,3 +2442,23 @@ compositor is the bottleneck. gpu vs cpu split names the path.
 
 ISO dist/koru-vbirq9-20261111.iso rebuilt. Drill: 'kms'->'kwin'->
 drag ~10s -> read 'perf' lines on screen.
+
+## VBLINE STAGE-9o — REAL fps measured: ~1.5fps, render-bound (2026-11-11)
+
+perf line (old tick-window): '+f=2 irq+=143 gpu=313 cpu=0'.
+irq+=143 PIT ticks in the same 1<<18-flipTick window as 2 flips —
+window ~1.4s => ~1.5fps flip rate, NOT 60. THE JANK: cursor/window
+are compositor layers repainting only on flips; at ~1.5fps everything
+feels frozen-then-jump. NOT input, NOT LAPIC, NOT interrupts — gpu
+climbing (BCS works, cpu=0 no fallback). Bottleneck is flip/paint
+throughput: either flip_pending/edge-oracle serialization stalls
+commits, or paintFrame's per-frame submit+fence cycle is slow.
+FENCE_TIMEOUT_MS=100 but cpu=0 => fences signal (no timeout->fallback),
+so the stall is upstream of the fence — likely edge-oracle or loop rate.
+
+perf emitter now TSC-based: 'perf f=<flips> t=<tsc delta> gpu= cpu='
+=> real flips/sec. Need the number to localize: low fps + gpu climbing
+= flip pipeline; compare vs QEMU.
+
+ISO dist/koru-vbirq9-20261111.iso rebuilt (TSC perf). Drill:
+'kms'->'kwin'->drag ~10s -> read 'perf f=' lines = real fps.
