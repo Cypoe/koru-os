@@ -29,7 +29,7 @@ const text = @import("text.zig");
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
 extern var stdout: ?*anyopaque;
 
-const MAX_BUFS: usize = 2;
+const MAX_BUFS: usize = 3; // triple-buffered: 1 scanout + 1 in-flight + 1 free-to-composite
 const MAX_FLIP_FAILS: u32 = 12;
 // Vblank-oracle timeout: flip_pending normally clears on a DEIIR edge.
 // If DEIIR never latches on this panel (unverified assumption — M2's
@@ -54,8 +54,9 @@ const Buf = struct {
     acc: comp.Acc = .{},
 };
 
-var bufs: [MAX_BUFS]Buf = .{ .{}, .{} };
-var front: ?usize = null; // index of last flipSwapped buffer
+var bufs: [MAX_BUFS]Buf = .{ .{}, .{}, .{} };
+var front: ?usize = null; // index of last flipSwapped buffer (in-flight, then screen)
+var screen: ?usize = null; // index actually on scanout — set when a flip lands
 var flip_pending: bool = false; // a flip is armed, vblank not yet seen
 var armed_frm: u32 = 0; // FRMCNT at arm time — delta = flip landed at a frame boundary
 var vb_armed: bool = false;
@@ -255,7 +256,8 @@ fn sayU(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn flipReady() bool {
-    return bufs[0].ok and bufs[1].ok;
+    for (bufs) |b| if (!b.ok) return false;
+    return true;
 }
 
 fn teardown() void {
@@ -267,6 +269,7 @@ fn teardown() void {
         }
     }
     front = null;
+    screen = null;
     flip_pending = false;
     flip_age = 0;
     commit_armed = false;
@@ -315,21 +318,44 @@ fn ensureFlip() bool {
         vb_armed = true;
     }
     pre_scanout = kms.device().scanout; // modeset/test buffer to retire post-first-flip
-    sayU("KORU scene: flip buffers up {d}x{d} (2x dumb swapchain)\n", .{ s.w, s.h });
+    sayU("KORU scene: flip buffers up {d}x{d} (3x dumb swapchain)\n", .{ s.w, s.h });
     return true;
 }
 
-// fan pending scene damage into both per-buffer accumulators.
+// fan pending scene damage into every buffer's accumulator.
 fn fanDamage(p: comp.Acc) void {
     if (p.full) {
-        bufs[0].acc.full = true;
-        bufs[1].acc.full = true;
+        for (&bufs) |*b| b.acc.full = true;
         return;
     }
     for (p.rects[0..p.n]) |r| {
-        bufs[0].acc.add(r, compW(), compH());
-        bufs[1].acc.add(r, compW(), compH());
+        for (&bufs) |*b| b.acc.add(r, compW(), compH());
     }
+}
+
+var pick_rr: usize = 0; // round-robin cursor — rotate the free-buffer set
+
+// pickBack — a buffer safe to composite: not on scanout (screen), not
+// committed-in-flight (flip_pending?front). Prefers one whose acc has
+// damage; falls back to any free buffer (caller's acc.empty() skips idle).
+// With 3 bufs there's always one free even mid-flight -> composite
+// overlaps the in-flight vblank wait -> a flip every vblank.
+fn pickBack() ?usize {
+    const flightIdx: ?usize = if (flip_pending) front else null;
+    var fallback: ?usize = null;
+    var k: usize = 0;
+    while (k < MAX_BUFS) : (k += 1) {
+        const i = (pick_rr + k) % MAX_BUFS;
+        if (screen) |s| if (i == s) continue;
+        if (flightIdx) |f| if (i == f) continue;
+        if (bufs[i].acc.empty()) {
+            if (fallback == null) fallback = i;
+            continue; // prefer a buffer that actually has damage
+        }
+        pick_rr = (i + 1) % MAX_BUFS;
+        return i;
+    }
+    return fallback;
 }
 
 fn compW() u32 {
@@ -464,11 +490,13 @@ fn flipTick() void {
         if (ev != 0 or frm != armed_frm or irqc != armed_irq) {
             flip_pending = false;
             flip_age = 0;
+            screen = front; // committed buffer is now really on scanout
         } else {
             flip_age += 1;
             if (flip_age >= FLIP_TIMEOUT_TICKS) {
                 flip_pending = false;
                 flip_age = 0;
+                screen = front;
                 timeout_clears += 1;
                 if (timeout_clears == 1 or timeout_clears % 64 == 0)
                     sayU("KORU scene: vblank oracle silent — timeout clear {d}\n",
@@ -479,12 +507,16 @@ fn flipTick() void {
 
     fanDamage(comp.takePending());
 
-    // deferred commit — edge seen (or dead-counter timeout) => land
-    // DSPASURF now; otherwise damage keeps accumulating in the accs.
+    // deferred commit — land DSPASURF on a vblank edge, but only once the
+    // previous flip has landed (!flip_pending): committing mid-flight
+    // would retarget DSPASURF and skip the in-flight frame. While a flip
+    // is in flight we fall through and composite the free 3rd buffer, so
+    // the pipeline stays full -> a flip every vblank instead of ~30fps.
     if (commit_armed) {
         commit_age += 1;
-        if (kms.frameCount() != commit_frm or irqc != commit_irq or
-            commit_age >= COMMIT_TIMEOUT_TICKS)
+        if (!flip_pending and
+            (kms.frameCount() != commit_frm or irqc != commit_irq or
+             commit_age >= COMMIT_TIMEOUT_TICKS))
         {
             if (kms.flipSwapFast(commit_handle)) {
                 armed_frm = kms.frameCount();
@@ -509,12 +541,13 @@ fn flipTick() void {
             }
             commit_armed = false;
         }
-        return; // still waiting on the edge — nothing else to do
+        if (commit_armed) return; // commit slot busy — wait for edge+landing
     }
 
-    if (flip_pending) return; // armed buffer still in flight — damage waits in accs
-
-    const back: usize = if (front) |f| 1 - f else 0;
+    // composite the free buffer — pickBack excludes scanout (screen) and
+    // in-flight (flip_pending?front), so with 3 bufs there's always one
+    // to paint even mid-flight. No free buffer -> nothing to do.
+    const back = pickBack() orelse return;
     const b = &bufs[back];
     if (b.acc.empty()) return;
 
@@ -633,6 +666,7 @@ pub fn tick() void {
         flip_pending = false;
         commit_armed = false;
         front = null;
+        screen = null;
         pre_scanout = null;
         flip_fails = 0;
         retry_wait = 64;
