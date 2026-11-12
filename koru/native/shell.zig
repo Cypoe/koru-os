@@ -14,6 +14,7 @@ const present = @import("present.zig");
 const hwprobe = @import("hwprobe.zig");
 const xhci = @import("xhci.zig");
 const net = @import("net");
+const buildver = @import("buildver");
 
 var line: [96]u8 = undefined;
 var n: usize = 0;
@@ -49,6 +50,9 @@ pub fn run() noreturn {
     if (cursor.backing()) |cbuf|
         _ = comp.cursorAttach(cbuf, cursor.CURSOR_W, cursor.CURSOR_W, cursor.CURSOR_H);
     text.puts("KORU OS - native shell\n");
+    text.puts("build ");
+    text.puts(buildver.sha);
+    text.puts("\n");
     text.puts("type 'help'\n\n");
     prompt();
     var a = rdtsc();
