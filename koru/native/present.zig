@@ -405,6 +405,9 @@ fn flipTick() void {
         text.puts(" iq="); text.putdec(if (paint_n == 0) 0 else gpublt.irq_during * 100 / paint_n);
         text.puts(" fe="); text.putdec(if (gpublt.fe_n == 0) 0 else gpublt.fe_tsc / gpublt.fe_n);
         text.puts(" sb="); text.putdec(if (gpublt.sb_n == 0) 0 else gpublt.sb_tsc / gpublt.sb_n);
+        text.puts(" x1="); text.putdec(if (paint_n == 0) 0 else gpublt.px1 / paint_n);
+        text.puts(" x2="); text.putdec(if (paint_n == 0) 0 else gpublt.px2 / paint_n);
+        text.puts(" x3="); text.putdec(if (paint_n == 0) 0 else gpublt.px3 / paint_n);
         text.puts(" gpu="); text.putdec(gpu_frames);
         text.puts(" cpu="); text.putdec(cpu_frames); text.puts("\n");
     }

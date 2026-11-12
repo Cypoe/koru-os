@@ -124,6 +124,12 @@ pub var fe_tsc: u64 = 0;
 pub var fe_n: u64 = 0;
 pub var sb_tsc: u64 = 0;
 pub var sb_n: u64 = 0;
+// pre-loop sub-segments — the ~54ms stall lives in pf0->b0 cheap code
+// with only ~14% IRQ coverage. Three checkpoints name the exact line:
+// px1=arm-check+dumbGet+map, px2=dims+field-reads, px3=rects/cands setup.
+pub var px1: u64 = 0;
+pub var px2: u64 = 0;
+pub var px3: u64 = 0;
 
 fn rdtsc() u64 {
     var lo: u32 = undefined;
@@ -475,11 +481,15 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
     }
     const db = kms.dumbGet(dstHandle) orelse return false;
     if (db.map == null) return false;
+    const p1 = rdtsc();
+    px1 += p1 - pf0;
     var sw: u32 = 0;
     var sh: u32 = 0;
     comp.dims(&sw, &sh);
     const dstGtt = db.gtt_offset;
     const dstPitchB = db.pitch;
+    const p2 = rdtsc();
+    px2 += p2 - p1;
 
     // damage rect list — acc.full degenerates to whole scene like
     // compositeAcc does.
@@ -495,6 +505,7 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
     var cands: [comp.MAX_LAYERS]comp.LayerView = undefined;
 
     const b0 = rdtsc();
+    px3 += b0 - p2;
     pre_tsc += b0 - pf0;
     pre_n += 1;
     for (rects) |r| {
