@@ -65,6 +65,7 @@ var perf_last_flips: u64 = 0;
 var perf_last_tsc: u64 = 0;
 var paint_tsc: u64 = 0;   // cumulative rdtsc inside paintFrame
 var paint_n: u64 = 0;     // paintFrame calls — avg = paint_tsc/paint_n
+var paint_min: u64 = ~@as(u64, 0); // best-case paintFrame — separates compute from stall
 
 fn rdtsc() u64 {
     var lo: u32 = undefined;
@@ -393,6 +394,7 @@ fn flipTick() void {
         text.puts(" t="); text.putdec(dt);
         text.puts(" to="); text.putdec(timeout_clears);
         text.puts(" pt="); text.putdec(if (paint_n == 0) 0 else paint_tsc / paint_n);
+        text.puts(" pm="); text.putdec(paint_min);
         text.puts(" fw="); text.putdec(if (gpublt.fw_n == 0) 0 else gpublt.fw_tsc / gpublt.fw_n);
         text.puts(" fb="); text.putdec(gpublt.flush_bytes);
         text.puts(" ec="); text.putdec(gpublt.emit_count);
@@ -496,8 +498,10 @@ fn flipTick() void {
         comp.compositeAcc(&t, &b.acc);
         cpu_frames += 1;
     }
-    paint_tsc += rdtsc() - p0;
+    const pd = rdtsc() - p0;
+    paint_tsc += pd;
     paint_n += 1;
+    if (pd < paint_min) paint_min = pd;
     const was_full = b.acc.full;
     const nr = b.acc.n;
     b.acc.clear();
