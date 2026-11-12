@@ -402,6 +402,7 @@ fn flipTick() void {
         text.puts(" pr="); text.putdec(if (gpublt.pre_n == 0) 0 else gpublt.pre_tsc / gpublt.pre_n);
         text.puts(" ac="); text.putdec(gpublt.arm_calls);
         text.puts(" ai="); text.putdec(gpublt.arm_inner_calls);
+        text.puts(" iq="); text.putdec(if (paint_n == 0) 0 else gpublt.irq_during * 100 / paint_n);
         text.puts(" gpu="); text.putdec(gpu_frames);
         text.puts(" cpu="); text.putdec(cpu_frames); text.puts("\n");
     }

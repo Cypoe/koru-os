@@ -51,6 +51,7 @@ const comp = @import("comp");
 
 extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
 extern var stdout: ?*anyopaque;
+extern var irq_dispatches: u64; // user.zig — every irq_exc_dispatch entry
 
 fn sayU(comptime fmt: []const u8, args: anytype) void {
     var buf: [256]u8 = undefined;
@@ -113,6 +114,10 @@ pub var pre_n: u64 = 0;
 // measuring something else entirely.
 pub var arm_calls: u64 = 0;
 pub var arm_inner_calls: u64 = 0;
+// irq_during — paintFrame calls where an IRQ dispatched mid-frame.
+// paintFrame compute ~4us but ~15-38ms wall: if ~every call has an IRQ
+// landing inside, interrupt preemption IS the deschedule.
+pub var irq_during: u64 = 0;
 
 fn rdtsc() u64 {
     var lo: u32 = undefined;
@@ -458,6 +463,7 @@ fn collectLayers(r: comp.Rect, out: *[comp.MAX_LAYERS]comp.LayerView) usize {
 // the CPU composite (named degrade, never silent).
 pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
     const pf0 = rdtsc();
+    const irq0 = irq_dispatches;
     if (!ready) {
         if (!arm()) return false;
     }
@@ -571,6 +577,7 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
 
     blit_count += emitted;
     frame_count += 1;
+    if (irq_dispatches != irq0) irq_during += 1;
     if (frame_count == 1 or frame_count % 120 == 0)
         sayU("gpucomp: frame {d} blits={d} total={d} maps={d}\n",
             .{ frame_count, emitted, blit_count, map_n });

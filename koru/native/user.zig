@@ -428,6 +428,9 @@ fn eoiVec(vec: u64) void {
 }
 
 pub export var irq_ticks: u64 = 0;
+// irq_dispatches — every irq_exc_dispatch entry, any vector. Rate oracle:
+// a pathological count during drag = interrupt storm starving the loop.
+pub export var irq_dispatches: u64 = 0;
 var virtio_seen: u64 = 0;
 // msi_any_seen — every vec>=0x30 delivery (LAPIC-local + MSI/MSI-X).
 // The T590 has no serial: probes read this to distinguish 'MSI
@@ -525,6 +528,7 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
     // would spin on the holder's own lock and deadlock the cpu.
     const nested = bklMine();
     if (!nested) lockBkl();
+    irq_dispatches += 1;
     if (f.vec >= 0x20 and f.vec < 0x30) {
         if (f.vec == 0x20) {
             irq_ticks += 1;
