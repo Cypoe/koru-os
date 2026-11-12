@@ -19,6 +19,25 @@ var line: [96]u8 = undefined;
 var n: usize = 0;
 var raw: bool = false; // scan mode — dump raw 8042 bytes, ESC exits
 
+// ---- per-stage loop timing oracle -------------------------------------
+// paintFrame compute measured ~4us but ~38ms wall — the CPU is being
+// descheduled inside the loop. Time each stage to name the blocker.
+fn rdtsc() u64 {
+    var lo: u32 = undefined;
+    var hi: u32 = undefined;
+    asm volatile ("rdtsc" : [lo] "={eax}" (lo), [hi] "={edx}" (hi));
+    return (@as(u64, hi) << 32) | lo;
+}
+var s_net: u64 = 0; var s_kbd: u64 = 0; var s_cur: u64 = 0;
+var s_ptr: u64 = 0; var s_comp: u64 = 0; var s_win: u64 = 0;
+var s_pres: u64 = 0; var s_loop: u64 = 0; var s_n: u64 = 0;
+var s_last: u64 = 0;
+fn stageT(t: *u64, f: anytype) void {
+    const a = rdtsc();
+    f();
+    t.* += rdtsc() - a;
+}
+
 pub fn run() noreturn {
     comp.init();            // scene core — dims + layer/damage state
     present.consoleUp();    // console backing + sink + root layer (present owns it — gen-change resizes)
@@ -32,8 +51,10 @@ pub fn run() noreturn {
     text.puts("KORU OS - native shell\n");
     text.puts("type 'help'\n\n");
     prompt();
+    var a = rdtsc();
     while (true) {
         net.heartbeat();
+        s_net += rdtsc() - a; a = rdtsc();
         if (raw) {
             if (kbd.pollRaw()) |b| {
                 if (b == 0x01) { // Esc make — leave scan mode
@@ -48,13 +69,38 @@ pub fn run() noreturn {
         } else if (kbd.pollChar()) |c| {
             handle(c);
         }
+        s_kbd += rdtsc() - a; a = rdtsc();
         _ = cursor.tick(); // M4: drain mouse motion, move the cursor sprite
+        s_cur += rdtsc() - a; a = rdtsc();
         const sp = cursor.sprite();
         comp.feedPointer(sp.x, sp.y, sp.on, cursor.buttonsHeld());
+        s_ptr += rdtsc() - a; a = rdtsc();
         comp.tick();      // scene input: press-edge focus/raise/drag
+        s_comp += rdtsc() - a; a = rdtsc();
         win.tick();       // kwin: focus-titlebar repaints -> damage
+        s_win += rdtsc() - a; a = rdtsc();
         present.tick();   // drain damage -> composite -> present (A or B)
+        s_pres += rdtsc() - a; a = rdtsc();
         if (present.takeConsoleReset()) redrawPrompt(); // console reallocated mid-line
+        s_loop += rdtsc() - a;
+        s_n += 1;
+        // breakdown emit — every ~0.5s TSC, per-stage busy tsc + iters
+        const tn = rdtsc();
+        if (tn - s_last >= 0x40000000) {
+            s_last = tn;
+            text.puts("loop n="); text.putdec(s_n);
+            text.puts(" net="); text.putdec(s_net);
+            text.puts(" kbd="); text.putdec(s_kbd);
+            text.puts(" cur="); text.putdec(s_cur);
+            text.puts(" ptr="); text.putdec(s_ptr);
+            text.puts(" cmp="); text.putdec(s_comp);
+            text.puts(" win="); text.putdec(s_win);
+            text.puts(" prs="); text.putdec(s_pres);
+            text.puts(" all="); text.putdec(s_loop); text.puts("\n");
+            s_net = 0; s_kbd = 0; s_cur = 0; s_ptr = 0;
+            s_comp = 0; s_win = 0; s_pres = 0; s_loop = 0; s_n = 0;
+        }
+        a = rdtsc();
         // NOT hlt — IF=0 here, hlt halts the CPU on the first iteration.
         asm volatile ("pause");
     }
