@@ -125,6 +125,7 @@ var flags: u32 = 0;
 var up: bool = false;
 var mac: [6]u8 = undefined;
 var link_up: bool = false;
+var nic: ?*const pci.Device = null; // kept for live command-reg reads + rearm
 
 const TX_N: usize = 32; // power of two — prod/cons mask directly
 const TX_BUFSZ: usize = 512;
@@ -338,6 +339,28 @@ pub fn linkIsUp() bool {
     return link_up;
 }
 
+// liveCommand: read the NIC's PCI command register NOW — BME (bit2, 0x4)
+// cleared = MMIO alive but DMA dead, the exact post-KMS wire-death split.
+pub fn liveCommand() u16 {
+    const d = nic orelse return 0;
+    return pci.command(d);
+}
+
+// rearm: re-assert MEM+BM, reset ring pointers, clear stale DD bits, and
+// re-run ringSetup — the 'netfix' experiment. If TX resumes after this,
+// the stall was a state/BME/power issue (fixable by re-arming post-modeset);
+// if not, the engine is held at a lower level (IOMMU/VT-d or reset-wedge).
+pub fn rearm() bool {
+    if (!up) return false;
+    const d = nic orelse return false;
+    pci.setCommand(d, pci.command(d) | 0x6);
+    tx_prod = 0;
+    tx_cons = 0;
+    for (tx_descs[0..]) |*dd| dd.status = 0;
+    ringSetup();
+    return true;
+}
+
 // tx: hand one Ethernet frame (14B header onward, no FCS — IFCS adds it)
 // to the ring. Polls the slot's DD bit before reuse; bounded wait, a
 // stuck descriptor reports false rather than hanging the caller.
@@ -433,6 +456,7 @@ pub fn init() bool {
         return false;
     };
     flags = f;
+    nic = d;
     diag.stage = 1;
     sayf("e1000e: {x}:{x}.{x} dev={x} class={x}/{x} flags={x}", .{ d.bus, d.slot, d.func, d.device, d.class, d.subclass, flags });
 

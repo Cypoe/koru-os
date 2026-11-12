@@ -194,6 +194,7 @@ pub const Status = struct {
     diag: e1000e.Diag,
     stats: e1000e.Stats,
     last_probe_ok: bool,
+    live_cmd: u16, // PCI command reg read NOW — bit2 (0x4) = bus-master/DMA
 };
 
 pub fn status() Status {
@@ -208,7 +209,17 @@ pub fn status() Status {
         .diag = e1000e.diagInfo(),
         .stats = e1000e.stats(),
         .last_probe_ok = e1000e.lastTxWaitOk(),
+        .live_cmd = e1000e.liveCommand(),
     };
+}
+
+// fixNet: the 'netfix' command — re-arm the TX path (BME+MemSpace, ring
+// reset, ringSetup) then probe whether a descriptor completes. true =
+// TX resumed (state issue, now fixed); false = engine held lower (IOMMU).
+pub fn fixNet() bool {
+    if (!up) return false;
+    if (!e1000e.rearm()) return false;
+    return sendMsg("netfix");
 }
 
 // sendUdp: arbitrary datagram for the shell 'udp' command — synchronous

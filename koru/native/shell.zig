@@ -154,6 +154,7 @@ fn dispatch() void {
         return;
     }
     if (eq("net")) { cmdNet(); return; }
+    if (eq("netfix")) { cmdNetFix(); return; }
     if (starts("udp ")) { cmdUdp(); return; }
     if (eq("frame") or starts("frame ")) { cmdFrame(); return; }
     if (starts("send ")) { cmdSend(); return; }
@@ -411,6 +412,19 @@ fn cmdNet() void {
     text.puts(" probe=");
     text.puts(if (s.last_probe_ok) "ok" else "none/fail");
     text.newline();
+    text.puts("  live cmd=");
+    puthex32(s.live_cmd);
+    text.puts(if ((s.live_cmd & 0x4) != 0) " (BM on)" else " (BM OFF!)");
+    text.newline();
+}
+
+fn cmdNetFix() void {
+    text.puts("netfix: re-arming TX ring + probing...\n");
+    if (net.fixNet()) {
+        text.puts("netfix: TX LIVE — descriptor completed\n");
+    } else {
+        text.puts("netfix: TX still dead — engine held below software\n");
+    }
 }
 // skip spaces from index i; returns new index or n
 fn skipSp(i: usize) usize {
