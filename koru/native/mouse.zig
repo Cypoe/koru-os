@@ -159,6 +159,13 @@ pub fn pop() ?kbd.InEv {
     return ev;
 }
 
+// authoritative button bitmask — the last decoded packet's btn bits.
+// Self-corrects on every packet, unlike an edge-count that desyncs on a
+// missed/duplicate transition and can latch `held` forever (dead input).
+pub fn buttons() u8 {
+    return prev_btns & 0x07;
+}
+
 // ---- packet assembler -----------------------------------------------------
 
 var pkt: [3]u8 = .{ 0, 0, 0 };

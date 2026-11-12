@@ -240,7 +240,9 @@ pub fn pos() Pos {
     return .{ .x = cx, .y = cy };
 }
 pub fn buttonsHeld() u32 {
-    return pressed_n;
+    // authoritative packet bitmask, not the drift-prone pressed_n count —
+    // a desynced count latches held=true and kills every later click.
+    return @intCast(@popCount(mouse.buttons()));
 }
 
 // ---- scene-compositor mode (MC-1) -----------------------------------------
