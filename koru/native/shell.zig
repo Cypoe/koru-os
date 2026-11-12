@@ -84,10 +84,11 @@ pub fn run() noreturn {
         if (present.takeConsoleReset()) redrawPrompt(); // console reallocated mid-line
         s_loop += rdtsc() - a;
         s_n += 1;
-        // breakdown emit — every ~0.5s TSC, dominant stage only.
-        // One short line: whichever tick ate the window's wall-time.
+        // breakdown emit — sparse now: every console line damages the
+        // root backing -> composite work -> self-inflicted drag jank.
+        // ~3s cadence keeps it readable without feeding the problem.
         const tn = rdtsc();
-        if (tn - s_last >= 0x40000000) {
+        if (tn - s_last >= 0x200000000) {
             s_last = tn;
             var hn: [*:0]const u8 = "net";
             var hv: u64 = s_net;

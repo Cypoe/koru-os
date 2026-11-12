@@ -439,7 +439,7 @@ fn flipTick() void {
     // + gpu climbing = render keeps up -> jank is input-side; low fps
     // = the flip/compositor path is the bottleneck.
     const tnow = rdtsc();
-    if (tnow - perf_last_tsc >= 0x80000000) { // ~1-2s at ~2-4GHz TSC
+    if (tnow - perf_last_tsc >= 0x400000000) { // ~7s — sparse: each line damages console
         const df = flip_count - perf_last_flips;
         const dt = tnow - perf_last_tsc;
         perf_last_flips = flip_count;
