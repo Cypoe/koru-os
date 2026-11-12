@@ -107,6 +107,12 @@ pub var build_n: u64 = 0;
 // region between paintFrame entry and the emit loop.
 pub var pre_tsc: u64 = 0;
 pub var pre_n: u64 = 0;
+// arm-call oracle — if this climbs ~1/frame, ready is false every
+// frame and the full GTT-alloc+ring-memset armInner runs per frame
+// (the ~24ms pre-loop). If it stays ~1, arm ran once and pr= is
+// measuring something else entirely.
+pub var arm_calls: u64 = 0;
+pub var arm_inner_calls: u64 = 0;
 
 fn rdtsc() u64 {
     var lo: u32 = undefined;
@@ -147,6 +153,7 @@ fn sayMark(comptime s: [*:0]const u8) void {
 // ---- one-time arm -------------------------------------------------------------
 
 fn arm() bool {
+    arm_calls += 1;
     if (ready) return true;
     // cheap gate first: no i915 device => CPU path forever, zero cost
     if (!kms.device().up) {
@@ -162,6 +169,7 @@ fn arm() bool {
 }
 
 fn armInner() bool {
+    arm_inner_calls += 1;
     if (!gt.ensureUp()) {
         arm_fail_msg = "gpucomp: engine power domains refused";
         return false;
