@@ -576,15 +576,18 @@ fn flipTick() void {
     const p0 = rdtsc();
     if (gpublt.paintFrame(b.handle, &b.acc)) {
         gpu_frames += 1;
-        const bw = @as(usize, @intCast(b.w));
-        const bh = @as(usize, @intCast(b.h));
-        const bp = @as(usize, @intCast(b.pitch));
+        // dense strided sample across the whole buffer — 24 sparse px
+        // missed the small window entirely (adv~0 artifact). ~400 samples
+        // guarantee the window/content region is hit -> true freshness.
+        const total = @as(usize, @intCast(b.pitch)) * @as(usize, @intCast(b.h));
+        const stride = @max(@as(usize, 1), total / 400);
         var sg: u64 = 0;
-        var si: usize = 0;
-        while (si < 24) : (si += 1) {
-            const gx = (si * 37 + 11) % bw;
-            const gy = (si * 53 + 7) % bh;
-            sg = sg *% 1099511628211 +% @as(u64, b.map[gy * bp + gx]);
+        var pi: usize = stride / 2;
+        var cnt: usize = 0;
+        while (pi < total and cnt < 400) {
+            sg = sg *% 1099511628211 +% @as(u64, b.map[pi]);
+            pi += stride;
+            cnt += 1;
         }
         if (sig_n > 0) { if (sg == sig_last) sig_same += 1 else sig_diff += 1; }
         sig_last = sg; sig_n += 1;
