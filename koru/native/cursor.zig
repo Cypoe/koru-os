@@ -47,6 +47,12 @@ var pkt_marked: bool = false;
 var drawn_gen: u64 = 0; // fb.generation() the sprite was last drawn on
 var diag_n: u64 = 0;   // cumulative motion events seen (wire stride)
 var edge_n: u64 = 0;   // clamp/edge markers emitted
+// motionDiag gates the per-motion sayU/net.mark diagnostics — they
+// dual-write serial (~87us/byte) AND UDP (submit can block TX_MAX_NS
+// on a stuck ring) every 16th motion event. During a drag that's
+// constant blocking I/O inside cursor.tick (measured 'hot cur').
+// Bring-up debug leftovers; off by default, flip for cursor hunts.
+pub var motionDiag: bool = false;
 
 // ensureInput — the shell path boots with fullBoot=false, so the doFull
 // init block (acpi/pci/ioapic/user/kbd/mouse/smp) never ran and
@@ -322,7 +328,7 @@ pub fn tick() bool {
     // First 8 motion ticks verbosely, then every 16th — enough to see the
     // erratic pattern without flooding the listener at packet rate.
     // Every clamp event is marked separately (edge hit = suspect).
-    if (moved) {
+    if (moved and motionDiag) {
         diag_n += evs;
         if (diag_n <= 8 or moves % 16 == 0)
             sayU("cursor:ev dx={d} dy={d} pre={d},{d} pos={d},{d} clamp={d}\n",
@@ -348,7 +354,7 @@ pub fn tick() bool {
     }
     // UDP mirror on a stride + always the first motion so the oracle sees
     // the cursor alive immediately without flooding the listener.
-    if (moved and (moves == 1 or moves % 16 == 0)) net.mark("cursor: move");
+    if (moved and motionDiag and (moves == 1 or moves % 16 == 0)) net.mark("cursor: move");
     return moved;
 }
 
