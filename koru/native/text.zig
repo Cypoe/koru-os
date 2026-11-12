@@ -4,8 +4,9 @@
 // Diagnostics-grade: one px call per lit dot — fine for console volumes.
 const fb = @import("fb.zig");
 
-const CW: u32 = 9; // 8px glyph + 1px spacing
-const CH: u32 = 9; // 8px glyph + 1px leading
+const SCALE: u32 = 2; // glyph pixel -> SCALE x SCALE block (panel legibility)
+const CW: u32 = 8 * SCALE + 1;  // glyph + spacing
+const CH: u32 = 8 * SCALE + 2;  // glyph + leading
 
 const BLANK = [8]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
@@ -144,7 +145,14 @@ fn glyphAt(x: u32, y: u32, g: u8) void {
         var c: usize = 0;
         while (c < 8) : (c += 1) {
             if (((bits >> @intCast(c)) & 1) != 0) {
-                putPxS(x + @as(u32, @intCast(c)), y + @as(u32, @intCast(r)), fg);
+                const bx = x + @as(u32, @intCast(c)) * SCALE;
+                const by = y + @as(u32, @intCast(r)) * SCALE;
+                var dy: u32 = 0;
+                while (dy < SCALE) : (dy += 1) {
+                    var dx: u32 = 0;
+                    while (dx < SCALE) : (dx += 1)
+                        putPxS(bx + dx, by + dy, fg);
+                }
             }
         }
     }

@@ -84,19 +84,22 @@ pub fn run() noreturn {
         if (present.takeConsoleReset()) redrawPrompt(); // console reallocated mid-line
         s_loop += rdtsc() - a;
         s_n += 1;
-        // breakdown emit — every ~0.5s TSC, per-stage busy tsc + iters
+        // breakdown emit — every ~0.5s TSC, dominant stage only.
+        // One short line: whichever tick ate the window's wall-time.
         const tn = rdtsc();
         if (tn - s_last >= 0x40000000) {
             s_last = tn;
-            text.puts("loop n="); text.putdec(s_n);
-            text.puts(" net="); text.putdec(s_net);
-            text.puts(" kbd="); text.putdec(s_kbd);
-            text.puts(" cur="); text.putdec(s_cur);
-            text.puts(" ptr="); text.putdec(s_ptr);
-            text.puts(" cmp="); text.putdec(s_comp);
-            text.puts(" win="); text.putdec(s_win);
-            text.puts(" prs="); text.putdec(s_pres);
-            text.puts(" all="); text.putdec(s_loop); text.puts("\n");
+            var hn: [*:0]const u8 = "net";
+            var hv: u64 = s_net;
+            if (s_kbd > hv)  { hn = "kbd"; hv = s_kbd; }
+            if (s_cur > hv)  { hn = "cur"; hv = s_cur; }
+            if (s_ptr > hv)  { hn = "ptr"; hv = s_ptr; }
+            if (s_comp > hv) { hn = "cmp"; hv = s_comp; }
+            if (s_win > hv)  { hn = "win"; hv = s_win; }
+            if (s_pres > hv) { hn = "prs"; hv = s_pres; }
+            text.puts("hot "); text.puts(hn);
+            text.puts(" "); text.putdec(hv);
+            text.puts(" n="); text.putdec(s_n); text.puts("\n");
             s_net = 0; s_kbd = 0; s_cur = 0; s_ptr = 0;
             s_comp = 0; s_win = 0; s_pres = 0; s_loop = 0; s_n = 0;
         }
