@@ -104,6 +104,13 @@ var flip_gave_up: bool = false; // latched until next gen change
 var flip_count: u64 = 0;
 var gpu_frames: u64 = 0; // frames composited via BCS blits
 var cpu_frames: u64 = 0; // frames CPU-composited (named fallback)
+// frame-content-advance oracle — sparse pixel signature of each
+// composite; adv% = flips showing NEW pixels. f counts flips ISSUED;
+// if adv is low the flips re-display stale buffers (hollow fps).
+var sig_last: u64 = 0;
+var sig_same: u64 = 0;
+var sig_diff: u64 = 0;
+var sig_n: u64 = 0;
 var paint_count: u64 = 0;
 var pre_scanout: ?u32 = null; // foreign scanout to retire after first flip
 
@@ -470,7 +477,8 @@ fn flipTick() void {
         text.puts(" x2="); text.putdec(if (d_pn == 0) 0 else d_x2 / d_pn);
         text.puts(" x3="); text.putdec(if (d_pn == 0) 0 else d_x3 / d_pn);
         text.puts(" gpu="); text.putdec(d_gpu);
-        text.puts(" cpu="); text.putdec(d_cpu); text.puts("\n");
+        text.puts(" cpu="); text.putdec(d_cpu);
+        text.puts(" adv="); text.putdec(if (sig_n <= 1) 0 else sig_diff * 100 / (sig_same + sig_diff)); text.puts("\n");
     }
     // vblank oracle FIRST: any latched DE event means >=1 vblank passed
     // since the last drain — an armed flip has landed, the old front is
@@ -568,6 +576,18 @@ fn flipTick() void {
     const p0 = rdtsc();
     if (gpublt.paintFrame(b.handle, &b.acc)) {
         gpu_frames += 1;
+        const bw = @as(usize, @intCast(b.w));
+        const bh = @as(usize, @intCast(b.h));
+        const bp = @as(usize, @intCast(b.pitch));
+        var sg: u64 = 0;
+        var si: usize = 0;
+        while (si < 24) : (si += 1) {
+            const gx = (si * 37 + 11) % bw;
+            const gy = (si * 53 + 7) % bh;
+            sg = sg *% 1099511628211 +% @as(u64, b.map[gy * bp + gx]);
+        }
+        if (sig_n > 0) { if (sg == sig_last) sig_same += 1 else sig_diff += 1; }
+        sig_last = sg; sig_n += 1;
     } else {
         comp.compositeAcc(&t, &b.acc);
         cpu_frames += 1;
