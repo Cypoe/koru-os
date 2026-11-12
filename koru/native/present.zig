@@ -63,6 +63,27 @@ var vb_emit_n: u64 = 0;   // ticks since last vb: telemetry line
 var vb_last_flips: u64 = 0; // flip_count at last emit — +f delta = fps
 var perf_last_flips: u64 = 0;
 var perf_last_tsc: u64 = 0;
+// per-window delta snapshots — cumulative counters (incl. the one-time
+// armInner inside paintFrame's pre-loop) inflate lifetime averages; deltas
+// isolate steady-state per-frame cost.
+var d_pt: u64 = 0; var d_pn: u64 = 0;
+var d_fw: u64 = 0; var d_fn: u64 = 0;
+var d_bd: u64 = 0; var d_bn: u64 = 0;
+var d_pr: u64 = 0; var d_rn: u64 = 0;
+var d_fe: u64 = 0; var d_en: u64 = 0;
+var d_sb: u64 = 0; var d_sn: u64 = 0;
+var d_x1: u64 = 0; var d_x2: u64 = 0; var d_x3: u64 = 0;
+var d_iq: u64 = 0; var d_fb: u64 = 0; var d_ec: u64 = 0;
+var d_gpu: u64 = 0; var d_cpu: u64 = 0;
+var l_pt: u64 = 0; var l_pn: u64 = 0;
+var l_fw: u64 = 0; var l_fn: u64 = 0;
+var l_bd: u64 = 0; var l_bn: u64 = 0;
+var l_pr: u64 = 0; var l_rn: u64 = 0;
+var l_fe: u64 = 0; var l_en: u64 = 0;
+var l_sb: u64 = 0; var l_sn: u64 = 0;
+var l_x1: u64 = 0; var l_x2: u64 = 0; var l_x3: u64 = 0;
+var l_iq: u64 = 0; var l_fb: u64 = 0; var l_ec: u64 = 0;
+var l_gpu: u64 = 0; var l_cpu: u64 = 0;
 var paint_tsc: u64 = 0;   // cumulative rdtsc inside paintFrame
 var paint_n: u64 = 0;     // paintFrame calls — avg = paint_tsc/paint_n
 var paint_min: u64 = ~@as(u64, 0); // best-case paintFrame — separates compute from stall
@@ -390,26 +411,40 @@ fn flipTick() void {
         const dt = tnow - perf_last_tsc;
         perf_last_flips = flip_count;
         perf_last_tsc = tnow;
+        // per-window deltas — steady-state cost, armInner amortization removed
+        d_pt = paint_tsc - l_pt; d_pn = paint_n - l_pn; l_pt = paint_tsc; l_pn = paint_n;
+        d_fw = gpublt.fw_tsc - l_fw; d_fn = gpublt.fw_n - l_fn; l_fw = gpublt.fw_tsc; l_fn = gpublt.fw_n;
+        d_bd = gpublt.build_tsc - l_bd; d_bn = gpublt.build_n - l_bn; l_bd = gpublt.build_tsc; l_bn = gpublt.build_n;
+        d_pr = gpublt.pre_tsc - l_pr; d_rn = gpublt.pre_n - l_rn; l_pr = gpublt.pre_tsc; l_rn = gpublt.pre_n;
+        d_fe = gpublt.fe_tsc - l_fe; d_en = gpublt.fe_n - l_en; l_fe = gpublt.fe_tsc; l_en = gpublt.fe_n;
+        d_sb = gpublt.sb_tsc - l_sb; d_sn = gpublt.sb_n - l_sn; l_sb = gpublt.sb_tsc; l_sn = gpublt.sb_n;
+        d_x1 = gpublt.px1 - l_x1; d_x2 = gpublt.px2 - l_x2; d_x3 = gpublt.px3 - l_x3;
+        l_x1 = gpublt.px1; l_x2 = gpublt.px2; l_x3 = gpublt.px3;
+        d_iq = gpublt.irq_during - l_iq; l_iq = gpublt.irq_during;
+        d_fb = gpublt.flush_bytes - l_fb; l_fb = gpublt.flush_bytes;
+        d_ec = gpublt.emit_count - l_ec; l_ec = gpublt.emit_count;
+        d_gpu = gpu_frames - l_gpu; l_gpu = gpu_frames;
+        d_cpu = cpu_frames - l_cpu; l_cpu = cpu_frames;
         text.puts("perf f="); text.putdec(df);
         text.puts(" t="); text.putdec(dt);
         text.puts(" to="); text.putdec(timeout_clears);
-        text.puts(" pt="); text.putdec(if (paint_n == 0) 0 else paint_tsc / paint_n);
+        text.puts(" pt="); text.putdec(if (d_pn == 0) 0 else d_pt / d_pn);
         text.puts(" pm="); text.putdec(paint_min);
-        text.puts(" fw="); text.putdec(if (gpublt.fw_n == 0) 0 else gpublt.fw_tsc / gpublt.fw_n);
-        text.puts(" fb="); text.putdec(gpublt.flush_bytes);
-        text.puts(" ec="); text.putdec(gpublt.emit_count);
-        text.puts(" bd="); text.putdec(if (gpublt.build_n == 0) 0 else gpublt.build_tsc / gpublt.build_n);
-        text.puts(" pr="); text.putdec(if (gpublt.pre_n == 0) 0 else gpublt.pre_tsc / gpublt.pre_n);
+        text.puts(" fw="); text.putdec(if (d_fn == 0) 0 else d_fw / d_fn);
+        text.puts(" fb="); text.putdec(d_fb);
+        text.puts(" ec="); text.putdec(d_ec);
+        text.puts(" bd="); text.putdec(if (d_bn == 0) 0 else d_bd / d_bn);
+        text.puts(" pr="); text.putdec(if (d_rn == 0) 0 else d_pr / d_rn);
         text.puts(" ac="); text.putdec(gpublt.arm_calls);
         text.puts(" ai="); text.putdec(gpublt.arm_inner_calls);
-        text.puts(" iq="); text.putdec(if (paint_n == 0) 0 else gpublt.irq_during * 100 / paint_n);
-        text.puts(" fe="); text.putdec(if (gpublt.fe_n == 0) 0 else gpublt.fe_tsc / gpublt.fe_n);
-        text.puts(" sb="); text.putdec(if (gpublt.sb_n == 0) 0 else gpublt.sb_tsc / gpublt.sb_n);
-        text.puts(" x1="); text.putdec(if (paint_n == 0) 0 else gpublt.px1 / paint_n);
-        text.puts(" x2="); text.putdec(if (paint_n == 0) 0 else gpublt.px2 / paint_n);
-        text.puts(" x3="); text.putdec(if (paint_n == 0) 0 else gpublt.px3 / paint_n);
-        text.puts(" gpu="); text.putdec(gpu_frames);
-        text.puts(" cpu="); text.putdec(cpu_frames); text.puts("\n");
+        text.puts(" iq="); text.putdec(if (d_pn == 0) 0 else d_iq * 100 / d_pn);
+        text.puts(" fe="); text.putdec(if (d_en == 0) 0 else d_fe / d_en);
+        text.puts(" sb="); text.putdec(if (d_sn == 0) 0 else d_sb / d_sn);
+        text.puts(" x1="); text.putdec(if (d_pn == 0) 0 else d_x1 / d_pn);
+        text.puts(" x2="); text.putdec(if (d_pn == 0) 0 else d_x2 / d_pn);
+        text.puts(" x3="); text.putdec(if (d_pn == 0) 0 else d_x3 / d_pn);
+        text.puts(" gpu="); text.putdec(d_gpu);
+        text.puts(" cpu="); text.putdec(d_cpu); text.puts("\n");
     }
     // vblank oracle FIRST: any latched DE event means >=1 vblank passed
     // since the last drain — an armed flip has landed, the old front is
