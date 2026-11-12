@@ -118,6 +118,12 @@ pub var arm_inner_calls: u64 = 0;
 // paintFrame compute ~4us but ~15-38ms wall: if ~every call has an IRQ
 // landing inside, interrupt preemption IS the deschedule.
 pub var irq_during: u64 = 0;
+// fe/sb — finishBatch+emitFence and submit() totals; closes the
+// paintFrame accounting: pt = pr + bd + fe + sb, and sb = nonfence + fw.
+pub var fe_tsc: u64 = 0;
+pub var fe_n: u64 = 0;
+pub var sb_tsc: u64 = 0;
+pub var sb_n: u64 = 0;
 
 fn rdtsc() u64 {
     var lo: u32 = undefined;
@@ -565,9 +571,15 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
     build_tsc += rdtsc() - b0;
     build_n += 1;
 
+    const f0 = rdtsc();
     if (ok) ok = finishBatch();
     if (ok) ok = emitFence();
+    fe_tsc += rdtsc() - f0;
+    fe_n += 1;
+    const s0 = rdtsc();
     if (ok) ok = submit();
+    sb_tsc += rdtsc() - s0;
+    sb_n += 1;
     if (!ok) {
         fail_count += 1;
         if (fail_count == 1 or fail_count % 32 == 0)
