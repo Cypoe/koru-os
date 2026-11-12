@@ -174,6 +174,13 @@ fn udpSend(payload: []const u8) bool {
     return udpSendTo(DST_IP, DST_PORT, &EN8_MAC, payload, false);
 }
 
+// udpSendBc: telemetry broadcast — any listener on the subnet receives it,
+// no dependence on the hardcoded en8 unicast MAC/IP being right. Fire-
+// and-forget (probe=false) so it can never stall the compositor.
+fn udpSendBc(payload: []const u8) bool {
+    return udpSendTo(BCAST_IP, DST_PORT, &BCAST_MAC, payload, false);
+}
+
 // ---- shell-facing surface ----------------------------------------------------
 
 pub const Status = struct {
@@ -244,7 +251,7 @@ pub fn peekMsg(msg: []const u8) ?[]const u8 {
 // here (via its udpMirror hook) so the wire log IS the screen log.
 pub fn mirror(line: []const u8) void {
     if (!up or line.len == 0) return;
-    _ = udpSendTo(DST_IP, DST_PORT, &EN8_MAC, line, false);
+    _ = udpSendBc(line);
 }
 
 // heartbeat: "KORU hb" every 10s while the shell loop ticks — distinguishes
@@ -264,7 +271,7 @@ pub fn mark(comptime tag: []const u8) void {
     if (!up) return;
     var msg: [448]u8 = undefined;
     const s = std.fmt.bufPrint(&msg, "KORU {s}", .{tag}) catch return;
-    if (udpSend(s)) {
+    if (udpSendBc(s)) {
         sayf("net: -> {s}", .{s});
     } else {
         sayf("net: TX FAILED {s}", .{s});

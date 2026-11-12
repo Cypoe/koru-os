@@ -147,6 +147,7 @@ var tx_cons: usize = 0;
 var tx_sent: u64 = 0;
 var tx_completed: u64 = 0;
 var tx_failed: u64 = 0;
+var tx_dropped: u64 = 0; // ring-full drops — dead-NIC signal, non-blocking
 var last_tx_wait_ok: bool = false; // result of the most recent synchronous probe
 
 // diag: what init actually did, for the shell 'net' command and the
@@ -167,9 +168,9 @@ var diag: Diag = .{};
 pub fn diagInfo() Diag {
     return diag;
 }
-pub const Stats = struct { sent: u64, completed: u64, failed: u64 };
+pub const Stats = struct { sent: u64, completed: u64, failed: u64, dropped: u64 };
 pub fn stats() Stats {
-    return .{ .sent = tx_sent, .completed = tx_completed, .failed = tx_failed };
+    return .{ .sent = tx_sent, .completed = tx_completed, .failed = tx_failed, .dropped = tx_dropped };
 }
 
 fn rd(off: usize) u32 {
@@ -349,16 +350,13 @@ fn submit(frame: []const u8) ?usize {
         return null;
     }
     if (tx_prod - tx_cons >= TX_N) {
-        // ring full — wait for the oldest descriptor to complete
+        // ring full — poll the oldest DD bit ONCE, non-blocking. Telemetry
+        // is fire-and-forget: a dead NIC (DD never sets post-KMS) must
+        // drop packets, never spin 50ms per call and stall the compositor.
         const dv: *volatile Desc = @ptrCast(&tx_descs[tx_cons & (TX_N - 1)]);
-        const t0 = ukplat_monotonic_clock();
-        while (dv.status & DESC_STATUS_DD == 0) {
-            if (ukplat_monotonic_clock() - t0 > TX_MAX_NS) {
-                say("e1000e: tx ring stuck — descriptor never completed\n");
-                tx_failed += 1;
-                return null;
-            }
-            asm volatile ("pause");
+        if (dv.status & DESC_STATUS_DD == 0) {
+            tx_dropped += 1;
+            return null;
         }
         dv.status = 0;
         tx_cons += 1;
