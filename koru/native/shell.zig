@@ -192,6 +192,7 @@ pub fn run() noreturn {
         s_comp += rdtsc() - a; a = rdtsc();
         win.tick();       // kwin: focus-titlebar repaints -> damage
         s_win += rdtsc() - a; a = rdtsc();
+        if (runtime.prog_pump) |cb| cb(); // program frame pump — damage before present
         present.tick();   // drain damage -> composite -> present (A or B)
         s_pres += rdtsc() - a; a = rdtsc();
         if (present.takeConsoleReset()) redrawPrompt(); // console reallocated mid-line

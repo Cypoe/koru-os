@@ -93,44 +93,52 @@ pub const main_module = struct {
     const std = @import("std");
     extern var stdout: ?*anyopaque;
     extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+    extern fn koru_pump_set(cb: ?*const fn () callconv(.c) void) callconv(.c) void;
     fn say(s: [*:0]const u8) void {
         _ = fputs(s, stdout);
+    }
+    var pump_s: ?*anyopaque = null;
+    var pump_n: u32 = 0;
+    fn pumpTick() callconv(.c) void {
+        pump_n +%= 1;
+        const s = pump_s orelse return;
+        const S = koru_koruos.koru_surface;
+        const shade = @as(u32, pump_n & 0xFF);
+        _ = S.fill_event.handler(.{
+            .surface = @ptrCast(s),
+            .x = 0, .y = 0, .w = 12, .h = 12,
+            .color = 0x00C00000 | (shade << 16),
+        });
+        _ = S.present_event.handler(.{
+            .surface = @ptrCast(s),
+            .x = 0, .y = 0, .w = 12, .h = 12,
+        });
+        if (pump_n % 120 == 0) say("PUMP TICK\n");
     }
     pub const run_event = struct {
         pub const Input = struct {
         };
         pub const Output = []const u8;
         pub fn handler(__koru_event_input: @This().Input) @This().Output {
-            // >>> PROC: run  [surf_demo.kz:26]
+            // >>> PROC: run  [surf_pump.kz:50]
             _ = &__koru_event_input;
 
                 const S = koru_koruos.koru_surface;
-                const s0 = switch (S.open_event.handler(.{ .width = 220, .height = 140 })) {
+                const s0 = switch (S.open_event.handler(.{ .width = 200, .height = 120 })) {
                     .ok => |r| r.surface,
                     .refused => |e| return e,
                 };
-                _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 220, .h = 140, .color = 0x00202830 });
-                _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 220, .h = 24, .color = 0x004080C0 });
-                _ = S.fill_event.handler(.{ .surface = s0, .x = 10, .y = 36, .w = 90, .h = 80, .color = 0x00D04030 });
-                _ = S.fill_event.handler(.{ .surface = s0, .x = 110, .y = 36, .w = 90, .h = 80, .color = 0x0030A050 });
-                _ = S.fill_event.handler(.{ .surface = s0, .x = 10, .y = 124, .w = 200, .h = 10, .color = 0x00D0C030 });
-                _ = S.present_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 220, .h = 140 });
-                say("SURF LIVE 0 up\n");
-
-                const s1 = switch (S.open_event.handler(.{ .width = 160, .height = 110 })) {
-                    .ok => |r| r.surface,
-                    .refused => |e| return e,
-                };
-                _ = S.fill_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 110, .color = 0x00301828 });
-                _ = S.fill_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 22, .color = 0x00A050D0 });
-                _ = S.fill_event.handler(.{ .surface = s1, .x = 12, .y = 32, .w = 136, .h = 60, .color = 0x00E0D030 });
-                _ = S.present_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 110 });
-                say("SURF LIVE 1 up\n");
-                return "SURF LIVE — 2 surfaces open";
+                _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 200, .h = 120, .color = 0x00202830 });
+                _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 200, .h = 24, .color = 0x004080C0 });
+                _ = S.present_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 200, .h = 24 });
+                pump_s = @ptrCast(s0);
+                koru_pump_set(pumpTick);
+                say("PUMP ARMED\n");
+                return "PUMP LIVE — per-tick callback registered";
 
         }
     };
-    // >>> FLOW: surf_demo.kz:52  ~surf_demo:run()
+    // >>> FLOW: surf_pump.kz:65  ~surf_pump:run()
     pub fn flow0() void {
         const r = main_module.run_event.handler(.{  });
         (struct { fn __kout(__fd: i32, __b: []const u8) void { if (@import("builtin").os.tag == .freestanding) { const __kc = struct { extern var stdout: ?*anyopaque; extern var stderr: ?*anyopaque; extern fn fputs(__s: [*:0]const u8, __st: ?*anyopaque) c_int; }; var __kt: [4096]u8 = undefined; for (0..(__b.len + __kt.len - 2) / (__kt.len - 1)) |__ki| { const __kn = @min(__kt.len - 1, __b.len - __ki * (__kt.len - 1)); @memcpy(__kt[0..__kn], __b[__ki * (__kt.len - 1)..][0..__kn]); __kt[__kn] = 0; @import("std").mem.doNotOptimizeAway(__kc.fputs(@as([*:0]const u8, @ptrCast(&__kt)), if (__fd == 2) __kc.stderr else __kc.stdout)); } } else if (@import("builtin").os.tag == .windows) { const __wh = @import("std").os.windows.GetStdHandle(if (__fd == 2) @import("std").os.windows.STD_ERROR_HANDLE else @import("std").os.windows.STD_OUTPUT_HANDLE) catch return; @import("std").mem.doNotOptimizeAway(@import("std").os.windows.WriteFile(__wh, __b, null) catch @as(usize, 0)); } else { @import("std").mem.doNotOptimizeAway(@import("std").posix.write(__fd, __b) catch @as(usize, 0)); } } fn __kw(comptime __f: []const u8, __a: anytype) void { var __kb: [65536]u8 = undefined; const __ks = @import("std").fmt.bufPrint(&__kb, __f, __a) catch __kb[0..0]; __kout(1, __ks); } }).__kw("{s}\n", .{r});

@@ -65,6 +65,18 @@ pub export var stderr: ?*anyopaque = @ptrFromInt(2);
 // COM1 has no attached serial. Null in single-program images -> serial only.
 pub var wire_sink: ?*const fn (s: [*]const u8, n: usize) void = null;
 
+// prog_pump — a Koru program registers a per-shell-tick callback through
+// the extern `koru_pump_set` (declared by the program's |zig host code).
+// shell.run invokes it between win.tick and present.tick so producer
+// damage lands in the same frame's composite — the producer<->compositor
+// pump an event-driven program (oshun host) needs; prog.main() itself
+// stays synchronous inside dispatch.
+pub var prog_pump: ?*const fn () callconv(.c) void = null;
+
+pub export fn koru_pump_set(cb: ?*const fn () callconv(.c) void) callconv(.c) void {
+    prog_pump = cb;
+}
+
 fn mirrorWire(s: [*]const u8, n: usize) void {
     if (wire_sink) |m| m(s, n);
 }

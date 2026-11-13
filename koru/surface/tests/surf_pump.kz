@@ -1,0 +1,64 @@
+// surf_pump — the producer<->compositor pump probe. run() opens a surface
+// and registers a per-shell-tick callback through extern koru_pump_set;
+// shell.run invokes it between win.tick and present.tick so each tick's
+// fill+present damage lands in the same frame's composite. The callback
+// animates a marker block (rotating shade) and says PUMP TICK every 120
+// ticks — wire-visible proof the program is alive per-frame after
+// prog.main() returned, which is the seam an event-driven oshun host
+// (host.run/frames) will ride.
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/native
+~import koruos/surface
+~import std/io
+
+const std = @import("std");
+
+extern var stdout: ?*anyopaque;
+extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+extern fn koru_pump_set(cb: ?*const fn () callconv(.c) void) callconv(.c) void;
+fn say(s: [*:0]const u8) void {
+    _ = fputs(s, stdout);
+}
+
+var pump_s: ?*anyopaque = null;
+var pump_n: u32 = 0;
+
+fn pumpTick() callconv(.c) void {
+    pump_n +%= 1;
+    const s = pump_s orelse return;
+    const S = koru_koruos.koru_surface;
+    const shade = @as(u32, pump_n & 0xFF);
+    _ = S.fill_event.handler(.{
+        .surface = @ptrCast(s),
+        .x = 0, .y = 0, .w = 12, .h = 12,
+        .color = 0x00C00000 | (shade << 16),
+    });
+    _ = S.present_event.handler(.{
+        .surface = @ptrCast(s),
+        .x = 0, .y = 0, .w = 12, .h = 12,
+    });
+    if (pump_n % 120 == 0) say("PUMP TICK\n");
+}
+
+~pub tor run {} -> string
+
+~proc run|zig {
+    const S = koru_koruos.koru_surface;
+    const s0 = switch (S.open_event.handler(.{ .width = 200, .height = 120 })) {
+        .ok => |r| r.surface,
+        .refused => |e| return e,
+    };
+    _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 200, .h = 120, .color = 0x00202830 });
+    _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 200, .h = 24, .color = 0x004080C0 });
+    _ = S.present_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 200, .h = 24 });
+    pump_s = @ptrCast(s0);
+    koru_pump_set(pumpTick);
+    say("PUMP ARMED\n");
+    return "PUMP LIVE — per-tick callback registered";
+}
+
+~run(): r |> std/io:print.ln("{{ r:s }}")
