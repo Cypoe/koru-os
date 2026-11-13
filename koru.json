@@ -3,7 +3,6 @@
   "version": "0.0.1",
   "description": "Koru OS — platform namespace: arms, realize rows, native providers",
   "paths": {
-    "std": "../koru/koru_std",
     "koruos": "./koru",
     "koru": "../koru-libs",
     "libs": "../koru-libs"

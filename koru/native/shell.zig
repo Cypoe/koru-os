@@ -12,6 +12,7 @@ const win = @import("win.zig");
 const comp = @import("comp");
 const present = @import("present.zig");
 const surf = @import("surf.zig");
+const prog = @import("program");
 const hwprobe = @import("hwprobe.zig");
 const xhci = @import("xhci.zig");
 const net = @import("net");
@@ -153,7 +154,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n  gcomp\n  verbose\n  ksurf\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n  gcomp\n  verbose\n  ksurf\n  kprog\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -165,6 +166,7 @@ fn dispatch() void {
         return;
     }
     if (eq("ksurf")) { cmdKsurf(); return; }
+    if (eq("kprog")) { prog.main(); text.puts("kprog: program returned\n"); return; }
     if (starts("udp ")) { cmdUdp(); return; }
     if (eq("frame") or starts("frame ")) { cmdFrame(); return; }
     if (starts("send ")) { cmdSend(); return; }

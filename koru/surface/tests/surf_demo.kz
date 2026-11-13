@@ -1,0 +1,51 @@
+// surf_demo — a Koru program that opens koruos/surface layers, fills
+// them with distinct colors, presents the damage, and RETURNS leaving
+// them open — the persistent-surfaces variant of boot_surf for the
+// consoleMode shell path (no hlt spins, no closes; present() only queues
+// damage which present.tick drains on the next shell tick).
+
+~std/compiler:paths {
+    koruos: {{ ENTRY }}/../..
+}
+
+~import koruos/native
+~import koruos/surface
+~import std/io
+
+const std = @import("std");
+
+extern var stdout: ?*anyopaque;
+extern fn fputs(s: [*:0]const u8, st: ?*anyopaque) callconv(.c) c_int;
+fn say(s: [*:0]const u8) void {
+    _ = fputs(s, stdout);
+}
+
+~pub tor run {} -> string
+
+~proc run|zig {
+    const S = koru_koruos.koru_surface;
+    const s0 = switch (S.open_event.handler(.{ .width = 220, .height = 140 })) {
+        .ok => |r| r.surface,
+        .refused => |e| return e,
+    };
+    _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 220, .h = 140, .color = 0x00202830 });
+    _ = S.fill_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 220, .h = 24, .color = 0x004080C0 });
+    _ = S.fill_event.handler(.{ .surface = s0, .x = 10, .y = 36, .w = 90, .h = 80, .color = 0x00D04030 });
+    _ = S.fill_event.handler(.{ .surface = s0, .x = 110, .y = 36, .w = 90, .h = 80, .color = 0x0030A050 });
+    _ = S.fill_event.handler(.{ .surface = s0, .x = 10, .y = 124, .w = 200, .h = 10, .color = 0x00D0C030 });
+    _ = S.present_event.handler(.{ .surface = s0, .x = 0, .y = 0, .w = 220, .h = 140 });
+    say("SURF LIVE 0 up\n");
+
+    const s1 = switch (S.open_event.handler(.{ .width = 160, .height = 110 })) {
+        .ok => |r| r.surface,
+        .refused => |e| return e,
+    };
+    _ = S.fill_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 110, .color = 0x00301828 });
+    _ = S.fill_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 22, .color = 0x00A050D0 });
+    _ = S.fill_event.handler(.{ .surface = s1, .x = 12, .y = 32, .w = 136, .h = 60, .color = 0x00E0D030 });
+    _ = S.present_event.handler(.{ .surface = s1, .x = 0, .y = 0, .w = 160, .h = 110 });
+    say("SURF LIVE 1 up\n");
+    return "SURF LIVE — 2 surfaces open";
+}
+
+~run(): r |> std/io:print.ln("{{ r:s }}")

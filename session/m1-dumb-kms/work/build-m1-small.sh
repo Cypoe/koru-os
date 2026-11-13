@@ -38,7 +38,7 @@ EOF
     -Macpi="$ROOT/koru/native/acpi.zig" \
     --dep acpi --dep mmio --dep pci -Mioapic="$ROOT/koru/native/ioapic.zig" \
     --dep pmm --dep mmio --dep acpi -Msmp="$ROOT/koru/native/smp.zig" \
-    --dep compiler_env -Mprogram="$ROOT/koru/fb/tests/output_emitted.zig" \
+    --dep compiler_env -Mprogram="$ROOT/koru/surface/tests/output_emitted.zig" \
     -Mcompiler_env="$ROOT/koru/native/compiler_env.zig" \
     -Mruntime="$ROOT/koru/native/runtime.zig" \
     -Mpci="$ROOT/koru/native/pci.zig" \
