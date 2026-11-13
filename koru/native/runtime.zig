@@ -59,6 +59,38 @@ pub export fn serPut(c: u8) callconv(.c) void {
 pub export var stdout: ?*anyopaque = @ptrFromInt(1);
 pub export var stderr: ?*anyopaque = @ptrFromInt(2);
 
+// wire_sink — optional mirror for program console output. The interactive
+// native image sets this to route program bytes to the UDP telemetry wire
+// (net.mirror) so Koru-program output is observable on real hardware where
+// COM1 has no attached serial. Null in single-program images -> serial only.
+pub var wire_sink: ?*const fn (s: [*]const u8, n: usize) void = null;
+
+fn mirrorWire(s: [*]const u8, n: usize) void {
+    if (wire_sink) |m| m(s, n);
+}
+
+// fputc emits one char at a time — mirror it through a line buffer flushed
+// on '\n' (or when full) so char-wise print paths still reach the wire
+// without one datagram per character.
+var wc_buf: [256]u8 = undefined;
+var wc_len: usize = 0;
+
+fn wcFlush() void {
+    if (wc_len == 0) return;
+    mirrorWire(wc_buf[0..wc_len].ptr, wc_len);
+    wc_len = 0;
+}
+
+fn wcPut(ch: u8) void {
+    if (ch == '\n') {
+        wcFlush();
+        return;
+    }
+    if (wc_len >= wc_buf.len) wcFlush();
+    wc_buf[wc_len] = ch;
+    wc_len += 1;
+}
+
 pub export fn fputs(s: [*:0]const u8, stream: ?*anyopaque) callconv(.c) c_int {
     _ = stream;
     serInit();
@@ -67,6 +99,8 @@ pub export fn fputs(s: [*:0]const u8, stream: ?*anyopaque) callconv(.c) c_int {
         if (s[n] == '\n') serPut('\r');
         serPut(s[n]);
     }
+    wcFlush(); // ordered before this string's mirror
+    mirrorWire(s, n);
     return @intCast(n);
 }
 
@@ -77,6 +111,7 @@ pub export fn fputc(c: c_int, stream: ?*anyopaque) callconv(.c) c_int {
     const ch: u8 = @intCast(@as(u32, @bitCast(c)) & 0xFF);
     if (ch == '\n') serPut('\r');
     serPut(ch);
+    wcPut(if (ch == '\r') '\n' else ch);
     return c;
 }
 
@@ -89,6 +124,8 @@ pub export fn write(fd: c_int, buf: [*]const u8, n: usize) callconv(.c) isize {
         if (buf[i] == '\n') serPut('\r');
         serPut(buf[i]);
     }
+    wcFlush();
+    mirrorWire(buf, n);
     return @intCast(n);
 }
 
@@ -102,6 +139,8 @@ pub export fn fwrite(ptr: [*]const u8, size: usize, nmemb: usize, stream: ?*anyo
         if (ptr[i] == '\n') serPut('\r');
         serPut(ptr[i]);
     }
+    wcFlush();
+    mirrorWire(ptr, n);
     return nmemb;
 }
 
