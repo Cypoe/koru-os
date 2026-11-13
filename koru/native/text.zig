@@ -10,6 +10,14 @@ const CH: u32 = 8 * SCALE + 2;  // glyph + leading
 
 const BLANK = [8]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
+// koru_glyph8 — program-side text rendering reads the same font the
+// console does (libs/metal draw.text on koru-native). ch indexes ASCII
+// (& 0x7F, same masking putc uses); row is 0..7; bit7 is the leftmost
+// pixel. One source of truth for the face — no duplicated table.
+pub export fn koru_glyph8(ch: u8, row: u8) callconv(.c) u8 {
+    return font[ch & 0x7F][row & 7];
+}
+
 pub const font: [128][8]u8 = .{
     BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, // 0-7
     BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, BLANK, // 8-15

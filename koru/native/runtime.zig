@@ -77,6 +77,14 @@ pub export fn koru_pump_set(cb: ?*const fn () callconv(.c) void) callconv(.c) vo
     prog_pump = cb;
 }
 
+// koru_wire — raw byte mirror for program telemetry that isn't line
+// text (libs/metal's window.snap pixel samples). Same sink program
+// stdout uses; callers send their own encoding so binary never has to
+// survive the line buffer.
+pub export fn koru_wire(s: [*]const u8, n: usize) callconv(.c) void {
+    mirrorWire(s, n);
+}
+
 fn mirrorWire(s: [*]const u8, n: usize) void {
     if (wire_sink) |m| m(s, n);
 }

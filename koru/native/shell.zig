@@ -130,6 +130,44 @@ fn scenarioTick() void {
     scen_t = now + SCEN_GAP;
 }
 
+// ---- program-facing tick + input exports ---------------------------------
+// The -Mprogram module (emitted Koru code) reaches the desktop through
+// these C-ABI exports. A modal producer pump — libs/metal's `frames`,
+// libs/host's `host.run` — calls koru_tick once per iteration so
+// cursor/comp/win/present keep turning while prog.main() is blocked
+// inside dispatch. It is the shell loop's non-input half: heartbeat,
+// cursor drain, pointer feed, scene/window ticks, the program pump,
+// present. Line editing, the kbd queue, and the scenario injector stay
+// with the shell — while an app pump runs, the app owns input.
+
+pub export fn koru_tick() callconv(.c) void {
+    net.heartbeat();
+    _ = cursor.tick();
+    const sp = cursor.sprite();
+    comp.feedPointer(sp.x, sp.y, sp.on, cursor.buttonsHeld());
+    comp.tick();
+    win.tick();
+    if (runtime.prog_pump) |cb| cb();
+    present.tick();
+    if (present.takeConsoleReset()) redrawPrompt();
+}
+
+// One queued console char, or -1 — the app pump's keyboard source.
+pub export fn koru_kbd_poll() callconv(.c) i32 {
+    return if (kbd.pollChar()) |c| @as(i32, c) else -1;
+}
+
+// Pointer state for app hit-testing: sprite tip in scene coords, the
+// on-screen flag, and the held-button bitmask (bit0 = left, per
+// comp.feedPointer's contract).
+pub export fn koru_pointer_state(x: *i32, y: *i32, on: *u8, buttons: *u32) callconv(.c) void {
+    const sp = cursor.sprite();
+    x.* = sp.x;
+    y.* = sp.y;
+    on.* = if (sp.on) 1 else 0;
+    buttons.* = cursor.buttonsHeld();
+}
+
 pub fn run() noreturn {
     comp.init();            // scene core — dims + layer/damage state
     present.consoleUp();    // console backing + sink + root layer (present owns it — gen-change resizes)
