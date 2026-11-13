@@ -13,6 +13,7 @@ const comp = @import("comp");
 const present = @import("present.zig");
 const surf = @import("surf.zig");
 const prog = @import("program");
+const runtime = @import("runtime");
 const hwprobe = @import("hwprobe.zig");
 const xhci = @import("xhci.zig");
 const net = @import("net");
@@ -57,6 +58,10 @@ pub fn run() noreturn {
     text.puts("\n");
     text.puts("type 'help'\n\n");
     prompt();
+    // Arm program-stdout->wire only now — console/present fully up, so
+    // early-boot fputs output never touches net.mirror (keeps boot
+    // byte-identical to the pre-bridge image on real hardware).
+    runtime.wire_sink = &progWire;
     var a = rdtsc();
     while (true) {
         net.heartbeat();
@@ -478,6 +483,12 @@ fn parsePort(i: usize) ?struct { port: u16, next: usize } {
 // colored regions into its provider backing, present the damage. Proves
 // a surface composites through comp -> the i915 KMS GPU path on real
 // hardware (previously only QEMU/fb-backend). XRGB8888 = 0x00RRGGBB.
+// progWire — runtime.wire_sink target: program console bytes mirror to the
+// UDP telemetry wire (net.mirror) alongside COM1, armed post-init in run().
+fn progWire(s: [*]const u8, len: usize) void {
+    net.mirror(s[0..len]);
+}
+
 fn cmdKsurf() void {
     const s = surf.koruos_surface_open(240, 160, "ksurf") orelse {
         text.puts("ksurf: open refused\n");

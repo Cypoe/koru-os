@@ -403,20 +403,12 @@ fn textConsole() noreturn {
 var fullBoot: bool = false; // DIAG: false = fbDiag/console fast path; true = real program
 var consoleMode: bool = true; // DIAG: true = text console after fb.init
 
-// progWireOut — runtime.wire_sink target: program console bytes (fputs/
-// fwrite/write/fputc) mirror to the UDP telemetry wire alongside COM1, so
-// Koru-program output is observable on hardware with no attached serial.
-fn progWireOut(s: [*]const u8, n: usize) void {
-    net.mirror(s[0..n]);
-}
-
 export fn kmain(mbi: u32) callconv(.c) noreturn {
     faults.install(); // exceptions freeze with a report instead of resetting
     pmm.init(mbi); // frames live before anything allocates
     net.init();    // NIC + UDP telemetry — the display-independent oracle;
                    // runs before every stage that can die blind
     text.udpMirror = net.mirror; // every console line streams to the listener
-    runtime.wire_sink = &progWireOut; // program stdout -> wire too
     const doFull = blk: {
         var v = fullBoot;
         asm volatile ("" : [v] "+r" (v)); // opaque — keeps the branch + inits live
