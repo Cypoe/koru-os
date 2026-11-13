@@ -265,12 +265,40 @@ pub fn mirror(line: []const u8) void {
     _ = udpSendBc(line);
 }
 
+// txWatchdog: self-heal a stalled TX engine — drops climbing (ring full)
+// with zero completions means the NIC stopped draining. Auto re-arm so
+// 'netfix' is never a manual step. ~1s check cadence, 10s cooldown so a
+// permanently-dead engine can't spam rearm; the sayf mirrors to the wire
+// so stalls show up in listener.log as 'auto-rearm #N'.
+var wd_t: u64 = 0;
+var wd_drop: u64 = 0;
+var wd_done: u64 = 0;
+var wd_last_rearm: u64 = 0;
+var wd_rearms: u64 = 0;
+
+fn txWatchdog() void {
+    const now = ukplat_monotonic_clock();
+    if (now - wd_t < 1_000_000_000) return;
+    wd_t = now;
+    const st = e1000e.stats();
+    const drops = st.dropped - wd_drop;
+    const dones = st.completed - wd_done;
+    wd_drop = st.dropped;
+    wd_done = st.completed;
+    if (drops >= 8 and dones == 0 and now - wd_last_rearm >= 10_000_000_000) {
+        wd_last_rearm = now;
+        wd_rearms += 1;
+        if (e1000e.rearm()) sayf("net: TX stall — auto-rearm #{d}\n", .{wd_rearms});
+    }
+}
+
 // heartbeat: "KORU hb" every 10s while the shell loop ticks — distinguishes
 // "kernel alive, display dead" from "never reached NIC" for i915 bring-up.
 var last_hb: u64 = 0;
 const HB_NS: u64 = 10 * 1_000_000_000;
 pub fn heartbeat() void {
     if (!up) return;
+    txWatchdog();
     const now = ukplat_monotonic_clock();
     if (now - last_hb < HB_NS) return;
     last_hb = now;
