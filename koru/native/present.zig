@@ -109,15 +109,23 @@ var land_int_min: u64 = ~@as(u64, 0);
 var land_int_max: u64 = 0;
 var land_int_sum: u64 = 0;
 var land_int_n: u64 = 0;
+var land_gaps: u64 = 0; // intervals > GAP_T — idle pauses or real stalls
+// ~100ms in TSC ticks — well above a vblank (~30M) but below observed
+// multi-hundred-ms stalls; separates active pacing from dead air.
+const LAND_GAP_T: u64 = 150_000_000;
 
 fn noteLand() void {
     const now = rdtsc();
     if (last_land_tsc != 0) {
         const dt = now - last_land_tsc;
-        if (dt < land_int_min) land_int_min = dt;
-        if (dt > land_int_max) land_int_max = dt;
-        land_int_sum += dt;
-        land_int_n += 1;
+        if (dt >= LAND_GAP_T) {
+            land_gaps += 1; // long gap — don't pollute pacing stats
+        } else {
+            if (dt < land_int_min) land_int_min = dt;
+            if (dt > land_int_max) land_int_max = dt;
+            land_int_sum += dt;
+            land_int_n += 1;
+        }
     }
     last_land_tsc = now;
 }
@@ -508,8 +516,10 @@ fn flipTick() void {
             text.putdec(land_int_max); text.puts("/");
             text.putdec(land_int_sum / land_int_n);
         }
+        text.puts(" g="); text.putdec(land_gaps);
         text.puts("\n");
         land_int_min = ~@as(u64, 0); land_int_max = 0; land_int_sum = 0; land_int_n = 0;
+        land_gaps = 0;
     }
     // vblank oracle FIRST: any latched DE event means >=1 vblank passed
     // since the last drain — an armed flip has landed, the old front is
