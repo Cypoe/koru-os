@@ -618,7 +618,7 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
     blit_count += emitted;
     frame_count += 1;
     if (irq_dispatches != irq0) irq_during += 1;
-    if (frame_count == 1 or frame_count % 120 == 0)
+    if (comp.verbose and (frame_count == 1 or frame_count % 120 == 0))
         sayU("gpucomp: frame {d} blits={d} total={d} maps={d}\n",
             .{ frame_count, emitted, blit_count, map_n });
     return true;

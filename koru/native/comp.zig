@@ -95,6 +95,11 @@ var z_next: u32 = 1;
 var live: bool = false;
 var W: u32 = 0;
 var H: u32 = 0;
+// verbose — gates recurring debug telemetry (hot stage profiler, vb reg
+// dumps, gpucomp/scene per-frame markers) so the console + wire stay
+// quiet by default. perf + heartbeat + one-time/error markers stay on.
+// Toggle with the shell 'verbose' command.
+pub var verbose: bool = false;
 
 // ---- damage accumulator -------------------------------------------------
 // Bounded rect list: union-merge on insert (overlap or edge-touch ->

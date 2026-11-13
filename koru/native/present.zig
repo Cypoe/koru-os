@@ -429,7 +429,7 @@ fn immediateTick() void {
     };
     comp.compositeAcc(&t, &p);
     paint_count += 1;
-    if (paint_count == 1 or paint_count % 256 == 0)
+    if (comp.verbose and (paint_count == 1 or paint_count % 256 == 0))
         sayU("KORU scene: paint n={d} full={d} on {d}x{d}\n",
             .{ p.n, @intFromBool(p.full), s.w, s.h });
 }
@@ -463,11 +463,13 @@ fn flipTick() void {
         const vr = kms.vblankRegs();
         const df = flip_count - vb_last_flips;
         vb_last_flips = flip_count;
-        sayU("vb DE={x} DI={x} SD={x} SI={x} I28={x} GT={x}\n",
-            .{ vr[0], vr[1], vr[2], vr[3], vr[4], vr[5] });
-        sayU("vb FR={x} PS={x} IM={x} IS={x} II={x} +f={d} pd={d} to={d}\n",
-            .{ vr[6], vr[7], vr[8], vr[9], vr[10], df,
-               @intFromBool(flip_pending), timeout_clears });
+        if (comp.verbose) {
+            sayU("vb DE={x} DI={x} SD={x} SI={x} I28={x} GT={x}\n",
+                .{ vr[0], vr[1], vr[2], vr[3], vr[4], vr[5] });
+            sayU("vb FR={x} PS={x} IM={x} IS={x} II={x} +f={d} pd={d} to={d}\n",
+                .{ vr[6], vr[7], vr[8], vr[9], vr[10], df,
+                   @intFromBool(flip_pending), timeout_clears });
+        }
     }
     // perf — objective jank oracle on the panel (wire dies post-kms).
     // TSC wall-clock window: f= flips in window, t= tsc ticks elapsed
@@ -591,7 +593,7 @@ fn flipTick() void {
                 flip_pending = true;
                 flip_age = 0;
                 flip_count += 1;
-                if (flip_count == 1 or flip_count % 120 == 0)
+                if (comp.verbose and (flip_count == 1 or flip_count % 120 == 0))
                     sayU("KORU scene: flip {d} back={d} rects={d} full={d}\n",
                         .{ flip_count, commit_back, commit_rects,
                            @intFromBool(commit_full) });

@@ -102,9 +102,11 @@ pub fn run() noreturn {
             if (s_comp > hv) { hn = "cmp"; hv = s_comp; }
             if (s_win > hv)  { hn = "win"; hv = s_win; }
             if (s_pres > hv) { hn = "prs"; hv = s_pres; }
-            text.puts("hot "); text.puts(hn);
-            text.puts(" "); text.putdec(hv);
-            text.puts(" n="); text.putdec(s_n); text.puts("\n");
+            if (comp.verbose) {
+                text.puts("hot "); text.puts(hn);
+                text.puts(" "); text.putdec(hv);
+                text.puts(" n="); text.putdec(s_n); text.puts("\n");
+            }
             s_net = 0; s_kbd = 0; s_cur = 0; s_ptr = 0;
             s_comp = 0; s_win = 0; s_pres = 0; s_loop = 0; s_n = 0;
         }
@@ -150,11 +152,17 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n  gcomp\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n  gcomp\n  verbose\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
     if (eq("netfix")) { cmdNetFix(); return; }
+    if (eq("verbose")) {
+        comp.verbose = !comp.verbose;
+        text.puts("verbose ");
+        text.puts(if (comp.verbose) "ON — hot/vb/gpucomp/scene markers live\n" else "OFF — quiet (perf+hb only)\n");
+        return;
+    }
     if (starts("udp ")) { cmdUdp(); return; }
     if (eq("frame") or starts("frame ")) { cmdFrame(); return; }
     if (starts("send ")) { cmdSend(); return; }
