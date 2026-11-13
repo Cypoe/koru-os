@@ -14,6 +14,11 @@
 // the memory map either way; fb.init reads mb2 tag 8 (GRUB) or falls back
 // to programming BGA itself.
 
+// Emitted programs may use std.heap.page_allocator (e.g. libs/metal
+// Window structs) — freestanding has no default page size, so the root
+// module declares it. Identity-mapped 4 KiB pages throughout.
+pub const std_options: std.Options = .{ .page_size_max = 4096 };
+
 const prog = @import("program");
 const runtime = @import("runtime");
 const virtio = @import("virtio");
