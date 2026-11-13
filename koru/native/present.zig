@@ -185,6 +185,15 @@ fn consoleFree() void {
     con_handle = -1;
 }
 
+// consoleCellDamage — text.sink.damage entry: console cell writes are
+// backing writes to the root layer, so mark its dr dirty (GPU flush
+// oracle) in addition to reporting scene damage. Root sits at scene
+// origin so scene coords == backing coords.
+fn consoleCellDamage(x: u32, y: u32, w: u32, h: u32) void {
+    comp.sceneDamage(x, y, w, h);
+    if (con_handle >= 0) comp.noteDirty(con_handle, x, y, w, h);
+}
+
 fn consoleBind() void {
     text.setColor(0xFFFFFFFF, CON_BG);
     text.sink = .{
@@ -192,7 +201,7 @@ fn consoleBind() void {
         .pitch = con_pitch,
         .w = con_w,
         .h = con_h,
-        .damage = comp.sceneDamage,
+        .damage = consoleCellDamage,
     };
     con_handle = comp.attachRoot(@volatileCast(con_buf), con_pitch, con_w, con_h);
 }

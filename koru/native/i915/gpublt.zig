@@ -508,6 +508,21 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
     px3 += b0 - p2;
     pre_tsc += b0 - pf0;
     pre_n += 1;
+    // dirty-backing flush — once per frame per written layer, covering the
+    // union of CPU writes (incl. occluded px). Static backings (window
+    // mid-drag, idle console) stay clean and skip clflush entirely; the
+    // per-rect emitCopy below reads already-coherent memory. Untracked
+    // layers still flush per-rect-intersection (safe default).
+    for (0..comp.layerSlots()) |i| {
+        const dlv = comp.layerView(i) orelse continue;
+        if (!dlv.dr_tracked or !dlv.dr_on) continue;
+        const dx1 = @min(dlv.dr.x + dlv.dr.w, dlv.w);
+        const dy1 = @min(dlv.dr.y + dlv.dr.h, dlv.h);
+        if (dlv.dr.x < dx1 and dlv.dr.y < dy1)
+            flushSrc(dlv.buf, dlv.pitch, dlv.dr.x, dlv.dr.y,
+                dx1 - dlv.dr.x, dy1 - dlv.dr.y);
+        comp.clearDirty(i);
+    }
     for (rects) |r| {
         // clip to scene + target like compositeRect does
         const x1 = @min(@min(r.x + r.w, sw), db.width);
@@ -535,7 +550,9 @@ pub fn paintFrame(dstHandle: u32, acc: *const comp.Acc) bool {
             const sy = iy - lv.y;
             const w = ix1 - ix;
             const h = iy1 - iy;
-            flushSrc(lv.buf, lv.pitch, sx, sy, w, h);
+            // tracked layers already flushed their dr rect upfront; only
+            // untracked backings pay the per-rect clflush here.
+            if (!lv.dr_tracked) flushSrc(lv.buf, lv.pitch, sx, sy, w, h);
             if (lv.kind == .cursor) {
                 // CURSOR_CLEAR px are transparent — per-run blits skip
                 // them so the scene beneath survives (a verbatim copy

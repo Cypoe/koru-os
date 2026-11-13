@@ -81,6 +81,13 @@ const Layer = struct {
     w: u32 = 0,
     h: u32 = 0,
     win: WinState = .{},
+    // backing-write dirty tracking (GPU flush oracle): dr = union of
+    // backing-coord writes since last GPU flush; dr_on = pending flush;
+    // dr_tracked = producer reports writes via damageLayer/noteDirty —
+    // untracked layers always flush (safe default, no stale pixels).
+    dr: Rect = .{},
+    dr_on: bool = true,
+    dr_tracked: bool = false,
 };
 var layers = [_]Layer{.{}} ** MAX_LAYERS;
 var z_next: u32 = 1;
@@ -320,12 +327,58 @@ pub fn sceneDamage(x: u32, y: u32, w: u32, h: u32) void {
     _ = damage(x, y, w, h);
 }
 
+// dirtyUnion — grow l.dr to cover a backing-coord write rect. Called by
+// the backing-write verbs (damageLayer/noteDirty); place() moves never
+// reach here, so a dragged window's static backing stays clean.
+fn dirtyUnion(l: *Layer, bx: u32, by: u32, bw: u32, bh: u32) void {
+    if (bx >= l.w or by >= l.h or bw == 0 or bh == 0) return;
+    const x1 = @min(bx + bw, l.w);
+    const y1 = @min(by + bh, l.h);
+    if (!l.dr_on) {
+        l.dr = .{ .x = bx, .y = by, .w = x1 - bx, .h = y1 - by };
+        l.dr_on = true;
+        return;
+    }
+    const ux = @min(l.dr.x, bx);
+    const uy = @min(l.dr.y, by);
+    const ux1 = @max(l.dr.x + l.dr.w, x1);
+    const uy1 = @max(l.dr.y + l.dr.h, y1);
+    l.dr = .{ .x = ux, .y = uy, .w = ux1 - ux, .h = uy1 - uy };
+}
+
+// noteDirty — scene-coord backing write for producers that report damage
+// in scene space (console root via text.sink). Translates to backing
+// coords and unions into dr. Scene damage is the caller's job.
+pub fn noteDirty(handle: i32, sx: u32, sy: u32, sw: u32, sh: u32) void {
+    if (!live or handle < 0 or @as(usize, @intCast(handle)) >= MAX_LAYERS) return;
+    const l = &layers[@intCast(handle)];
+    if (!l.live or sw == 0 or sh == 0) return;
+    const ix = @max(sx, l.x);
+    const iy = @max(sy, l.y);
+    const ix1 = @min(sx + sw, l.x + l.w);
+    const iy1 = @min(sy + sh, l.y + l.h);
+    if (ix >= ix1 or iy >= iy1) return;
+    l.dr_tracked = true;
+    dirtyUnion(l, ix - l.x, iy - l.y, ix1 - ix, iy1 - iy);
+}
+
+// clearDirty — gpublt calls after flushing a tracked layer's dr rect.
+// dr_tracked stays set (the producer still reports writes); only the
+// pending-flush bit clears.
+pub fn clearDirty(handle: usize) void {
+    if (handle >= MAX_LAYERS) return;
+    layers[handle].dr_on = false;
+    layers[handle].dr = .{};
+}
+
 // backing-rect -> scene-rect damage for a live layer (producer updates:
 // titlebar focus repaint etc.). bx,by,bw,bh are backing coords.
 pub fn damageLayer(handle: i32, bx: u32, by: u32, bw: u32, bh: u32) void {
     if (!live or handle < 0 or @as(usize, @intCast(handle)) >= MAX_LAYERS) return;
     const l = &layers[@intCast(handle)];
     if (!l.live) return;
+    l.dr_tracked = true;
+    dirtyUnion(l, bx, by, bw, bh);
     _ = damage(l.x + bx, l.y + by, bw, bh);
 }
 
@@ -641,6 +694,9 @@ pub const LayerView = struct {
     h: u32,
     z: u32,
     kind: Kind,
+    dr: Rect,      // dirty backing rect (backing coords) since last flush
+    dr_on: bool,   // pending flush needed
+    dr_tracked: bool, // producer reports writes — untracked always flush
 };
 
 pub fn layerSlots() usize {
@@ -662,6 +718,9 @@ pub fn layerView(i: usize) ?LayerView {
         .h = l.h,
         .z = l.z,
         .kind = l.kind,
+        .dr = l.dr,
+        .dr_on = l.dr_on,
+        .dr_tracked = l.dr_tracked,
     };
 }
 
