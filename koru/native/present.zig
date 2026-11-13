@@ -102,6 +102,25 @@ var retry_wait: u64 = 64; // ensureFlip backoff — grows x4 per failure
 var flip_fails: u32 = 0;
 var flip_gave_up: bool = false; // latched until next gen change
 var flip_count: u64 = 0;
+// flip-land interval stats — TSC delta between consecutive scanout lands.
+// Even ~16.6ms spacing = clean pacing; spread = the judder users feel.
+var last_land_tsc: u64 = 0;
+var land_int_min: u64 = ~@as(u64, 0);
+var land_int_max: u64 = 0;
+var land_int_sum: u64 = 0;
+var land_int_n: u64 = 0;
+
+fn noteLand() void {
+    const now = rdtsc();
+    if (last_land_tsc != 0) {
+        const dt = now - last_land_tsc;
+        if (dt < land_int_min) land_int_min = dt;
+        if (dt > land_int_max) land_int_max = dt;
+        land_int_sum += dt;
+        land_int_n += 1;
+    }
+    last_land_tsc = now;
+}
 var gpu_frames: u64 = 0; // frames composited via BCS blits
 var cpu_frames: u64 = 0; // frames CPU-composited (named fallback)
 // frame-content-advance oracle — sparse pixel signature of each
@@ -478,7 +497,19 @@ fn flipTick() void {
         text.puts(" x3="); text.putdec(if (d_pn == 0) 0 else d_x3 / d_pn);
         text.puts(" gpu="); text.putdec(d_gpu);
         text.puts(" cpu="); text.putdec(d_cpu);
-        text.puts(" adv="); text.putdec(if (sig_n <= 1) 0 else sig_diff * 100 / (sig_same + sig_diff)); text.puts("\n");
+        text.puts(" adv="); text.putdec(if (sig_n <= 1) 0 else sig_diff * 100 / (sig_same + sig_diff));
+        // flip-land interval min/max/avg (TSC ticks) this window — even
+        // ~vblank spacing = clean pacing; wide spread = the judder.
+        text.puts(" i=");
+        if (land_int_n == 0) {
+            text.puts("-");
+        } else {
+            text.putdec(land_int_min); text.puts("/");
+            text.putdec(land_int_max); text.puts("/");
+            text.putdec(land_int_sum / land_int_n);
+        }
+        text.puts("\n");
+        land_int_min = ~@as(u64, 0); land_int_max = 0; land_int_sum = 0; land_int_n = 0;
     }
     // vblank oracle FIRST: any latched DE event means >=1 vblank passed
     // since the last drain — an armed flip has landed, the old front is
@@ -499,12 +530,14 @@ fn flipTick() void {
             flip_pending = false;
             flip_age = 0;
             screen = front; // committed buffer is now really on scanout
+            noteLand();
         } else {
             flip_age += 1;
             if (flip_age >= FLIP_TIMEOUT_TICKS) {
                 flip_pending = false;
                 flip_age = 0;
                 screen = front;
+                noteLand();
                 timeout_clears += 1;
                 if (timeout_clears == 1 or timeout_clears % 64 == 0)
                     sayU("KORU scene: vblank oracle silent — timeout clear {d}\n",
