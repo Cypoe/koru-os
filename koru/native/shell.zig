@@ -11,6 +11,7 @@ const cursor = @import("cursor.zig");
 const win = @import("win.zig");
 const comp = @import("comp");
 const present = @import("present.zig");
+const surf = @import("surf.zig");
 const hwprobe = @import("hwprobe.zig");
 const xhci = @import("xhci.zig");
 const net = @import("net");
@@ -152,7 +153,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n  gcomp\n  verbose\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n  gcomp\n  verbose\n  ksurf\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -163,6 +164,7 @@ fn dispatch() void {
         text.puts(if (comp.verbose) "ON — hot/vb/gpucomp/scene markers live\n" else "OFF — quiet (perf+hb only)\n");
         return;
     }
+    if (eq("ksurf")) { cmdKsurf(); return; }
     if (starts("udp ")) { cmdUdp(); return; }
     if (eq("frame") or starts("frame ")) { cmdFrame(); return; }
     if (starts("send ")) { cmdSend(); return; }
@@ -470,6 +472,26 @@ fn parsePort(i: usize) ?struct { port: u16, next: usize } {
     return .{ .port = @intCast(v), .next = j };
 }
 // udp <a.b.c.d> <port> <msg> — arbitrary datagram, synchronous TX probe.
+// ksurf — drive koruos/surface directly: mint a .surface layer, paint
+// colored regions into its provider backing, present the damage. Proves
+// a surface composites through comp -> the i915 KMS GPU path on real
+// hardware (previously only QEMU/fb-backend). XRGB8888 = 0x00RRGGBB.
+fn cmdKsurf() void {
+    const s = surf.koruos_surface_open(240, 160, "ksurf") orelse {
+        text.puts("ksurf: open refused\n");
+        return;
+    };
+    _ = surf.koruos_surface_fill(s, 0, 0, 240, 160, 0x00202830);
+    _ = surf.koruos_surface_fill(s, 0, 0, 240, 26, 0x004080C0);
+    _ = surf.koruos_surface_fill(s, 10, 40, 100, 90, 0x00D04030);
+    _ = surf.koruos_surface_fill(s, 120, 40, 100, 90, 0x0030A050);
+    _ = surf.koruos_surface_fill(s, 10, 140, 210, 12, 0x00D0C030);
+    const pr = surf.koruos_surface_present(s, 0, 0, 240, 160);
+    text.puts("ksurf: surface 240x160 present=");
+    text.putdec(pr);
+    text.puts("\n");
+}
+
 fn cmdUdp() void {
     var i: usize = skipSp(4);
     const ipr = parseIpv4(i) orelse {
