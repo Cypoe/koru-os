@@ -42,6 +42,58 @@ fn stageT(t: *u64, f: anytype) void {
     t.* += rdtsc() - a;
 }
 
+// ---- kauto: self-driving scenario --------------------------------------
+// Feeds a canned command script through handle() — the identical echo,
+// dispatch, and damage-drain path as typed input — paced by TSC so each
+// stage's flips land in separate perf windows. The console->wire mirror
+// shows the script typing itself ("> kms" lines) and the KSCEN-BEGIN/
+// DONE echoes delimit the run for gate-surf-wire.py. Arm manually with
+// 'kauto', or at boot via buildver.scenario=="kauto"
+// (KORU_SCENARIO=kauto build-m1-small.sh) for a zero-touch test.
+const SCEN_GAP: u64 = 0x40000000; // ~0.4s between commands (TSC ~2.9GHz)
+const scen_cmds = [_][*:0]const u8{
+    "echo KSCEN-BEGIN",
+    "kms",
+    "kwin",
+    "ksurf",
+    "kprog",
+    "echo KSCEN-DONE",
+};
+var scen_on: bool = false;
+var scen_i: usize = 0;
+var scen_t: u64 = 0;
+
+fn zEq(a: [*:0]const u8, b: [*:0]const u8) bool {
+    var i: usize = 0;
+    while (true) {
+        if (a[i] != b[i]) return false;
+        if (a[i] == 0) return true;
+        i += 1;
+    }
+}
+
+fn scenarioArm() void {
+    scen_on = true;
+    scen_i = 0;
+    scen_t = rdtsc() + 0x100000000; // ~1.5s settle — boot/hb markers land first
+}
+
+fn scenarioTick() void {
+    if (!scen_on) return;
+    const now = rdtsc();
+    if (now < scen_t) return;
+    if (scen_i >= scen_cmds.len) {
+        scen_on = false;
+        return;
+    }
+    const cmd = scen_cmds[scen_i];
+    var i: usize = 0;
+    while (cmd[i] != 0) : (i += 1) handle(cmd[i]);
+    handle('\n');
+    scen_i += 1;
+    scen_t = now + SCEN_GAP;
+}
+
 pub fn run() noreturn {
     comp.init();            // scene core — dims + layer/damage state
     present.consoleUp();    // console backing + sink + root layer (present owns it — gen-change resizes)
@@ -62,6 +114,7 @@ pub fn run() noreturn {
     // early-boot fputs output never touches net.mirror (keeps boot
     // byte-identical to the pre-bridge image on real hardware).
     runtime.wire_sink = &progWire;
+    if (zEq(buildver.scenario, "kauto")) scenarioArm();
     var a = rdtsc();
     while (true) {
         net.heartbeat();
@@ -80,6 +133,7 @@ pub fn run() noreturn {
         } else if (kbd.pollChar()) |c| {
             handle(c);
         }
+        scenarioTick();
         s_kbd += rdtsc() - a; a = rdtsc();
         _ = cursor.tick(); // M4: drain mouse motion, move the cursor sprite
         s_cur += rdtsc() - a; a = rdtsc();
@@ -159,7 +213,7 @@ fn handle(c: u8) void {
 fn dispatch() void {
     if (n == 0) return;
     if (eq("help")) {
-        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n  gcomp\n  verbose\n  ksurf\n  kprog\n");
+        text.puts("commands:\n  help\n  echo <txt>\n  clear\n  about\n  scan\n  reboot\n  modeset\n  kms\n  kmsbuf\n  gpu\n  net\n  send <msg>\n  sendb <msg>\n  frame [msg]\n  kwin\n  kwui\n  kwclose\n  kstat\n  gcomp\n  verbose\n  ksurf\n  kprog\n  kauto\n");
         return;
     }
     if (eq("net")) { cmdNet(); return; }
@@ -172,6 +226,11 @@ fn dispatch() void {
     }
     if (eq("ksurf")) { cmdKsurf(); return; }
     if (eq("kprog")) { prog.main(); text.puts("kprog: program returned\n"); return; }
+    if (eq("kauto")) {
+        scenarioArm();
+        text.puts("kauto: scenario armed — kms/kwin/ksurf/kprog\n");
+        return;
+    }
     if (starts("udp ")) { cmdUdp(); return; }
     if (eq("frame") or starts("frame ")) { cmdFrame(); return; }
     if (starts("send ")) { cmdSend(); return; }

@@ -17,8 +17,12 @@ OUT="${1:-$WORK/m1.elf}"
 SHA="$(git -C "$ROOT" rev-parse --short=7 HEAD 2>/dev/null || echo nogit)"
 DIRTY="$(git -C "$ROOT" status --porcelain koru/native 2>/dev/null | head -1)"
 TAG="$SHA$([ -n "$DIRTY" ] && echo -dirty || echo '')"
+# KORU_SCENARIO=kauto bakes the self-driving shell scenario into the image
+# (shell.zig auto-arms it post-init) — flash-and-walk-away physical tests.
+SCEN="$(printf '%s' "${KORU_SCENARIO:-}" | tr -cd 'a-z0-9-')"
 cat > "$WORK/buildver.zig" <<EOF
 pub const sha: [*:0]const u8 = "$TAG";
+pub const scenario: [*:0]const u8 = "$SCEN";
 EOF
 
 # koruc emit — idempotent; refresh each build so kernel-side .k deps

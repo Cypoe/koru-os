@@ -8,7 +8,10 @@ SESSION="$(cd "$WORK/.." && pwd)"
 ROOT="$(cd "$SESSION/../.." && pwd)"
 SHA="$(git -C "$ROOT" rev-parse --short=7 HEAD)"
 DIRTY="$(git -C "$ROOT" status --porcelain koru/native | head -1)"
-TAG="$SHA$([ -n "$DIRTY" ] && echo -dirty || echo '')"
+# KORU_SCENARIO variants get their own ISO name — a self-driving image is
+# not byte-identical to the plain commit build and must not share its tag.
+SCEN="$(printf '%s' "${KORU_SCENARIO:-}" | tr -cd 'a-z0-9-')"
+TAG="$SHA$([ -n "$DIRTY" ] && echo -dirty || echo '')$([ -n "$SCEN" ] && echo "-$SCEN" || echo '')"
 ISO="$SESSION/dist/koru-vbirq9-$TAG.iso"
 
 bash "$WORK/build-m1-small.sh" "$WORK/m1-vbirq9-small.elf"
