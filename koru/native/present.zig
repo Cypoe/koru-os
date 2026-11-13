@@ -496,39 +496,38 @@ fn flipTick() void {
         d_ec = gpublt.emit_count - l_ec; l_ec = gpublt.emit_count;
         d_gpu = gpu_frames - l_gpu; l_gpu = gpu_frames;
         d_cpu = cpu_frames - l_cpu; l_cpu = cpu_frames;
-        text.puts("perf f="); text.putdec(df);
-        text.puts(" t="); text.putdec(dt);
-        text.puts(" to="); text.putdec(timeout_clears);
-        text.puts(" pt="); text.putdec(if (d_pn == 0) 0 else d_pt / d_pn);
-        text.puts(" pm="); text.putdec(paint_min);
-        text.puts(" fw="); text.putdec(if (d_fn == 0) 0 else d_fw / d_fn);
-        text.puts(" fb="); text.putdec(d_fb);
-        text.puts(" ec="); text.putdec(d_ec);
-        text.puts(" bd="); text.putdec(if (d_bn == 0) 0 else d_bd / d_bn);
-        text.puts(" pr="); text.putdec(if (d_rn == 0) 0 else d_pr / d_rn);
-        text.puts(" ac="); text.putdec(gpublt.arm_calls);
-        text.puts(" ai="); text.putdec(gpublt.arm_inner_calls);
-        text.puts(" iq="); text.putdec(if (d_pn == 0) 0 else d_iq * 100 / d_pn);
-        text.puts(" fe="); text.putdec(if (d_en == 0) 0 else d_fe / d_en);
-        text.puts(" sb="); text.putdec(if (d_sn == 0) 0 else d_sb / d_sn);
-        text.puts(" x1="); text.putdec(if (d_pn == 0) 0 else d_x1 / d_pn);
-        text.puts(" x2="); text.putdec(if (d_pn == 0) 0 else d_x2 / d_pn);
-        text.puts(" x3="); text.putdec(if (d_pn == 0) 0 else d_x3 / d_pn);
-        text.puts(" gpu="); text.putdec(d_gpu);
-        text.puts(" cpu="); text.putdec(d_cpu);
-        text.puts(" adv="); text.putdec(if (sig_n <= 1) 0 else sig_diff * 100 / (sig_same + sig_diff));
-        // flip-land interval min/max/avg (TSC ticks) this window — even
-        // ~vblank spacing = clean pacing; wide spread = the judder.
-        text.puts(" i=");
-        if (land_int_n == 0) {
-            text.puts("-");
-        } else {
-            text.putdec(land_int_min); text.puts("/");
-            text.putdec(land_int_max); text.puts("/");
-            text.putdec(land_int_sum / land_int_n);
+        const imin: u64 = if (land_int_n == 0) 0 else land_int_min;
+        const imax: u64 = if (land_int_n == 0) 0 else land_int_max;
+        const iavg: u64 = if (land_int_n == 0) 0 else land_int_sum / land_int_n;
+        // perf is wire-first: net.mirror always, panel only under verbose.
+        var pb: [1024]u8 = undefined;
+        const wlen = blk: {
+            const s = std.fmt.bufPrint(&pb,
+                "perf f={d} t={d} to={d} pt={d} pm={d} fw={d} fb={d} ec={d} bd={d} pr={d} ac={d} ai={d} iq={d} fe={d} sb={d} x1={d} x2={d} x3={d} gpu={d} cpu={d} adv={d} i={d}/{d}/{d} g={d}\n",
+                .{
+                    df, dt, timeout_clears,
+                    if (d_pn == 0) 0 else d_pt / d_pn, paint_min,
+                    if (d_fn == 0) 0 else d_fw / d_fn, d_fb, d_ec,
+                    if (d_bn == 0) 0 else d_bd / d_bn,
+                    if (d_rn == 0) 0 else d_pr / d_rn,
+                    gpublt.arm_calls, gpublt.arm_inner_calls,
+                    if (d_pn == 0) 0 else d_iq * 100 / d_pn,
+                    if (d_en == 0) 0 else d_fe / d_en,
+                    if (d_sn == 0) 0 else d_sb / d_sn,
+                    if (d_pn == 0) 0 else d_x1 / d_pn,
+                    if (d_pn == 0) 0 else d_x2 / d_pn,
+                    if (d_pn == 0) 0 else d_x3 / d_pn,
+                    d_gpu, d_cpu,
+                    if (sig_n <= 1) 0 else sig_diff * 100 / (sig_same + sig_diff),
+                    imin, imax, iavg, land_gaps,
+                }) catch break :blk 0;
+            break :blk s.len;
+        };
+        if (wlen != 0) {
+            pb[wlen] = 0;
+            net.mirror(pb[0..wlen]);
+            if (comp.verbose) text.puts(@as([*:0]const u8, @ptrCast(&pb)));
         }
-        text.puts(" g="); text.putdec(land_gaps);
-        text.puts("\n");
         land_int_min = ~@as(u64, 0); land_int_max = 0; land_int_sum = 0; land_int_n = 0;
         land_gaps = 0;
     }
