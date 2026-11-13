@@ -57,11 +57,46 @@ const scen_cmds = [_][*:0]const u8{
     "kwin",
     "ksurf",
     "kprog",
+    "kdrag",
     "echo KSCEN-DONE",
 };
 var scen_on: bool = false;
 var scen_i: usize = 0;
 var scen_t: u64 = 0;
+
+// ptr_seq — synthesized pointer events fed through comp.feedPointer one
+// step per loop iteration (the shell's real mouse feed is bypassed while
+// armed). kdrag uses it to exercise press/drag/drop without PS/2 input.
+const PTR_SEQ_MAX = 24;
+var ptr_seq: [PTR_SEQ_MAX]struct { x: i32, y: i32, b: u32 } = undefined;
+var ptr_n: usize = 0;
+var ptr_i: usize = 0;
+var ptr_seq_on: bool = false;
+
+fn ptrSeqArm() void {
+    const h = comp.topWindow();
+    if (h < 0) {
+        text.puts("kdrag: no window to drag\n");
+        return;
+    }
+    const lv = comp.layerView(@intCast(h)) orelse {
+        text.puts("kdrag: layer view refused\n");
+        return;
+    };
+    const cx = @as(i32, @intCast(lv.x + lv.w / 2));
+    const cy = @as(i32, @intCast(lv.y + 10)); // inside titlebar strip
+    ptr_n = 0;
+    ptr_seq[ptr_n] = .{ .x = cx, .y = cy, .b = 1 }; ptr_n += 1; // press
+    var i: i32 = 1;
+    while (i <= 14 and ptr_n < PTR_SEQ_MAX) : (i += 1) {
+        ptr_seq[ptr_n] = .{ .x = cx - i * 9, .y = cy - i * 4, .b = 1 };
+        ptr_n += 1;
+    }
+    ptr_seq[ptr_n] = .{ .x = cx - 126, .y = cy - 56, .b = 0 }; ptr_n += 1; // release
+    ptr_i = 0;
+    ptr_seq_on = true;
+    text.puts("kdrag: synthesized titlebar drag armed\n");
+}
 
 fn zEq(a: [*:0]const u8, b: [*:0]const u8) bool {
     var i: usize = 0;
@@ -87,6 +122,7 @@ fn scenarioTick() void {
         return;
     }
     const cmd = scen_cmds[scen_i];
+    n = 0; // discard stray keystrokes accumulated between commands
     var i: usize = 0;
     while (cmd[i] != 0) : (i += 1) handle(cmd[i]);
     handle('\n');
@@ -130,6 +166,8 @@ pub fn run() noreturn {
                     text.putc(' ');
                 }
             }
+        } else if (scen_on) {
+            while (kbd.pollChar()) |_| {} // drain — strays must not corrupt injection
         } else if (kbd.pollChar()) |c| {
             handle(c);
         }
@@ -138,7 +176,17 @@ pub fn run() noreturn {
         _ = cursor.tick(); // M4: drain mouse motion, move the cursor sprite
         s_cur += rdtsc() - a; a = rdtsc();
         const sp = cursor.sprite();
-        comp.feedPointer(sp.x, sp.y, sp.on, cursor.buttonsHeld());
+        if (ptr_seq_on) {
+            if (ptr_i < ptr_n) {
+                const s = ptr_seq[ptr_i];
+                comp.feedPointer(s.x, s.y, true, s.b);
+                ptr_i += 1;
+            } else {
+                ptr_seq_on = false;
+            }
+        } else {
+            comp.feedPointer(sp.x, sp.y, sp.on, cursor.buttonsHeld());
+        }
         s_ptr += rdtsc() - a; a = rdtsc();
         comp.tick();      // scene input: press-edge focus/raise/drag
         s_comp += rdtsc() - a; a = rdtsc();
@@ -231,6 +279,7 @@ fn dispatch() void {
         text.puts("kauto: scenario armed — kms/kwin/ksurf/kprog\n");
         return;
     }
+    if (eq("kdrag")) { ptrSeqArm(); return; }
     if (starts("udp ")) { cmdUdp(); return; }
     if (eq("frame") or starts("frame ")) { cmdFrame(); return; }
     if (starts("send ")) { cmdSend(); return; }
