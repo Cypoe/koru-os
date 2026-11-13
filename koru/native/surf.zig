@@ -39,6 +39,7 @@ const Surf = struct {
 var pool = [_]Surf{.{}} ** MAX_SURF;
 var opened: u64 = 0;
 var closed: u64 = 0;
+var place_n: u32 = 0; // cascade counter — successive surfaces offset, never stack
 
 fn asSurf(p: ?*anyopaque) ?*Surf {
     const s: *Surf = @ptrCast(@alignCast(p orelse return null));
@@ -69,9 +70,13 @@ pub export fn koruos_surface_open(w: u32, h: u32, title: [*:0]const u8) callconv
     @memset(buf[0 .. w * h], 0); // cleared before attach — map paints it
     var sx: u32 = 0;
     var sy: u32 = 0;
-    // pitch == w for this provider's backing; ANCHOR is the desired pos —
-    // comp's placement authority (decide) has final say.
-    const slot = comp.attach(buf, w, w, h, 40, 40, .surface, 0, &sx, &sy);
+    // pitch == w for this provider's backing; the anchor is the desired
+    // pos — comp's placement authority (decide) has final say. Cascade:
+    // each open offsets further so surfaces never stack at one point.
+    const ax = 40 + (place_n % 8) * 30;
+    const ay = 40 + (place_n % 5) * 22;
+    place_n +%= 1;
+    const slot = comp.attach(buf, w, w, h, ax, ay, .surface, 0, &sx, &sy);
     if (slot < 0) {
         _ = pmm.freeBlock(phys, pages);
         return null;

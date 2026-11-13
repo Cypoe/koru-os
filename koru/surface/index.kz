@@ -31,6 +31,7 @@ extern fn koruos_surface_open(w: u32, h: u32, title: [*:0]const u8) ?*anyopaque;
 extern fn koruos_surface_fill(s: *anyopaque, x: u32, y: u32, w: u32, h: u32, color: u32) u8;
 extern fn koruos_surface_px(s: *anyopaque, x: u32, y: u32, color: u32) u8;
 extern fn koruos_surface_present(s: *anyopaque, x: u32, y: u32, w: u32, h: u32) u8;
+extern fn koruos_surface_move(s: *anyopaque, nx: u32, ny: u32) u8;
 extern fn koruos_surface_close(s: *anyopaque) u8;
 
 // A zero-arg title keeps the lift honest about what a host compositor can
@@ -66,6 +67,17 @@ const CACHED_TITLE: [:0]const u8 = "koru-os";
 ~proc present|zig {
     if (koruos_surface_present(@ptrCast(surface), x, y, w, h) == 0)
         return .{ .refused = "present refused (empty rect or provider failure)" };
+    return .{ .ok = .{} };
+}
+
+// move — relayer to scene coords (nx,ny). The compositor owns final
+// placement; providers that can't move refuse.
+~[retain]pub tor move { surface: *Surf<open>, x: u32, y: u32 }
+| ok
+| refused string
+
+~proc move|zig {
+    if (koruos_surface_move(@ptrCast(surface), x, y) == 0) return .{ .refused = "move failed" };
     return .{ .ok = .{} };
 }
 
