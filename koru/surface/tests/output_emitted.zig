@@ -813,8 +813,8 @@ pub const koru_libs = struct {
                         put.c(&buf, &n, '\n');
                         const s = win.surf orelse break :s2;
                         _ = s;
-                        const gw: u32 = 8;
-                        const gh: u32 = 6;
+                        const gw: u32 = 4;
+                        const gh: u32 = 3;
                         var gy: u32 = 0;
                         while (gy < gh) : (gy += 1) {
                             var gx: u32 = 0;
