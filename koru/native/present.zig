@@ -500,33 +500,55 @@ fn flipTick() void {
         const imax: u64 = if (land_int_n == 0) 0 else land_int_max;
         const iavg: u64 = if (land_int_n == 0) 0 else land_int_sum / land_int_n;
         // perf is wire-first: net.mirror always, panel only under verbose.
-        var pb: [1024]u8 = undefined;
-        const wlen = blk: {
-            const s = std.fmt.bufPrint(&pb,
-                "perf f={d} t={d} to={d} pt={d} pm={d} fw={d} fb={d} ec={d} bd={d} pr={d} ac={d} ai={d} iq={d} fe={d} sb={d} x1={d} x2={d} x3={d} gpu={d} cpu={d} adv={d} i={d}/{d}/{d} g={d}\n",
-                .{
-                    df, dt, timeout_clears,
-                    if (d_pn == 0) 0 else d_pt / d_pn, paint_min,
-                    if (d_fn == 0) 0 else d_fw / d_fn, d_fb, d_ec,
-                    if (d_bn == 0) 0 else d_bd / d_bn,
-                    if (d_rn == 0) 0 else d_pr / d_rn,
-                    gpublt.arm_calls, gpublt.arm_inner_calls,
-                    if (d_pn == 0) 0 else d_iq * 100 / d_pn,
-                    if (d_en == 0) 0 else d_fe / d_en,
-                    if (d_sn == 0) 0 else d_sb / d_sn,
-                    if (d_pn == 0) 0 else d_x1 / d_pn,
-                    if (d_pn == 0) 0 else d_x2 / d_pn,
-                    if (d_pn == 0) 0 else d_x3 / d_pn,
-                    d_gpu, d_cpu,
-                    if (sig_n <= 1) 0 else sig_diff * 100 / (sig_same + sig_diff),
-                    imin, imax, iavg, land_gaps,
-                }) catch break :blk 0;
-            break :blk s.len;
-        };
-        if (wlen != 0) {
-            pb[wlen] = 0;
-            net.mirror(pb[0..wlen]);
-            if (comp.verbose) text.puts(@as([*:0]const u8, @ptrCast(&pb)));
+        // The datagram cap is 400B and the full field set is ~1KB, so the
+        // window rides as three markers: `perf` carries the gate fields
+        // (f..adv — gate-perf-wire parses only this head), `perfx`/`perfz`
+        // carry stage detail. Each stays well under the cap by construction.
+        var pb1: [384]u8 = undefined;
+        const w1 = std.fmt.bufPrint(&pb1,
+            "perf f={d} t={d} to={d} pt={d} pm={d} fw={d} fb={d} gpu={d} cpu={d} adv={d}\n",
+            .{
+                df, dt, timeout_clears,
+                if (d_pn == 0) 0 else d_pt / d_pn, paint_min,
+                if (d_fn == 0) 0 else d_fw / d_fn, d_fb,
+                d_gpu, d_cpu,
+                if (sig_n <= 1) 0 else sig_diff * 100 / (sig_same + sig_diff),
+            }) catch "";
+        if (w1.len != 0) {
+            pb1[w1.len] = 0;
+            net.mirror(w1);
+            if (comp.verbose) text.puts(@as([*:0]const u8, @ptrCast(&pb1)));
+        }
+        var pb2: [384]u8 = undefined;
+        const w2 = std.fmt.bufPrint(&pb2,
+            "perfx ec={d} bd={d} pr={d} ac={d} ai={d} iq={d} fe={d} sb={d}\n",
+            .{
+                d_ec,
+                if (d_bn == 0) 0 else d_bd / d_bn,
+                if (d_rn == 0) 0 else d_pr / d_rn,
+                gpublt.arm_calls, gpublt.arm_inner_calls,
+                if (d_pn == 0) 0 else d_iq * 100 / d_pn,
+                if (d_en == 0) 0 else d_fe / d_en,
+                if (d_sn == 0) 0 else d_sb / d_sn,
+            }) catch "";
+        if (w2.len != 0) {
+            pb2[w2.len] = 0;
+            net.mirror(w2);
+            if (comp.verbose) text.puts(@as([*:0]const u8, @ptrCast(&pb2)));
+        }
+        var pb3: [384]u8 = undefined;
+        const w3 = std.fmt.bufPrint(&pb3,
+            "perfz x1={d} x2={d} x3={d} i={d}/{d}/{d} g={d}\n",
+            .{
+                if (d_pn == 0) 0 else d_x1 / d_pn,
+                if (d_pn == 0) 0 else d_x2 / d_pn,
+                if (d_pn == 0) 0 else d_x3 / d_pn,
+                imin, imax, iavg, land_gaps,
+            }) catch "";
+        if (w3.len != 0) {
+            pb3[w3.len] = 0;
+            net.mirror(w3);
+            if (comp.verbose) text.puts(@as([*:0]const u8, @ptrCast(&pb3)));
         }
         land_int_min = ~@as(u64, 0); land_int_max = 0; land_int_sum = 0; land_int_n = 0;
         land_gaps = 0;
