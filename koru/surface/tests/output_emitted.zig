@@ -23,27 +23,67 @@ const __koru_bare = struct {
     const allocator = @import("std").mem.Allocator{ .ptr = undefined, .vtable = &vtable };
 };
 const __koru_backing = if (@import("builtin").link_libc) @import("std").heap.c_allocator else if (@import("builtin").os.tag == .freestanding and !@import("builtin").cpu.arch.isWasm()) __koru_bare.allocator else @import("std").heap.page_allocator;
+const __koru_leak_mode = false;
+var __koru_gpa: @import("std").heap.DebugAllocator(.{ .stack_trace_frames = 16 }) = .init;
+fn __koruBacking() @import("std").mem.Allocator {
+    if (comptime __koru_leak_mode) return __koru_gpa.allocator();
+    return __koru_backing;
+}
+var __koru_leak_watch_started: @import("std").atomic.Value(bool) = .init(false);
+fn __koru_leak_watch_maybe_start() void {
+    if (comptime !__koru_leak_mode) return;
+    if (__koru_leak_watch_started.swap(true, .acq_rel)) return;
+    _ = @import("std").Thread.spawn(.{}, __koru_leak_watch, .{}) catch {};
+}
+fn __koru_leak_watch() void {
+    var tick: usize = 0;
+    while (true) : (tick += 1) {
+        @import("std").Thread.sleep(5 * @import("std").time.ns_per_s);
+        @import("std").debug.print("[koru-leak] outstanding allocs: {}\n", .{__koru_leak_count.load(.acquire)});
+        if (tick % 12 == 11) {
+            @import("std").debug.print("[koru-leak] GPA scan — sites still holding allocs:\n", .{});
+            _ = __koru_gpa.detectLeaks();
+        }
+    }
+}
 var __koru_leak_count: @import("std").atomic.Value(usize) = .init(0);
+var __koru_par_tasks: @import("std").atomic.Value(usize) = .init(0);
+const __koru_par_CAP: usize = 128;
+threadlocal var __koru_par_depth: usize = 0;
+const __koru_par_DEPTH_CAP: usize = 7;
+var __koru_par_pool: @import("std").Thread.Pool = undefined;
+var __koru_par_pool_ready: bool = false;
+var __koru_par_pool_mtx: @import("std").Thread.Mutex = .{};
+fn __koru_par_pool_ensure() *@import("std").Thread.Pool {
+    __koru_par_pool_mtx.lock();
+    defer __koru_par_pool_mtx.unlock();
+    if (!__koru_par_pool_ready) {
+        @import("std").Thread.Pool.init(&__koru_par_pool, .{ .allocator = @import("std").heap.smp_allocator }) catch @panic("koru: thread pool init failed");
+        __koru_par_pool_ready = true;
+    }
+    return &__koru_par_pool;
+}
 fn __koru_alloc(ctx: *anyopaque, len: usize, alignment: @import("std").mem.Alignment, ret_addr: usize) ?[*]u8 {
     _ = ctx;
-    const r = __koru_backing.rawAlloc(len, alignment, ret_addr);
-    if (comptime @import("builtin").mode == .Debug) {
+    __koru_leak_watch_maybe_start();
+    const r = __koruBacking().rawAlloc(len, alignment, ret_addr);
+    if (comptime @import("builtin").mode == .Debug or __koru_leak_mode) {
         if (r != null) _ = __koru_leak_count.fetchAdd(1, .monotonic);
     }
     return r;
 }
 fn __koru_resize(ctx: *anyopaque, memory: []u8, alignment: @import("std").mem.Alignment, new_len: usize, ret_addr: usize) bool {
     _ = ctx;
-    return __koru_backing.rawResize(memory, alignment, new_len, ret_addr);
+    return __koruBacking().rawResize(memory, alignment, new_len, ret_addr);
 }
 fn __koru_remap(ctx: *anyopaque, memory: []u8, alignment: @import("std").mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
     _ = ctx;
-    return __koru_backing.rawRemap(memory, alignment, new_len, ret_addr);
+    return __koruBacking().rawRemap(memory, alignment, new_len, ret_addr);
 }
 fn __koru_free(ctx: *anyopaque, memory: []u8, alignment: @import("std").mem.Alignment, ret_addr: usize) void {
     _ = ctx;
-    __koru_backing.rawFree(memory, alignment, ret_addr);
-    if (comptime @import("builtin").mode == .Debug) {
+    __koruBacking().rawFree(memory, alignment, ret_addr);
+    if (comptime @import("builtin").mode == .Debug or __koru_leak_mode) {
         _ = __koru_leak_count.fetchSub(1, .monotonic);
     }
 }
@@ -60,6 +100,23 @@ pub inline fn __koru_intcast(comptime T: type, x: anytype) T {
     if (comptime (dst == .int and src == .int and dst.int.bits == src.int.bits and dst.int.signedness != src.int.signedness))
         return @as(T, @bitCast(x));
     return @as(T, @intCast(x));
+}
+
+fn __KoruPadI(comptime T: type) type {
+    const V = switch (@typeInfo(T)) { .comptime_int => i64, .comptime_float => f64, else => T };
+    return struct {
+        v: V,
+        width: usize,
+        pub fn format(self: @This(), w: *@import("std").Io.Writer) @import("std").Io.Writer.Error!void {
+            const rendered = @import("std").fmt.count("{d}", .{self.v});
+            const pad = self.width -| rendered;
+            for (0..pad) |_| try w.writeByte(' ');
+            try w.print("{d}", .{self.v});
+        }
+    };
+}
+pub fn __koru_pad_i(width: usize, value: anytype) __KoruPadI(@TypeOf(value)) {
+    return .{ .v = value, .width = width };
 }
 
 pub fn koru_leak_check() void {
@@ -96,7 +153,7 @@ pub const main_module = struct {
         switch (result_0) {
             // >>> BRANCH: native_smoke.k:35  | err e |>
             .err => |e| {
-                (struct { fn __kout(__fd: i32, __b: []const u8) void { if (@import("builtin").os.tag == .freestanding) { const __kc = struct { extern var stdout: ?*anyopaque; extern var stderr: ?*anyopaque; extern fn fputs(__s: [*:0]const u8, __st: ?*anyopaque) c_int; }; var __kt: [4096]u8 = undefined; for (0..(__b.len + __kt.len - 2) / (__kt.len - 1)) |__ki| { const __kn = @min(__kt.len - 1, __b.len - __ki * (__kt.len - 1)); @memcpy(__kt[0..__kn], __b[__ki * (__kt.len - 1)..][0..__kn]); __kt[__kn] = 0; @import("std").mem.doNotOptimizeAway(__kc.fputs(@as([*:0]const u8, @ptrCast(&__kt)), if (__fd == 2) __kc.stderr else __kc.stdout)); } } else if (@import("builtin").os.tag == .windows) { const __wh = @import("std").os.windows.GetStdHandle(if (__fd == 2) @import("std").os.windows.STD_ERROR_HANDLE else @import("std").os.windows.STD_OUTPUT_HANDLE) catch return; @import("std").mem.doNotOptimizeAway(@import("std").os.windows.WriteFile(__wh, __b, null) catch @as(usize, 0)); } else { @import("std").mem.doNotOptimizeAway(@import("std").posix.write(__fd, __b) catch @as(usize, 0)); } } fn __kw(comptime __f: []const u8, __a: anytype) void { var __kb: [65536]u8 = undefined; const __ks = @import("std").fmt.bufPrint(&__kb, __f, __a) catch __kb[0..0]; __kout(1, __ks); } }).__kw("metal init failed: {s}\n", .{e});
+                (struct { fn __kout(__fd: i32, __b: []const u8) void { if (@import("builtin").os.tag == .freestanding) { const __kc = struct { extern var stdout: ?*anyopaque; extern var stderr: ?*anyopaque; extern fn fputs(__s: [*:0]const u8, __st: ?*anyopaque) c_int; }; var __kt: [4096]u8 = undefined; for (0..(__b.len + __kt.len - 2) / (__kt.len - 1)) |__ki| { const __kn = @min(__kt.len - 1, __b.len - __ki * (__kt.len - 1)); @memcpy(__kt[0..__kn], __b[__ki * (__kt.len - 1)..][0..__kn]); __kt[__kn] = 0; @import("std").mem.doNotOptimizeAway(__kc.fputs(@as([*:0]const u8, @ptrCast(&__kt)), if (__fd == 2) __kc.stderr else __kc.stdout)); } } else { @import("std").mem.doNotOptimizeAway(@import("std").posix.write(__fd, __b) catch @as(usize, 0)); } } fn __kw(comptime __f: []const u8, __a: anytype) void { var __kb: [65536]u8 = undefined; const __ks = @import("std").fmt.bufPrint(&__kb, __f, __a) catch __kb[0..0]; __kout(1, __ks); } }).__kw("metal init failed: {s}\n", .{e});
             },
             // >>> BRANCH: native_smoke.k:18  | win w |>
             .win => |w| {
@@ -181,7 +238,7 @@ pub const main_module = struct {
                 const w2 = result_2.done;
                 const result_3 = koru_libs.koru_canvas.window_close_event.handler(.{ .win = w2 });
                 _ = &result_3;
-                (struct { fn __kout(__fd: i32, __b: []const u8) void { if (@import("builtin").os.tag == .freestanding) { const __kc = struct { extern var stdout: ?*anyopaque; extern var stderr: ?*anyopaque; extern fn fputs(__s: [*:0]const u8, __st: ?*anyopaque) c_int; }; var __kt: [4096]u8 = undefined; for (0..(__b.len + __kt.len - 2) / (__kt.len - 1)) |__ki| { const __kn = @min(__kt.len - 1, __b.len - __ki * (__kt.len - 1)); @memcpy(__kt[0..__kn], __b[__ki * (__kt.len - 1)..][0..__kn]); __kt[__kn] = 0; @import("std").mem.doNotOptimizeAway(__kc.fputs(@as([*:0]const u8, @ptrCast(&__kt)), if (__fd == 2) __kc.stderr else __kc.stdout)); } } else if (@import("builtin").os.tag == .windows) { const __wh = @import("std").os.windows.GetStdHandle(if (__fd == 2) @import("std").os.windows.STD_ERROR_HANDLE else @import("std").os.windows.STD_OUTPUT_HANDLE) catch return; @import("std").mem.doNotOptimizeAway(@import("std").os.windows.WriteFile(__wh, __b, null) catch @as(usize, 0)); } else { @import("std").mem.doNotOptimizeAway(@import("std").posix.write(__fd, __b) catch @as(usize, 0)); } } fn __kw(comptime __f: []const u8, __a: anytype) void { var __kb: [65536]u8 = undefined; const __ks = @import("std").fmt.bufPrint(&__kb, __f, __a) catch __kb[0..0]; __kout(1, __ks); } }).__kw("native metal: frames done, window closed\n", .{});
+                (struct { fn __kout(__fd: i32, __b: []const u8) void { if (@import("builtin").os.tag == .freestanding) { const __kc = struct { extern var stdout: ?*anyopaque; extern var stderr: ?*anyopaque; extern fn fputs(__s: [*:0]const u8, __st: ?*anyopaque) c_int; }; var __kt: [4096]u8 = undefined; for (0..(__b.len + __kt.len - 2) / (__kt.len - 1)) |__ki| { const __kn = @min(__kt.len - 1, __b.len - __ki * (__kt.len - 1)); @memcpy(__kt[0..__kn], __b[__ki * (__kt.len - 1)..][0..__kn]); __kt[__kn] = 0; @import("std").mem.doNotOptimizeAway(__kc.fputs(@as([*:0]const u8, @ptrCast(&__kt)), if (__fd == 2) __kc.stderr else __kc.stdout)); } } else { @import("std").mem.doNotOptimizeAway(@import("std").posix.write(__fd, __b) catch @as(usize, 0)); } } fn __kw(comptime __f: []const u8, __a: anytype) void { var __kb: [65536]u8 = undefined; const __ks = @import("std").fmt.bufPrint(&__kb, __f, __a) catch __kb[0..0]; __kout(1, __ks); } }).__kw("native metal: frames done, window closed\n", .{});
             },
         }
     }

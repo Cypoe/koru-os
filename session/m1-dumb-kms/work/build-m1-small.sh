@@ -7,8 +7,8 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 WORK="$(cd "$(dirname "$0")" && pwd)"
-KORUC="${KORUC:-$HOME/src/koru-cypoe/zig-out/bin/koruc}"
-export KORU_STDLIB="${KORU_STDLIB:-$HOME/src/koru-cypoe/koru_std}"
+KORUC="${KORUC:-$HOME/src/koru/zig-out/bin/koruc}"
+export KORU_STDLIB="${KORU_STDLIB:-$HOME/src/koru/koru_std}"
 ZIG="${ZIG:-/opt/homebrew/bin/zig}"
 PROG="$ROOT/koru/fb/tests/boot_fb.k"
 OUT="${1:-$WORK/m1.elf}"
