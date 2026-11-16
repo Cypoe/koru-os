@@ -4,7 +4,7 @@ iface: koruos/oracle.klanker
 arms: [koru-native]
 lane: oracle
 needs: [py-cpython-child]
-accept: klanker + agents-* deps run under the CPython child; REPL answers, bot-to-bot over unix socket
+accept: klanker + agents-* deps run under the CPython child; REPL answers, bot-to-bot over unix socket, real chat turn over AF_INET bridge
 tier: qemu
 status: landed
 evidence: V
@@ -15,9 +15,9 @@ provenance: project-owned codebase — no donor diligence needed
 # klanker-child
 
 klanker — the Lolaplex agent shell — running unmodified inside the
-CPython child: `klanker sense`/`klanker prompt` as real subprocesses,
-and two children holding bot-to-bot traffic over a unix socket (the
-same-kernel shape that needs no AF_INET at all).
+CPython child: `klanker sense`/`klanker prompt`/`klanker chat` as real
+subprocesses, and two children holding bot-to-bot traffic over a unix
+socket (the same-kernel shape that needs no AF_INET at all).
 
 ## Acceptance — MET (QEMU serial)
 
@@ -33,6 +33,13 @@ fetch-pyroot + klanker/agents-* sources flattened into the stdlib dir
 - `KL botsock bot-ping status 0` — fork'd child connects to the
   parent's `/run/bot.sock` listener, minted as a S_IFSOCK ent inside
   the initramfs RAM table (the ONE mutation the RO view allows).
+- `KL chat rc 0` — a full `klanker chat ping --provider
+  lmstudio.local` turn: manifest → urlopen → `socket(AF_INET)` →
+  connect → SSE `chat/completions` exchange → JSON parse → rc 0.
+  The request rides the COM2 bridge to `netrelay.py` → one real TCP
+  connection on the host → llama-server (live `qwen3.5-4b` proved
+  it; the gate's `llmstub` speaks the same SSE shape). See
+  `challenges/netsock-relay/entry.md`.
 - `KL COMPLETE`, `PY GATE COMPLETE`, status=0.
 
 ## Measured gaps (named, honest)
@@ -41,16 +48,16 @@ fetch-pyroot + klanker/agents-* sources flattened into the stdlib dir
   clone-thread shape (`0x7d0f00`) — `clone-threads` stands as the
   rung, now proven by klanker's own demand.
 - **`KL chat rc 1` → `Turn error: <urlopen error [Errno 97] Address
-  family not supported by protocol>`** — the payload now carries a
-  provider manifest: `/providers/lmstudio.local.json` (the
+  family not supported by protocol>`** — RESOLVED by `netsock-relay`:
+  the payload carries `/providers/lmstudio.local.json` (the
   `AGENTS_PROVIDERS_DIR` overlay convention — host URLs ride the
-  payload, never the package) names LM Studio's llama-server on the
+  payload, never the package) naming LM Studio's llama-server on the
   QEMU host via slirp's `10.0.2.2` alias, model `qwen3.5-4b`, auth
-  disabled. Manifest resolution, request build, and urlopen all
-  cleared; the refusal is `socket(AF_INET)` → `-97 EAFNOSUPPORT` —
-  the net stack is the named provider gap. En route the trimmed
-  stdlib needed `stringprep.py` (the `idna` codec's dependency —
-  urllib's host normalization).
+  disabled. The wall walked: `EAFNOSUPPORT` → `EOPNOTSUPP`
+  (`setsockopt` errno-name ruling — see
+  `concepts/frag-the-errno-name-is-the-contract.md`) → rc 0.
+  En route the trimmed stdlib needed `stringprep.py` (the `idna`
+  codec's dependency — urllib's host normalization).
 - `getcwd` returns `/` (the view root is the cwd model); `readlink`
   ENOSYS — survived, named.
 - `nr=0x19 readv` refused in the bag → python fell back cleanly.

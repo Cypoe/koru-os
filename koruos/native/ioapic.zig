@@ -134,6 +134,7 @@ pub fn init() void {
     // line left PIC-routed is dead the moment the PIC mask drops.
     route(0, false, bsp); // PIT
     route(1, false, bsp); // 8042
+    route(3, false, bsp); // COM2 — the net-relay's RX line
     route(12, false, bsp); // PS/2 aux
     for (pci.devices[0..pci.count]) |d| {
         if (d.irq_pin != 0 and d.irq_line != 0 and d.irq_line != 0xFF)

@@ -470,12 +470,15 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             irq_ticks += 1;
             if (irq_ticks == 1) say("irq: timer delivered\n");
             wakeKind(.poll); // deadline re-check — the tick is poll's clock
+            netBridgePoll(); // RX drain + TX stragglers — the net tick
             schedPreempt(f);
         } else if (f.vec == 0x21) {
             kbd.irq(); // 8042 scancode → input ring
             // a landed ASCII byte is worth a conin wake; a bare break
             // code is not — the resumed read would just re-block.
             if (kbd.conPending()) wakeKind(.conin);
+        } else if (f.vec == 0x23) {
+            netBridgePoll(); // COM2 RX-ready — the relay has bytes
         } else if (f.vec == 0x2C) {
             mouse_irq(); // 8042 aux channel — PS/2 mouse packet byte
         } else if (virtio_irq_line != 0xFF and f.vec == 0x20 + @as(u64, virtio_irq_line)) {
@@ -688,6 +691,7 @@ pub fn init() void {
     for (0..64) |v| setIdtGate(v, irqstub_table[v], v == 3);
     loadTables();
     koru_irq_unmask(0); // PIT tick — the standing delivery proof
+    netInit(); // COM2 probe — a present port arms the AF_INET bridge
     asm volatile ("sti");
 }
 
@@ -2030,8 +2034,11 @@ fn canonNr(nr: u64) u64 {
         // resolves. poll/ppoll multiplex those same channels — the
         // class question is "may this child wait on channels".
         41, 42, 43, 288, 44, 45, 46, 47, 49, 50, 53, 319, 7, 271 => 22,
-        55 => 22, // getsockopt — a channel-fact query on the same class
+        48, 54, 55 => 22, // shutdown/setsockopt/getsockopt — channel-fact
+                          // verbs on the same class (the arm decides honesty)
         51, 52 => 22, // getsockname/getpeername — same channel-fact class
+        23 => 22, // select — the bitset shape of channel-wait (pselect6
+                  // 270 already folds here below)
         // epoll is the same class: an interest list is another way to
         // wait on channels — create/ctl/wait share the bit.
         213, 232, 233, 281, 291 => 22,
@@ -3676,7 +3683,7 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
 // the load-bearing consumer: a pool fd crosses the socket, the server
 // mmaps it, and the buffer's frames are genuinely shared. The wait key
 // is .sock + wait_pipe = pair*2+dir — mark-only wakes like every kind.
-const NSOCKS = 4;
+const NSOCKS = 8;
 const SOCKQ = 8; // queued fd refs per direction — a bound, like the ring
 // ---- the roster view ------------------------------------------------------
 // nr522 procview(): mint a read-only fd whose bytes are a generated
@@ -3783,6 +3790,13 @@ const SockPair = struct {
     conn: bool = false, // socket() mints unconnected — I/O is ENOTCONN
     owner: [2]u32 = .{ 0, 0 }, // roster slot+1 of each side's minter —
                              // SO_PEERCRED's honest answer
+    fam: u8 = 1,   // 1 unix / 2 inet — connect() routes on it
+    nid: u8 = 0,   // relay session id (inet only; 0 = unnegotiated)
+    cst: u8 = 0,   // 0 idle / 1 connecting / 2 up — the inet handshake
+    cerr: u8 = 0,  // the relay's connect errno — SO_ERROR's answer
+    wshut: u8 = 0, // SHUT_WR landed — writes are EPIPE now
+    rst: u8 = 0,   // the relay said RST — drained reads are ECONNRESET
+    npeer: [6]u8 = .{0} ** 6, // peer ip:4 + port:2 wire-order — getpeername
 };
 var socks: [NSOCKS]SockPair = .{SockPair{}} ** NSOCKS;
 
@@ -3854,6 +3868,247 @@ fn sockPairCreate(conn: bool) ?usize {
     return null;
 }
 
+// ---- net-uart-relay: AF_INET over the COM2 host bridge -----------------
+// An AF_INET socket is a sock pair whose peer end is owned by the kernel
+// BRIDGE — the child's writes land in dir[1] and get framed onto COM2
+// toward the host relay, and the relay's DATA frames land in dir[0] where
+// the existing ring/wake/close machinery is the session. The TCP stack
+// lives on the host (the same delegation slirp performs under a NIC —
+// the boundary just moved from L2 frames to L4 socket ops), so the
+// surface is real AF_INET semantics while the stack placement stays
+// honestly named as a provider, not a netstack.
+//
+// Wire: 0x4E | id | op | len:u16le | payload — guest ids are pair+1.
+//   guest→host: 1 CONNECT{ip:u32be,port:u16be} 2 DATA 3 CLOSE 4 SHUT
+//   host→guest: 1 COK{errno u8} 2 DATA 3 EOF 4 RST
+const BRIDGE_OWNER: u32 = 0xFFFF_FFFF;
+const COM2: u16 = 0x2F8;
+var com2_live = false;
+
+fn com2Put(b: u8) void {
+    var spin: u32 = 0;
+    while (inb(COM2 + 5) & 0x20 == 0) { // THR empty — a wedged peer can't
+        spin += 1;                     // hang the seam: bounded, then drop
+        if (spin > 1_000_000) return;
+    }
+    outb(COM2, b);
+}
+
+fn netFrame(id: u8, op: u8, pay: []const u8) void {
+    if (!com2_live) return;
+    com2Put(0x4E);
+    com2Put(id);
+    com2Put(op);
+    com2Put(@truncate(pay.len));
+    com2Put(@truncate(pay.len >> 8));
+    for (pay) |b| com2Put(b);
+}
+
+// Move the child's pending tx bytes (dir[1]) onto the wire. Called from
+// sockWrite's push (eager) and the bridge poll (stragglers).
+fn netTxPair(pair: usize) void {
+    const s = &socks[pair];
+    if (!s.conn or s.nid == 0) return;
+    const d = &s.dir[1];
+    var moved = false;
+    while (d.count > 0) {
+        var pay: [512]u8 = undefined;
+        var n: usize = 0;
+        while (n < pay.len and d.count > 0) : (n += 1) {
+            pay[n] = d.buf[d.tail];
+            d.tail = (d.tail + 1) % d.buf.len;
+            d.count -= 1;
+        }
+        netFrame(s.nid, 2, pay[0..n]);
+        moved = true;
+    }
+    if (moved) wakeSock(pair, 1); // ring space freed — writers re-check
+}
+
+// RX deframer — a byte-at-a-time machine; a DATA byte that can't take
+// ring space simply isn't consumed yet (netRxStalled leaves it in the
+// UART FIFO — TCP backpressure does flow control for free).
+var nrx_state: u8 = 0; // 0 magic 1 id 2 op 3 lenlo 4 lenhi 5 payload
+var nrx_id: u8 = 0;
+var nrx_op: u8 = 0;
+var nrx_len: u16 = 0;
+var nrx_got: u16 = 0;
+var nrx_pay: [16]u8 = undefined;
+var nrx_dirty: u8 = 0; // bitmask of pairs that gained rx bytes
+
+// Relay session ids are a 255-deep pool detached from the socks[] index —
+// nid = pair+1 would let a stale frame (in-flight DATA/EOF after our CLOSE)
+// alias whichever socket reuses the slot. A freed id's frames match no
+// pair and die at dispatch.
+var sid_live: [8]u32 = .{1} ++ .{0} ** 7; // bit0 pinned — id 0 means unnegotiated
+
+fn netSidAlloc() u8 {
+    for (0..8) |w| {
+        const avail = ~sid_live[w];
+        if (avail == 0) continue;
+        const bit = @ctz(avail);
+        sid_live[w] |= @as(u32, 1) << @intCast(bit);
+        return @intCast(w * 32 + bit);
+    }
+    return 0;
+}
+
+fn netSidFree(id: u8) void {
+    sid_live[id >> 5] &= ~(@as(u32, 1) << @intCast(id & 31));
+}
+
+fn netPairBySid(id: u8) ?usize {
+    if (id == 0) return null;
+    for (0..NSOCKS) |i|
+        if (socks[i].used and socks[i].fam == 2 and socks[i].nid == id) return i;
+    return null;
+}
+
+fn netRxStalled() bool {
+    if (nrx_state != 5 or nrx_op != 2 or nrx_id == 0) return false;
+    const pi = netPairBySid(nrx_id) orelse return false;
+    return socks[pi].dir[0].count == socks[pi].dir[0].buf.len;
+}
+
+fn netControlDone() void {
+    if (nrx_id == 0) return;
+    const pi = netPairBySid(nrx_id) orelse return;
+    const s = &socks[pi];
+    switch (nrx_op) {
+        1 => { // COK — the relay's connect verdict
+            if (nrx_pay[0] == 0) {
+                s.cst = 2;
+                s.conn = true;
+            } else {
+                s.cst = 0;
+                s.cerr = nrx_pay[0];
+            }
+            wakeSock(pi, 0); // a parked connect re-checks
+        },
+        3 => sockCloseEnd(pi, 1), // EOF — the host half-closed
+        4 => { // RST — same teardown, reads answer ECONNRESET
+            s.rst = 1;
+            sockCloseEnd(pi, 1);
+        },
+        else => {},
+    }
+}
+
+fn netRxByte(b: u8) void {
+    switch (nrx_state) {
+        0 => {
+            if (b == 0x4E) nrx_state = 1;
+        },
+        1 => {
+            nrx_id = b;
+            nrx_state = 2;
+        },
+        2 => {
+            nrx_op = b;
+            nrx_state = 3;
+        },
+        3 => {
+            nrx_len = b;
+            nrx_state = 4;
+        },
+        4 => {
+            nrx_len |= @as(u16, b) << 8;
+            nrx_got = 0;
+            nrx_state = if (nrx_len == 0) 0 else 5;
+            if (nrx_len == 0) netControlDone();
+        },
+        else => { // 5 — payload
+            if (nrx_op == 2) {
+                if (netPairBySid(nrx_id)) |pi| {
+                    const d = &socks[pi].dir[0];
+                    if (d.count < d.buf.len) {
+                        d.buf[d.head] = b;
+                        d.head = (d.head + 1) % d.buf.len;
+                        d.count += 1;
+                        nrx_dirty |= @as(u8, 1) << @intCast(pi);
+                    }
+                }
+                // a dead pair's payload is consumed and dropped — the
+                // stream stays framed
+            } else if (nrx_got < nrx_pay.len) nrx_pay[nrx_got] = b;
+            nrx_got += 1;
+            if (nrx_got >= nrx_len) {
+                netControlDone();
+                nrx_state = 0;
+            }
+        },
+    }
+}
+
+// One bridge pass: drain UART RX into sessions, wake touched readers,
+// flush any tx stragglers. Rides the tick, IRQ3, and the connect loop.
+fn netBridgePoll() void {
+    if (!com2_live) return;
+    var n: usize = 0;
+    while (n < 4096 and !netRxStalled() and (inb(COM2 + 5) & 1) != 0) : (n += 1)
+        netRxByte(inb(COM2));
+    var mask = nrx_dirty;
+    nrx_dirty = 0;
+    var pi: usize = 0;
+    while (mask != 0) : (mask >>= 1) {
+        if (mask & 1 != 0) wakeSock(pi, 0);
+        pi += 1;
+    }
+    pi = 0;
+    while (pi < NSOCKS) : (pi += 1)
+        if (socks[pi].used and socks[pi].fam == 2) netTxPair(pi);
+}
+
+// COM2 probe + arm: an absent UART reads 0xFF on a floating bus — only a
+// present port gets IER + the IRQ3 line, so non-net boots stay silent.
+fn netInit() void {
+    outb(COM2 + 1, 0x00);
+    outb(COM2 + 3, 0x80);
+    outb(COM2 + 0, 0x01);
+    outb(COM2 + 1, 0x00);
+    outb(COM2 + 3, 0x03);
+    outb(COM2 + 2, 0xC7);
+    outb(COM2 + 4, 0x0B);
+    if (inb(COM2 + 5) == 0xFF) return;
+    com2_live = true;
+    _ = inb(COM2 + 2); // IIR — clear any pending source
+    _ = inb(COM2); // drain a stale RX byte
+    outb(COM2 + 1, 0x01); // IER: RX-ready only — TX stays polled
+    koru_irq_unmask(3);
+    say("net: com2 relay armed\n");
+}
+
+// nr 42 inet arm — sockaddr_in {family:u16le, port:u16be, ip:u32be}: the
+// CONNECT frame rides out and the caller parks until COK/CERR; a
+// nonblocking fd hears EINPROGRESS and finishes via POLLOUT/SO_ERROR.
+fn netInetConnect(c: *Child, f: *TrapFrame, pair: usize) i64 {
+    const s = &socks[pair];
+    var ab: [16]u8 = undefined;
+    if (f.rdx < 16 or copyFromUser(c, @intCast(f.rsi), ab[0..16]) < 16) return -22;
+    if (std.mem.readInt(u16, ab[0..2], .little) != 2) return -97;
+    var pb: [6]u8 = undefined;
+    @memcpy(pb[0..4], ab[4..8]); // ip + port, wire order verbatim
+    @memcpy(pb[4..6], ab[2..4]);
+    while (true) {
+        if (s.cst == 0) {
+            if (s.nid == 0) {
+                s.nid = netSidAlloc();
+                if (s.nid == 0) return -105; // ENOBUFS — pool drained
+            }
+            s.cst = 1;
+            s.cerr = 0;
+            s.npeer = pb; // getpeername answers what the CONNECT named
+            netFrame(s.nid, 1, &pb);
+        }
+        if (s.cst == 2) return 0; // resolved while we weren't parked
+        if (c.fdnb[@intCast(f.rdi)] != 0) return -115; // EINPROGRESS
+        c.wait_pipe = pair * 2;
+        kblock(.sock); // wake = the COK frame landed
+        if (s.cst == 0) return -@as(i64, @max(1, s.cerr));
+        if (s.cst == 2) return 0;
+    }
+}
+
 // Dup a live fd entry for transfer: bump the endpoint's refs and return
 // the queued-ref record. fs goes through the provider dup (shared-offset
 // POSIX semantics, same as cloneFd). false = undupable kind.
@@ -3912,6 +4167,7 @@ fn fdFreeRef(r: FdRef) void {
 fn sockWrite(c: *Child, pair: usize, dir: usize, bva: u64, want: u64, nb: bool) i64 {
     if (want == 0) return 0;
     if (!socks[pair].conn) return -107; // ENOTCONN — socket() before connect
+    if (socks[pair].wshut != 0) return -32; // EPIPE — SHUT_WR landed
     const d = &socks[pair].dir[dir];
     while (true) {
         if (socks[pair].refs[dir] == 0) return -32; // EPIPE — reader side gone
@@ -3926,6 +4182,7 @@ fn sockWrite(c: *Child, pair: usize, dir: usize, bva: u64, want: u64, nb: bool) 
         }
         if (n != 0) {
             sock_sends += 1;
+            if (socks[pair].fam == 2) netTxPair(pair); // relay hears it now
             wakeSock(pair, dir); // bytes landed — prod the parked reader
             return @intCast(n);
         }
@@ -3958,7 +4215,9 @@ fn sockRead(c: *Child, pair: usize, dir: usize, bva: u64, want: u64, nb: bool) i
             }
             if (userEntry(c, @intCast(bva)) & 1 == 0) return -14;
         } else if (socks[pair].refs[dir ^ 1] == 0) {
-            return 0; // peer gone and drained — this read IS the EOS
+            // peer gone and drained — EOS, or ECONNRESET where the
+            // relay said RST (inet pairs only; unix never sets it)
+            return if (socks[pair].rst != 0) -104 else 0;
         } else {
             if (nb) return -11; // MSG_DONTWAIT — EAGAIN, dispatch's empty check
             c.wait_pipe = pair * 2 + dir;
@@ -3970,16 +4229,25 @@ fn sockRead(c: *Child, pair: usize, dir: usize, bva: u64, want: u64, nb: bool) i
 fn sockCloseEnd(pair: usize, side: usize) void {
     const s = &socks[pair];
     if (s.refs[side] > 0) s.refs[side] -= 1;
+    // inet: the last child-side ref dying closes the relay session —
+    // CLOSE carries it host-side, and the bridge ref drops with it
+    // (close() is a full teardown; in-flight relay data dies there).
+    if (s.fam == 2 and s.nid != 0 and side == 0 and s.refs[0] == 0) {
+        netFrame(s.nid, 3, &.{});
+        s.refs[1] = 0;
+    }
     wakeSock(pair, side ^ 1); // the peer's waiters re-check the refs
     wakeSock(pair, side);
     if (s.refs[0] == 0 and s.refs[1] == 0) {
-        // Both ends gone — queued refs die with the pair.
+        // Both ends gone — queued refs die with the pair, and the relay
+        // session id returns to the pool before the slot can reissue.
         for (0..2) |d| {
             while (s.dir[d].qn > 0) {
                 s.dir[d].qn -= 1;
                 fdFreeRef(s.dir[d].q[s.dir[d].qn]);
             }
         }
+        if (s.fam == 2 and s.nid != 0) netSidFree(s.nid);
         s.* = .{};
     }
 }
@@ -5029,10 +5297,16 @@ fn sockPath(c: *Child, ava: u64, alen: u64, out: []u8) ?[]const u8 {
 // ENOTCONN. SOCK_CLOEXEC/SOCK_NONBLOCK ride the upper type bits and
 // are masked like socketpair's (flags are fcntl no-ops here).
 fn childSocket(c: *Child, f: *TrapFrame) i64 {
-    if (f.rdi != 1 or (f.rsi & 0xF) != 1) return -97; // EAFNOSUPPORT
+    const inet = f.rdi == 2; // AF_INET — the COM2 bridge serves streams
+    if ((f.rdi != 1 and !inet) or (f.rsi & 0xF) != 1) return -97; // EAFNOSUPPORT
     const slot = sockSlot(c) orelse return -24; // EMFILE
     const pi = sockPairCreate(false) orelse return -24;
-    socks[pi].refs[1] = 0; // no peer until connect grafts a session
+    if (inet) {
+        socks[pi].fam = 2;
+        socks[pi].owner[1] = BRIDGE_OWNER; // the relay stands as peer
+    } else {
+        socks[pi].refs[1] = 0; // no peer until connect grafts a session
+    }
     socks[pi].owner[0] = @intCast(cur_child + 1);
     c.fdkinds[slot] = .sock;
     c.fds[slot] = pi * 2 + 1;
@@ -5051,6 +5325,9 @@ fn childBind(c: *Child, f: *TrapFrame) i64 {
     const fd: usize = @intCast(f.rdi);
     if (c.fdkinds[fd] != .sock) return -88; // ENOTSOCK
     const v = c.fds[fd] - 1;
+    if (socks[@intCast(v >> 1)].fam == 2) return -95; // EOPNOTSUPP —
+        // the relay is outbound-only this rung; bind needs a listener
+        // model the bridge doesn't carry yet, not a mangled sockaddr_in
     if (socks[@intCast(v >> 1)].conn) return -22; // EINVAL — already connected
     const ops = c.fsv orelse return -38; // ENOSYS — no view, no name
     var pb: [112]u8 = undefined;
@@ -5104,11 +5381,20 @@ fn childSockName(c: *Child, f: *TrapFrame, peer: bool) i64 {
     const cap: usize = @intCast(std.mem.readInt(u64, &ava, .little));
     var name: [112]u8 = std.mem.zeroes([112]u8);
     var nlen: usize = 2;
-    std.mem.writeInt(u16, name[0..2], 1, .little); // AF_UNIX
     switch (c.fdkinds[fd]) {
         .sock => {
             const v = c.fds[fd] - 1;
-            if (peer and !socks[@intCast(v >> 1)].conn) return -107;
+            const sp = &socks[@intCast(v >> 1)];
+            if (sp.fam == 2) {
+                if (peer and !sp.conn) return -107;
+                std.mem.writeInt(u16, name[0..2], 2, .little); // AF_INET
+                if (peer) @memcpy(name[2..8], &sp.npeer);
+                nlen = 16; // sockaddr_in — the host owns the local end,
+                    // so getsockname is family + zeros like an unnamed end
+            } else {
+                std.mem.writeInt(u16, name[0..2], 1, .little); // AF_UNIX
+                if (peer and !sp.conn) return -107;
+            }
         },
         .slisten => {
             if (peer) return -107; // a listener has no session peer
@@ -5136,6 +5422,7 @@ fn childConnect(c: *Child, f: *TrapFrame) i64 {
     const v = c.fds[fd] - 1;
     const op: usize = @intCast(v >> 1);
     if (socks[op].conn) return -106; // EISCONN
+    if (socks[op].fam == 2) return netInetConnect(c, f, op);
     const ops = c.fsv orelse return -38;
     var pb: [112]u8 = undefined;
     const path = sockPath(c, f.rsi, f.rdx, &pb) orelse return -22;
@@ -5231,7 +5518,22 @@ fn childGetsockopt(c: *Child, f: *TrapFrame) i64 {
     if (f.rdi >= c.fds.len) return -9;
     const fd: usize = @intCast(f.rdi);
     if (c.fdkinds[fd] != .sock) return -88; // ENOTSOCK
-    if (f.rsi != 1 or f.rdx != 17) return -92; // SOL_SOCKET/SO_PEERCRED only
+    if (f.rsi == 1 and f.rdx == 4) { // SOL_SOCKET/SO_ERROR — the relay's
+        // connect verdict (inet pairs); consumed, then cleared like linux
+        const v0 = c.fds[fd] - 1;
+        const s = &socks[@intCast(v0 >> 1)];
+        if (s.fam != 2) return -92; // unix ends have no pending error to name
+        var vb: [4]u8 = undefined;
+        std.mem.writeInt(i32, &vb, s.cerr, .little);
+        var lb: [4]u8 = undefined;
+        if (copyFromUser(c, @intCast(f.r8), &lb) < 4) return -14;
+        const cap: usize = @intCast(@min(4, std.mem.readInt(u32, &lb, .little)));
+        std.mem.writeInt(u32, &lb, 4, .little);
+        s.cerr = 0;
+        if (copyToUser(c, @intCast(f.r8), &lb) < 4) return -14;
+        return if (copyToUser(c, @intCast(f.r10), vb[0..cap]) == cap) 0 else -14;
+    }
+    if (f.rsi != 1 or f.rdx != 17) return -92; // SOL_SOCKET/SO_PEERCRED else
     var lb: [4]u8 = undefined;
     if (copyFromUser(c, @intCast(f.r8), &lb) < 4) return -14;
     if (std.mem.readInt(u32, &lb, .little) < 12) return -22;
@@ -5349,6 +5651,49 @@ fn fdPollRev(c: *Child, fdi: usize, ev: u16) u16 {
         .none => return POLLNVAL,
     }
     return r;
+}
+
+// nr 23 select / nr 270 pselect6 — the fd_set multiplexer, same readiness
+// truth as poll in a different bitset shape. timeout NULL parks until
+// ready; the deadline rides the tick like every .poll wait.
+const FDSET_BYTES = 128; // 1024 fds — the POSIX fd_set width
+
+fn childSelect(c: *Child, nfdsu: u64, rva: u64, wva: u64, xva: u64,
+        deadline: u64) i64 {
+    const nfds: usize = @intCast(@min(nfdsu, 1024));
+    const va = [3]u64{ rva, wva, xva };
+    var in: [3][FDSET_BYTES]u8 = .{.{0} ** FDSET_BYTES} ** 3;
+    var res: [3][FDSET_BYTES]u8 = undefined;
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        if (va[i] == 0) continue;
+        if (copyFromUser(c, @intCast(va[i]), &in[i]) < FDSET_BYTES) return -14;
+    }
+    while (true) {
+        res = .{.{0} ** FDSET_BYTES} ** 3;
+        var nready: i64 = 0;
+        i = 0;
+        while (i < 3) : (i += 1) {
+            if (va[i] == 0) continue;
+            const ev: u16 = switch (i) { 0 => POLLIN, 1 => POLLOUT, else => POLLERR };
+            var fd: usize = 0;
+            while (fd < nfds) : (fd += 1) {
+                if (in[i][fd >> 3] & (@as(u8, 1) << @intCast(fd & 7)) == 0) continue;
+                if (fdPollRev(c, fd, ev) != 0) {
+                    res[i][fd >> 3] |= @as(u8, 1) << @intCast(fd & 7);
+                    nready += 1;
+                }
+            }
+        }
+        if (nready != 0 or irq_ticks >= deadline) {
+            i = 0;
+            while (i < 3) : (i += 1)
+                if (va[i] != 0 and copyToUser(c, @intCast(va[i]), &res[i]) < FDSET_BYTES)
+                    return -14;
+            return nready;
+        }
+        kblock(.poll); // wake = any readiness change or the tick
+    }
 }
 
 // One readiness pass: fills revents, returns the count of ready fds.
@@ -6493,6 +6838,48 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                      // the fcntl no-ops
             f.rax = @bitCast(childAccept(c, f));
         },
+        48 => { // shutdown(fd, how) — a stream's half-close. inet pairs:
+                // SHUT_WR frames host-side + wshut; SHUT_RDWR is a full
+                // CLOSE. unix pairs refuse — no user of it yet, and a
+                // silent no-op would lie.
+            if (f.rdi >= c.fds.len or c.fdkinds[@intCast(f.rdi)] != .sock) {
+                f.rax = @bitCast(@as(i64, -88));
+            } else {
+                const v = c.fds[@intCast(f.rdi)] - 1;
+                const s = &socks[@intCast(v >> 1)];
+                if (s.fam != 2 or s.nid == 0) {
+                    f.rax = @bitCast(@as(i64, -95)); // EOPNOTSUPP
+                } else switch (f.rsi) {
+                    1 => { // SHUT_WR — writes are EPIPE; reads still drain
+                        s.wshut = 1;
+                        netFrame(s.nid, 4, &.{});
+                        f.rax = 0;
+                    },
+                    2 => { // SHUT_RDWR — full teardown, EOS after drain
+                        s.wshut = 1;
+                        netFrame(s.nid, 3, &.{});
+                        sockCloseEnd(@intCast(v >> 1), 1);
+                        f.rax = 0;
+                    },
+                    else => f.rax = @bitCast(@as(i64, -22)),
+                }
+            }
+        },
+        54 => { // setsockopt(fd, level, optname, val, len) — TCP_NODELAY
+                // is semantically already true here (the bridge frames a
+                // guest write the tick it lands; nothing coalesces), so
+                // accepting it is no lie. Every other option answers
+                // ENOPROTOOPT — linux's own word for "this level doesn't
+                // define that", which is exactly the bridge's situation.
+            if (f.rdi >= c.fds.len or c.fdkinds[@intCast(f.rdi)] != .sock) {
+                f.rax = @bitCast(@as(i64, -88));
+            } else if (f.rsi == 6 and f.rdx == 1 and
+                socks[@intCast((c.fds[@intCast(f.rdi)] - 1) >> 1)].fam == 2) {
+                f.rax = 0; // IPPROTO_TCP/TCP_NODELAY on the relay stream
+            } else {
+                f.rax = @bitCast(@as(i64, -92)); // ENOPROTOOPT, loudly
+            }
+        },
         46 => { // sendmsg(fd, msghdr, flags) — iov bytes + SCM_RIGHTS;
                 // MSG_DONTWAIT flushes EAGAIN rather than parking.
             f.rax = @bitCast(childSendmsg(c, f.rdi, f.rsi, f.rdx));
@@ -6533,6 +6920,56 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                // the typed projection; .poll continuation, tick deadlines.
             const ms: i64 = @as(i32, @bitCast(@as(u32, @truncate(f.rdx))));
             f.rax = @bitCast(childPoll(c, f.rdi, f.rsi, ms));
+        },
+        23 => { // select(nfds, rfds, wfds, xfds, tv) — the POSIX bitset
+                // wait; tv is a relative deadline, NULL parks until ready.
+            var deadline: u64 = std.math.maxInt(u64);
+            var bad: i64 = 0;
+            if (f.r8 != 0) {
+                var tb: [16]u8 = undefined;
+                if (copyFromUser(c, @intCast(f.r8), &tb) < 16) {
+                    bad = -14;
+                } else {
+                    const sec = std.mem.readInt(i64, tb[0..8], .little);
+                    const usec = std.mem.readInt(i64, tb[8..16], .little);
+                    if (sec < 0 or usec < 0) {
+                        bad = -22;
+                    } else {
+                        deadline = irq_ticks + pollDeadlineTicks(
+                            sec * 1000 + @divTrunc(usec, 1000));
+                    }
+                }
+            }
+            f.rax = @bitCast(if (bad != 0) bad else
+                childSelect(c, f.rdi, f.rsi, f.rdx, f.r10, deadline));
+        },
+        270 => { // pselect6 — select with a timespec and an atomic mask
+                 // swap; the swap is async delivery, which doesn't exist
+                 // here — NULL mask is the only honest shape (ppoll's
+                 // own ruling). r9 points at the {mask,size} pair.
+            if (f.r9 != 0) {
+                f.rax = @bitCast(@as(i64, -38)); // ENOSYS — sigmask swap
+            } else {
+                var deadline: u64 = std.math.maxInt(u64);
+                var bad: i64 = 0;
+                if (f.r8 != 0) {
+                    var tb: [16]u8 = undefined;
+                    if (copyFromUser(c, @intCast(f.r8), &tb) < 16) {
+                        bad = -14;
+                    } else {
+                        const sec = std.mem.readInt(i64, tb[0..8], .little);
+                        const nsec = std.mem.readInt(i64, tb[8..16], .little);
+                        if (sec < 0 or nsec < 0) {
+                            bad = -22;
+                        } else {
+                            deadline = irq_ticks + pollDeadlineTicks(
+                                sec * 1000 + @divTrunc(nsec, 1_000_000));
+                        }
+                    }
+                }
+                f.rax = @bitCast(if (bad != 0) bad else
+                    childSelect(c, f.rdi, f.rsi, f.rdx, f.r10, deadline));
+            }
         },
         271 => { // ppoll(fds, nfds, ts, mask) — the atomic mask swap
                  // is about async delivery, which doesn't exist here
