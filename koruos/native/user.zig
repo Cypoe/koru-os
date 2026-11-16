@@ -470,6 +470,8 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             irq_ticks += 1;
             if (irq_ticks == 1) say("irq: timer delivered\n");
             wakeKind(.poll); // deadline re-check — the tick is poll's clock
+            wakeKind(.futex); // same clock — futex timeouts evaluate on
+                              // wake; the waiter re-reads and re-parks
             netBridgePoll(); // RX drain + TX stragglers — the net tick
             schedPreempt(f);
         } else if (f.vec == 0x21) {
@@ -822,8 +824,11 @@ const UserFrame = extern struct {
     ss: u64,
 };
 
-const ChildState = enum { empty, runnable, blocked, zombie, dead };
-const MAXCHILDREN: usize = 4;
+const ChildState = enum { empty, runnable, blocked, zombie, dead,
+    gdead }; // leader out early — the group lives on, the slot is held
+             // (not reapable, not reusable) until the last member exits
+const MAXCHILDREN: usize = 8; // threads consume slots of the same
+                               // roster — a tgid is a set, not a slot
 
 // The child's scoped fs view: the fs a child was spawned *from* hands
 // down this ops record — open/read/read_at/seek/stat/close over opaque
@@ -888,7 +893,7 @@ const ChildFsOps = extern struct {
     utimens: *const fn (ctx: ?*anyopaque, path: [*:0]const u8, mask: u32, a_ns: u64, m_ns: u64) callconv(.c) i64,
 };
 
-const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd, pty, pause };
+const WaitKind = enum { none, conin, blk, exit, pipe, gpu, sock, blkq, poll, input, efd, pty, pause, futex };
 
 // fd slots are projections over typed seam endpoints, not bare provider
 // handles: stdio are real entries (conin/conout), fs a view handle,
@@ -958,14 +963,14 @@ fn sigSend(vs: usize, e: SigEnt) void {
     if (v.state == .zombie or v.state == .dead or
         v.state == .empty) return;
     const bit = @as(u64, 1) << @intCast(e.signo - 1);
-    if (v.sig_ign & bit != 0) return;      // ignored: the fact drops
+    if (v.sh.sig_ign & bit != 0) return;      // ignored: the fact drops
     sigQueue(v, e);                         // the fact lands first
     if (v.sig_blocked & bit != 0) return;   // pending — the action waits
     // a deliverable fact interrupts pause(): placed before the
     // disposition switch so stop-class facts wake it too (the stop
     // flag then holds it until CONT re-questions — linux's order).
     if (v.state == .blocked and v.wait_kind == .pause) v.state = .runnable;
-    if (v.sig_caught & bit != 0) return;    // handled: facts only
+    if (v.sh.sig_caught & bit != 0) return;    // handled: facts only
     switch (e.signo) {
         19, 20, 21, 22 => { // STOP/TSTP/TTIN/TTOU
             // an orphaned pgrp is immune to the JOB-CONTROL stops —
@@ -1018,7 +1023,7 @@ fn sigSend(vs: usize, e: SigEnt) void {
 // a process is always in a group, its own by default (linux's shape:
 // the bootstrap pgid IS the pid until setpgid says otherwise).
 fn effPgid(i: usize) usize {
-    const g = children[i].pgid;
+    const g = children[i].sh.pgid;
     return if (g == 0) i + 1 else g;
 }
 
@@ -1031,7 +1036,7 @@ fn pgrpLiveIn(pgid: usize, sid: usize) bool {
             m.state != .zombie) continue;
         // effPgid: a member that never setpgid'd is still its own
         // group's one member — the group exists either way.
-        if (effPgid(i) == pgid and m.sid == sid) return true;
+        if (effPgid(i) == pgid and m.sh.sid == sid) return true;
     }
     return false;
 }
@@ -1041,10 +1046,10 @@ fn pgrpLiveIn(pgid: usize, sid: usize) bool {
 // bookkeeping (pgid 0) count as not-orphaned — kernel children have
 // nobody to strand them.
 fn pgrpOrphaned(v: *Child) bool {
-    if (v.pgid == 0) return false;
+    if (v.sh.pgid == 0) return false;
     for (0..nchildren) |i| {
         const m = &children[i];
-        if (m.pgid != v.pgid) continue;
+        if (m.sh.pgid != v.sh.pgid) continue;
         if (m.state != .runnable and m.state != .blocked and
             m.state != .zombie) continue;
         const ps = m.spawned_by;
@@ -1054,7 +1059,7 @@ fn pgrpOrphaned(v: *Child) bool {
         // not "no session": a child whose parent lives in it is not
         // orphaned. Requiring sid!=0 suppressed every job-control stop
         // before anyone called setsid.
-        if (p.sid == v.sid and p.pgid != v.pgid and
+        if (p.sh.sid == v.sh.sid and p.sh.pgid != v.sh.pgid and
             (p.state == .runnable or p.state == .blocked or
             p.state == .zombie)) return false;
     }
@@ -1068,7 +1073,7 @@ fn pgrpOrphaned(v: *Child) bool {
 // (the user claim is ours — nobody runs user code mid-syscall), so
 // flipping its state is safe; a parked kctx is simply never resumed.
 fn childReap(ds: usize, signo: u8) void {
-    releaseFds(&children[ds]);
+    // fd discharge rides freeChild -> releaseShared — last ref only
     for (0..nchildren) |i| {
         const p = &children[i];
         if (p.state == .blocked and p.wait_kind == .exit and
@@ -1096,6 +1101,168 @@ fn childReap(ds: usize, signo: u8) void {
     fgSweep();
 }
 
+// Wake up to `maxn` futex waiters parked on `uaddr` — the wait key is
+// the VA itself (user VAs live above USER_VA_BASE, ring/pipe keys are
+// small ints: the domains can't alias). Same-VA match is honest for a
+// shared address space; cross-process shared-page futexes would need
+// physical matching — a named gap.
+fn futexWake(uaddr: u64, maxn: i64) usize {
+    if (maxn <= 0) return 0;
+    var n: usize = 0;
+    for (0..nchildren) |i| {
+        const p = &children[i];
+        if (p.state == .blocked and p.wait_kind == .futex and
+            p.wait_pipe == @as(usize, @intCast(uaddr))) {
+            p.state = .runnable;
+            n += 1;
+            if (n >= @as(usize, @intCast(maxn))) break;
+        }
+    }
+    return n;
+}
+
+// nr 202 — futex(uaddr, op, val, timeout, uaddr2, val3). WAIT parks on
+// the VA itself; WAKE releases waiters. FUTEX_PRIVATE's bit is the
+// same operation here (one kernel, shared tables); WAIT_BITSET,
+// REQUEUE, PI ops are refused by name. Spurious wakes are legal futex
+// semantics — the waiter re-reads the word each cycle.
+fn childFutex(c: *Child, f: *TrapFrame) i64 {
+    const op = @as(u32, @truncate(f.rsi)) & 0x7f;
+    const uaddr = f.rdi;
+    const val: u32 = @truncate(@as(u64, @bitCast(f.rdx)));
+    switch (op) {
+        0 => { // FUTEX_WAIT
+            var cur: [4]u8 = undefined;
+            if (copyFromUser(c, @intCast(uaddr), &cur) < 4) return -14;
+            if (std.mem.readInt(u32, &cur, .little) != val) return -11;
+            const deadline: u64 = if (f.r10 == 0)
+                std.math.maxInt(u64)
+            else blk: {
+                var ts: [16]u8 = undefined;
+                if (copyFromUser(c, @intCast(f.r10), &ts) < 16)
+                    break :blk std.math.maxInt(u64);
+                const ms = std.mem.readInt(u64, ts[0..8], .little) * 1000 +
+                    std.mem.readInt(u64, ts[8..16], .little) / 1_000_000;
+                break :blk irq_ticks + pollDeadlineTicks(@intCast(ms));
+            };
+            c.wait_pipe = @intCast(uaddr);
+            while (true) {
+                if (c.sig_pending & ~c.sig_blocked & c.sh.sig_caught != 0) {
+                    c.wait_pipe = 0;
+                    return -4; // EINTR
+                }
+                kblock(.futex);
+                var v: [4]u8 = undefined;
+                if (copyFromUser(c, @intCast(uaddr), &v) < 4) {
+                    c.wait_pipe = 0;
+                    return -14;
+                }
+                if (std.mem.readInt(u32, &v, .little) != val) {
+                    c.wait_pipe = 0;
+                    return 0;
+                }
+                if (irq_ticks >= deadline) {
+                    c.wait_pipe = 0;
+                    return -116; // ETIMEDOUT
+                }
+            }
+        },
+        1 => return @intCast(futexWake(uaddr, @bitCast(f.rdx))), // WAKE
+        else => {
+            say("SEAM REFUSE futex op=");
+            puthex(f.rsi);
+            say("\n");
+            return -38;
+        },
+    }
+}
+
+// The last member out reports the group: waiters on the LEADER's slot
+// collect the status once per tgid, the spawner gets the one SIGCHLD,
+// and the held leader slot becomes the zombie. Mirrors childDie's
+// reporting — the leader's own frames already freed at its exit.
+fn groupReap(leader: usize, status: i64, signo: u8) void {
+    last_exit = @bitCast(status);
+    for (0..nchildren) |i| {
+        const p = &children[i];
+        if (p.state == .blocked and p.wait_kind == .exit and
+            (p.wait_pid == leader or p.wait_pid == ANY_PID)) {
+            p.spawn_ret = @bitCast(status);
+            p.state = .runnable;
+        }
+    }
+    const db = children[leader].spawned_by;
+    if (db < nchildren and db != leader) {
+        const p = &children[db];
+        if (p.state == .runnable or p.state == .blocked or
+            p.state == .zombie) {
+            sigQueue(p, .{ .signo = SIGCHLD,
+                .code = if (signo != 0) CLD_KILLED else CLD_EXITED,
+                .pid = @intCast(leader + 1),
+                .status = if (signo != 0) signo else @intCast(status) });
+            wakeKind(.poll);
+        }
+    }
+    const dead = &children[leader];
+    dead.exit_status = if (signo != 0) signo else status;
+    dead.exit_signo = signo;
+    dead.state = if (dead.waitable) .zombie else .dead;
+    cttyHangup(leader);
+    fgSweep();
+}
+
+// exit(60) — the MEMBER verb. The slot frees, CHILD_CLEARTID zeroes
+// its word and wakes the join futex, and the leader turns zombie only
+// when the group's last ref drops. A leader exiting while members live
+// becomes .gdead: the slot is held (not reapable, not reusable) until
+// the group is empty.
+fn threadExit(status: i64, signo: u8) noreturn {
+    const dead_slot = cur_child;
+    const c = &children[dead_slot];
+    const sh = c.sh;
+    sh.exit_code = status; // pthread_exit's arg — last out wins
+    if (c.clear_tid != 0) {
+        var z = [4]u8{ 0, 0, 0, 0 };
+        _ = copyToUser(c, @intCast(c.clear_tid), &z);
+        _ = futexWake(c.clear_tid, 1);
+    }
+    const leader: usize = sh.tgid - 1;
+    const last = sh.refs <= 1;
+    const leader_is_self = leader == dead_slot;
+    c.state = if (leader_is_self and !last) .gdead else .dead;
+    const nf = freeChild(c); // own pml4/pdpt + a refs drop — the shared
+        // table, fds, and upd die with the last ref inside releaseShared
+    say("pmm: reap freed=");
+    puthex(nf);
+    say("\n");
+    if (last) groupReap(leader, status, signo);
+    schedEnter(&exitTail);
+    unreachable;
+}
+
+// exit_group(231) — every member dies at once. A blocked member's kctx
+// is abandoned with its slot (slot re-issue re-primes .{} anyway); the
+// caller exits last so the refs drop frees everything in one order.
+// musl's exit() lands here, not on nr60 — this is every process death.
+fn groupExit(status: i64, signo: u8) noreturn {
+    const c = &children[cur_child];
+    const sh = c.sh;
+    sh.exit_code = status;
+    sh.exiting = 1;
+    const leader: usize = sh.tgid - 1;
+    for (0..nchildren) |i| {
+        if (i == cur_child) continue;
+        const m = &children[i];
+        if (m.sh != sh) continue; // .gdead/.dead members already dropped
+        if (m.state != .runnable and m.state != .blocked) continue;
+        // a .dead slot reissues freely; the leader's must stay held —
+        // it is still the group's reap target until groupReap runs
+        m.state = if (i == leader) .gdead else .dead;
+        _ = freeChild(m);
+    }
+    threadExit(status, signo);
+}
+
 // A process group is an identity, not a number: when its last live
 // member dies the group is gone, and a terminal holding its id as the
 // foreground must release it — a slot reissued later may land on the
@@ -1118,7 +1285,30 @@ fn fgSweep() void {
 // Dispatch on the victim: self-death can't return to user — the exit
 // arm's own path takes over; a foreign slot reaps in place.
 fn childKill(vs: usize, signo: u8) void {
-    if (vs == cur_child) childDie(@intCast(signo), signo) else childReap(vs, signo);
+    if (vs == cur_child) {
+        // a fatal signal is a GROUP death — never a lone member exit
+        const c = &children[vs];
+        if (c.sh.refs > 1)
+            groupExit(@intCast(signo), signo)
+        else
+            childDie(@intCast(signo), signo);
+    } else {
+        const v = &children[vs];
+        if (v.sh.refs > 1) {
+            const sh = v.sh;
+            sh.exiting = 1;
+            sh.exit_code = signo;
+            const leader: usize = sh.tgid - 1;
+            for (0..nchildren) |i| {
+                const m = &children[i];
+                if (m.sh != sh) continue;
+                if (m.state != .runnable and m.state != .blocked) continue;
+                m.state = if (i == leader) .gdead else .dead;
+                _ = freeChild(m);
+            }
+            groupReap(leader, signo, signo);
+        } else childReap(vs, signo);
+    }
 }
 
 // The exit arm and the kill-self arm share this: status/signo recorded,
@@ -1127,7 +1317,8 @@ fn childKill(vs: usize, signo: u8) void {
 fn childDie(raw_status: i64, signo: u8) noreturn {
     last_exit = @bitCast(raw_status);
     const dead_slot = cur_child;
-    releaseFds(&children[dead_slot]);
+    // fds discharge inside freeChild -> releaseShared on the last ref —
+    // a CLONE_FILES member's exit closes nothing the group still owns
     for (0..nchildren) |i| {
         const p = &children[i];
         if (p.state == .blocked and p.wait_kind == .exit and
@@ -1169,12 +1360,12 @@ fn childDie(raw_status: i64, signo: u8) noreturn {
 // member of the session loses the ctty.
 fn cttyHangup(ds: usize) void {
     const dead = &children[ds];
-    if (dead.sid != ds + 1 or dead.ctty == 0) return;
-    const pi = dead.ctty - 1;
+    if (dead.sh.sid != ds + 1 or dead.sh.ctty == 0) return;
+    const pi = dead.sh.ctty - 1;
     const fg = ptys[pi].fg_pgrp;
     for (0..nchildren) |i| {
         const m = &children[i];
-        if (m.sid == dead.sid) m.ctty = 0;
+        if (m.sh.sid == dead.sh.sid) m.sh.ctty = 0;
     }
     ptys[pi].fg_pgrp = 0;
     if (fg != 0) {
@@ -1208,16 +1399,123 @@ const SECT_MAGIC: u32 = 0x4252474B; // 'KGRB'
 const TAG_ARGV: u16 = 1;
 const TAG_GRANT: u16 = 2;
 
+// ---- the shared process record -----------------------------------------
+// What a thread group IS: the state every CLONE_* flag names as shared —
+// VM (upd ownership + bump cursors), FILES (the descriptor table — a
+// close in one member is visible to all), SIGHAND (the disposition
+// masks), FS (the view), and the process's session facts (pgid/sid/
+// ctty — setpgid is a process verb, not a thread verb). A single-
+// threaded child owns one of these alone; CLONE_VM threads bind the
+// leader's. refs counts live members — the last exit runs the table
+// teardown and the group's reap.
+const ProcShared = struct {
+    refs: u8 = 0,
+    upd: usize = 0,      // the shared user PD phys — CLONE_VM
+    tgid: usize = 0,     // getpid's answer — the leader's slot+1
+    exit_code: i64 = 0,  // the status the group reports upward
+    exiting: u8 = 0,     // exit_group landed — survivors die into it
+    // CLONE_FILES — the descriptor table
+    fds: [32]u64 = .{0} ** 32,
+    fdkinds: [32]FdKind = .{.none} ** 32,
+    fdverbs: [32]u8 = .{0} ** 32,
+    fdnb: [32]u8 = .{0} ** 32,
+    fdcx: [32]u8 = .{0} ** 32,
+    dent_pending: [264]u8 = .{0} ** 264,
+    dent_plen: u8 = 0,
+    dent_pfd: i64 = -1,
+    // CLONE_SIGHAND — dispositions are process-wide in POSIX
+    sig_ign: u64 = 0,
+    sig_caught: u64 = 0,
+    // CLONE_VM bookkeeping — bump cursors must agree across threads
+    // or two mmaps hand out the same VA
+    brk: usize = 0,
+    brk_base: usize = 0,
+    mmap_top: usize = 0,
+    // the process's session facts
+    pgid: usize = 0,
+    sid: usize = 0,
+    ctty: usize = 0,
+};
+
+var procs: [MAXCHILDREN]ProcShared = .{ProcShared{}} ** MAXCHILDREN;
+var dead_proc = ProcShared{}; // sentinel — unbound slots read zeros
+
+fn allocShared() ?*ProcShared {
+    for (&procs) |*sh| {
+        if (sh.refs == 0) {
+            sh.* = .{ .refs = 1, .dent_pfd = -1 };
+            return sh;
+        }
+    }
+    return null;
+}
+
+// Point a child's descriptor-table slices at a shared record — the only
+// mutator of the slice set, so c.fds and c.sh.fds can never diverge.
+fn bindShared(c: *Child, sh: *ProcShared) void {
+    c.sh = sh;
+    c.fds = sh.fds[0..];
+    c.fdkinds = sh.fdkinds[0..];
+    c.fdverbs = sh.fdverbs[0..];
+    c.fdnb = sh.fdnb[0..];
+    c.fdcx = sh.fdcx[0..];
+    c.dent_pending = sh.dent_pending[0..];
+}
+
+// One member leaving the group: the table and the upd die with the last
+// ref; earlier exits only drop the count. Returns user frames freed.
+fn releaseShared(c: *Child) usize {
+    const sh = c.sh;
+    if (sh == &dead_proc or sh.refs == 0) return 0;
+    sh.refs -= 1;
+    var freed: usize = 0;
+    if (sh.refs == 0) {
+        releaseFds(c); // the slices still name the table — last ref
+                       // runs the whole teardown once
+        freed = freeUserPd(sh.upd);
+        sh.* = .{};
+    }
+    c.sh = &dead_proc;
+    c.fds = &.{};
+    c.fdkinds = &.{};
+    c.fdverbs = &.{};
+    c.fdnb = &.{};
+    c.fdcx = &.{};
+    c.dent_pending = &.{};
+    return freed;
+}
+
+// The shared user-PD teardown — every pt frame and leaf page in the
+// window, called once when the last member of the group exits.
+fn freeUserPd(upd: usize) usize {
+    if (upd == 0) return 0;
+    var freed: usize = 0;
+    const c_upd: *const [512]u64 = @ptrFromInt(upd);
+    for (c_upd) |pde| {
+        if (pde & 1 == 0) continue;
+        const pt: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(pde & ~@as(u64, 0xFFF))));
+        for (pt) |e| {
+            if (e & 1 != 0) {
+                _ = pmm.free(e & ~@as(u64, 0xFFF));
+                freed += 1;
+            }
+        }
+        _ = pmm.free(pde & ~@as(u64, 0xFFF));
+        freed += 1;
+    }
+    _ = pmm.free(upd);
+    freed += 1;
+    return freed;
+}
+
 const Child = struct {
     pml4: usize = 0,
     pdpt: usize = 0,
-    upd: usize = 0,  // user-half pd — pdpt[1], USER_VA_BASE..END
-                     // (kernel half shares pdpt slots with the BSP —
-                     //  no per-child kernel tables to own)
-    fsbase: u64 = 0, // TLS base (arch_prctl) — MSR-loaded at resume
-    brk: usize = 0,  // program break (brk syscall)
-    brk_base: usize = 0, // lowest legal break — end of the loaded image
-    mmap_top: usize = 0, // bump cursor of the mmap arena
+    upd: usize = 0,  // user-half pd — pdpt[1], USER_VA_BASE..END;
+                     // for a CLONE_VM member this IS sh.upd's phys
+    sh: *ProcShared = &dead_proc, // the group's shared record — bound
+                                  // before any field below is touched
+    fsbase: u64 = 0, // TLS base (arch_prctl / CLONE_SETTLS) — per-thread
     frame: UserFrame = std.mem.zeroes(UserFrame),
     rights: u64 = 0,                 // class-grant projection of the bag
     grants: [MAXGRANTS]Grant = undefined, // object-scoped grants (ngrants
@@ -1225,24 +1523,24 @@ const Child = struct {
     ngrants: u8 = 0,
     state: ChildState = .empty,
     fsv: ?*const ChildFsOps = null, // scoped fs view (the spawning fs)
-    fds: [32]u64 = .{0} ** 32,      // endpoint id by kind: fs handle or pipe idx
-    fdkinds: [32]FdKind = .{.none} ** 32,
-    fdverbs: [32]u8 = .{0} ** 32,   // the fd IS a grant — V_READ/V_WRITE
+    // the descriptor table — slices bound into sh; CLONE_FILES members
+    // see every mutation the group makes
+    fds: []u64 = &.{},
+    fdkinds: []FdKind = &.{},
+    fdverbs: []u8 = &.{},           // the fd IS a grant — V_READ/V_WRITE
                                     // recorded when the projection was
                                     // minted; read/write dispatch checks
                                     // the verb, not just the kind
-    fdnb: [32]u8 = .{0} ** 32,      // O_NONBLOCK per fd — FIONBIO/F_SETFL
-    fdcx: [32]u8 = .{0} ** 32,      // FD_CLOEXEC per fd — fork_exec's
+    fdnb: []u8 = &.{},              // O_NONBLOCK per fd — FIONBIO/F_SETFL
+    fdcx: []u8 = &.{},              // FD_CLOEXEC per fd — fork_exec's
                                     // errpipe EOF IS the parent unblock;
                                     // without it every CLOEXEC pipe outlives
                                     // the exec it was meant to die on
                                     // state; read/write dispatch ORs it
                                     // into the channel functions' nb arm
-    dent_pending: [264]u8 = .{0} ** 264, // one-record pushback for
-                                    // getdents: a fetched record that
-                                    // didn't fit is held, not dropped
-    dent_plen: u8 = 0,
-    dent_pfd: i64 = -1,             // the fd the pending record came from
+    dent_pending: []u8 = &.{},      // one-record pushback for getdents:
+                                    // a fetched record that didn't fit
+                                    // is held, not dropped
     // blocking is a kernel continuation, not a rebuilt user frame: kblock
     // pushes callee-saved on this child's own kstack and stores the rsp
     // here; a waker just flips .runnable and the next switchInto pops the
@@ -1270,16 +1568,13 @@ const Child = struct {
     sig_pending: u64 = 0,           // bitmask of queued signos
     sigs: [NSIGQ]SigEnt = .{SigEnt{}} ** NSIGQ, // per-signo payload queue
     nsigs: u8 = 0,
-    sig_ign: u64 = 0,               // rt_sigaction SIG_IGN bits — a fact
-                                    // ignored is a fact dropped, not queued
-    sig_caught: u64 = 0,            // registered-handler bits — queue the
-                                    // fact, no kernel lifecycle action
-    // sessions + job control: pid-domain ids (slot+1, 0 = unset/kernel
-    // child). The session is implicit — the set of children sharing a
-    // sid; the ctty is the session's controlling pty (index+1).
-    pgid: usize = 0,                // process-group leader pid; 0 = own group
-    sid: usize = 0,                 // session leader pid; 0 = no session
-    ctty: usize = 0,                // controlling pty index+1; 0 = none
+    // dispositions (sig_ign/sig_caught) and the session facts
+    // (pgid/sid/ctty) live in sh — POSIX makes them process facts;
+    // per-thread here: the blocked mask, the pending facts, and the
+    // clear-tid address join waits on.
+    clear_tid: u64 = 0,             // CHILD_CLEARTID/set_tid_address —
+                                    // thread exit writes 0 + futex-wakes
+    detached: bool = false,         // CLONE_DETACHED — no join waits
     stopped: bool = false,          // job-control stop — gates the
                                     // scheduler, never rewrites .state
     stop_signo: u8 = 0,             // signo that stopped it — WUNTRACED's
@@ -1288,7 +1583,7 @@ const Child = struct {
                                     // the raw signo, not status<<8
 };
 
-var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{} };
+var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{} };
 var nchildren: usize = 0;
 var cur_child: usize = 0;
 // Exported: the spawn save-asm opens the epoch with `movb $1` only after
@@ -1383,28 +1678,19 @@ fn allocPage() ?*align(4096) [4096]u8 {
 // on the dead child's stack — the frame frees only release the refcount,
 // the identity map keeps the pages readable until we jump away, and
 // nothing allocates in between.
+// The per-child frame teardown: pml4/pdpt are always private — a
+// CLONE_VM member's pdpt[1] points at the SHARED upd, so the user
+// pages themselves are never freed here; releaseShared owns that
+// lifecycle (last ref out runs freeUserPd).
 fn freeChild(c: *Child) usize {
     var freed: usize = 0;
-    if (c.upd == 0) return 0;
-    const c_upd: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(c.upd)));
-    for (c_upd) |pde| {
-        if (pde & 1 == 0) continue;
-        const pt: *const [512]u64 = @ptrFromInt(@as(usize, @intCast(pde & ~@as(u64, 0xFFF))));
-        for (pt) |e| {
-            if (e & 1 != 0) {
-                _ = pmm.free(e & ~@as(u64, 0xFFF));
-                freed += 1;
-            }
-        }
-        _ = pmm.free(pde & ~@as(u64, 0xFFF));
-        freed += 1;
-    }
-    for ([_]u64{ c.upd, c.pdpt, c.pml4 }) |t| {
+    for ([_]u64{ c.pdpt, c.pml4 }) |t| {
         if (t != 0) {
             _ = pmm.free(t);
             freed += 1;
         }
     }
+    freed += releaseShared(c);
     c.upd = 0;
     c.pdpt = 0;
     c.pml4 = 0;
@@ -1547,10 +1833,12 @@ fn marshalVec(c: *Child, vva: u64, blob: []u8) i64 {
     return -7; // vector past MAXARGS — E2BIG
 }
 
-fn buildTables(c: *Child) bool {
+// Tables over a given user-PD phys: pml4/pdpt are always the child's own
+// frames; `upd` is what pdpt[1] names — freshly allocated for a process,
+// the GROUP's for a CLONE_VM member.
+fn buildTablesWithUpd(c: *Child, upd: usize) bool {
     c.pml4 = @intFromPtr(allocPage() orelse return false);
     c.pdpt = @intFromPtr(allocPage() orelse return false);
-    c.upd = @intFromPtr(allocPage() orelse return false);
     const c_pml4: *[512]u64 = @ptrFromInt(c.pml4);
     const c_pdpt: *[512]u64 = @ptrFromInt(c.pdpt);
     // The kernel half is shared, not snapshot: the child's pdpt copies
@@ -1566,9 +1854,24 @@ fn buildTables(c: *Child) bool {
         say("aspace: kernel window occupies pdpt[1] — child space refused\n");
         return false;
     }
+    c.upd = upd;
     c_pml4[0] = c.pdpt | US | ENT;
     c_pdpt.* = pdpt;
     c_pdpt[1] = c.upd | US | ENT;
+    return true;
+}
+
+fn buildTables(c: *Child) bool {
+    const upd = @intFromPtr(allocPage() orelse return false);
+    if (!buildTablesWithUpd(c, upd)) {
+        _ = pmm.free(upd);
+        if (c.pdpt != 0) _ = pmm.free(c.pdpt);
+        if (c.pml4 != 0) _ = pmm.free(c.pml4);
+        c.upd = 0;
+        c.pdpt = 0;
+        c.pml4 = 0;
+        return false;
+    }
     return true;
 }
 
@@ -2001,6 +2304,8 @@ fn canonNr(nr: u64) u64 {
         231 => 60,
         318 => 61,
         158, 218, 273, 302 => 62,
+        200 => 62, // tgkill — same signal verb, tid is bookkeeping:
+                   // our signal domain is the process, not the member
         14 => 62, // rt_sigprocmask — proc-self metadata; the stored set
                   // is now real state (signalfd consumes the queue)
         13 => 62, // rt_sigaction — registration is metadata too; a handler
@@ -2590,11 +2895,11 @@ fn childGetdents(c: *Child, fdu: u64, buva: u64, count: u64) i64 {
     var cookie: u64 = 0;
     while (true) {
         var have = false;
-        if (c.dent_plen != 0 and c.dent_pfd == @as(i64, @intCast(fd))) {
+        if (c.sh.dent_plen != 0 and c.sh.dent_pfd == @as(i64, @intCast(fd))) {
             // a prior call fetched a record that didn't fit — it rides
             // the pushback slot until the caller's buffer takes it.
-            @memcpy(rec[0..c.dent_plen], c.dent_pending[0..c.dent_plen]);
-            c.dent_plen = 0;
+            @memcpy(rec[0..c.sh.dent_plen], c.dent_pending[0..c.sh.dent_plen]);
+            c.sh.dent_plen = 0;
             have = true;
         }
         if (!have) {
@@ -2609,9 +2914,9 @@ fn childGetdents(c: *Child, fdu: u64, buva: u64, count: u64) i64 {
             // doesn't fit — push it back for the NEXT call; linux holds
             // the cursor, dropping the record skips a name forever
             // (measured: 95th dir entry vanished -> ModuleNotFoundError).
-            c.dent_plen = @intCast(10 + nl);
-            c.dent_pfd = @intCast(fd);
-            @memcpy(c.dent_pending[0..c.dent_plen], rec[0..c.dent_plen]);
+            c.sh.dent_plen = @intCast(10 + nl);
+            c.sh.dent_pfd = @intCast(fd);
+            @memcpy(c.dent_pending[0..c.sh.dent_plen], rec[0..c.sh.dent_plen]);
             break;
         }
         var de: [280]u8 = undefined;
@@ -2683,8 +2988,8 @@ fn childMmapFile(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fdu: 
         base = @intCast(addru);
         if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
     } else {
-        base = c.mmap_top;
-        c.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
+        base = c.sh.mmap_top;
+        c.sh.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
     }
     var p: usize = 0;
     while (p < len) : (p += 0x1000) {
@@ -2718,8 +3023,8 @@ fn childMmapShm(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fd: us
         base = @intCast(addru);
         if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
     } else {
-        base = c.mmap_top;
-        c.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
+        base = c.sh.mmap_top;
+        c.sh.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
     }
     var p: usize = 0;
     while (p < len) : (p += 0x1000) {
@@ -2754,8 +3059,8 @@ fn childMmapSurf(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fd: u
         base = @intCast(addru);
         if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
     } else {
-        base = c.mmap_top;
-        c.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
+        base = c.sh.mmap_top;
+        c.sh.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
     }
     var p: usize = 0;
     while (p < avail) : (p += 0x1000) {
@@ -3404,7 +3709,7 @@ fn ptySlaveRead(c: *Child, idx: usize, bva: u64, want: u64) i64 {
         // blocked/ignored/orphaned facts answer EIO (linux's own
         // tty-check table), and a resumed reader re-questions on the
         // next loop like a fresh call.
-        if (t.fg_pgrp != 0 and c.ctty == idx + 1 and
+        if (t.fg_pgrp != 0 and c.sh.ctty == idx + 1 and
             effPgid(cur_child) != t.fg_pgrp) {
             sigSend(cur_child, .{ .signo = 21 });
             if (!c.stopped) return -5; // EIO — blocked, ignored, orphaned
@@ -3513,12 +3818,12 @@ fn ptyMasterRead(c: *Child, idx: usize, bva: u64, want: u64) i64 {
 // which the call re-questions, exactly like a restarted syscall.
 fn ptyCheckTTOU(c: *Child, t: *Pty, idx: usize) i64 {
     const ttou_bit = @as(u64, 1) << (22 - 1);
-    while (t.fg_pgrp != 0 and c.ctty == idx + 1 and
+    while (t.fg_pgrp != 0 and c.sh.ctty == idx + 1 and
         effPgid(cur_child) != t.fg_pgrp) {
         // linux's is_ignored first: a masked or SIG_IGN'd TTOU lets the
         // verb proceed — the shell's reclaim path runs exactly on this.
-        if (c.sig_ign & ttou_bit != 0 or c.sig_blocked & ttou_bit != 0 or
-            c.sig_caught & ttou_bit != 0) break;
+        if (c.sh.sig_ign & ttou_bit != 0 or c.sig_blocked & ttou_bit != 0 or
+            c.sh.sig_caught & ttou_bit != 0) break;
         if (pgrpOrphaned(c)) return -5; // EIO — linux's orphaned answer
         sigSend(cur_child, .{ .signo = 22 });
         if (c.stopped) {
@@ -3602,7 +3907,7 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
             // the named group must be a LIVE pgrp inside the caller's
             // own session — a leader's death doesn't dissolve the group
             // while members remain, and a foreign session is EPERM.
-            if (!pgrpLiveIn(pg, c.sid)) return -1;
+            if (!pgrpLiveIn(pg, c.sh.sid)) return -1;
             if (dbg_trace) { say("SPGRP<"); puthex(cur_child); say("="); puthex(pg); say("> "); }
             t.fg_pgrp = pg;
             return 0;
@@ -3610,24 +3915,24 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
         0x540E => { // TIOCSCTTY — only a session leader claims, and only
                     // a pty no session owns. Steal (arg==1) refuses —
                     // hangup, not force, is the honest transfer.
-            if (c.sid != cur_child + 1) return -1; // EPERM — not a leader
-            if (c.ctty != 0) return -1;            // already has one
+            if (c.sh.sid != cur_child + 1) return -1; // EPERM — not a leader
+            if (c.sh.ctty != 0) return -1;            // already has one
             for (0..nchildren) |i| {
-                if (i != cur_child and children[i].ctty == idx + 1 and
-                    children[i].sid != c.sid)
+                if (i != cur_child and children[i].sh.ctty == idx + 1 and
+                    children[i].sh.sid != c.sh.sid)
                     return -1; // EPERM — another session holds it
             }
-            c.ctty = idx + 1;
+            c.sh.ctty = idx + 1;
             if (t.fg_pgrp == 0) t.fg_pgrp = effPgid(cur_child);
             return 0;
         },
         0x5422 => { // TIOCNOTTY — the leader hangs its session's ctty up
                     // (SIGHUP to the fg pgrp, members lose the link);
                     // a non-leader just releases its own association.
-            if (c.sid == cur_child + 1) {
+            if (c.sh.sid == cur_child + 1) {
                 const fg = t.fg_pgrp;
                 for (0..nchildren) |i| {
-                    if (children[i].sid == c.sid) children[i].ctty = 0;
+                    if (children[i].sh.sid == c.sh.sid) children[i].sh.ctty = 0;
                 }
                 t.fg_pgrp = 0;
                 if (fg != 0) {
@@ -3639,8 +3944,8 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
                             sigSend(i, .{ .signo = 1 }); // SIGHUP
                     }
                 }
-            } else if (c.ctty == idx + 1) {
-                c.ctty = 0;
+            } else if (c.sh.ctty == idx + 1) {
+                c.sh.ctty = 0;
             }
             return 0;
         },
@@ -3723,11 +4028,11 @@ fn rosterFill(r: *Rost) void {
             i + 1,
             if (p.spawned_by == NO_PARENT) 0 else p.spawned_by + 1,
             effPgid(i),
-            p.sid,
+            p.sh.sid,
             st,
             p.stop_signo,
             p.rights,
-            p.ctty,
+            p.sh.ctty,
             nfd,
         }) catch break; // a line that doesn't fit simply isn't said
     }
@@ -5133,7 +5438,7 @@ fn releaseFd(c: *Child, i: usize) void {
     c.fdkinds[i] = .none;
     c.fdverbs[i] = 0;
     c.fdcx[i] = 0;
-    if (c.dent_pfd == @as(i64, @intCast(i))) c.dent_plen = 0; // drop the
+    if (c.sh.dent_pfd == @as(i64, @intCast(i))) c.sh.dent_plen = 0; // drop the
         // pushback — a reused slot must not eat another listing's record
     flockDropIfOrphaned(c, ofd);
 }
@@ -6014,7 +6319,7 @@ fn childWait(c: *Child, pid: i64, stva: u64, opts: u64) i64 {
     // pid=0 waits the CALLER's pgrp like linux; pid<-1 names |pid|.
     const want_pgrp = pid <= -1 and pid != -1;
     const pgrp: usize = if (pid == 0)
-        c.pgid
+        c.sh.pgid
     else if (want_pgrp)
         @intCast(-pid)
     else
@@ -6194,14 +6499,21 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
     const g = slot orelse return -11; // EAGAIN — roster full
     const nc = &children[g];
     nc.* = .{};
-    if (!buildTables(nc)) return -12; // ENOMEM
+    const nsh = allocShared() orelse return -11;
+    bindShared(nc, nsh);
+    nsh.tgid = g + 1;
+    if (!buildTables(nc)) {
+        _ = freeChild(nc);
+        return -12; // ENOMEM
+    }
+    nsh.upd = nc.upd;
     nc.fsv = c.fsv; // spawned inside the same view the caller names paths through
     nc.spawned_by = cur_child; // the spawner is the SIGCHLD parent
     // spawn lands in the caller's session like a fork does — the shell
     // model: children start in the spawner's pgrp until setpgid moves them
-    nc.pgid = effPgid(cur_child);
-    nc.sid = c.sid;
-    nc.ctty = c.ctty;
+    nc.sh.pgid = effPgid(cur_child);
+    nc.sh.sid = c.sh.sid;
+    nc.sh.ctty = c.sh.ctty;
     // stdio is a projection too: conin/conout entries by default, the
     // caller's in_src/out_src entries cloned in when wiring is asked for.
     nc.fdkinds[0] = .conin;
@@ -6268,9 +6580,9 @@ fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u6
         _ = freeChild(nc);
         return -12;
     };
-    nc.brk_base = info.brk_base;
-    nc.brk = info.brk_base;
-    nc.mmap_top = MMAP_BASE;
+    nc.sh.brk_base = info.brk_base;
+    nc.sh.brk = info.brk_base;
+    nc.sh.mmap_top = MMAP_BASE;
     nc.state = .runnable;
     return @intCast(g);
 }
@@ -6341,6 +6653,25 @@ fn childExec(c: *Child, f: *TrapFrame) i64 {
         hdr[3] != 'F' or hdr[4] != 2 or hdr[18] != 0x3E)
         return -8; // ENOEXEC — not a loadable image
     // point of no return: the address space dies; the identity lives.
+    // exec from a thread kills the rest of the group first — every
+    // other member drops (the leader's slot stays held as the reap
+    // target, de_thread's own shape), so the shared table and fds
+    // become this member's alone before its upd is unmapped. The tgid
+    // keeps naming the leader's slot: the parent still reaps THAT pid.
+    if (c.sh.refs > 1) {
+        const sh = c.sh;
+        const leader: usize = sh.tgid - 1;
+        sh.exiting = 1;
+        for (0..nchildren) |i| {
+            if (i == cur_child) continue;
+            const m = &children[i];
+            if (m.sh != sh) continue;
+            if (m.state != .runnable and m.state != .blocked) continue;
+            m.state = if (i == leader) .gdead else .dead;
+            _ = freeChild(m);
+        }
+        sh.exiting = 0; // the process lives on — exec is not death
+    }
     unmapUserSpace(c);
     // FD_CLOEXEC discharge — every flagged projection dies with the old
     // image; endpoint refcounts drop through releaseFd like any close.
@@ -6370,12 +6701,12 @@ fn childExec(c: *Child, f: *TrapFrame) i64 {
     // pending signal facts dropped (POSIX: pending does not carry),
     // caught dispositions back to default; the mask, the ignored set,
     // the stop state, pgid/sid/ctty, and every fd ride through.
-    c.brk_base = info.brk_base;
-    c.brk = info.brk_base;
-    c.mmap_top = MMAP_BASE;
+    c.sh.brk_base = info.brk_base;
+    c.sh.brk = info.brk_base;
+    c.sh.mmap_top = MMAP_BASE;
     c.sig_pending = 0;
     c.nsigs = 0;
-    c.sig_caught = 0;
+    c.sh.sig_caught = 0;
     // the live frame is THIS syscall's return — repoint it at the new
     // image: rcx is sysret's user rip, ursp publishes through the
     // dispatcher's defer back to the sysret epilogue.
@@ -6436,7 +6767,14 @@ fn childFork(c: *Child, f: *TrapFrame) i64 {
     const g = slot orelse return -11; // EAGAIN — roster full
     const nc = &children[g];
     nc.* = .{};
-    if (!buildTables(nc)) return -12; // ENOMEM
+    const nsh = allocShared() orelse return -11;
+    bindShared(nc, nsh);
+    nsh.tgid = g + 1; // a fork's child IS its own tgid
+    if (!buildTables(nc)) {
+        _ = freeChild(nc);
+        return -12; // ENOMEM
+    }
+    nsh.upd = nc.upd; // the group owns this PD's pages
     if (!cloneUserSpace(nc, c)) {
         _ = freeChild(nc);
         return -12;
@@ -6460,17 +6798,17 @@ fn childFork(c: *Child, f: *TrapFrame) i64 {
     nc.waitable = true;   // the status holds in a zombie for nr61 wait
     nc.sig_blocked = c.sig_blocked; // posix: the mask inherits, pending
                                   // does not — sigs stay empty
-    nc.sig_ign = c.sig_ign;         // dispositions inherit across fork
-    nc.sig_caught = c.sig_caught;
+    nc.sh.sig_ign = c.sh.sig_ign;         // dispositions inherit across fork
+    nc.sh.sig_caught = c.sh.sig_caught;
     // session bookkeeping inherits: the child starts in the caller's
     // pgrp/session/ctty; setpgid/setsid is how a job steps out.
-    nc.pgid = effPgid(cur_child);
-    nc.sid = c.sid;
-    nc.ctty = c.ctty;
+    nc.sh.pgid = effPgid(cur_child);
+    nc.sh.sid = c.sh.sid;
+    nc.sh.ctty = c.sh.ctty;
     nc.fsbase = c.fsbase;
-    nc.brk = c.brk;
-    nc.brk_base = c.brk_base;
-    nc.mmap_top = c.mmap_top;
+    nc.sh.brk = c.sh.brk;
+    nc.sh.brk_base = c.sh.brk_base;
+    nc.sh.mmap_top = c.sh.mmap_top;
     nc.ursp = c.ursp;
     const fr: *const [15]u64 = @ptrCast(f);
     for (0..15) |k| nc.frame.gp[k] = fr[k];
@@ -6494,14 +6832,81 @@ fn childFork(c: *Child, f: *TrapFrame) i64 {
     return @intCast(g + 1); // pid domain — slot+1; 0 means "the child"
 }
 
-// nr 56 — clone: this rung serves only the fork-shaped flag set
-// (SIGCHLD alone, flags==0x11). CLONE_VM/VFORK/THREAD/PARENT are each
-// their own axis — refused by name, never silently forked.
+// nr 56 thread shape — CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|
+// SETTLS|PARENT_SETTID|CHILD_CLEARTID|DETACHED = 0x7d0f00, the musl
+// pthread set. The member shares the caller's ProcShared wholesale:
+// same upd phys in its own pml4/pdpt, same descriptor table, same
+// dispositions, same session facts. What stays per-child is exactly
+// what a thread owns: frame, kctx/kstack, TLS base, wait records, the
+// pending-signal facts. clone(flags, stack, ptid, ctid, tls) on
+// x86_64 — rdi/rsi/rdx/r10/r8.
+fn childThread(c: *Child, f: *TrapFrame) i64 {
+    var slot: ?usize = null;
+    for (0..MAXCHILDREN) |i| {
+        const s = children[i].state;
+        if (s == .empty or s == .dead) { slot = i; break; }
+    }
+    const g = slot orelse return -11; // EAGAIN — roster full
+    const nc = &children[g];
+    nc.* = .{};
+    if (!buildTablesWithUpd(nc, c.sh.upd)) return -12;
+    bindShared(nc, c.sh);
+    nc.sh.refs += 1;
+    nc.fsv = c.fsv;
+    nc.spawned_by = c.spawned_by; // the group's parent — a member's
+        // death never reports itself upward; the leader's reap does
+    nc.rights = c.rights; // the bag is the process's — the member
+        // inherits the whole projection
+    nc.grants = c.grants;
+    nc.ngrants = c.ngrants;
+    nc.waitable = false; // threads are never wait4 targets
+    nc.detached = (f.rdi & 0x400000) != 0; // CLONE_DETACHED
+    nc.clear_tid = f.r10; // CHILD_CLEARTID — pthread_join's futex
+    nc.fsbase = f.r8; // CLONE_SETTLS — the thread's own TLS base
+    nc.sig_blocked = c.sig_blocked; // pthread_create inherits the
+        // CALLING thread's mask; pending facts stay empty
+    const fr: *const [15]u64 = @ptrCast(f);
+    for (0..15) |k| nc.frame.gp[k] = fr[k];
+    nc.frame.gp[0] = 0; // the member sees clone()==0
+    if (child_entry == 1) {
+        nc.frame.rip = f.rcx;
+        nc.frame.cs = 0x23;
+        nc.frame.rflags = f.r11;
+        nc.frame.ss = 0x1B;
+    } else {
+        const hw: *const [5]u64 = @ptrFromInt(@intFromPtr(f) + 15 * 8);
+        nc.frame.rip = hw[0];
+        nc.frame.cs = hw[1];
+        nc.frame.rflags = hw[2];
+        nc.frame.ss = hw[4];
+    }
+    nc.frame.rsp = f.rsi; // the caller's stack arg — musl's own arena
+    // CLONE_PARENT_SETTID: the caller's space learns the member's tid —
+    // a failed write unwinds the whole clone, linux's own order
+    var tb: [4]u8 = undefined;
+    std.mem.writeInt(u32, &tb, @intCast(g + 1), .little);
+    if (copyToUser(c, @intCast(f.rdx), &tb) < 4) {
+        nc.sh.refs -= 1;
+        bindShared(nc, &dead_proc);
+        _ = freeChild(nc);
+        nc.* = .{};
+        return -14; // EFAULT
+    }
+    if (g >= nchildren) nchildren = g + 1;
+    nc.state = .runnable;
+    return @intCast(g + 1); // the tid — join/bookkeeping key
+}
+
+// nr 56 — clone: the fork shape (SIGCHLD alone, 0x11) and the musl
+// pthread shape (0x7d0f00). Any other flag combination is a different
+// axis — CLONE_VFORK's park-until-exec, CLONE_PARENT's reparent,
+// namespaces — refused by name, never silently forked.
 fn childClone(c: *Child, f: *TrapFrame) i64 {
     if (f.rdi == 0x11) return childFork(c, f);
+    if (f.rdi == 0x7d0f00) return childThread(c, f);
     say("SEAM REFUSE clone flags=");
     puthex(f.rdi);
-    say(" (not the fork shape)\n");
+    say(" (not a served shape)\n");
     return -38; // ENOSYS
 }
 
@@ -7132,7 +7537,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     // the stop/continue cycle itself) does not cut a
                     // sleep; only a caught one does.
                     while (irq_ticks < deadline and
-                           c.sig_pending & ~c.sig_blocked & c.sig_caught == 0) {
+                           c.sig_pending & ~c.sig_blocked & c.sh.sig_caught == 0) {
                         kblock(.poll);
                     }
                     if (irq_ticks < deadline) {
@@ -7305,9 +7710,9 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 // oldact first: the stored disposition, truthfully
                 if (f.rdx != 0) {
                     var ob: [32]u8 = @splat(0);
-                    if (c.sig_ign & bit != 0) {
+                    if (c.sh.sig_ign & bit != 0) {
                         std.mem.writeInt(u64, ob[0..8], 1, .little); // SIG_IGN
-                    } else if (c.sig_caught & bit != 0) {
+                    } else if (c.sh.sig_caught & bit != 0) {
                         std.mem.writeInt(u64, ob[0..8], 2, .little); // a handler
                     }
                     _ = copyToUser(c, @intCast(f.rdx), &ob);
@@ -7319,23 +7724,27 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     } else {
                         const h = std.mem.readInt(u64, &ib, .little);
                         if (h == 1) { // SIG_IGN
-                            c.sig_ign |= bit;
-                            c.sig_caught &= ~bit;
+                            c.sh.sig_ign |= bit;
+                            c.sh.sig_caught &= ~bit;
                         } else if (h == 0) { // SIG_DFL
-                            c.sig_ign &= ~bit;
-                            c.sig_caught &= ~bit;
+                            c.sh.sig_ign &= ~bit;
+                            c.sh.sig_caught &= ~bit;
                         } else { // a handler address — caught, never fires
-                            c.sig_ign &= ~bit;
-                            c.sig_caught |= bit;
+                            c.sh.sig_ign &= ~bit;
+                            c.sh.sig_caught |= bit;
                         }
                         f.rax = 0;
                     }
                 } else f.rax = 0;
             }
         },
-        39, 186 => { // getpid / gettid — the pid domain is slot+1; one
-                     // thread per child exists, so tid IS pid here.
-            f.rax = @intCast(cur_child + 1);
+        39, 186 => { // getpid names the GROUP (the leader's slot+1 —
+                     // threads share it); gettid names the member's own
+                     // slot. One thread per child: the two agree.
+            f.rax = if (f.rax == 39)
+                @intCast(children[cur_child].sh.tgid)
+            else
+                @intCast(cur_child + 1);
         },
         62 => { // kill(pid, signo) — the fact lands on the target; the
                 // disposition runs as kernel bookkeeping (a TERM victim
@@ -7353,7 +7762,9 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     if (t.state != .runnable and t.state != .blocked and
                         t.state != .zombie) continue;
                     const hit = if (pid > 0)
-                        (i == @as(usize, @intCast(pid - 1)))
+                        // kill's pid is a TGID — the leader's slot+1,
+                        // never a member's tid
+                        (t.sh.tgid == @as(usize, @intCast(pid)))
                     else if (pid == 0)
                         (effPgid(i) == effPgid(cur_child))
                     else if (pid == -1)
@@ -7367,6 +7778,26 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     // is unreachable past that point, like linux.
                 }
                 f.rax = @bitCast(if (found) @as(i64, 0) else -3); // ESRCH
+            }
+        },
+        200 => { // tgkill(tgid, tid, sig) — the tid names a member slot
+                 // of the CALLER's group; anything else is ESRCH like
+                 // linux. musl's abort/pthread_cancel ride this nr.
+            const tsig: u32 = @truncate(f.rdx);
+            if (tsig > 31) {
+                f.rax = @bitCast(@as(i64, -22)); // EINVAL
+            } else {
+                const tid: usize = @intCast(f.rsi);
+                const m = if (tid >= 1 and tid <= nchildren)
+                    &children[tid - 1] else null;
+                if (f.rdi != children[cur_child].sh.tgid or m == null or
+                    m.?.sh != children[cur_child].sh or
+                    (m.?.state != .runnable and m.?.state != .blocked)) {
+                    f.rax = @bitCast(@as(i64, -3)); // ESRCH
+                } else {
+                    if (tsig != 0) sigSend(tid - 1, .{ .signo = @intCast(tsig) });
+                    f.rax = 0;
+                }
             }
         },
         109 => { // setpgid(pid, pgid) — pid 0 self, pgid 0 = the target's
@@ -7387,14 +7818,14 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     ret = -3; // ESRCH
                 } else if (ts != cur_child and t.spawned_by != cur_child) {
                     ret = -3; // ESRCH — not our child (linux's wording)
-                } else if (t.sid == ts + 1) {
+                } else if (t.sh.sid == ts + 1) {
                     ret = -1; // EPERM — a session leader can't regroup
-                } else if (t.sid != c.sid) {
+                } else if (t.sh.sid != c.sh.sid) {
                     ret = -1; // EPERM — different session
-                } else if (newpg != ts + 1 and !pgrpLiveIn(newpg, t.sid)) {
+                } else if (newpg != ts + 1 and !pgrpLiveIn(newpg, t.sh.sid)) {
                     ret = -1; // EPERM — no such pgrp in the session
                 } else {
-                    t.pgid = newpg;
+                    t.sh.pgid = newpg;
                 }
                 f.rax = @bitCast(ret);
             }
@@ -7416,22 +7847,22 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             if (effPgid(cur_child) == cur_child + 1) {
                 f.rax = @bitCast(@as(i64, -1)); // EPERM
             } else {
-                c.sid = cur_child + 1;
-                c.pgid = cur_child + 1;
-                c.ctty = 0;
-                f.rax = @intCast(c.sid);
+                c.sh.sid = cur_child + 1;
+                c.sh.pgid = cur_child + 1;
+                c.sh.ctty = 0;
+                f.rax = @intCast(c.sh.sid);
             }
         },
         124 => { // getsid(pid) — 0 self; the leader's pid, 0 if the child
                  // never joined a session (our kernel children).
             const pid: i64 = @bitCast(f.rdi);
             if (pid == 0) {
-                f.rax = @intCast(c.sid);
+                f.rax = @intCast(c.sh.sid);
             } else if (pid < 0 or pid > MAXCHILDREN or
                 children[@intCast(pid - 1)].state == .empty) {
                 f.rax = @bitCast(@as(i64, -3)); // ESRCH
             } else {
-                f.rax = @intCast(children[@intCast(pid - 1)].sid);
+                f.rax = @intCast(children[@intCast(pid - 1)].sh.sid);
             }
         },
         72 => { // fcntl(fd, cmd, arg) — flag ops are honest no-ops (no
@@ -7596,19 +8027,19 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         },
         12 => { // brk(addr) -> current break; 0 queries
             const want: usize = @intCast(f.rdi);
-            if (want == 0 or want < c.brk_base or
+            if (want == 0 or want < c.sh.brk_base or
                 want >= USER_STACK_TOP - USER_STACK_PAGES * 0x1000 - 0x1000)
             {
-                f.rax = c.brk; // brk's refusal is returning the old break
+                f.rax = c.sh.brk; // brk's refusal is returning the old break
             } else {
-                var p = c.brk & ~@as(usize, 0xFFF);
+                var p = c.sh.brk & ~@as(usize, 0xFFF);
                 while (p < want) : (p += 0x1000) {
                     if (userEntry(c, p) == 0) {
                         _ = mapUserPage(c, p) orelse break;
                     }
                 }
-                c.brk = want;
-                f.rax = c.brk;
+                c.sh.brk = want;
+                f.rax = c.sh.brk;
             }
         },
         9 => { // mmap(addr,len,prot,flags,fd,off)
@@ -7648,7 +8079,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 } else {
                     // bump cursor — skip past any span the fixed path left
                     // live, else a later bump collides with a fixed map.
-                    base = c.mmap_top;
+                    base = c.sh.mmap_top;
                     while (true) {
                         var live = false;
                         var q: usize = 0;
@@ -7658,7 +8089,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         if (!live) break;
                         base += (len + 0xFFF) & ~@as(usize, 0xFFF);
                     }
-                    c.mmap_top = base + ((len + 0xFFF) & ~@as(usize, 0xFFF));
+                    c.sh.mmap_top = base + ((len + 0xFFF) & ~@as(usize, 0xFFF));
                 }
                 var p: usize = 0;
                 var ok = true;
@@ -7714,7 +8145,14 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @bitCast(@as(i64, -22)); // EINVAL
             }
         },
-        218 => f.rax = 1, // set_tid_address — our only tid is the child
+        218 => { // set_tid_address — the word pthread_exit zeroes and
+                 // futex-wakes on death; returns the caller's own tid
+            children[cur_child].clear_tid = f.rdi;
+            f.rax = @intCast(cur_child + 1);
+        },
+        202 => { // futex(uaddr, op, val, timeout, uaddr2, val3)
+            f.rax = @bitCast(childFutex(&children[cur_child], f));
+        },
         273 => f.rax = 0, // set_robust_list — declared, no robust futexes
         302 => { // prlimit64(pid, res, new, old) — old gets infinity
             if (f.r10 != 0) {
@@ -7740,9 +8178,13 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             }
             f.rax = f.rsi;
         },
-        60, 231 => { // exit/exit_group(code) — child dies, frames go back.
-                   // The body is childDie's: kill()'s self-path shares it.
-            childDie(@bitCast(f.rdi), 0);
+        60, 231 => { // exit dies the MEMBER — its slot frees, clear_tid
+                   // wakes the join; exit_group dies the whole tgid at
+                   // once. A lone child threads both identically.
+            if (f.rax == 231)
+                groupExit(@bitCast(f.rdi), 0)
+            else
+                threadExit(@bitCast(f.rdi), 0);
         },
         else => {
             say("SEAM ENOSYS nr=");
@@ -8213,19 +8655,33 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         // instead of the fresh frame jumps to wherever the old chain's
         // top-of-stack pointed (observed: #UD at rip=3 after a reap'd-
         // blocked python subprocess's slot reissued into a later epoch).
-        if (c.upd != 0) _ = freeChild(c); // pages a dead slot still holds
+        if (c.upd != 0 or c.pml4 != 0) _ = freeChild(c); // frames a dead
+                                    // slot still holds (+ its shared
+                                    // record — last ref runs the table)
         c.* = .{};
+        const csh = allocShared() orelse {
+            say("RING3 FAIL: proc table\n");
+            unlockBkl();
+            return -1;
+        };
+        bindShared(c, csh);
+        csh.tgid = i + 1;
         if (!buildTables(c)) {
+            _ = freeChild(c);
             say("RING3 FAIL: page alloc\n");
             unlockBkl();
             return -1;
         }
+        csh.upd = c.upd;
         c.fsv = fsv;
-        c.fds = .{0} ** 32;
         // provider children get the stdio projection too — stdio is a
         // typed entry now, not an fd-number special case
-        c.fdkinds = .{ .conin, .conout, .conout } ++ .{.none} ** 29;
-        c.fdverbs = .{ V_READ, V_WRITE, V_WRITE } ++ .{0} ** 29;
+        c.fdkinds[0] = .conin;
+        c.fdkinds[1] = .conout;
+        c.fdkinds[2] = .conout;
+        c.fdverbs[0] = V_READ;
+        c.fdverbs[1] = V_WRITE;
+        c.fdverbs[2] = V_WRITE;
         var ipath: [256]u8 = undefined;
         var ilen: usize = 0;
         const info = loadElf(c, imgs[i][0..sizes[i]], USER_VA_BASE, &ipath, &ilen) orelse {
@@ -8259,9 +8715,9 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
             unlockBkl();
             return -1;
         };
-        c.brk_base = info.brk_base;
-        c.brk = info.brk_base;
-        c.mmap_top = MMAP_BASE;
+        c.sh.brk_base = info.brk_base;
+        c.sh.brk = info.brk_base;
+        c.sh.mmap_top = MMAP_BASE;
         c.fsbase = 0;
         c.frame.ss = 0x1B; // user data
         c.state = .runnable;

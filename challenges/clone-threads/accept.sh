@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
-echo "OPEN: clone(CLONE_VM) second runner + futex park/wake + distinct tids, status=0"
-exit 77
+echo "LANDED: clone-threads — gate row 'clone-threads' (check-boot): THR COMPLETE fails=0 + klanker KL thread 41"
+exit 0

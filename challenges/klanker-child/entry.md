@@ -44,9 +44,10 @@ fetch-pyroot + klanker/agents-* sources flattened into the stdlib dir
 
 ## Measured gaps (named, honest)
 
-- **`KL thread refused RuntimeError can't start new thread`** — the
-  clone-thread shape (`0x7d0f00`) — `clone-threads` stands as the
-  rung, now proven by klanker's own demand.
+- **`KL thread refused RuntimeError can't start new thread`** —
+  RESOLVED by `clone-threads`: `KL thread 41` — a member's write the
+  leader reads through the shared `ProcShared` address space. The
+  gate row pins `KL thread 41` as a pass criterion.
 - **`KL chat rc 1` → `Turn error: <urlopen error [Errno 97] Address
   family not supported by protocol>`** — RESOLVED by `netsock-relay`:
   the payload carries `/providers/lmstudio.local.json` (the
