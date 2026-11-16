@@ -400,6 +400,9 @@ extern fn mouse_irq() void;
 extern var gpu_msix_vec: u8;
 extern var gpu_msix_seen: u64;
 extern fn gpu_irq_ack() void;
+extern var net_msix_vec: u8;
+extern var net_msix_seen: u64;
+extern fn net_irq_ack() void;
 
 const ExcFrame = extern struct {
     rax: u64,
@@ -524,6 +527,11 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             gpu_msix_seen += 1;
             if (gpu_msix_seen == 1) say("irq: vgpu msix delivered\n");
             wakeKind(.gpu); // a retired command resumes its parked trap
+        } else if (net_msix_vec != 0xFF and f.vec == net_msix_vec) {
+            net_irq_ack();
+            if (net_msix_seen == 1) say("irq: net msix delivered\n");
+            netdev.stackPoll(irq_ticks); // rx landed — drain now,
+                                         // not at the next tick
         } else {
             say("irq: stray msi vec=");
             puthex(f.vec);
@@ -670,6 +678,7 @@ extern var irqstub_table: [64]u64;
 // LAPIC's own EOI register (0xFEE000B0), never to the 8259. One page of
 // MMIO, identity-mapped; software-enabled via the spurious vector reg.
 const mmio = @import("mmio");
+const netdev = @import("net");
 var lapic: [*]volatile u32 = undefined;
 var lapicArmed = false;
 
@@ -4096,7 +4105,8 @@ const SockPair = struct {
     owner: [2]u32 = .{ 0, 0 }, // roster slot+1 of each side's minter —
                              // SO_PEERCRED's honest answer
     fam: u8 = 1,   // 1 unix / 2 inet — connect() routes on it
-    nid: u8 = 0,   // relay session id (inet only; 0 = unnegotiated)
+    prov: u8 = 0,  // inet wire provider: 0 com2 relay / 1 native virtio
+    nid: u8 = 0,   // provider session id (inet only; 0 = unnegotiated)
     cst: u8 = 0,   // 0 idle / 1 connecting / 2 up — the inet handshake
     cerr: u8 = 0,  // the relay's connect errno — SO_ERROR's answer
     wshut: u8 = 0, // SHUT_WR landed — writes are EPIPE now
@@ -4217,15 +4227,28 @@ fn netTxPair(pair: usize) void {
     const d = &s.dir[1];
     var moved = false;
     while (d.count > 0) {
+        // peek up to a frame's worth without consuming
         var pay: [512]u8 = undefined;
         var n: usize = 0;
-        while (n < pay.len and d.count > 0) : (n += 1) {
-            pay[n] = d.buf[d.tail];
+        var t = d.tail;
+        while (n < pay.len and n < d.count) : (n += 1) {
+            pay[n] = d.buf[t];
+            t = (t + 1) % d.buf.len;
+        }
+        const sent = if (s.prov == 1)
+            // native stack — tcpSend consumes what fits its window;
+            // the rest stays in the ring, same backpressure shape
+            netdev.tcpSend(s.nid, pay[0..n], irq_ticks)
+        else blk: {
+            netFrame(s.nid, 2, pay[0..n]);
+            break :blk n; // the relay's txq always takes it
+        };
+        for (0..sent) |_| {
             d.tail = (d.tail + 1) % d.buf.len;
             d.count -= 1;
         }
-        netFrame(s.nid, 2, pay[0..n]);
-        moved = true;
+        moved = sent != 0;
+        if (sent < n) break; // window full — next pass resumes
     }
     if (moved) wakeSock(pair, 1); // ring space freed — writers re-check
 }
@@ -4345,9 +4368,49 @@ fn netRxByte(b: u8) void {
     }
 }
 
+// The native stack's delivery hooks — the wire truth lands in the same
+// pair marks the relay drives: rx bytes into dir[0] (what doesn't fit
+// simply isn't acked — the peer retransmits into a drained ring, real
+// TCP flow control), the connect verdict into cst/cerr, FIN/RST as the
+// same close facts the relay's EOF/RST ops produce.
+fn netNativeRx(pair: usize, data: []const u8) usize {
+    if (pair >= NSOCKS or !socks[pair].used) return 0;
+    const d = &socks[pair].dir[0];
+    var n: usize = 0;
+    while (n < data.len and d.count < d.buf.len) : (n += 1) {
+        d.buf[d.head] = data[n];
+        d.head = (d.head + 1) % d.buf.len;
+        d.count += 1;
+    }
+    if (n != 0) wakeSock(pair, 0);
+    return n;
+}
+fn netNativeConn(pair: usize, errno: u8) void {
+    if (pair >= NSOCKS or !socks[pair].used) return;
+    const s = &socks[pair];
+    if (errno == 0) {
+        s.cst = 2;
+        s.conn = true;
+    } else {
+        s.cst = 0;
+        s.cerr = errno;
+    }
+    wakeSock(pair, 0); // a parked connect re-checks
+}
+fn netNativeEof(pair: usize) void {
+    if (pair < NSOCKS and socks[pair].used) sockCloseEnd(pair, 1);
+}
+fn netNativeRst(pair: usize) void {
+    if (pair >= NSOCKS or !socks[pair].used) return;
+    socks[pair].rst = 1;
+    sockCloseEnd(pair, 1);
+}
+
 // One bridge pass: drain UART RX into sessions, wake touched readers,
 // flush any tx stragglers. Rides the tick, IRQ3, and the connect loop.
 fn netBridgePoll() void {
+    netdev.stackPoll(irq_ticks); // the owned stack's engine tick — rx
+        // drain + retransmit sweep, armed or absent it decides
     if (!com2_live) return;
     var n: usize = 0;
     while (n < 4096 and !netRxStalled() and (inb(COM2 + 5) & 1) != 0) : (n += 1)
@@ -4367,6 +4430,13 @@ fn netBridgePoll() void {
 // COM2 probe + arm: an absent UART reads 0xFF on a floating bus — only a
 // present port gets IER + the IRQ3 line, so non-net boots stay silent.
 fn netInit() void {
+    netdev.setHooks(.{
+        .rxData = netNativeRx,
+        .eof = netNativeEof,
+        .rst = netNativeRst,
+        .connDone = netNativeConn,
+    });
+    netdev.devProbe(); // virtio-net — silent-absent like the COM2 probe
     outb(COM2 + 1, 0x00);
     outb(COM2 + 3, 0x80);
     outb(COM2 + 0, 0x01);
@@ -4397,18 +4467,26 @@ fn netInetConnect(c: *Child, f: *TrapFrame, pair: usize) i64 {
     while (true) {
         if (s.cst == 0) {
             if (s.nid == 0) {
-                s.nid = netSidAlloc();
-                if (s.nid == 0) return -105; // ENOBUFS — pool drained
+                if (s.prov == 1) {
+                    // the owned stack: a session slot, SYN rides the
+                    // retransmit sweep — connDone lands the verdict
+                    s.nid = netdev.tcpConnect(pair, pb[0..4].*,
+                        (@as(u16, pb[4]) << 8) | pb[5], irq_ticks);
+                    if (s.nid == 0) return -105; // ENOBUFS
+                } else {
+                    s.nid = netSidAlloc();
+                    if (s.nid == 0) return -105; // ENOBUFS — pool drained
+                    netFrame(s.nid, 1, &pb);
+                }
             }
             s.cst = 1;
             s.cerr = 0;
             s.npeer = pb; // getpeername answers what the CONNECT named
-            netFrame(s.nid, 1, &pb);
         }
         if (s.cst == 2) return 0; // resolved while we weren't parked
         if (c.fdnb[@intCast(f.rdi)] != 0) return -115; // EINPROGRESS
         c.wait_pipe = pair * 2;
-        kblock(.sock); // wake = the COK frame landed
+        kblock(.sock); // wake = the handshake verdict landed
         if (s.cst == 0) return -@as(i64, @max(1, s.cerr));
         if (s.cst == 2) return 0;
     }
@@ -4534,25 +4612,28 @@ fn sockRead(c: *Child, pair: usize, dir: usize, bva: u64, want: u64, nb: bool) i
 fn sockCloseEnd(pair: usize, side: usize) void {
     const s = &socks[pair];
     if (s.refs[side] > 0) s.refs[side] -= 1;
-    // inet: the last child-side ref dying closes the relay session —
-    // CLOSE carries it host-side, and the bridge ref drops with it
-    // (close() is a full teardown; in-flight relay data dies there).
+    // inet: the last child-side ref dying closes the wire session —
+    // the relay hears CLOSE; the native stack gets a FIN+free
+    // (close() is a full teardown; in-flight data dies there).
     if (s.fam == 2 and s.nid != 0 and side == 0 and s.refs[0] == 0) {
-        netFrame(s.nid, 3, &.{});
+        if (s.prov == 1) {
+            netdev.tcpShutdown(s.nid, irq_ticks); // FIN rides out before
+            netdev.tcpClose(s.nid);               // the slot frees
+        } else netFrame(s.nid, 3, &.{});
         s.refs[1] = 0;
     }
     wakeSock(pair, side ^ 1); // the peer's waiters re-check the refs
     wakeSock(pair, side);
     if (s.refs[0] == 0 and s.refs[1] == 0) {
-        // Both ends gone — queued refs die with the pair, and the relay
-        // session id returns to the pool before the slot can reissue.
+        // Both ends gone — queued refs die with the pair, and the
+        // provider session id returns before the slot can reissue.
         for (0..2) |d| {
             while (s.dir[d].qn > 0) {
                 s.dir[d].qn -= 1;
                 fdFreeRef(s.dir[d].q[s.dir[d].qn]);
             }
         }
-        if (s.fam == 2 and s.nid != 0) netSidFree(s.nid);
+        if (s.fam == 2 and s.nid != 0 and s.prov == 0) netSidFree(s.nid);
         s.* = .{};
     }
 }
@@ -5602,13 +5683,16 @@ fn sockPath(c: *Child, ava: u64, alen: u64, out: []u8) ?[]const u8 {
 // ENOTCONN. SOCK_CLOEXEC/SOCK_NONBLOCK ride the upper type bits and
 // are masked like socketpair's (flags are fcntl no-ops here).
 fn childSocket(c: *Child, f: *TrapFrame) i64 {
-    const inet = f.rdi == 2; // AF_INET — the COM2 bridge serves streams
+    const inet = f.rdi == 2; // AF_INET — native stack if armed, else
+                           // the delegated COM2 relay, else a refusal
     if ((f.rdi != 1 and !inet) or (f.rsi & 0xF) != 1) return -97; // EAFNOSUPPORT
+    if (inet and !netdev.nativeUp() and !com2_live) return -97;
     const slot = sockSlot(c) orelse return -24; // EMFILE
     const pi = sockPairCreate(false) orelse return -24;
     if (inet) {
         socks[pi].fam = 2;
-        socks[pi].owner[1] = BRIDGE_OWNER; // the relay stands as peer
+        socks[pi].prov = if (netdev.nativeUp()) 1 else 0;
+        socks[pi].owner[1] = BRIDGE_OWNER; // the wire side stands as peer
     } else {
         socks[pi].refs[1] = 0; // no peer until connect grafts a session
     }
@@ -7257,12 +7341,18 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 } else switch (f.rsi) {
                     1 => { // SHUT_WR — writes are EPIPE; reads still drain
                         s.wshut = 1;
-                        netFrame(s.nid, 4, &.{});
+                        if (s.prov == 1)
+                            netdev.tcpShutdown(s.nid, irq_ticks)
+                        else
+                            netFrame(s.nid, 4, &.{});
                         f.rax = 0;
                     },
                     2 => { // SHUT_RDWR — full teardown, EOS after drain
                         s.wshut = 1;
-                        netFrame(s.nid, 3, &.{});
+                        if (s.prov == 1) {
+                            netdev.tcpShutdown(s.nid, irq_ticks);
+                            netdev.tcpClose(s.nid);
+                        } else netFrame(s.nid, 3, &.{});
                         sockCloseEnd(@intCast(v >> 1), 1);
                         f.rax = 0;
                     },

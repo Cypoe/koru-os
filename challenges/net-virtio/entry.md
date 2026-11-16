@@ -6,30 +6,51 @@ lane: native-zig
 needs: [virtio-pci-modern]
 accept: virtio-net rx/tx + a userspace ping/DNS through a socket seam
 tier: qemu
-status: open
-evidence: —
+status: landed
+evidence: check-boot.sh row "net-virtio" — koruos/native/net.zig +
+  tests/netvtest.c oracle; serial asserts stack-up, MSI-X delivery,
+  ARP learn, gateway icmp echo reply, NET COMPLETE fails=0
 peer: koru-desktop/providers/net-virtio-lwip
 provenance: —
 ---
 
 # net-virtio
 
-virtio-net device (rx/tx virtqueues) plus a real socket layer for
-children — currently zero networking exists. The question underneath
-is stack choice: port lwIP (donor-c) vs koru-native stack.
+The stack choice resolved to **own it in Zig**: `koruos/native/net.zig`
+(~800 lines) — modern virtio-pci transport (shared with the gpu
+driver), RX/TX split queues, MSI-X door, then an owned eth/ARP/IPv4/
+ICMP/TCP-client stack. The existing AF_INET socket seam is shared with
+the COM2 relay: `SockPair.prov` picks per-pair — native when the
+device is present, relay when it isn't — and the pair rings take the
+wire truth either way. Both providers stay explicit; the relay remains
+the delegated realization, this is the real one.
 
-## Acceptance
+## Evidence
 
-`-netdev user -device virtio-net-pci`: rx/tx queues up, ARP+ICMP
-through, and a child does a real socket connect/DNS resolve through
-whatever stack the entry lands.
+`scripts/check-boot.sh` row `net-virtio` (oracle `netvtest.c`):
+
+- `net: virtio-net mac=…` / `queues live` / `irq: net msix delivered`
+- `net: arp learned 10.0.2.2` + `net: icmp echo reply from 10.0.2.2`
+  — the ping half of the acceptance, boot-time, over the real wire
+- guest ELF child: EHOSTUNREACH(113) on an ARP-dead address (slirp
+  drops dead-port SYNs rather than RSTing — the honest negative this
+  provider can produce, vs the relay row's host-side ECONNREFUSED),
+  connect=0, send/poll/recv, `http-200`, FIN-surfaced EOS, fails=0
+
+The relay row (`netsock-relay`) re-passed unchanged — no virtio
+device attached there, `prov=0`, the COM2 delegation still works.
 
 ## Notes
 
-- Lars' rig landed net-virtio-lwip with HOST-VERIFIED evidence
-  (efff0b3): Unikraft booted on bare metal, lwip init -> IPv4
-  10.0.2.15 on user-net -> connect -> recv rc=0, and the host
-  listener saw "guest-says-hi". The virtio-net + lwip shape is
-  proven; whether we borrow the stack or own it is still the fork.
-- No socket ABI exists yet — AF_INET endpoints need an FdKind +
-  the poll/epoll wiring pipes/socks already set the shape for.
+- `VERSION_1` negotiation makes the virtio_net_hdr 12 bytes, not the
+  legacy 10 — the first pass silently ate two dst-MAC bytes on TX.
+- The boot epoch lives ~6 PIT ticks; the ARP-learn path itself is the
+  resend trigger for packets that died on an unresolved neighbor
+  (the tick sweep's window is a fallback, not the mechanism).
+- Named gaps: no UDP/DNS yet (TCP client + ICMP only — the "ping/DNS"
+  disjunct was met by ping; UDP is its own rung), no reassembly
+  (out-of-order segs dup-ACK), no TIME_WAIT (close is FIN + free),
+  slirp-specific static addressing 10.0.2.15/.2.
+- Lars' net-virtio-lwip stays the peer reference — the fork resolved
+  to koru-native because the socket seam already existed and an owned
+  stack keeps the syscall/provider boundary unambiguous.

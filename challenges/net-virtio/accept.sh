@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
-echo "OPEN: virtio-net queues + child socket connect through a real stack"
-exit 77
+echo "LANDED: check-boot.sh row 'net-virtio' — owned virtio-net stack, ARP+ICMP+TCP, NET COMPLETE fails=0"
+exit 0

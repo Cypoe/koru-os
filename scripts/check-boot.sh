@@ -530,6 +530,47 @@ else
     bad "netsock-relay: build failed (nettest/mkcpio/iso)"; tail -4 "$WORK/nettest.build" "$WORK/mkcpionet.log" "$WORK/isonet.build" 2>/dev/null
 fi
 
+# net-virtio: the OWNED stack — same AF_INET socket seam as the relay
+# row but the provider is the guest's own: virtio-net-pci (modern
+# transport, MSI-X door) feeds a Zig eth/ARP/IPv4/ICMP/TCP stack and
+# the pair rings take the wire truth. QEMU carries a non-transitional
+# virtio-net on user-mode slirp; there is NO COM2 relay here — every
+# byte crosses the virtqueue. The device markers are the rung's own
+# evidence: MSI-X delivered, ARP learned, the gateway's icmp echo
+# reply. The oracle asserts what this stack can prove honestly —
+# EHOSTUNREACH on an ARP-dead address (slirp drops dead-port SYNs
+# rather than RSTing, so the relay row's 111 is not this row's truth),
+# then a real handshake + HTTP/1.1 200 + FIN-surfaced EOS.
+if command -v python >/dev/null 2>&1 \
+   && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/netvtest.elf" "$ROOT/koruos/native/tests/netvtest.c" > "$WORK/netvtest.build" 2>&1 \
+   && python "$ROOT/scripts/mkcpio.py" "$WORKW/netsock.cpio" \
+        "bin/nettest=$WORKW/netvtest.elf|755" > "$WORK/mkcpionetv.log" 2>&1 \
+   && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_netsock.k" > "$WORK/boot_netv.k" \
+   && bash "$ROOT/scripts/build-iso.sh" "$WORK/boot_netv.k" "$WORK/koru-netv.iso" "$WORKW/netsock.cpio" > "$WORK/isonetv.build" 2>&1; then
+    python "$ROOT/koruos/native/tests/llmstub.py" > "$WORK/llmstubv.log" 2>&1 &
+    NETSTUB=$!
+    timeout 200 "$QEMU" -cdrom "$WORK/koru-netv.iso" -boot d -serial stdio \
+        -netdev user,id=n0 -device virtio-net-pci-non-transitional,netdev=n0 \
+        -display none -m 512M -no-reboot > "$WORK/boot_netv.serial" 2>&1 || true
+    kill $NETSTUB 2>/dev/null || true
+    if grep -qF 'net: stack up' "$WORK/boot_netv.serial" \
+       && grep -qF 'irq: net msix delivered' "$WORK/boot_netv.serial" \
+       && grep -qF 'net: arp learned 10.0.2.2' "$WORK/boot_netv.serial" \
+       && grep -qF 'net: icmp echo reply from 10.0.2.2' "$WORK/boot_netv.serial" \
+       && grep -qF 'NET unreach-errno got=113 want=113' "$WORK/boot_netv.serial" \
+       && grep -qF 'NET connect got=0 want=0' "$WORK/boot_netv.serial" \
+       && grep -qF 'NET http-200 got=1 want=1' "$WORK/boot_netv.serial" \
+       && grep -qF 'NET eos got=1 want=1' "$WORK/boot_netv.serial" \
+       && grep -qF 'NET COMPLETE fails=0' "$WORK/boot_netv.serial" \
+       && grep -qF 'status=0' "$WORK/boot_netv.serial"; then
+        ok "net-virtio: owned virtio-net stack — MSI-X rx/tx, ARP+ICMP to the gateway, guest TCP handshake, HTTP/1.1 200, EHOSTUNREACH negative, EOS"
+    else
+        bad "net-virtio: $(grep -aE 'NET |net:|SEAM|FAIL|EXC' "$WORK/boot_netv.serial" | tail -16 | tr '\n' '|')"
+    fi
+else
+    bad "net-virtio: build failed (netvtest/mkcpio/iso)"; tail -4 "$WORK/netvtest.build" "$WORK/mkcpionetv.log" "$WORK/isonetv.build" 2>/dev/null
+fi
+
 # clone-threads: the 0x7d0f00 musl pthread flag set end-to-end — a
 # static musl oracle drives pthread_create/join/detach through the
 # kernel: members share one ProcShared (same upd, fd table,
