@@ -81,7 +81,19 @@ struct rsurf {
     int surfix;                      // scs[] index or -1
     struct scsurf *sc;
     int32_t dx, dy, dw, dh;          // pending damage union; dw<=0 = none
+    // wl_subsurface role: a surface a parent composes at an offset.
+    // sub_first chains the parent's children in list order (which IS
+    // the z order place_above/place_below rearrange); sub_pending is
+    // the sync-mode commit cache — applied on the parent's commit.
+    struct rsurf *sub_parent, *sub_first, *sub_next;
+    struct wl_resource *subres;      // the wl_subsurface resource
+    int sub_sync;
+    int32_t sub_dx, sub_dy;
+    int sub_pending;
 };
+
+struct rsrc;                     // wl_data_source record — defined with
+                                 // the data-device impl below
 
 // a session — one wl_client, our side-table of its routed objects
 struct sess {
@@ -89,6 +101,8 @@ struct sess {
     struct wl_client *cl;
     struct wl_listener dlistener;    // client-destroy hook
     struct wl_resource *seat, *ptr, *kbd, *wmb;
+    struct wl_resource *dd;          // wl_data_device for this seat
+    struct rsrc *sel;                // the selection this client set
 };
 
 static struct sess ses[NSES];
@@ -261,28 +275,11 @@ static void surf_scale(struct wl_client *cl, struct wl_resource *res,
                        int32_t scale) {}
 static void surf_xform(struct wl_client *cl, struct wl_resource *res,
                        int32_t transform) {}
-static void surf_commit(struct wl_client *cl, struct wl_resource *res) {
-    struct rsurf *S = wl_resource_get_user_data(res);
-
-    if (S->xsurf && S->top && !S->confser) {
-        // the role handshake: an xdg client performs an initial
-        // buffer-less commit after get_toplevel; the compositor's
-        // answer is toplevel.configure (0,0 = client's call) followed
-        // by xsurface.configure(serial). The buffer commit after it
-        // MUST carry the ack.
-        struct wl_array st;
-        wl_array_init(&st);
-        xdg_toplevel_send_configure(S->top, 0, 0, &st);
-        xdg_surface_send_configure(S->xsurf, serial);
-        printf("WLSRV toplevel configure ser=%u\n", serial);
-        S->confser = serial++;
-    }
-    if (S->xsurf && S->confser && S->attached &&
-        S->acked != S->confser) {
-        printf("WLSRV unacked commit (ack=%u want=%u)\n",
-               S->acked, S->confser);
-    }
-
+// the commit's apply half — buffer blit, *Surf mint, damage, present,
+// frame-done, release. A sync subsurface's commits replay through this
+// when the PARENT commits; toplevels call it directly.
+static void surf_apply(struct wl_client *cl, struct rsurf *S,
+                       struct wl_resource *res) {
     struct wl_shm_buffer *shb =
         S->buf ? wl_shm_buffer_get(S->buf) : NULL;
     if (S->attached && shb &&
@@ -333,8 +330,18 @@ static void surf_commit(struct wl_client *cl, struct wl_resource *res) {
                                    f, 0);
                     t->smap = m == MAP_FAILED ? NULL : m;
                     S->sc = t;
-                    t->x = 40 + 100 * (uint32_t)S->surfix;
-                    t->y = 40 + 100 * (uint32_t)S->surfix;
+                    if (S->sub_parent && S->sub_parent->sc) {
+                        // a subsurface composes at the parent's own
+                        // position + its set_position offset — the
+                        // tile formula is for toplevels.
+                        t->x = (uint32_t)((int32_t)S->sub_parent->sc->x
+                                          + S->sub_dx);
+                        t->y = (uint32_t)((int32_t)S->sub_parent->sc->y
+                                          + S->sub_dy);
+                    } else {
+                        t->x = 40 + 100 * (uint32_t)S->surfix;
+                        t->y = 40 + 100 * (uint32_t)S->surfix;
+                    }
                     syscall(K_SURF_MOVE, t->fd, t->x, t->y);
                     struct scene_geom g;
                     if (syscall(K_SURF_INFO, t->fd, &g) == 0) {
@@ -405,6 +412,44 @@ static void surf_commit(struct wl_client *cl, struct wl_resource *res) {
         wl_buffer_send_release(S->buf);
     }
 }
+
+static void surf_commit(struct wl_client *cl, struct wl_resource *res) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+
+    if (S->xsurf && S->top && !S->confser) {
+        // the role handshake: an xdg client performs an initial
+        // buffer-less commit after get_toplevel; the compositor's
+        // answer is toplevel.configure (0,0 = client's call) followed
+        // by xsurface.configure(serial). The buffer commit after it
+        // MUST carry the ack.
+        struct wl_array st;
+        wl_array_init(&st);
+        xdg_toplevel_send_configure(S->top, 0, 0, &st);
+        xdg_surface_send_configure(S->xsurf, serial);
+        printf("WLSRV toplevel configure ser=%u\n", serial);
+        S->confser = serial++;
+    }
+    if (S->xsurf && S->confser && S->attached &&
+        S->acked != S->confser) {
+        printf("WLSRV unacked commit (ack=%u want=%u)\n",
+               S->acked, S->confser);
+    }
+
+    if (S->sub_parent && S->sub_sync) {
+        // synchronized subsurface: the commit caches, the parent's own
+        // commit is the apply point — the protocol's whole sync flag.
+        S->sub_pending = 1;
+        printf("WLSRV sub commit sync-deferred\n");
+        return;
+    }
+    surf_apply(cl, S, res);
+    for (struct rsurf *t = S->sub_first; t; t = t->sub_next) {
+        if (t->sub_pending) {
+            t->sub_pending = 0;
+            surf_apply(cl, t, t->sres);
+        }
+    }
+}
 static const struct wl_surface_interface surf_impl = {
     surf_destroy, surf_attach, surf_damage, surf_frame,
     surf_region, surf_region, surf_commit, surf_xform,
@@ -414,6 +459,14 @@ static const struct wl_surface_interface surf_impl = {
 static void surf_res_destroy(struct wl_resource *res) {
     struct rsurf *S = wl_resource_get_user_data(res);
     if (!S) return;
+    if (S->sub_parent) {
+        // detach from the parent's sub list — a dead link is a dangling
+        // commit replay, not just bookkeeping
+        struct rsurf **pp = &S->sub_parent->sub_first;
+        while (*pp && *pp != S) pp = &(*pp)->sub_next;
+        if (*pp == S) *pp = S->sub_next;
+        S->sub_parent = NULL;
+    }
     if (S->surfix >= 0) {
         struct scsurf *s = &scs[S->surfix];
         if (s->live) {
@@ -441,11 +494,24 @@ static void comp_create_surface(struct wl_client *cl,
     wl_resource_set_implementation(sres, &surf_impl, S,
                                  surf_res_destroy);
 }
+// regions carry no behavior in this compositor — but the resource must
+// still carry a REAL implementation: a NULL impl is libwayland's abort
+// path, so add/subtract land as accepted no-ops.
+static void region_add(struct wl_client *cl, struct wl_resource *res,
+                       int32_t x, int32_t y, int32_t w, int32_t h) {}
+static void region_sub(struct wl_client *cl, struct wl_resource *res,
+                       int32_t x, int32_t y, int32_t w, int32_t h) {}
+static void region_destroy(struct wl_client *cl, struct wl_resource *res) {
+    wl_resource_destroy(res);
+}
+static const struct wl_region_interface region_impl = {
+    region_destroy, region_add, region_sub,
+};
 static void comp_create_region(struct wl_client *cl,
                                struct wl_resource *res, uint32_t id) {
-    // regions carry no behavior here — mint a valid resource so the
-    // client's bookkeeping stays real.
-    wl_resource_create(cl, &wl_region_interface, 1, id);
+    struct wl_resource *rr =
+        wl_resource_create(cl, &wl_region_interface, 1, id);
+    wl_resource_set_implementation(rr, &region_impl, NULL, NULL);
 }
 static const struct wl_compositor_interface comp_impl = {
     comp_create_surface, comp_create_region,
@@ -456,6 +522,339 @@ static void comp_bind(struct wl_client *cl, void *data,
         wl_resource_create(cl, &wl_compositor_interface,
                            version > 4 ? 4 : version, id);
     wl_resource_set_implementation(res, &comp_impl, NULL, NULL);
+}
+
+// ---- wl_subcompositor impl -------------------------------------------
+// Real surfaces composited at a parent-relative offset — foot binds the
+// global unconditionally (its overlay/search box are subsurfaces), and
+// a bare global answer would be a lie: the objects mint real records,
+// sync commits really defer to the parent's, and the z-list really
+// reorders. The *Surf presentation at parent+offset rides the same
+// seam a toplevel does.
+static void sub_destroy(struct wl_client *cl, struct wl_resource *res) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (S) {
+        S->subres = NULL;
+        if (S->sub_parent) {
+            struct rsurf **pp = &S->sub_parent->sub_first;
+            while (*pp && *pp != S) pp = &(*pp)->sub_next;
+            if (*pp == S) *pp = S->sub_next;
+            S->sub_parent = NULL;
+        }
+    }
+    wl_resource_destroy(res);
+}
+static void sub_set_position(struct wl_client *cl,
+                             struct wl_resource *res,
+                             int32_t x, int32_t y) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (!S) return;
+    S->sub_dx = x; S->sub_dy = y;
+    // live surfaces re-place immediately — desync clients see it now;
+    // sync clients see it at the next parent commit either way, which
+    // is the same picture the spec promises.
+    if (S->sc && S->sub_parent && S->sub_parent->sc) {
+        uint32_t nx = (uint32_t)((int32_t)S->sub_parent->sc->x + x);
+        uint32_t ny = (uint32_t)((int32_t)S->sub_parent->sc->y + y);
+        syscall(K_SURF_MOVE, S->sc->fd, nx, ny);
+        S->sc->x = nx; S->sc->y = ny;
+    }
+}
+static void sub_restack(struct wl_client *cl, struct wl_resource *res,
+                        struct wl_resource *sibling, int below) {
+    // sibling may be the parent surface itself (spec: a valid ref) —
+    // below-parent means bottom of the list, above-parent the top.
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (!S || !S->sub_parent) return;
+    struct rsurf *R = sibling
+        ? wl_resource_get_user_data(sibling) : NULL;
+    struct rsurf *P = S->sub_parent;
+    // detach first — the list is the z-order
+    struct rsurf **pp = &P->sub_first;
+    while (*pp && *pp != S) pp = &(*pp)->sub_next;
+    if (*pp == S) *pp = S->sub_next;
+    S->sub_next = NULL;
+    if (R == P || !R) {
+        // parent itself: below -> head, above -> tail
+        if (below) {
+            S->sub_next = P->sub_first;
+            P->sub_first = S;
+        } else {
+            struct rsurf **tail = &P->sub_first;
+            while (*tail) tail = &(*tail)->sub_next;
+            *tail = S;
+        }
+        return;
+    }
+    // sibling must share our parent — protocol's own validity check
+    if (R->sub_parent != P) {
+        wl_resource_post_error(res,
+            WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
+            "sibling is not a sibling");
+        return;
+    }
+    if (below) {
+        // insert S before R
+        struct rsurf **q = &P->sub_first;
+        while (*q && *q != R) q = &(*q)->sub_next;
+        S->sub_next = *q;
+        *q = S;
+    } else {
+        S->sub_next = R->sub_next;
+        R->sub_next = S;
+    }
+}
+static void sub_place_above(struct wl_client *cl,
+                            struct wl_resource *res,
+                            struct wl_resource *sibling) {
+    sub_restack(cl, res, sibling, 0);
+}
+static void sub_place_below(struct wl_client *cl,
+                            struct wl_resource *res,
+                            struct wl_resource *sibling) {
+    sub_restack(cl, res, sibling, 1);
+}
+static void sub_set_sync(struct wl_client *cl,
+                         struct wl_resource *res) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (S) S->sub_sync = 1;
+}
+static void sub_set_desync(struct wl_client *cl,
+                           struct wl_resource *res) {
+    struct rsurf *S = wl_resource_get_user_data(res);
+    if (S) S->sub_sync = 0;
+}
+static const struct wl_subsurface_interface sub_impl = {
+    sub_destroy, sub_set_position, sub_place_above, sub_place_below,
+    sub_set_sync, sub_set_desync,
+};
+
+static void subcomp_destroy(struct wl_client *cl,
+                            struct wl_resource *res) {
+    wl_resource_destroy(res);
+}
+static void subcomp_get_subsurface(struct wl_client *cl,
+                                   struct wl_resource *res, uint32_t id,
+                                   struct wl_resource *surface,
+                                   struct wl_resource *parent) {
+    struct rsurf *S = wl_resource_get_user_data(surface);
+    struct rsurf *P = wl_resource_get_user_data(parent);
+    if (!S || !P || S == P) {
+        wl_resource_post_error(res,
+            WL_SUBCOMPOSITOR_ERROR_BAD_PARENT,
+            "surface cannot be its own parent");
+        return;
+    }
+    if (S->sub_parent || S->xsurf || S->top) {
+        wl_resource_post_error(res,
+            WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
+            "surface already has a role");
+        return;
+    }
+    S->sub_parent = P;
+    S->sub_sync = 1; // spec default — commits defer to the parent's
+    // append at the tail — a new sub sits at the top of the stack
+    struct rsurf **tail = &P->sub_first;
+    while (*tail) tail = &(*tail)->sub_next;
+    *tail = S;
+    S->sub_next = NULL;
+    struct wl_resource *sres =
+        wl_resource_create(cl, &wl_subsurface_interface, 1, id);
+    S->subres = sres;
+    wl_resource_set_implementation(sres, &sub_impl, S, NULL);
+    printf("WLSRV subsurface minted\n");
+}
+static const struct wl_subcompositor_interface subcomp_impl = {
+    subcomp_destroy, subcomp_get_subsurface,
+};
+static void subcomp_bind(struct wl_client *cl, void *data,
+                         uint32_t version, uint32_t id) {
+    struct wl_resource *res =
+        wl_resource_create(cl, &wl_subcompositor_interface,
+                           version > 1 ? 1 : version, id);
+    wl_resource_set_implementation(res, &subcomp_impl, NULL, NULL);
+    printf("WLSRV subcompositor bound\n");
+}
+
+// ---- wl_data_device_manager impl -------------------------------------
+// The clipboard chain: manager -> data_source (a client's offered
+// mimes) + data_device (per seat, holds the selection) -> data_offer
+// (the cross-client handle). receive() relays the requester's fd into
+// the source's `send` event — the bytes travel source-client ->
+// requester-client through the same SCM_RIGHTS channel shm pools do.
+// With one client nothing is ever offered, which is the honest shape
+// of a sole selection owner.
+
+struct rsrc {                    // a live wl_data_source
+    struct wl_resource *res;
+    struct sess *ses;
+    char mimes[8][64];
+    int nmime;
+    uint32_t actions;
+    struct rsrc *next;
+};
+static struct rsrc *sources;
+
+struct roffer {                  // a live wl_data_offer
+    struct wl_resource *res;
+    struct rsrc *src;
+    char accepted[64];
+    struct roffer *next;
+};
+static struct roffer *offers;
+
+static void src_offer(struct wl_client *cl, struct wl_resource *res,
+                      const char *mime) {
+    struct rsrc *s = wl_resource_get_user_data(res);
+    if (!s || s->nmime >= 8 || !mime) return;
+    snprintf(s->mimes[s->nmime], 64, "%s", mime);
+    s->nmime++;
+}
+static void src_set_actions(struct wl_client *cl,
+                            struct wl_resource *res, uint32_t a) {
+    struct rsrc *s = wl_resource_get_user_data(res);
+    if (s) s->actions = a;
+}
+static void src_destroy(struct wl_client *cl, struct wl_resource *res) {
+    struct rsrc *s = wl_resource_get_user_data(res);
+    if (s && s->ses && s->ses->sel == s) s->ses->sel = NULL;
+    wl_resource_destroy(res);
+}
+static const struct wl_data_source_interface src_impl = {
+    src_offer, src_destroy, src_set_actions,
+};
+
+static void offer_accept(struct wl_client *cl, struct wl_resource *res,
+                         uint32_t serial, const char *mime) {
+    struct roffer *o = wl_resource_get_user_data(res);
+    if (o && mime) snprintf(o->accepted, 64, "%s", mime);
+}
+static void offer_receive(struct wl_client *cl, struct wl_resource *res,
+                          const char *mime, int32_t fd) {
+    // the protocol's real relay: the requester's fd becomes the
+    // source's send target — server does no byte-copying at all.
+    struct roffer *o = wl_resource_get_user_data(res);
+    if (o && o->src && o->src->res) {
+        wl_data_source_send_send(o->src->res, mime ? mime : "", fd);
+    }
+    close(fd);
+}
+static void offer_destroy(struct wl_client *cl, struct wl_resource *res) {
+    struct roffer *o = wl_resource_get_user_data(res);
+    if (o) { o->src = NULL; o->res = NULL; }
+    wl_resource_destroy(res);
+}
+static void offer_finish(struct wl_client *cl, struct wl_resource *res) {}
+static void offer_set_actions(struct wl_client *cl,
+                              struct wl_resource *res,
+                              uint32_t da, uint32_t pa) {}
+static const struct wl_data_offer_interface offer_impl = {
+    offer_accept, offer_receive, offer_destroy, offer_finish,
+    offer_set_actions,
+};
+
+static void dd_start_drag(struct wl_client *cl, struct wl_resource *res,
+                          struct wl_resource *source,
+                          struct wl_resource *origin,
+                          struct wl_resource *icon, uint32_t serial) {
+    // DnD gesture bookkeeping — recorded, not played: the pointer
+    // routing that would carry a drag lives in the input seam and
+    // this rung's clients never start one.
+}
+static void dd_set_selection(struct wl_client *cl, struct wl_resource *res,
+                             struct wl_resource *source, uint32_t ser) {
+    struct sess *me = ses_of(cl);
+    struct rsrc *src = source ? wl_resource_get_user_data(source) : NULL;
+    if (me) me->sel = src;
+    printf("WLSRV selection set mimes=%d\n", src ? src->nmime : -1);
+    // every OTHER live session's device gets a fresh offer carrying
+    // the source's real mime list
+    for (int i = 0; i < NSES; i++) {
+        if (!ses[i].live || &ses[i] == me || !ses[i].dd) continue;
+        struct roffer *o = calloc(1, sizeof *o);
+        if (!o) continue;
+        o->src = src;
+        // server-pushed object: id 0 lets the data_offer event's
+        // new_id assign the wire id at send time
+        o->res = wl_resource_create(ses[i].cl,
+                    &wl_data_offer_interface, 1, 0);
+        if (!o->res) { free(o); continue; }
+        wl_resource_set_implementation(o->res, &offer_impl, o, NULL);
+        o->next = offers; offers = o;
+        wl_data_device_send_data_offer(ses[i].dd, o->res);
+        if (src) {
+            for (int m = 0; m < src->nmime; m++)
+                wl_data_offer_send_offer(o->res, src->mimes[m]);
+        }
+        wl_data_device_send_selection(ses[i].dd, o->res);
+    }
+}
+static void dd_release(struct wl_client *cl, struct wl_resource *res) {
+    struct sess *c = ses_of(cl);
+    if (c) c->dd = NULL;
+    wl_resource_destroy(res);
+}
+static const struct wl_data_device_interface dd_impl = {
+    dd_start_drag, dd_set_selection, dd_release,
+};
+static void ddm_create_source(struct wl_client *cl,
+                              struct wl_resource *res, uint32_t id) {
+    struct rsrc *s = calloc(1, sizeof *s);
+    if (!s) return;
+    s->ses = ses_of(cl);
+    s->res = wl_resource_create(cl, &wl_data_source_interface,
+                                wl_resource_get_version(res), id);
+    wl_resource_set_implementation(s->res, &src_impl, s, NULL);
+    s->next = sources; sources = s;
+    printf("WLSRV datasource minted\n");
+}
+static void ddm_get_device(struct wl_client *cl, struct wl_resource *res,
+                           uint32_t id, struct wl_resource *seat) {
+    struct wl_resource *dd =
+        wl_resource_create(cl, &wl_data_device_interface,
+                           wl_resource_get_version(res), id);
+    wl_resource_set_implementation(dd, &dd_impl, NULL, NULL);
+    struct sess *c = ses_of(cl);
+    if (c) c->dd = dd;
+    printf("WLSRV datadevice minted\n");
+}
+static const struct wl_data_device_manager_interface ddm_impl = {
+    ddm_create_source, ddm_get_device,
+};
+static void ddm_bind(struct wl_client *cl, void *data,
+                     uint32_t version, uint32_t id) {
+    struct wl_resource *res =
+        wl_resource_create(cl, &wl_data_device_manager_interface,
+                           version > 3 ? 3 : version, id);
+    wl_resource_set_implementation(res, &ddm_impl, NULL, NULL);
+}
+
+// ---- wl_output impl --------------------------------------------------
+// The monitor answer foot demands: real scanout facts, learned from the
+// scene extent probe at startup — never a hardcoded resolution.
+static void out_release(struct wl_client *cl, struct wl_resource *res) {
+    wl_resource_destroy(res);
+}
+static const struct wl_output_interface out_impl = { out_release };
+static void out_bind(struct wl_client *cl, void *data,
+                     uint32_t version, uint32_t id) {
+    struct wl_resource *res =
+        wl_resource_create(cl, &wl_output_interface,
+                           version > 4 ? 4 : version, id);
+    wl_resource_set_implementation(res, &out_impl, NULL, NULL);
+    wl_output_send_geometry(res, 0, 0, 0, 0,
+                            WL_OUTPUT_SUBPIXEL_NONE, "koru-os",
+                            "virtio-gpu", WL_OUTPUT_TRANSFORM_NORMAL);
+    wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT |
+                        WL_OUTPUT_MODE_PREFERRED,
+                        (int32_t)sw, (int32_t)sh, 60000);
+    if (version >= 2) wl_output_send_scale(res, 1);
+    if (version >= 4) {
+        wl_output_send_name(res, "koru-scanout0");
+        wl_output_send_description(res, "koru-os virtio-gpu scanout");
+    }
+    wl_output_send_done(res);
+    printf("WLSRV output %ux%u@60\n", sw, sh);
 }
 
 // ---- wl_seat impl ------------------------------------------------------
@@ -724,16 +1123,34 @@ int main(void) {
            ifd >= 0 ? 0 : iopen);
     px = py = 0;
 
+    // the scanout extent for wl_output's answer — a throwaway *Surf is
+    // the only extent door the seam offers. The scene reports its own
+    // facts; nothing here is hardcoded.
+    {
+        int pf = (int)syscall(K_SURF_OPEN, 1, 1);
+        if (pf >= 0) {
+            struct scene_geom g;
+            if (syscall(K_SURF_INFO, pf, &g) == 0) { sw = g.sw; sh = g.sh; }
+            close(pf);
+        }
+    }
+
     // the real display: libwayland-server's object table, registry,
     // wire codec and event loop — the same code every compositor links.
     struct wl_display *dpy = wl_display_create();
     if (!dpy) { printf("WLSRV FAIL display\n"); return 1; }
     // registry ORDER is the gate's contract: names mint in create
-    // order — comp, shm, seat, xdg.
+    // order — comp, shm, seat, xdg own 1..4 for the existing rows;
+    // the real-desktop globals append after them.
     wl_global_create(dpy, &wl_compositor_interface, 4, NULL, comp_bind);
     wl_display_init_shm(dpy);               // the library's own wl_shm
     wl_global_create(dpy, &wl_seat_interface, 7, NULL, seat_bind);
     wl_global_create(dpy, &xdg_wm_base_interface, 1, NULL, wmb_bind);
+    wl_global_create(dpy, &wl_subcompositor_interface, 1, NULL,
+                     subcomp_bind);
+    wl_global_create(dpy, &wl_data_device_manager_interface, 3, NULL,
+                     ddm_bind);
+    wl_global_create(dpy, &wl_output_interface, 4, NULL, out_bind);
 
     struct wl_event_loop *loop = wl_display_get_event_loop(dpy);
     wl_event_loop_add_fd(loop, lfd, WL_EVENT_READABLE, on_accept, dpy);

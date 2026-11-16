@@ -69,9 +69,9 @@ static char acc[4096];
 static int acc_n;
 static const char *last_capture(void) { return acc; }
 
-// read the master until `want` appears or the poll budget dies —
+// read the master until a want appears or the poll budget dies —
 // shell output is asynchronous; the window is the honest bound.
-static int expect(const char *want, int ms) {
+static int expectany(const char *want, const char *alt, int ms) {
     int n;
     acc_n = n = 0;
     int left = ms;
@@ -89,17 +89,27 @@ static int expect(const char *want, int ms) {
             acc[n++] = b[i];
         acc[n] = 0;
         acc_n = n;
-        if (strstr(acc, want)) return 0;
+        if (strstr(acc, want) || (alt && strstr(acc, alt))) return 0;
     }
     acc_n = n;
     dump_acc(want, acc, n);
     return -1;
 }
+static int expect(const char *want, int ms) { return expectany(want, NULL, ms); }
 
 // one master round-trip: write the line, then wait for evidence.
 static int cmd(const char *line, const char *want, int ms) {
     if (write(m, line, strlen(line)) != (long)strlen(line)) return -1;
     return expect(want, ms);
+}
+
+// ash's prompt sigil is uid-honest: '#' for euid 0, '$' for a mortal —
+// arming getuid flipped the staged root shell's sigil, which is the
+// correct answer; the oracle asserts the prompt's RETURN, not the
+// user's privilege.
+static int cmdp(const char *line, int ms) {
+    if (write(m, line, strlen(line)) != (long)strlen(line)) return -1;
+    return expectany("/ $", "/ #", ms);
 }
 
 int main(void) {
@@ -189,7 +199,7 @@ int main(void) {
 
     // `sleep 30 &` — busybox ash prints NO "[1] pid" at launch (measured:
     // only `bg` prints "[1]+ ..."); the job-start fact rides `jobs`.
-    check("bg-job", cmd("sleep 30 &\n", "/ $", 8000) < 0 ? -1 : 0, 0);
+    check("bg-job", cmdp("sleep 30 &\n", 8000) < 0 ? -1 : 0, 0);
     check("jobs-running", cmd("jobs\n", "Running", 8000) < 0 ? -1 : 0, 0);
 
     // fg brings it up; ash echoes the command line it foregrounded.
@@ -209,11 +219,11 @@ int main(void) {
     // explicit wait4 — `wait` is the arm's honest consumer. It blocks
     // until the TERM'd job is reaped; if the signal never landed the
     // window dies honestly. $? = 128+15 names the signal itself.
-    check("kill-job", cmd("kill %1\n", "/ $", 8000) < 0 ? -1 : 0, 0);
-    check("kill-job-wait", cmd("wait %1\n", "/ $", 8000) < 0 ? -1 : 0, 0);
+    check("kill-job", cmdp("kill %1\n", 8000) < 0 ? -1 : 0, 0);
+    check("kill-job-wait", cmdp("wait %1\n", 8000) < 0 ? -1 : 0, 0);
     check("kill-job-status", cmd("echo st=$?\n", "st=143", 8000) < 0 ? -1 : 0, 0);
     {   // the reaped table speaks last: Running would mean the sweep lied.
-        int r = cmd("jobs\n", "/ $", 8000);
+        int r = cmdp("jobs\n", 8000);
         if (r == 0)
             check("kill-job-dead",
                   strstr(last_capture(), "Running") ? -1 : 0, 0);

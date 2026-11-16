@@ -21,6 +21,12 @@ pass=0; failn=0
 ok()  { pass=$((pass+1));  echo "ok   $1"; }
 bad() { failn=$((failn+1)); echo "FAIL $1"; }
 
+# Hosts that ship only python3: shim `python` once so every `command -v
+# python` gate and bare `python` call below sees the same interpreter.
+if ! command -v python >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    python() { python3 "$@"; }
+fi
+
 # Gate runs are evidence, not scratch: each run gets its own dir under
 # evidence/runs/<ts>-boot.XXXXXX (gitignored) so serial logs, ISOs and
 # screendumps survive for re-runs and postmortems. EVIDENCE_KEEP prunes.
@@ -1623,6 +1629,54 @@ sys.exit(0 if px(40,40)==b'\xb0\xce\xfb' and px(41,40)==b'\xd9\xff\xff'
                 fi
             else
                 bad "wlrcomp-pixels: screendump failed — dumped=$wcdumped ppm=$([ -s "$wlcppm" ] && echo written || echo missing)"
+            fi
+            # foot-real: the desktop-client rung — Debian forky's
+            # UNMODIFIED /usr/bin/foot (glibc + fontconfig + freetype +
+            # harfbuzz + fcft closure resolved by the real ld.so) speaks
+            # xdg_shell to our wlserver and fork+execs a shell onto its
+            # own devpts pty. Evidence: the toplevel presented real
+            # pixels AND the pty child's /footproof marker landed on
+            # the same ext2 view. foot-stage/ is regenerated on demand
+            # by scripts/fetch-foot.sh (Debian fetch over WSL) — never
+            # committed.
+            FOOTSTAGE="$ROOT/koruos/native/tests/foot-stage"
+            FIMG="$WORK/foot.img"
+            FIMGW="$(cygpath -m "$FIMG" 2>/dev/null || echo "$FIMG")"
+            FIMGWSL="$(wsl -e wslpath -u "$(cygpath -w "$FIMG")" 2>/dev/null)"
+            FSTAGEWSL="$(wsl -e wslpath -u "$(cygpath -w "$FOOTSTAGE")" 2>/dev/null)"
+            FELFWSL="$(wsl -e wslpath -u "$(cygpath -w "$WORK")" 2>/dev/null)"
+            FSHPTYPRE="/mnt/$(cygpath -m "$WORK" | sed 's|^\(.\):|\L\1|')"
+            if ( [ -f "$FOOTSTAGE/stage/usr/bin/foot" ] \
+                 || { WROOT="/mnt/$(cygpath -m "$ROOT" | sed 's|^\(.\):|\L\1|')"; \
+                      MSYS_NO_PATHCONV=1 wsl bash "$WROOT/scripts/fetch-foot.sh" "$FSTAGEWSL" > "$WORK/fetchfoot.log" 2>&1; } ) \
+               && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/footinit.elf" "$ROOT/koruos/native/tests/footinit.c" > "$WORK/footinit.build" 2>&1 \
+               && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/shellproof.elf" "$ROOT/koruos/native/tests/shellproof.c" > "$WORK/shellproof.build" 2>&1 \
+               && { [ -d "$FSHPTYPRE/shpty-bin/bin" ] \
+                    || { WROOT="/mnt/$(cygpath -m "$ROOT" | sed 's|^\(.\):|\L\1|')"; \
+                         MSYS_NO_PATHCONV=1 wsl bash "$WROOT/scripts/fetch-shpty.sh" "$FSHPTYPRE/shpty-bin" > "$WORK/fetchshpty-foot.log" 2>&1; }; } \
+               && MSYS_NO_PATHCONV=1 wsl bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-foot.sh")" 2>/dev/null)" "$FIMGWSL" "$FSTAGEWSL/stage" "$FELFWSL" "$FSHPTYPRE/shpty-bin" > "$WORK/stagefoot.log" 2>&1 \
+               && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_foot.k" > "$WORK/boot_foot.k" \
+               && bash "$ROOT/scripts/build-native.sh" "$WORK/boot_foot.k" "$WORK/boot_foot.elf" > "$WORK/boot_foot.build" 2>&1; then
+                timeout 150 "$QEMU" -kernel "$WORK/boot_foot.elf" -serial stdio \
+                    -drive "file=$FIMGW,format=raw,if=none,id=d1" \
+                    -device virtio-blk-pci,drive=d1,disable-modern=on \
+                    -display none -m 1G -no-reboot \
+                    -vga none -device virtio-gpu-pci \
+                    > "$WORK/boot_foot.serial" 2>&1 || true
+                if grep -qF "FOOTINIT wayland-1 bound" "$WORK/boot_foot.serial" \
+                   && grep -qF "FOOTINIT SHELLPROOF" "$WORK/boot_foot.serial" \
+                   && grep -qF "FOOTINIT COMPLETE" "$WORK/boot_foot.serial" \
+                   && grep -qF "WLSRV appid foot" "$WORK/boot_foot.serial" \
+                   && grep -qF "WLSRV toplevel configure" "$WORK/boot_foot.serial" \
+                   && grep -qE "comp: paint 693x494 nb=[1-9]" "$WORK/boot_foot.serial" \
+                   && grep -qE "WLSRV surf 693x494 smap=1" "$WORK/boot_foot.serial" \
+                   && grep -qF "FOOT COMPLETE" "$WORK/boot_foot.serial"; then
+                    ok "foot-real: unmodified Debian foot 1.28 (glibc ld.so closure) — wayland connect/xdg toplevel/subcompositor/data-device/output, 693x494 shm surface painted, devpts pty child ran shellproof (ext2 marker)"
+                else
+                    bad "foot-real: evidence missing: $(grep -aE 'FOOTINIT|WLSRV|comp:|fail|FAIL|REFUSE|EXC' "$WORK/boot_foot.serial" | tail -12 | tr '\n' '|')"
+                fi
+            else
+                bad "foot-real: build failed (fetch/elf/stage/native)"; tail -4 "$WORK/fetchfoot.log" "$WORK/footinit.build" "$WORK/shellproof.build" "$WORK/stagefoot.log" "$WORK/boot_foot.build" 2>/dev/null
             fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null

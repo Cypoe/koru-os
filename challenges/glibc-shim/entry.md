@@ -37,3 +37,8 @@ that is genuinely a libc-shape gap and not a syscall gap.
   The measured gap names itself `py-cpython-child` — revisit only if
   a glibc-only C extension (manylinux wheel without a musllinux
   build) ever enters the dependency graph.
+- foot-wayland CONFIRMED the waiver's premise (2026-11): Debian's
+  unmodified glibc 2.43 foot ran its full closure on the seam with
+  zero shim. Every refusal it hit was syscall/fs/compositor-shaped —
+  stat-mode truth, d_type, lazy shm, memfd seals, devpts, termios2,
+  cwd, prctl — never a libc-internal gap. The distinction held.

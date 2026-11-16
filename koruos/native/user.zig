@@ -476,6 +476,16 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
             wakeKind(.futex); // same clock — futex timeouts evaluate on
                               // wake; the waiter re-reads and re-parks
             netBridgePoll(); // RX drain + TX stragglers — the net tick
+            // alarm deadlines: a due alarm lands SIGALRM on a live
+            // member of its group, one shot (the word clears first).
+            for (0..nchildren) |ai| {
+                const ac = &children[ai];
+                if ((ac.state != .runnable and ac.state != .blocked) or
+                    ac.sh.alarm_ticks == 0 or ac.sh.alarm_ticks > irq_ticks)
+                    continue;
+                ac.sh.alarm_ticks = 0;
+                sigQueue(ac, .{ .signo = 14 });
+            }
             schedPreempt(f);
         } else if (f.vec == 0x21) {
             kbd.irq(); // 8042 scancode → input ring
@@ -1136,11 +1146,17 @@ fn futexWake(uaddr: u64, maxn: i64) usize {
 // REQUEUE, PI ops are refused by name. Spurious wakes are legal futex
 // semantics — the waiter re-reads the word each cycle.
 fn childFutex(c: *Child, f: *TrapFrame) i64 {
-    const op = @as(u32, @truncate(f.rsi)) & 0x7f;
+    const raw = @as(u32, @truncate(f.rsi));
+    const op = raw & 0x7f;
     const uaddr = f.rdi;
     const val: u32 = @truncate(@as(u64, @bitCast(f.rdx)));
     switch (op) {
-        0 => { // FUTEX_WAIT
+        // WAIT is relative-timeout; WAIT_BITSET (glibc's cond_wait
+        // spelling) is ABSTIME in the flag's clock — our REALTIME and
+        // MONOTONIC share the boot-anchored tick, so either flag reads
+        // the same deadline conversion. The bitset mask is val3(r8) and
+        // glibc parks all-ones; any wake is a legal wake here.
+        0, 9 => {
             var cur: [4]u8 = undefined;
             if (copyFromUser(c, @intCast(uaddr), &cur) < 4) return -14;
             if (std.mem.readInt(u32, &cur, .little) != val) return -11;
@@ -1152,7 +1168,10 @@ fn childFutex(c: *Child, f: *TrapFrame) i64 {
                     break :blk std.math.maxInt(u64);
                 const ms = std.mem.readInt(u64, ts[0..8], .little) * 1000 +
                     std.mem.readInt(u64, ts[8..16], .little) / 1_000_000;
-                break :blk irq_ticks + pollDeadlineTicks(@intCast(ms));
+                break :blk if (op == 9)
+                    pollDeadlineTicks(@intCast(ms)) // absolute ticks
+                else
+                    irq_ticks + pollDeadlineTicks(@intCast(ms));
             };
             c.wait_pipe = @intCast(uaddr);
             while (true) {
@@ -1176,7 +1195,7 @@ fn childFutex(c: *Child, f: *TrapFrame) i64 {
                 }
             }
         },
-        1 => return @intCast(futexWake(uaddr, @bitCast(f.rdx))), // WAKE
+        1, 10 => return @intCast(futexWake(uaddr, @bitCast(f.rdx))), // WAKE / WAKE_BITSET
         else => {
             say("SEAM REFUSE futex op=");
             puthex(f.rsi);
@@ -1238,6 +1257,25 @@ fn threadExit(status: i64, signo: u8) noreturn {
     const leader: usize = sh.tgid - 1;
     const last = sh.refs <= 1;
     const leader_is_self = leader == dead_slot;
+    if (last) {
+        // pdeathsig sweep — while the dying group's shared block is
+        // still a live allocation (refs>0 until the free below), a
+        // slot's .sh pointer is a meaningful group name. An orphan
+        // that armed PR_SET_PDEATHSIG against any member of this
+        // group gets the signo it is owed, like linux's last-exit
+        // delivery; a stale db whose slot reissued to another group
+        // fails the pointer compare and owes nothing.
+        for (0..nchildren) |i| {
+            const p = &children[i];
+            if (p.pdeathsig == 0) continue;
+            if (p.state != .runnable and p.state != .blocked) continue;
+            const db = p.spawned_by;
+            if (db >= nchildren or children[db].sh != sh) continue;
+            sigQueue(p, .{ .signo = p.pdeathsig, .code = 0,
+                .pid = @intCast(leader + 1), .status = 0 });
+            p.pdeathsig = 0;
+        }
+    }
     c.state = if (leader_is_self and !last) .gdead else .dead;
     const nf = freeChild(c); // own pml4/pdpt + a refs drop — the shared
         // table, fds, and upd die with the last ref inside releaseShared
@@ -1429,6 +1467,14 @@ const ProcShared = struct {
     fdverbs: [32]u8 = .{0} ** 32,
     fdnb: [32]u8 = .{0} ** 32,
     fdcx: [32]u8 = .{0} ** 32,
+    // a directory fd's own path — the dirfd model *at-verbs join
+    // against. Recorded at open when the inode is a dir; empty means
+    // "not a dir" (openat answers ENOTDIR, linux's own word).
+    fddir: [32][128]u8 = .{.{0} ** 128} ** 32,
+    // a shm fd's byte cursor — the ofd offset memfd read/write/lseek
+    // carry. Dup'd entries copy it (a divergence the fs handles share
+    // properly through their provider handle).
+    shmoff: [32]u64 = .{0} ** 32,
     dent_pending: [264]u8 = .{0} ** 264,
     dent_plen: u8 = 0,
     dent_pfd: i64 = -1,
@@ -1444,6 +1490,12 @@ const ProcShared = struct {
     pgid: usize = 0,
     sid: usize = 0,
     ctty: usize = 0,
+    // CLONE_FS — the working directory a clone group shares (linux's
+    // fs_struct); fork copies it. Root-relative spelling, empty is "/".
+    cwd: [256]u8 = .{0} ** 256,
+    // alarm() is a process fact — the deadline in irq_ticks; the tick
+    // sweep delivers SIGALRM to a live member of the group.
+    alarm_ticks: u64 = 0,
 };
 
 var procs: [MAXCHILDREN]ProcShared = .{ProcShared{}} ** MAXCHILDREN;
@@ -1468,6 +1520,8 @@ fn bindShared(c: *Child, sh: *ProcShared) void {
     c.fdverbs = sh.fdverbs[0..];
     c.fdnb = sh.fdnb[0..];
     c.fdcx = sh.fdcx[0..];
+    c.fddir = sh.fddir[0..];
+    c.shmoff = sh.shmoff[0..];
     c.dent_pending = sh.dent_pending[0..];
 }
 
@@ -1490,6 +1544,8 @@ fn releaseShared(c: *Child) usize {
     c.fdverbs = &.{};
     c.fdnb = &.{};
     c.fdcx = &.{};
+    c.fddir = &.{};
+    c.shmoff = &.{};
     c.dent_pending = &.{};
     return freed;
 }
@@ -1547,9 +1603,15 @@ const Child = struct {
                                     // the exec it was meant to die on
                                     // state; read/write dispatch ORs it
                                     // into the channel functions' nb arm
+    fddir: [][128]u8 = &.{},        // directory-fd path records — the
+                                    // dirfd model *at-verbs resolve
+                                    // against (glibc ld.so opens libs
+                                    // openat(dirfd) on cached search fds)
     dent_pending: []u8 = &.{},      // one-record pushback for getdents:
                                     // a fetched record that didn't fit
                                     // is held, not dropped
+    shmoff: []u64 = &.{},           // per-fd byte cursor for .shm reads/
+                                    // writes/seeks — the memfd ofd offset
     // blocking is a kernel continuation, not a rebuilt user frame: kblock
     // pushes callee-saved on this child's own kstack and stores the rsp
     // here; a waker just flips .runnable and the next switchInto pops the
@@ -1590,6 +1652,10 @@ const Child = struct {
                                     // payload, cleared once reported
     exit_signo: u8 = 0,             // !=0: killed by signal — wait reports
                                     // the raw signo, not status<<8
+    comm: [16]u8 = .{0} ** 16,      // PR_SET_NAME — task comm for ps/dmesg
+    pdeathsig: u8 = 0,              // PR_SET_PDEATHSIG — signo owed when the
+                                    // parent exits; delivery lands with the
+                                    // exit path, not at set time
 };
 
 var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{} };
@@ -2313,8 +2379,10 @@ fn canonNr(nr: u64) u64 {
         231 => 60,
         318 => 61,
         158, 218, 273, 302 => 62,
-        200 => 62, // tgkill — same signal verb, tid is bookkeeping:
+        200 => 62, // tkill — same signal verb, tid is bookkeeping:
                    // our signal domain is the process, not the member
+                   // (234 tgkill folds through the high-nr list below)
+        28 => 62, // madvise — advice over the own address space
         14 => 62, // rt_sigprocmask — proc-self metadata; the stored set
                   // is now real state (signalfd consumes the queue)
         13 => 62, // rt_sigaction — registration is metadata too; a handler
@@ -2322,12 +2390,14 @@ fn canonNr(nr: u64) u64 {
         72 => 62, // fcntl folds to the proc-self group — our handles carry no flag state
         32, 33, 292 => 62, // dup family — fd-table ops on own handles
         228, 229 => 62, // clock_gettime/getres — self-time queries, same describe class
+        201 => 62, // time — the same clock's seconds-only spelling
         230 => 62, // clock_nanosleep — self-time's wait half; the arm decides honesty
         186 => 39, // gettid folds to getpid — one thread per child exists
         // session/pgrp verbs are process self-metadata like the rest of
         // cap 62; kill(62) lands here through the else-arm already —
         // these nrs just can't carry their own bit (the domain is <64).
         109, 111, 112, 121, 124 => 62,
+        157 => 62, // prctl — process self-metadata (name/pdeathsig)
         // koru's own ABI lives at 512+, out of musl's namespace — nr57 is
         // REAL fork now (musl _Fork sends it with zero args); clone(56)
         // folds to the same "create a child" cap — the flag-shape refusal
@@ -2385,8 +2455,10 @@ fn canonNr(nr: u64) u64 {
         // wl_socket_lock's /wayland-N.lock contention check rides it.
         73 => 2,
         // stat/lstat query an fs object by path — the same class's
-        // read half (fstat already rides the fd it names).
-        4, 6 => 2,
+        // read half (fstat already rides the fd it names). newfstatat
+        // is glibc's universal spelling of the same verb — stat/lstat/
+        // faccess all route through nr262 on a real glibc.
+        4, 6, 262 => 2,
         // access family — an fs-object permission query; same class.
         21, 269, 439 => 2,
         // interpreter-surface folds: every nr >=64 that a real
@@ -2523,21 +2595,49 @@ fn openCovered(c: *Child, ops: *const ChildFsOps, p: [*:0]const u8, flags: u64) 
     return -13;
 }
 
-fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
-    const ops = c.fsv orelse return -38; // ENOSYS — this child has no fs view
+// userPath + the cwd join — the non-*at verbs' resolution funnel, so
+// open/stat/rename/… honor chdir exactly like the *at family does with
+// AT_FDCWD. jb comes back NUL-terminated; the return is its length or
+// an errno.
+fn pathCwd(c: *Child, va: usize, jb: *[256]u8) i64 {
     var pb: [256]u8 = undefined;
-    const p = userPath(c, pva, &pb) orelse return -14; // EFAULT
-    pb[p.len] = 0;
+    const p = userPath(c, va, &pb) orelse return -14;
+    return resolveAt(c, -100, p, jb);
+}
+
+fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
+    _ = c.fsv orelse return -38; // ENOSYS — this child has no fs view
+    return childOpenAt(c, -100, pva, flags);
+}
+
+// openat(dirfd,path,flags): userPath + the dirfd join + the shared open
+// tail. resolveAt keeps the honest rulings — absolute path ignores
+// dirfd, ENOTDIR names a non-dir dirfd, EBADF an unopened one.
+fn childOpenAt(c: *Child, dfd: i64, pva: usize, flags: u64) i64 {
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    var jb: [256]u8 = undefined;
+    const j = resolveAt(c, dfd, p, &jb);
+    if (j < 0) return j;
+    return childOpenZ(c, @ptrCast(&jb), jb[0..@intCast(j)], flags);
+}
+
+fn childOpenZ(c: *Child, zpath: [*:0]const u8, p: []const u8, flags: u64) i64 {
+    const ops = c.fsv orelse return -38; // ENOSYS — this child has no fs view
     // /dev/shm/<name> is the POSIX shm namespace, not an fs path — the
     // intercept runs before the fs grant check entirely.
     if (shmPathName(p)) |nm| return childShmOpen(c, nm, flags);
+    // /dev/ptmx and /dev/pts/<n> are the same class of door: devpts
+    // names mint pty fds, they are not fs objects.
+    if (std.mem.eql(u8, p, "/dev/ptmx")) return childPtmxOpen(c, flags);
+    if (ptsPathName(p)) |pn| return childPtsOpen(c, pn, flags);
     // The class bit covers every object+verb (mount-wide); without it
     // the object-scoped check runs against the resolved key.
     if ((c.rights >> 2) & 1 == 0) {
-        const cov = openCovered(c, ops, @ptrCast(&pb), flags);
+        const cov = openCovered(c, ops, zpath, flags);
         if (cov < 0) return cov;
     }
-    const h = ops.open(ops.ctx, @ptrCast(&pb), @intCast(flags));
+    const h = ops.open(ops.ctx, zpath, @intCast(flags));
     if (h < 0) return h; // provider's errno passes through (ENOENT &c.)
     var fd: usize = 3;
     while (fd < c.fds.len) : (fd += 1) {
@@ -2557,6 +2657,22 @@ fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
     };
     c.fdnb[fd] = @intFromBool(flags & 0x800 != 0);       // O_NONBLOCK
     c.fdcx[fd] = @intFromBool(flags & 0x80000 != 0);     // O_CLOEXEC
+    // dirfd record: an opened directory carries its own path — *at
+    // verbs with a non-FDCWD dirfd join against it. glibc's ld.so is
+    // the driver: it caches a fd per library search dir and openats
+    // each candidate relative to it.
+    var dst: [144]u8 = std.mem.zeroes([144]u8);
+    if (ops.stat(ops.ctx, c.fds[fd], &dst) >= 0) {
+        var m: u32 = 0;
+        for (0..4) |i| m |= @as(u32, dst[24 + i]) << @intCast(i * 8);
+        if (m & 0o170000 == 0o040000) {
+            var dp = p;
+            while (dp.len > 1 and dp[dp.len - 1] == '/') dp = dp[0 .. dp.len - 1];
+            const n = @min(dp.len, 127);
+            @memcpy(c.fddir[fd][0..n], dp[0..n]);
+            c.fddir[fd][n] = 0;
+        }
+    }
     return @intCast(fd);
 }
 
@@ -2567,14 +2683,109 @@ fn childOpen(c: *Child, pva: usize, flags: u64) i64 {
 // inode's own.
 fn childStatPath(c: *Child, pva: usize, stva: u64) i64 {
     const ops = c.fsv orelse return -38;
-    var pb: [256]u8 = undefined;
-    const p = userPath(c, pva, &pb) orelse return -14;
-    pb[p.len] = 0;
+    var jb: [256]u8 = undefined;
+    const j = pathCwd(c, pva, &jb);
+    if (j < 0) return j;
     var st: [144]u8 = std.mem.zeroes([144]u8);
-    const r = ops.stat_path(ops.ctx, @ptrCast(&pb), &st);
+    const r = ops.stat_path(ops.ctx, @ptrCast(&jb), &st);
     if (r < 0) return r;
     const n = copyToUser(c, @intCast(stva), &st);
     return if (n < 144) -14 else 0;
+}
+
+// dirfd resolution for the *at family: the user's path plus the dirfd
+// becomes one absolute path the provider's ops understand. Absolute
+// user paths skip the join (dirfd is decorative — POSIX); AT_FDCWD
+// resolves from the view root like every non-at arm; a real dirfd
+// joins against the path recorded when that directory was opened —
+// glibc ld.so's cached search-dir fds are the driver. EBADF names a
+// dirfd that isn't an open fd, ENOTDIR one that isn't a recorded dir.
+fn resolveAt(c: *Child, dfd: i64, p: []const u8, jb: *[256]u8) i64 {
+    if (p.len == 0 or p[0] == '/' or dfd == -100) {
+        if (p.len == 0 or p[0] == '/' or dfd != -100) {
+            if (p.len >= jb.len) return -36; // ENAMETOOLONG
+            @memcpy(jb[0..p.len], p);
+            jb[p.len] = 0;
+            return @intCast(p.len);
+        }
+        // relative at AT_FDCWD joins the stored cwd — same "dir/rel"
+        // shape the dirfd arm below builds.
+        const clen = std.mem.indexOfScalar(u8, &c.sh.cwd, 0) orelse c.sh.cwd.len;
+        if (clen + 1 + p.len >= jb.len) return -36;
+        var n: usize = clen;
+        if (clen > 0) {
+            @memcpy(jb[0..clen], c.sh.cwd[0..clen]);
+            jb[n] = '/';
+            n += 1;
+        }
+        @memcpy(jb[n..][0..p.len], p);
+        n += p.len;
+        jb[n] = 0;
+        return @intCast(n);
+    }
+    if (dfd < 0 or dfd >= c.fds.len) return -9; // EBADF
+    const d: usize = @intCast(dfd);
+    if (c.fdkinds[d] != .fs) return -9; // EBADF — only fs fds are dirfds
+    const dp = &c.fddir[d];
+    const dlen = std.mem.indexOfScalar(u8, dp, 0) orelse dp.len;
+    if (dlen == 0) return -20; // ENOTDIR — fd opened on a non-directory
+    var dpath: []const u8 = dp[0..dlen];
+    while (dpath.len > 0 and dpath[0] == '/') dpath = dpath[1..];
+    // join as "dir/rel" — lookupPath resolves root-relative spelling
+    if (dpath.len + 1 + p.len >= jb.len) return -36;
+    @memcpy(jb[0..dpath.len], dpath);
+    var n = dpath.len;
+    if (dpath.len > 0) {
+        jb[n] = '/';
+        n += 1;
+    }
+    @memcpy(jb[n..][0..p.len], p);
+    n += p.len;
+    jb[n] = 0;
+    return @intCast(n);
+}
+
+// newfstatat (nr262): glibc's universal stat spelling — on a real
+// glibc, stat/lstat/faccess all route here instead of nr4/6, so this
+// arm is what a Debian binary actually calls. No symlink layer means
+// AT_SYMLINK_NOFOLLOW is proforma; AT_EMPTY_PATH is the fd-query shape
+// (fstat by another name); dirfd resolves through resolveAt.
+fn childFstatat(c: *Child, dfd: i64, pva: usize, stva: u64, flags: u64) i64 {
+    if (flags & ~@as(u64, 0x1900) != 0) return -22; // NOFOLLOW|NOAUTOMOUNT|EMPTY_PATH
+    const ops = c.fsv orelse return -38;
+    var jb: [256]u8 = undefined;
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    if (p.len == 0) {
+        if (flags & 0x1000 == 0) return -2; // ENOENT — empty demands EMPTY_PATH
+        return childFstat(c, @intCast(@as(u64, @bitCast(dfd))), stva);
+    }
+    const j = resolveAt(c, dfd, p, &jb);
+    if (j < 0) return j;
+    var st: [144]u8 = std.mem.zeroes([144]u8);
+    const r = ops.stat_path(ops.ctx, @ptrCast(&jb), &st);
+    if (r < 0) return r;
+    const n = copyToUser(c, @intCast(stva), &st);
+    return if (n < 144) -14 else 0;
+}
+
+// readlink/readlinkat (nr89/267): no symlink layer exists — every
+// extant object is a non-link (EINVAL, linux's own word for readlink
+// on a regular file) and every missing name is ENOENT (/proc/self/exe
+// included — glibc's fallback takes it from there). dirfd resolves
+// through resolveAt like the rest of the family.
+fn childReadlink(c: *Child, f: *const TrapFrame) i64 {
+    const ops = c.fsv orelse return -38;
+    const dfd: i64 = if (f.rax == 267) @bitCast(f.rdi) else -100;
+    const pva: usize = @intCast(if (f.rax == 267) f.rsi else f.rdi);
+    var pb: [256]u8 = undefined;
+    const p = userPath(c, pva, &pb) orelse return -14;
+    var jb: [256]u8 = undefined;
+    const j = resolveAt(c, dfd, p, &jb);
+    if (j < 0) return j;
+    var st: [144]u8 = std.mem.zeroes([144]u8);
+    const r = ops.stat_path(ops.ctx, @ptrCast(&jb), &st);
+    return if (r < 0) r else -22; // EINVAL — extant non-link
 }
 
 // access/faccessat/faccessat2 (nr21/269/439): a permission query, not a
@@ -2583,21 +2794,66 @@ fn childStatPath(c: *Child, pva: usize, stva: u64) i64 {
 // object (the fs is rw), X_OK requires an x bit set, ENOENT and friends
 // propagate. flags beyond AT_EACCESS|AT_SYMLINK_NOFOLLOW refuse EINVAL —
 // AT_EMPTY_PATH and the dirfd-relative forms aren't armed, honestly.
-fn childAccess(c: *Child, pva: usize, mode: u64, flags: u64) i64 {
+fn childAccess(c: *Child, dfd: i64, pva: usize, mode: u64, flags: u64) i64 {
     if (mode & ~@as(u64, 7) != 0) return -22; // EINVAL — RWX only
     if (flags & ~@as(u64, 0x300) != 0) return -22;
     const ops = c.fsv orelse return -38;
     var pb: [256]u8 = undefined;
     const p = userPath(c, pva, &pb) orelse return -14;
-    pb[p.len] = 0;
+    var jb: [256]u8 = undefined;
+    const j = resolveAt(c, dfd, p, &jb);
+    if (j < 0) return j;
     var st: [144]u8 = std.mem.zeroes([144]u8);
-    const r = ops.stat_path(ops.ctx, @ptrCast(&pb), &st);
+    const r = ops.stat_path(ops.ctx, @ptrCast(&jb), &st);
     if (r < 0) return r;
     if (mode & 1 != 0) { // X_OK — root still needs a real x bit
         var m: u32 = 0;
         for (0..4) |i| m |= @as(u32, st[24 + i]) << @intCast(i * 8);
         if (m & 0o111 == 0) return -13; // EACCES
     }
+    return 0;
+}
+
+// chdir/fchdir (nr80/81): the one cwd fact a process owns — it lives
+// in sh so a CLONE_FS group shares it (linux's fs_struct) while fork
+// copies. The target resolves against the CURRENT cwd, then must stat
+// as a directory (st_mode's S_IFMT) before the word commits. "." and
+// ".." store textually — lookupPath walks the real dirents.
+fn childChdir(c: *Child, f: *TrapFrame) i64 {
+    const ops = c.fsv orelse return -38;
+    var jb: [256]u8 = undefined;
+    var jlen: usize = 0;
+    if (f.rax == 81) { // fchdir(fd) — the fd's recorded dir path
+        const dfd: i64 = @bitCast(f.rdi);
+        if (dfd < 0 or dfd >= c.fds.len) return -9; // EBADF
+        const d: usize = @intCast(dfd);
+        if (c.fdkinds[d] != .fs) return -9;
+        const dp = &c.fddir[d];
+        const dlen = std.mem.indexOfScalar(u8, dp, 0) orelse dp.len;
+        if (dlen == 0) return -20; // ENOTDIR — the fd isn't a dir
+        if (dlen >= jb.len) return -36;
+        @memcpy(jb[0..dlen], dp[0..dlen]);
+        jb[dlen] = 0;
+        jlen = dlen;
+    } else {
+        var pb: [256]u8 = undefined;
+        const p = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
+        if (p.len == 0) return -2; // ENOENT — linux's word for ""
+        const j = resolveAt(c, -100, p, &jb);
+        if (j < 0) return j;
+        jlen = @intCast(j);
+    }
+    var st: [144]u8 = std.mem.zeroes([144]u8);
+    const r = ops.stat_path(ops.ctx, @ptrCast(&jb), &st);
+    if (r < 0) return r;
+    var m: u32 = 0;
+    for (0..4) |i| m |= @as(u32, st[24 + i]) << @intCast(i * 8);
+    if (m & 0o170000 != 0o040000) return -20; // ENOTDIR
+    // commit root-relative — the spelling resolveAt joins against
+    var s: usize = 0;
+    while (s < jlen and jb[s] == '/') s += 1;
+    c.sh.cwd = .{0} ** 256;
+    @memcpy(c.sh.cwd[0 .. jlen - s], jb[s..jlen]);
     return 0;
 }
 
@@ -2669,10 +2925,12 @@ fn childRename(c: *Child, ova: usize, nva: usize) i64 {
     const ops = c.fsv orelse return -38;
     var ob: [256]u8 = undefined;
     var nb: [256]u8 = undefined;
-    const op = userPath(c, ova, &ob) orelse return -14;
-    const np = userPath(c, nva, &nb) orelse return -14;
-    ob[op.len] = 0;
-    nb[np.len] = 0;
+    const oj = pathCwd(c, ova, &ob);
+    if (oj < 0) return oj;
+    const nj = pathCwd(c, nva, &nb);
+    if (nj < 0) return nj;
+    const op = ob[0..@intCast(oj)];
+    const np = nb[0..@intCast(nj)];
     if ((c.rights >> 2) & 1 == 0) {
         var d1: [256]u8 = undefined;
         var d2: [256]u8 = undefined;
@@ -2701,9 +2959,12 @@ fn childRename(c: *Child, ova: usize, nva: usize) i64 {
 fn childUnlink(c: *Child, pva: usize) i64 {
     const ops = c.fsv orelse return -38;
     var pb: [256]u8 = undefined;
-    const p = userPath(c, pva, &pb) orelse return -14;
-    pb[p.len] = 0;
-    if (shmPathName(p)) |nm| return childShmUnlink(nm);
+    const up = userPath(c, pva, &pb) orelse return -14;
+    if (shmPathName(up)) |nm| return childShmUnlink(nm);
+    var jb: [256]u8 = undefined;
+    const j = resolveAt(c, -100, up, &jb);
+    if (j < 0) return j;
+    const p = jb[0..@intCast(j)];
     if ((c.rights >> 2) & 1 == 0) {
         var db: [256]u8 = undefined;
         const dp = parentPath(p, &db);
@@ -2717,7 +2978,7 @@ fn childUnlink(c: *Child, pva: usize) i64 {
             return -13;
         }
     }
-    return ops.unlink(ops.ctx, @ptrCast(&pb));
+    return ops.unlink(ops.ctx, @ptrCast(&jb));
 }
 
 // mkdir/rmdir: single-name dir verbs — the mutated object is the PARENT
@@ -2726,8 +2987,9 @@ fn childUnlink(c: *Child, pva: usize) i64 {
 fn childMkdir(c: *Child, pva: usize) i64 {
     const ops = c.fsv orelse return -38;
     var pb: [256]u8 = undefined;
-    const p = userPath(c, pva, &pb) orelse return -14;
-    pb[p.len] = 0;
+    const j = pathCwd(c, pva, &pb);
+    if (j < 0) return j;
+    const p = pb[0..@intCast(j)];
     if ((c.rights >> 2) & 1 == 0) {
         var db: [256]u8 = undefined;
         const dp = parentPath(p, &db);
@@ -2747,8 +3009,9 @@ fn childMkdir(c: *Child, pva: usize) i64 {
 fn childRmdir(c: *Child, pva: usize) i64 {
     const ops = c.fsv orelse return -38;
     var pb: [256]u8 = undefined;
-    const p = userPath(c, pva, &pb) orelse return -14;
-    pb[p.len] = 0;
+    const j = pathCwd(c, pva, &pb);
+    if (j < 0) return j;
+    const p = pb[0..@intCast(j)];
     if ((c.rights >> 2) & 1 == 0) {
         var db: [256]u8 = undefined;
         const dp = parentPath(p, &db);
@@ -2772,10 +3035,11 @@ fn childLink(c: *Child, ova: usize, nva: usize) i64 {
     const ops = c.fsv orelse return -38;
     var ob: [256]u8 = undefined;
     var nb: [256]u8 = undefined;
-    const op = userPath(c, ova, &ob) orelse return -14;
-    const np = userPath(c, nva, &nb) orelse return -14;
-    ob[op.len] = 0;
-    nb[np.len] = 0;
+    const oj = pathCwd(c, ova, &ob);
+    if (oj < 0) return oj;
+    const nj = pathCwd(c, nva, &nb);
+    if (nj < 0) return nj;
+    const np = nb[0..@intCast(nj)];
     if ((c.rights >> 2) & 1 == 0) {
         var db: [256]u8 = undefined;
         const dp = parentPath(np, &db);
@@ -2798,8 +3062,8 @@ fn childLink(c: *Child, ova: usize, nva: usize) i64 {
 fn childChmod(c: *Child, pva: usize, mode: u64) i64 {
     const ops = c.fsv orelse return -38;
     var pb: [256]u8 = undefined;
-    const p = userPath(c, pva, &pb) orelse return -14;
-    pb[p.len] = 0;
+    const j = pathCwd(c, pva, &pb);
+    if (j < 0) return j;
     if ((c.rights >> 2) & 1 == 0) {
         const k = ops.key(ops.ctx, @ptrCast(&pb));
         if (k < 0) return k;
@@ -2821,8 +3085,8 @@ fn childChmod(c: *Child, pva: usize, mode: u64) i64 {
 fn childUtimens(c: *Child, pva: usize, tva: u64) i64 {
     const ops = c.fsv orelse return -38;
     var pb: [256]u8 = undefined;
-    const p = userPath(c, pva, &pb) orelse return -14;
-    pb[p.len] = 0;
+    const j = pathCwd(c, pva, &pb);
+    if (j < 0) return j;
     const UTIME_NOW: i64 = 0x3fffffff;
     const UTIME_OMIT: i64 = 0x3ffffffe;
     var mask: u32 = 3;
@@ -2970,6 +3234,7 @@ fn childSeek(c: *Child, fdu: u64, off: i64, whence: u32) i64 {
     // roster etc. are streams: ESPIPE is linux's own answer, and
     // passing a kernel handle to the provider as *OpenFile would be
     // a type confusion (measured: subprocess lseek'd a pipe -> ud2).
+    if (c.fdkinds[fd] == .shm) return shmSeek(c, fd, off, whence);
     if (c.fdkinds[fd] != .fs) return -29; // ESPIPE
     const ops = c.fsv orelse return -38;
     return ops.seek(ops.ctx, c.fds[fd], off, whence);
@@ -2997,6 +3262,7 @@ fn childMmapFile(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fdu: 
         base = @intCast(addru);
         if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
     } else {
+        if (c.sh.mmap_top + len > USER_VA_END) return -12; // ENOMEM
         base = c.sh.mmap_top;
         c.sh.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
     }
@@ -3019,11 +3285,36 @@ fn childMmapFile(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fdu: 
 
 // mmap a memfd: MAP_SHARED maps the object's frames into this child's
 // PT — the same physical pages every other mapper sees, which IS the
-// wl_shm contract. MAP_PRIVATE on shm is CoW we don't implement —
-// refused loudly, not silently private.
+// wl_shm contract. MAP_PRIVATE needs no CoW story: a private map's
+// only contract is that writes never propagate — a copy-in snapshot
+// serves it fully, so the keymap a client maps private lands.
 fn childMmapShm(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fd: usize, off: u64) i64 {
     const s = &shms[@intCast(c.fds[fd] - 1)];
-    if (flags & 0x01 == 0) return -95; // EOPNOTSUPP — private maps need CoW
+    if (flags & 0x01 == 0) {
+        var base: usize = 0;
+        if (flags & 0x10 != 0 and addru != 0) {
+            base = @intCast(addru);
+            if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
+        } else {
+            if (c.sh.mmap_top + len > USER_VA_END) return -12; // ENOMEM
+            base = c.sh.mmap_top;
+            c.sh.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
+        }
+        var p: usize = 0;
+        while (p < len) : (p += 0x1000) {
+            const pi = (off + p) >> 12;
+            if (off + p >= s.size) return -22; // past the object — honest EINVAL
+            const frame = shmPageAlloc(s, pi) orelse return -12;
+            if (userEntry(c, base + p) & 1 == 0) {
+                _ = mapUserPage(c, base + p) orelse return -12;
+            }
+            const dst: [*]u8 = @ptrFromInt(userPhys(c, base + p));
+            const take = @min(@as(usize, 0x1000), len - p);
+            @memcpy(dst[0..take], frame[0..take]);
+        }
+        setUserWritable(c, base, len, prot & 2 != 0);
+        return @intCast(base);
+    }
     // PROT_WRITE|SHARED on a read-only projection is the fd-verb
     // question again: O_RDONLY shm pairs exist for this exact refusal.
     if (prot & 2 != 0 and c.fdverbs[fd] & V_WRITE == 0) return -13;
@@ -3032,14 +3323,16 @@ fn childMmapShm(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fd: us
         base = @intCast(addru);
         if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
     } else {
+        if (c.sh.mmap_top + len > USER_VA_END) return -12; // ENOMEM
         base = c.sh.mmap_top;
         c.sh.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
     }
     var p: usize = 0;
     while (p < len) : (p += 0x1000) {
         const pi = (off + p) >> 12;
-        if (pi >= s.npages) return -22; // past the object — honest EINVAL
-        if (!mapUserPhys(c, base + p, s.frames[pi])) return -12;
+        if (off + p >= s.size) return -22; // past the object — honest EINVAL
+        const frame = shmPageAlloc(s, pi) orelse return -12;
+        if (!mapUserPhys(c, base + p, @intFromPtr(frame))) return -12;
     }
     setUserWritable(c, base, len, prot & 2 != 0);
     shm_maps += 1;
@@ -3068,6 +3361,7 @@ fn childMmapSurf(c: *Child, addru: u64, len: usize, prot: u64, flags: u64, fd: u
         base = @intCast(addru);
         if (base & 0xFFF != 0 or base < USER_VA_BASE or base + len > USER_VA_END) return -22;
     } else {
+        if (c.sh.mmap_top + len > USER_VA_END) return -12; // ENOMEM
         base = c.sh.mmap_top;
         c.sh.mmap_top += (len + 0xFFF) & ~@as(usize, 0xFFF);
     }
@@ -3656,6 +3950,73 @@ fn childOpenpty(c: *Child, svva: u64) i64 {
     return 0;
 }
 
+// /dev/ptmx: mint a pair, serve the master — locked, the way a real
+// ptmx arrives (unlockpt's TIOCSPTLCK drops it). The slave waits for
+// its devpts name to open, exactly like devpts: no name exists until
+// the pair does.
+fn childPtmxOpen(c: *Child, flags: u64) i64 {
+    var fd: usize = 3;
+    while (fd < c.fds.len) : (fd += 1) {
+        if (c.fdkinds[fd] == .none) break;
+    }
+    if (fd == c.fds.len) return -24; // EMFILE
+    var pi: usize = NPTYS;
+    for (0..NPTYS) |i| {
+        if (!ptys[i].used) {
+            pi = i;
+            break;
+        }
+    }
+    if (pi == NPTYS) return -24;
+    ptys[pi] = .{
+        .used = true,
+        .mrefs = 1,
+        .tio = PTY_TIO_INIT,
+        .locked = true,
+    };
+    c.fdkinds[fd] = .ptym;
+    c.fds[fd] = pi;
+    c.fdverbs[fd] = V_READ | V_WRITE;
+    c.fdnb[fd] = @intFromBool(flags & 0x800 != 0);
+    c.fdcx[fd] = @intFromBool(flags & 0x80000 != 0);
+    return @intCast(fd);
+}
+
+// /dev/pts/<n>: the slave's devpts name. A locked pair answers EIO —
+// devpts' own refusal until TIOCSPTLCK unlocks it. The opener bumps
+// the slave refcount; owner moves to whoever holds the slave, the
+// signal-fallback fact the pair tracks.
+fn childPtsOpen(c: *Child, idx: usize, flags: u64) i64 {
+    if (idx >= NPTYS or !ptys[idx].used) return -2; // ENOENT
+    if (ptys[idx].locked) return -5; // EIO — locked slave
+    var fd: usize = 3;
+    while (fd < c.fds.len) : (fd += 1) {
+        if (c.fdkinds[fd] == .none) break;
+    }
+    if (fd == c.fds.len) return -24;
+    ptys[idx].srefs += 1;
+    ptys[idx].owner = cur_child;
+    c.fdkinds[fd] = .ptys;
+    c.fds[fd] = idx;
+    c.fdverbs[fd] = V_READ | V_WRITE;
+    c.fdnb[fd] = @intFromBool(flags & 0x800 != 0);
+    c.fdcx[fd] = @intFromBool(flags & 0x80000 != 0);
+    return @intCast(fd);
+}
+
+// "/dev/pts/<n>" -> index, or null — devpts names carry no subdirs and
+// the index is decimal.
+fn ptsPathName(p: []const u8) ?usize {
+    const pre = "/dev/pts/";
+    if (p.len <= pre.len or !std.mem.eql(u8, p[0..pre.len], pre)) return null;
+    var n: usize = 0;
+    for (p[pre.len..]) |ch| {
+        if (ch < '0' or ch > '9') return null;
+        n = n * 10 + (ch - '0');
+    }
+    return n;
+}
+
 // Master -> slave: bytes through the ldisc. Slave-side queue space is
 // what parks the writer — erase/signal/special bytes always consume
 // (they free room or queue facts), only a queued byte can stall.
@@ -3869,6 +4230,21 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
             ptyFlushInput(t);
             return 0;
         },
+        0x802C542A => { // TCGETS2 — glibc's tcgetattr spelling; termios2
+                        // is termios + ispeed/ospeed tails we don't model
+            var buf: [44]u8 = std.mem.zeroes([44]u8);
+            @memcpy(buf[0..36], &t.tio);
+            return if (copyToUser(c, @intCast(arg), &buf) < 44) -14 else 0;
+        },
+        0x402C542B, 0x402C542C, 0x402C542D => { // TCSETS2/TCSETSW2/TCSETSF2
+            const ttou = ptyCheckTTOU(c, t, idx);
+            if (ttou != 0) return ttou;
+            var buf: [44]u8 = undefined;
+            if (copyFromUser(c, @intCast(arg), &buf) < 44) return -14;
+            @memcpy(&t.tio, buf[0..36]);
+            if (cmd == 0x402C542D) ptyFlushInput(t);
+            return 0;
+        },
         0x5413 => { // TIOCGWINSZ
             return if (copyToUser(c, @intCast(arg), &t.ws) < 8) -14 else 0;
         },
@@ -3963,8 +4339,11 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
             std.mem.writeInt(u32, &buf, @intCast(idx), .little);
             return if (copyToUser(c, @intCast(arg), &buf) < 4) -14 else 0;
         },
-        0x40045431 => { // TIOCSPTLCK — unlockpt's door
-            t.locked = arg != 0;
+        0x40045431 => { // TIOCSPTLCK — unlockpt's door; linux reads a
+                        // POINTER to int here (glibc/musl pass &(int))
+            var buf: [4]u8 = undefined;
+            if (copyFromUser(c, @intCast(arg), &buf) < 4) return -14;
+            t.locked = std.mem.readInt(u32, &buf, .little) != 0;
             return 0;
         },
         0x541B => { // FIONREAD — bytes THIS end's read could take now:
@@ -3984,7 +4363,12 @@ fn ptyIoctl(c: *Child, idx: usize, master: bool, cmd: u64, arg: u64) i64 {
             std.mem.writeInt(u32, &buf, v32, .little);
             return if (copyToUser(c, @intCast(arg), &buf) < 4) -14 else 0;
         },
-        else => return -25, // ENOTTY — the ioctl we don't speak refuses
+        else => {
+            say("PTYIOCTL ENOTTY cmd=");
+            puthex(cmd);
+            say("\n");
+            return -25; // the ioctl we don't speak refuses
+        },
     }
 }
 
@@ -4644,21 +5028,30 @@ fn sockCloseEnd(pair: usize, side: usize) void {
 // unmap — memfd's real lifetime, which wl_shm's "close the fd after
 // sendmsg" idiom depends on.
 const NSHM = 16;
-// 8 MiB per object — a nested compositor's pixman swapchain buffer is a
-// real framebuffer (1280x720x4 ~ 3.5 MiB), not a test tile.
-const SHM_MAXPAGES = 2048;
+// Objects are LAZY: ftruncate names a size, frames mint on first write
+// or map touch — foot's scrollback pool truncates 512 MiB once and then
+// uses it sparsely. 512 MiB cap per object. The frame table is lazy too:
+// a flat [SHM_MAXPAGES]u64 per slot was 16 MiB of bss across the pool —
+// measured breaking the OVMF/GRUB efi load (the flat table's image
+// footprint exceeds what that chain will place). Two levels instead:
+// 256 chunk slots each pointing at a pmm page of 512 u64 entries —
+// a fully-minted object's table still costs only 1 MiB, allocated on
+// the first touch of each 2 MiB span.
+const SHM_MAXPAGES = 131072;
+const SHM_CHUNK = 512; // u64 slots per 4 KiB table page
 const ShmObj = struct {
     used: bool = false,
     refs: u8 = 0, // live fd handles (each SCM_QUEUED ref counts too)
-    npages: u16 = 0, // SHM_MAXPAGES=2048 — u8 silently wrapped at 255
+    npages: u32 = 0, // high-water of minted frames (SHM_MAXPAGES needs u32)
     size: u64 = 0,
+    seals: u16 = 0, // F_SEAL_* — foot seals the wl_shm pool SHRINK|GROW|SEAL
     // POSIX shm namespace: a /dev/shm/<name> open carries these — an
     // anonymous memfd is namelen 0. unlink clears the name while the
     // object lives on through refs — real tmpfs unlink semantics.
     name: [48]u8 = .{0} ** 48,
     namelen: u8 = 0,
     mode: u16 = 0o600,
-    frames: [SHM_MAXPAGES]u64 = .{0} ** SHM_MAXPAGES,
+    frames: [SHM_MAXPAGES / SHM_CHUNK]u64 = .{0} ** (SHM_MAXPAGES / SHM_CHUNK),
 };
 var shms: [NSHM]ShmObj = .{ShmObj{}} ** NSHM;
 pub export var shm_maps: u64 = 0;
@@ -5336,11 +5729,33 @@ fn childSfdRead(c: *Child, f: *TrapFrame) i64 {
     }
 }
 
+// frame-table accessors — the chunk page mints on the first slot use.
+fn shmFrame(s: *ShmObj, pi: usize) u64 {
+    const t = s.frames[pi / SHM_CHUNK];
+    if (t == 0) return 0;
+    return @as([*]const u64, @ptrFromInt(@as(usize, @intCast(t))))[pi % SHM_CHUNK];
+}
+
+fn shmFrameSet(s: *ShmObj, pi: usize, v: u64) bool {
+    var t = s.frames[pi / SHM_CHUNK];
+    if (t == 0) {
+        const page = allocPage() orelse return false;
+        t = @intFromPtr(page);
+        s.frames[pi / SHM_CHUNK] = t;
+    }
+    @as([*]u64, @ptrFromInt(@as(usize, @intCast(t))))[pi % SHM_CHUNK] = v;
+    return true;
+}
+
 fn shmRelease(idx: usize) void {
     const s = &shms[idx];
     if (s.refs > 0) s.refs -= 1;
     if (s.refs == 0) {
         for (0..s.npages) |i| {
+            const fp = shmFrame(s, i);
+            if (fp != 0) _ = pmm.free(fp);
+        }
+        for (0..s.frames.len) |i| {
             if (s.frames[i] != 0) _ = pmm.free(s.frames[i]);
         }
         s.* = .{};
@@ -5351,14 +5766,104 @@ fn shmTrunc(idx: usize, len: u64) i64 {
     const s = &shms[idx];
     const np: usize = @intCast((len + 0xFFF) >> 12);
     if (np > SHM_MAXPAGES) return -12;
-    while (s.npages < np) : (s.npages += 1) {
-        const page = allocPage() orelse return -12;
-        s.frames[s.npages] = @intFromPtr(page);
-    }
-    // shrink keeps the pages — mmap may still point in (real memfd
+    // seals: F_SEAL_GROW refuses growth, F_SEAL_SHRINK refuses shrink —
+    // the pool's size contract foot seals for the compositor's trust.
+    if (s.seals & 4 != 0 and len > s.size) return -1; // EPERM — SEAL_GROW
+    if (s.seals & 2 != 0 and len < s.size) return -1; // EPERM — SEAL_SHRINK
+    // LAZY: the truncate names a size, not an allocation — a frame mints
+    // on the first write or map touch of its page (foot ftruncates the
+    // whole scrollback pool once, then uses it sparsely; eager alloc
+    // here meant ENOMEM on a 512 MiB object that never fills).
+    // shrink keeps minted pages — mmap may still point in (real memfd
     // semantics: a truncated-away tail SIGBUSes, we keep it simple)
     s.size = len;
     return 0;
+}
+
+// mint a page of an shm object — the demand arm of lazy truncation.
+fn shmPageAlloc(s: *ShmObj, pi: usize) ?[*]u8 {
+    if (pi >= SHM_MAXPAGES) return null;
+    if (shmFrame(s, pi) == 0) {
+        const page = allocPage() orelse return null;
+        if (!shmFrameSet(s, pi, @intFromPtr(page))) {
+            _ = pmm.free(@intFromPtr(page));
+            return null;
+        }
+        if (pi + 1 > s.npages) s.npages = @intCast(pi + 1);
+    }
+    return @ptrFromInt(@as(usize, @intCast(shmFrame(s, pi))));
+}
+
+// memfd I/O: read/write run through the fd's byte cursor (shmoff) like a
+// regular file — this is what wlserver's memfd_create+write keymap path
+// needs, and it is the same shape memfd gives linux callers.
+fn shmRead(c: *Child, fd: usize, buva: u64, want: u64) i64 {
+    const s = &shms[@intCast(c.fds[fd] - 1)];
+    var pos = c.shmoff[fd];
+    if (pos >= s.size) return 0; // EOF
+    const wantc: usize = @intCast(@min(want, s.size - pos));
+    var done: usize = 0;
+    while (done < wantc) {
+        const pi: usize = @intCast(pos >> 12);
+        const po: usize = @intCast(pos & 0xFFF);
+        const n = @min(0x1000 - po, wantc - done);
+        if (shmFrame(s, pi) == 0) {
+            // never-minted page — the sparse hole reads as zeros
+            var zb: [64]u8 = .{0} ** 64;
+            var left = n;
+            while (left > 0) {
+                const take = @min(left, 64);
+                const g = copyToUser(c, @intCast(buva + done), zb[0..take]);
+                done += g;
+                pos += g;
+                left -= g;
+                if (g < take) return @intCast(done);
+            }
+            continue;
+        }
+        const got = copyToUser(c, @intCast(buva + done), @as([*]const u8, @ptrFromInt(@as(usize, @intCast(shmFrame(s, pi)))))[po..][0..n]);
+        done += got;
+        pos += got;
+        if (got < n) break;
+    }
+    c.shmoff[fd] = pos;
+    return @intCast(done);
+}
+
+fn shmWrite(c: *Child, fd: usize, buva: u64, want: u64) i64 {
+    const s = &shms[@intCast(c.fds[fd] - 1)];
+    const pos0 = c.shmoff[fd];
+    if ((pos0 + want + 0xFFF) >> 12 > SHM_MAXPAGES) return -12;
+    var pos = pos0;
+    var done: usize = 0;
+    const wantc: usize = @intCast(want);
+    while (done < wantc) {
+        const pi: usize = @intCast(pos >> 12);
+        const po: usize = @intCast(pos & 0xFFF);
+        const n = @min(0x1000 - po, wantc - done);
+        const frame = shmPageAlloc(s, pi) orelse return if (done > 0) @intCast(done) else -12;
+        const got = copyFromUser(c, @intCast(buva + done), frame[po..][0..n]);
+        done += got;
+        pos += got;
+        if (got < n) break;
+    }
+    if (pos > s.size) s.size = pos; // size tracks the top write
+    c.shmoff[fd] = pos;
+    return @intCast(done);
+}
+
+fn shmSeek(c: *Child, fd: usize, off: i64, whence: u32) i64 {
+    const s = &shms[@intCast(c.fds[fd] - 1)];
+    const base: i64 = switch (whence) {
+        0 => 0, // SEEK_SET
+        1 => @intCast(c.shmoff[fd]), // SEEK_CUR
+        2 => @intCast(s.size), // SEEK_END
+        else => return -22,
+    };
+    const np = base + off;
+    if (np < 0) return -22;
+    c.shmoff[fd] = @intCast(np);
+    return np;
 }
 
 // ---- flock: advisory locks on object identity -------------------------
@@ -5519,6 +6024,7 @@ fn releaseFd(c: *Child, i: usize) void {
     c.fdkinds[i] = .none;
     c.fdverbs[i] = 0;
     c.fdcx[i] = 0;
+    c.fddir[i][0] = 0;
     if (c.sh.dent_pfd == @as(i64, @intCast(i))) c.sh.dent_plen = 0; // drop the
         // pushback — a reused slot must not eat another listing's record
     flockDropIfOrphaned(c, ofd);
@@ -5570,6 +6076,7 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
             dst.fdverbs[dfd] = src.fdverbs[sfd];
             dst.fdnb[dfd] = src.fdnb[sfd];
             dst.fdcx[dfd] = src.fdcx[sfd];
+            dst.fddir[dfd] = src.fddir[sfd]; // the dirfd record rides too
             return true;
         },
         else => {},
@@ -5579,6 +6086,9 @@ fn cloneFd(dst: *Child, dfd: usize, src: *Child, sfd: usize) bool {
     dst.fdverbs[dfd] = src.fdverbs[sfd]; // the verbs ride the projection
     dst.fdnb[dfd] = src.fdnb[sfd];     // O_NONBLOCK rides it too
     dst.fdcx[dfd] = src.fdcx[sfd];     // CLOEXEC too — the caller clears it
+    dst.fddir[dfd] = src.fddir[sfd];   // dirfd record — POSIX shares the
+                                     // file description AND its position
+                                     // as dirfd; the path follows
                                      // for dup-family projections (POSIX:
                                      // dup never carries the flag)
     return true;
@@ -6486,7 +6996,9 @@ const SPAWN_NO_FD: u64 = ~@as(u64, 0);
 fn spawnBuild(c: *Child, f: *TrapFrame, waitable: bool, in_src: u64, out_src: u64) i64 {
     if (c.fsv == null) return -38; // ENOSYS — no fs view, nothing to exec
     var pb: [256]u8 = undefined;
-    const path = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
+    const pj = pathCwd(c, @intCast(f.rdi), &pb); // spawn honors the cwd
+    if (pj < 0) return pj;
+    const path = pb[0..@intCast(pj)];
     // The blob IS the bag's wire form: rdx/r10 name a bounded 'KGRB'
     // section stream in OUR space — argv rides section 1 (NUL-separated,
     // unchanged), grant records section 2, env lands as 3. One bounded
@@ -6713,7 +7225,11 @@ fn childSpawn(c: *Child, f: *TrapFrame) i64 {
 fn childExec(c: *Child, f: *TrapFrame) i64 {
     const ops = c.fsv orelse return -38; // ENOSYS — no view, no images
     var pb: [256]u8 = undefined;
-    const path = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
+    const up = userPath(c, @intCast(f.rdi), &pb) orelse return -14;
+    var xjb: [256]u8 = undefined;
+    const xj = resolveAt(c, -100, up, &xjb); // exec honors the cwd too
+    if (xj < 0) return xj;
+    const path = xjb[0..@intCast(xj)];
     // argv/envp blocks. linux's real contract bounds the whole block
     // (ARG_MAX ~2MB, 128KiB/string): 512B refused a legit ~11-entry env,
     // then argv's blob-filled on a multi-KB "You are a …" LLM prompt
@@ -6893,6 +7409,7 @@ fn childFork(c: *Child, f: *TrapFrame) i64 {
     nc.sh.brk = c.sh.brk;
     nc.sh.brk_base = c.sh.brk_base;
     nc.sh.mmap_top = c.sh.mmap_top;
+    nc.sh.cwd = c.sh.cwd; // the cwd word copies; CLONE_FS would share
     nc.ursp = c.ursp;
     const fr: *const [15]u64 = @ptrCast(f);
     for (0..15) |k| nc.frame.gp[k] = fr[k];
@@ -6987,7 +7504,25 @@ fn childThread(c: *Child, f: *TrapFrame) i64 {
 // namespaces — refused by name, never silently forked.
 fn childClone(c: *Child, f: *TrapFrame) i64 {
     if (f.rdi == 0x11) return childFork(c, f);
-    if (f.rdi == 0x7d0f00) return childThread(c, f);
+    // CHILD_SETTID|CHILD_CLEARTID|SIGCHLD = 0x1200011 — glibc's fork:
+    // fork semantics plus the child's tid written at ctid in the CHILD's
+    // space (its getpid cache) and that word cleared on exit.
+    if (f.rdi == 0x1200011) {
+        const pid = childFork(c, f);
+        if (pid < 0) return pid;
+        const nc = &children[@intCast(pid - 1)];
+        nc.clear_tid = f.r10;
+        var tb: [4]u8 = undefined;
+        std.mem.writeInt(u32, &tb, @intCast(pid), .little);
+        if (copyToUser(nc, @intCast(f.r10), &tb) < 4) {
+            releaseFds(nc); // dead on arrival — linux unwinds the clone
+            _ = freeChild(nc);
+            nc.* = .{};
+            return -14; // EFAULT
+        }
+        return pid;
+    }
+    if (f.rdi == 0x7d0f00 or f.rdi == 0x3d0f00) return childThread(c, f);
     say("SEAM REFUSE clone flags=");
     puthex(f.rdi);
     say(" (not a served shape)\n");
@@ -7058,6 +7593,8 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     // the POSIX refusal for a bad-mode write.
                     .fs => f.rax = @bitCast(if (c.fdverbs[fdi] & V_WRITE != 0)
                         childWrite(c, fdi, f.rsi, f.rdx) else -9),
+                    .shm => f.rax = @bitCast(if (c.fdverbs[fdi] & V_WRITE != 0)
+                        shmWrite(c, fdi, f.rsi, f.rdx) else -9),
                     .efd => f.rax = @bitCast(childEfdWrite(c, f)),
                     .tfd => f.rax = @bitCast(@as(i64, -22)), // EINVAL — a clock has no write end
                     else => f.rax = @bitCast(@as(i64, -9)),
@@ -7129,14 +7666,12 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         },
         2, 257 => { // open(path,flags) / openat(dirfd,path,flags)
             // Scoped fs view: paths resolve inside the fs the child was
-            // spawned from — nothing else exists for it to mean.
-            if (f.rax == 257 and f.rdi != @as(u64, @bitCast(@as(i64, -100)))) {
-                f.rax = @bitCast(@as(i64, -9)); // EBADF — only AT_FDCWD has meaning here
-            } else {
-                const pva: usize = if (f.rax == 2) @intCast(f.rdi) else @intCast(f.rsi);
-                const fl = if (f.rax == 2) f.rsi else f.rdx;
-                f.rax = @bitCast(childOpen(c, pva, fl));
-            }
+            // spawned from. A real dirfd joins the recorded dir path —
+            // glibc ld.so's cached search fds are the driver.
+            f.rax = @bitCast(if (f.rax == 257)
+                childOpenAt(c, @bitCast(f.rdi), @intCast(f.rsi), f.rdx)
+            else
+                childOpen(c, @intCast(f.rdi), f.rsi));
         },
         85 => { // creat(path) ≡ open(path, O_WRONLY|O_CREAT|O_TRUNC)
             f.rax = @bitCast(childOpen(c, @intCast(f.rdi), 0o1101));
@@ -7279,6 +7814,8 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     .fs => if (c.fdverbs[fdi] & V_READ != 0)
                         childRead(c, f.rdi, f.rsi, f.rdx) else -9,
                     .pipe_r => pipeReadEnd(c, @intCast(c.fds[fdi]), f.rsi, f.rdx, c.fdnb[fdi] != 0),
+                    .shm => if (c.fdverbs[fdi] & V_READ != 0)
+                        shmRead(c, fdi, f.rsi, f.rdx) else -9,
                     .ptym => ptyMasterRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
                     .ptys => ptySlaveRead(c, @intCast(c.fds[fdi]), f.rsi, f.rdx),
                     .sock => sockRead(c, @intCast((c.fds[fdi] - 1) >> 1), @intCast((c.fds[fdi] - 1) & 1), f.rsi, f.rdx, c.fdnb[fdi] != 0),
@@ -7545,15 +8082,24 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         4, 6 => { // stat/lstat(path, st) — no symlink layer; identical
             f.rax = @bitCast(childStatPath(c, @intCast(f.rdi), f.rsi));
         },
-        21 => { // access(path, mode)
-            f.rax = @bitCast(childAccess(c, @intCast(f.rdi), f.rsi, 0));
+        262 => { // newfstatat(dfd, path, st, flags) — glibc's stat verb
+            f.rax = @bitCast(childFstatat(c, @bitCast(f.rdi), @intCast(f.rsi), f.rdx, f.r10));
         },
-        269 => { // faccessat(dfd, path, mode) — no cwd model; AT_FDCWD
-                 // shape only, relative paths resolve from the view root
-            f.rax = @bitCast(childAccess(c, @intCast(f.rsi), f.rdx, 0));
+        89, 267 => { // readlink/readlinkat(dfd, path, buf, len) — no
+                     // symlink layer exists, so the honest answers are
+                     // ENOENT for a missing name and EINVAL for an
+                     // extant non-link. /proc/self/exe lands in the
+                     // first class — glibc's fallback takes it.
+            f.rax = @bitCast(childReadlink(c, f));
+        },
+        21 => { // access(path, mode)
+            f.rax = @bitCast(childAccess(c, -100, @intCast(f.rdi), f.rsi, 0));
+        },
+        269 => { // faccessat(dfd, path, mode)
+            f.rax = @bitCast(childAccess(c, @bitCast(f.rdi), @intCast(f.rsi), f.rdx, 0));
         },
         439 => { // faccessat2(dfd, path, mode, flags)
-            f.rax = @bitCast(childAccess(c, @intCast(f.rsi), f.rdx, f.r10));
+            f.rax = @bitCast(childAccess(c, @bitCast(f.rdi), @intCast(f.rsi), f.rdx, f.r10));
         },
         55 => { // getsockopt(fd, level, optname, optval, optlen)
             f.rax = @bitCast(childGetsockopt(c, f));
@@ -7561,16 +8107,23 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         77 => { // ftruncate(fd, len) — sizes shm objects (grow, zero)
             f.rax = @bitCast(childFtruncate(c, f.rdi, f.rsi));
         },
-        79 => { // getcwd(buf, size) — the view root is the child's cwd:
-                // every relative path resolves from "/" inside its scoped
-                // fs (no chdir state exists to track — the honest answer).
+        79 => { // getcwd(buf, size) — the stored cwd word, leading "/"
+                // restored; an empty store is the view root.
             const size: usize = @intCast(f.rsi);
-            if (size < 2) {
+            const clen = std.mem.indexOfScalar(u8, &c.sh.cwd, 0) orelse c.sh.cwd.len;
+            if (size < clen + 2) {
                 f.rax = @bitCast(@as(i64, -34)); // ERANGE
             } else {
-                const got = copyToUser(c, @intCast(f.rdi), "/\x00");
-                f.rax = @bitCast(@as(i64, if (got < 2) -14 else 2));
+                var wb: [256]u8 = undefined;
+                wb[0] = '/';
+                @memcpy(wb[1..][0..clen], c.sh.cwd[0..clen]);
+                wb[clen + 1] = 0;
+                const got = copyToUser(c, @intCast(f.rdi), wb[0 .. clen + 2]);
+                f.rax = @bitCast(@as(i64, if (got < clen + 2) -14 else @as(i64, @intCast(clen + 2))));
             }
+        },
+        80, 81 => { // chdir(path) / fchdir(fd) — the stored cwd word
+            f.rax = @bitCast(childChdir(c, f));
         },
         56 => { // clone(flags,...) — only the fork shape (SIGCHLD) this rung
             f.rax = @bitCast(childClone(c, f));
@@ -7836,6 +8389,75 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             else
                 @intCast(cur_child + 1);
         },
+        110 => { // getppid — the spawner's pid-domain id; the boot/root
+                 // children answer 0 like linux's init.
+            const sb = children[cur_child].spawned_by;
+            f.rax = @intCast(if (sb == NO_PARENT) 0 else sb + 1);
+        },
+        102, 104, 107, 108 => { // getuid/getgid/geteuid/getegid — no uid
+                                // model exists; every child is uid 0,
+                                // the single authority the seam grants.
+            f.rax = 0;
+        },
+        105, 106, 113, 114, 117, 119, 122, 123 => {
+            // set(uid|gid|reuid|regid|resuid|resgid|fsuid|fsgid): a set
+            // that asks for uid 0 is already-true — a set asking for
+            // anything else names an identity that does not exist here.
+            // fsuid/fsgid (122/123) return the PREVIOUS fsuid, always 0.
+            if (f.rax == 122 or f.rax == 123) {
+                f.rax = 0;
+            } else if ((f.rax == 105 or f.rax == 106) and f.rdi == 0) {
+                f.rax = 0;
+            } else {
+                var ok = (f.rax != 105 and f.rax != 106);
+                if (ok) {
+                    const n: usize = if (f.rax == 117 or f.rax == 119) 3 else 2;
+                    const args = [_]u64{ f.rdi, f.rsi, f.rdx };
+                    for (0..n) |i| {
+                        const a: i64 = @bitCast(args[i]);
+                        if (a != 0 and a != -1) ok = false;
+                    }
+                }
+                f.rax = @bitCast(@as(i64, if (ok) 0 else -1)); // EPERM
+            }
+        },
+        118, 120 => { // getresuid/getresgid — three zeros: ruid/euid/suid
+                      // are all the one identity.
+            var b: [12]u8 = std.mem.zeroes([12]u8);
+            f.rax = @bitCast(if (copyToUser(c, @intCast(f.rdi), &b) < 12)
+                @as(i64, -14) else 0);
+        },
+        115 => { // getgroups — an empty supplementary list
+            f.rax = 0;
+        },
+        116 => { // setgroups — an empty set is already true; anything
+                 // else names groups that don't exist.
+            f.rax = @bitCast(@as(i64, if (f.rdi == 0) 0 else -1)); // EPERM
+        },
+        37 => { // alarm(secs) — a real deadline in irq_ticks; the return
+                // is the previous pending alarm's seconds (POSIX).
+            const prev = children[cur_child].sh.alarm_ticks;
+            const secs = f.rdi;
+            children[cur_child].sh.alarm_ticks =
+                if (secs == 0) 0 else irq_ticks + pollDeadlineTicks(@intCast(secs * 1000));
+            f.rax = if (prev == 0) 0 else (prev - irq_ticks) * 55 / 1000;
+        },
+        137, 138 => { // statfs/fstatfs — the fs fact sheet: ext2 magic,
+                      // 1KiB blocks. fstatfs demands an fs-kind fd.
+            const sfd_ok = f.rax != 138 or
+                (f.rdi < c.fds.len and c.fdkinds[@intCast(f.rdi)] == .fs);
+            if (!sfd_ok) {
+                f.rax = @bitCast(@as(i64, -9)); // EBADF
+            } else {
+                var sb: [120]u8 = std.mem.zeroes([120]u8);
+                std.mem.writeInt(u64, sb[0..8], 0xEF53, .little);  // f_type ext2
+                std.mem.writeInt(u64, sb[8..16], 1024, .little);   // f_bsize
+                std.mem.writeInt(u64, sb[64..72], 255, .little);   // f_namelen
+                std.mem.writeInt(u64, sb[72..80], 1024, .little);  // f_frsize
+                f.rax = @bitCast(if (copyToUser(c, @intCast(f.rsi), &sb) < 120)
+                    @as(i64, -14) else 0);
+            }
+        },
         62 => { // kill(pid, signo) — the fact lands on the target; the
                 // disposition runs as kernel bookkeeping (a TERM victim
                 // dies here, a TSTP one stops). pid 0 = caller's pgrp,
@@ -7870,7 +8492,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @bitCast(if (found) @as(i64, 0) else -3); // ESRCH
             }
         },
-        200 => { // tgkill(tgid, tid, sig) — the tid names a member slot
+        200, 234 => { // tkill/tgkill(tgid, tid, sig) — the tid names a member slot
                  // of the CALLER's group; anything else is ESRCH like
                  // linux. musl's abort/pthread_cancel ride this nr.
             const tsig: u32 = @truncate(f.rdx);
@@ -7931,6 +8553,35 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 f.rax = @intCast(effPgid(@intCast(pid - 1)));
             }
         },
+        157 => { // prctl(opt, arg2) — the arm serves only the self-attrs we
+                 // can name honestly: task name (in/out) and the stored
+                 // parent-death signo. Anything else refuses by opt.
+            const opt: u64 = f.rdi;
+            switch (opt) {
+                1 => { // PR_SET_PDEATHSIG — record the owed signo; the exit
+                       // path owes delivery (see pdeathsig in Child).
+                    if (f.rsi > 64) {
+                        f.rax = @bitCast(@as(i64, -22));
+                    } else {
+                        c.pdeathsig = @intCast(f.rsi);
+                        f.rax = 0;
+                    }
+                },
+                15 => { // PR_SET_NAME — comm is ≤15 chars + NUL.
+                    var nb: [16]u8 = .{0} ** 16;
+                    _ = copyFromUser(c, @intCast(f.rsi), &nb);
+                    if (nb[15] != 0) nb[15] = 0;
+                    c.comm = nb;
+                    f.rax = 0;
+                },
+                16 => { // PR_GET_NAME — write comm back (always NUL-terminated).
+                    var nb: [16]u8 = c.comm;
+                    nb[15] = 0;
+                    f.rax = if (copyToUser(c, @intCast(f.rsi), &nb) == 0) @bitCast(@as(i64, -14)) else 0;
+                },
+                else => f.rax = @bitCast(@as(i64, -22)), // unarmed opt names itself
+            }
+        },
         112 => { // setsid() — the caller becomes a session leader:
                  // new sid+pgid = own pid, ctty drops. EPERM if it is
                  // already a pgrp leader, like linux.
@@ -7962,7 +8613,7 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 // through it and a stub would hand back fd 0.
             if (f.rdi >= c.fds.len or c.fdkinds[@intCast(f.rdi)] == .none) {
                 f.rax = @bitCast(@as(i64, -9));
-            } else if (f.rsi == 6 or f.rsi == 1030) { // F_DUPFD[/_CLOEXEC]
+            } else if (f.rsi == 0 or f.rsi == 1030) { // F_DUPFD/_CLOEXEC
                 if (f.rdx >= c.fds.len) {
                     f.rax = @bitCast(@as(i64, -22)); // EINVAL past the ceiling
                 } else {
@@ -7996,6 +8647,28 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             } else if (f.rsi == 2) { // F_SETFD
                 c.fdcx[@intCast(f.rdi)] = @intFromBool(f.rdx & 1 != 0);
                 f.rax = 0;
+            } else if (f.rsi == 5 or f.rsi == 6 or f.rsi == 7) {
+                // F_GETLK/SETLK/SETLKW — POSIX byte locks are advisory;
+                // the flock arm carries real contention for the wayland
+                // lock file. fcntl locks answer success unmodeled.
+                f.rax = 0;
+            } else if (f.rsi == 1033 or f.rsi == 1034) {
+                // F_ADD_SEALS/F_GET_SEALS — memfd sealing. The object
+                // carries the word; F_SEAL_SEAL freezes the word itself.
+                const fdi2: usize = @intCast(f.rdi);
+                if (c.fdkinds[fdi2] != .shm) {
+                    f.rax = @bitCast(@as(i64, -22)); // seals are memfd-only
+                } else {
+                    const so = &shms[@intCast(c.fds[fdi2] - 1)];
+                    if (f.rsi == 1034) {
+                        f.rax = so.seals;
+                    } else if (so.seals & 8 != 0) {
+                        f.rax = @bitCast(@as(i64, -1)); // EPERM — sealed
+                    } else {
+                        so.seals |= @intCast(f.rdx & 0xF);
+                        f.rax = 0;
+                    }
+                }
             } else {
                 f.rax = @bitCast(@as(i64, -22)); // EINVAL — unknown cmd
             }
@@ -8069,6 +8742,15 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                     @as(i64, -14) else 0);
             }
         },
+        201 => { // time(tloc) — the TSC clock's seconds; REALTIME shares
+                 // the reading like gettime (no RTC epoch exists).
+            const secs: i64 = @intCast(ukplat_monotonic_clock() / 1_000_000_000);
+            var tb: [8]u8 = undefined;
+            std.mem.writeInt(i64, &tb, secs, .little);
+            f.rax = @bitCast(if (f.rdi != 0 and
+                copyToUser(c, @intCast(f.rdi), &tb) < 8)
+                @as(i64, -14) else secs);
+        },
         63 => { // uname(buf) — the kernel's own identity, honestly named:
             // a real GNU uname prints what we are, not a Linux costume.
             var uts: [390]u8 = std.mem.zeroes([390]u8);
@@ -8114,6 +8796,16 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         59 => { // execve(path, argv, envp) — the image swap; return only
                 // on refusal (the frame repoints at the new entry).
             f.rax = @bitCast(childExec(c, f));
+        },
+        28 => { // madvise(addr, len, advice) — every advice is advisory
+                // by spec (linux may ignore all of it); we hold no swap
+                // and don't reclaim on DONTNEED, so "noted, no-op" is
+                // the honest answer. Only the argument shape validates.
+            if (f.rdx > 0x25) {
+                f.rax = @bitCast(@as(i64, -22)); // EINVAL — unknown advice
+            } else {
+                f.rax = 0;
+            }
         },
         12 => { // brk(addr) -> current break; 0 queries
             const want: usize = @intCast(f.rdi);
@@ -8169,8 +8861,11 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                 } else {
                     // bump cursor — skip past any span the fixed path left
                     // live, else a later bump collides with a fixed map.
+                    // The scan is bounded by USER_VA_END: an oversized
+                    // request (glibc's 128MB arena probes) must answer
+                    // ENOMEM, not index pdpt past its 512 entries.
                     base = c.sh.mmap_top;
-                    while (true) {
+                    while (base + len <= USER_VA_END) {
                         var live = false;
                         var q: usize = 0;
                         while (q < len) : (q += 0x1000) {
@@ -8178,6 +8873,10 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                         }
                         if (!live) break;
                         base += (len + 0xFFF) & ~@as(usize, 0xFFF);
+                    }
+                    if (base + len > USER_VA_END) {
+                        f.rax = @bitCast(@as(i64, -12)); // ENOMEM — arena exhausted
+                        return;
                     }
                     c.sh.mmap_top = base + ((len + 0xFFF) & ~@as(usize, 0xFFF));
                 }

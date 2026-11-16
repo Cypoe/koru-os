@@ -1190,9 +1190,26 @@ fn cfDent(ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64 {
         if (namelen > 0 and rec_off + 8 + namelen <= fp.size) {
             var nm: [256]u8 = undefined;
             if (readAt(fs, fp.ino, rec_off + 8, &nm, namelen) < namelen) return -5;
-            const t: u8 = switch (hdr[7]) {
-                1 => 8, 2 => 4, 7 => 10, else => 0,
+            var t: u8 = switch (hdr[7]) {
+                1 => 8, 2 => 4, 6 => 10, 7 => 12, else => 0,
             };
+            if (t == 0) {
+                // no file_type byte in this dirent (images built
+                // without the feature) — the truth is the inode's
+                // mode, one lookup per entry. DT_UNKNOWN is a real
+                // answer too but it starves readers that gate on
+                // DT_DIR (measured: fontconfig skipped truetype/).
+                if (inodeLoc(fs, dino)) |dloc| {
+                    var dit: [BS]u8 = undefined;
+                    if (readBlock(fs, dloc.block, &dit)) {
+                        const dm = rd16(&dit, dloc.off) & 0o170000;
+                        t = switch (dm) {
+                            0o100000 => 8, 0o040000 => 4, 0o120000 => 10,
+                            0o140000 => 12, else => 0,
+                        };
+                    }
+                }
+            }
             std.mem.writeInt(u64, dst[0..8], dino, .little);
             dst[8] = t;
             dst[9] = namelen;
@@ -1460,14 +1477,21 @@ fn cfStat(ctx: ?*anyopaque, h: u64, dst: [*]u8) callconv(.c) i64 {
     }.s;
     w64(dst, 0, fs.dev_id);                          // st_dev
     w64(dst, 8, fp.ino);                             // st_ino
-    // st_nlink is the inode's real link count — hardlinks made it honest.
+    // st_nlink and st_mode are the inode's own — hardlinks made nlink
+    // honest, directories made mode honest (measured: glibc's opendir
+    // fstat()s the fd and ENOTDIRs on a hardcoded regular mode, which
+    // starved fontconfig's whole font-dir scan).
     var nlink: u64 = 1;
+    var mode: u64 = 0o100644;
     if (inodeLoc(fs, fp.ino)) |iloc| {
         var ib: [BS]u8 = undefined;
-        if (readBlock(fs, iloc.block, &ib)) nlink = rd16(&ib, iloc.off + 26);
+        if (readBlock(fs, iloc.block, &ib)) {
+            nlink = rd16(&ib, iloc.off + 26);
+            mode = rd16(&ib, iloc.off);
+        }
     }
     w64(dst, 16, nlink);                             // st_nlink
-    for (0..4) |i| dst[24 + i] = @truncate(@as(u64, 0o100644) >> @intCast(i * 8)); // st_mode u32
+    for (0..4) |i| dst[24 + i] = @truncate(mode >> @intCast(i * 8)); // st_mode u32
     w64(dst, 48, fp.size);                           // st_size
     w64(dst, 56, BS);                                // st_blksize
     w64(dst, 64, (fp.size + 511) / 512);             // st_blocks

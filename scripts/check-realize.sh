@@ -185,7 +185,8 @@ if [ -x "$LEAN" ] && [ -f "$WITNESS_DIR/WitnessCheck.lean" ] \
 else bad "Lean projection re-decision failed (lean=$LEAN)"; sed -n '1,6p' "$WORK/lean_matrix.out" 2>/dev/null | sed 's/^/     /'; fi
 
 if [ -f "$WORK/rows.json" ] && [ -f "$WORK/arm-matrix.txt" ]; then
-    if python - "$WORK" <<'PYEOF'
+    PYBIN="$(command -v python || command -v python3 || true)"
+    if [ -n "$PYBIN" ] && "$PYBIN" - "$WORK" <<'PYEOF'
 import json, re, sys, pathlib
 w = pathlib.Path(sys.argv[1])
 rows = json.loads((w / "rows.json").read_text())

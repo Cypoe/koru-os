@@ -8,7 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-python - "$@" <<'PY'
+PYBIN="$(command -v python || command -v python3)"
+"$PYBIN" - "$@" <<'PY'
 import os, re, sys, glob
 
 ROOT = os.getcwd()

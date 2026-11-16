@@ -7,7 +7,7 @@ needs: [sessions-jobctl]
 accept: unmodified busybox sh drives fg/bg/&/^Z through a pty
 tier: qemu
 status: landed
-evidence: check-boot busybox-sh-pty row — SHP COMPLETE fails=0
+evidence: V
 peer: —
 provenance: busybox 1.37 already runs (dynamic row) — oracle not product
 ---

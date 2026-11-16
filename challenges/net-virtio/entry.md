@@ -7,7 +7,7 @@ needs: [virtio-pci-modern]
 accept: virtio-net rx/tx + a userspace ping/DNS through a socket seam
 tier: qemu
 status: landed
-evidence: check-boot.sh row "net-virtio" — koruos/native/net.zig +
+evidence: V
   tests/netvtest.c oracle; serial asserts stack-up, MSI-X delivery,
   ARP learn, gateway icmp echo reply, NET COMPLETE fails=0
 peer: koru-desktop/providers/net-virtio-lwip

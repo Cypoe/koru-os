@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
-echo "OPEN: musl posix_openpt/unlockpt/ptsname/open through scoped fs view, no nr521"
-exit 77
+echo "ptmx-devpts: landed. Evidence: 'foot-real' row in scripts/check-boot.sh"
+echo "oracle: glibc foot posix_openpt(/dev/ptmx) -> unlockpt -> open(/dev/pts/0) -> TIOCSCTTY -> shell"
+exit 0

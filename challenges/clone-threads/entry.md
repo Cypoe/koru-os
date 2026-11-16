@@ -7,7 +7,7 @@ needs: []
 accept: clone(CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|SETTLS|SETTID|CLEARTID|DETACHED|SYSVSEM) mints members on one ProcShared; join parks on clear_tid futex; exit_group reaps the tgid once
 tier: qemu
 status: landed
-evidence: check-boot clone-threads row — THR COMPLETE fails=0, klanker-child KL thread 41
+evidence: V
 peer: —
 provenance: —
 ---
