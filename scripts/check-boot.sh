@@ -1678,6 +1678,44 @@ sys.exit(0 if px(40,40)==b'\xb0\xce\xfb' and px(41,40)==b'\xd9\xff\xff'
             else
                 bad "foot-real: build failed (fetch/elf/stage/native)"; tail -4 "$WORK/fetchfoot.log" "$WORK/footinit.build" "$WORK/shellproof.build" "$WORK/stagefoot.log" "$WORK/boot_foot.build" 2>/dev/null
             fi
+            # cage-real: the real-compositor rung — UNMODIFIED upstream
+            # cage 0.1.5 (wlroots 0.16 kiosk) nests on wlserver's
+            # /wayland-1 as an xdg toplevel, serves its own /wayland-0,
+            # and its primary-client path fork+execvps Debian's foot —
+            # four real protocol hops foot → cage → wlserver → *Surf →
+            # virtio-gpu, with foot's shm frame composited inside cage's
+            # nested output. Same staged image plus the cage payload.
+            CGIMG="$WORK/cage.img"
+            CGIMGW="$(cygpath -m "$CGIMG" 2>/dev/null || echo "$CGIMG")"
+            CGIMGWSL="$(wsl -e wslpath -u "$(cygpath -w "$CGIMG")" 2>/dev/null)"
+            if bash "$ROOT/scripts/build-cage.sh" "$WORK/cage.elf" > "$WORK/cage.build" 2>&1 \
+               && "$ZIGBIN" cc -target x86_64-linux-musl -static -Wl,--image-base=0x48000000 -Wl,--build-id=none -s -o "$WORK/cageinit.elf" "$ROOT/koruos/native/tests/cageinit.c" > "$WORK/cageinit.build" 2>&1 \
+               && MSYS_NO_PATHCONV=1 wsl bash "$(wsl -e wslpath -u "$(cygpath -w "$ROOT/scripts/stage-foot.sh")" 2>/dev/null)" "$CGIMGWSL" "$FSTAGEWSL/stage" "$FELFWSL" "$FSHPTYPRE/shpty-bin" "$FELFWSL" > "$WORK/stagecage.log" 2>&1 \
+               && sed "s|{{ ENTRY }}|$FIX|g" "$ROOT/koruos/native/tests/boot_cage.k" > "$WORK/boot_cage.k" \
+               && bash "$ROOT/scripts/build-native.sh" "$WORK/boot_cage.k" "$WORK/boot_cage.elf" > "$WORK/boot_cage.build" 2>&1; then
+                timeout 200 "$QEMU" -kernel "$WORK/boot_cage.elf" -serial stdio \
+                    -drive "file=$CGIMGW,format=raw,if=none,id=d1" \
+                    -device virtio-blk-pci,drive=d1,disable-modern=on \
+                    -display none -m 1G -no-reboot \
+                    -vga none -device virtio-gpu-pci \
+                    > "$WORK/boot_cage.serial" 2>&1 || true
+                if grep -qF "CAGEINIT srv spawned" "$WORK/boot_cage.serial" \
+                   && grep -qF "CAGEINIT wayland-1 bound" "$WORK/boot_cage.serial" \
+                   && grep -qF "CAGEINIT cage forked" "$WORK/boot_cage.serial" \
+                   && grep -qF "CAGEINIT SHELLPROOF" "$WORK/boot_cage.serial" \
+                   && grep -qF "CAGEINIT COMPLETE" "$WORK/boot_cage.serial" \
+                   && grep -qF "WLSRV appid wlroots" "$WORK/boot_cage.serial" \
+                   && grep -qF "WLSRV title foot" "$WORK/boot_cage.serial" \
+                   && grep -qE "comp: paint 12[0-9]0x720 nb=[1-9]" "$WORK/boot_cage.serial" \
+                   && grep -qE "comp: paint [0-9]{3}x[0-9]{3} nb=[1-9]" "$WORK/boot_cage.serial" \
+                   && grep -qF "CAGE COMPLETE" "$WORK/boot_cage.serial"; then
+                    ok "cage-real: unmodified upstream cage 0.1.5 (wlroots 0.16 wayland backend) nested on wlserver — spawned Debian foot itself, appid/title propagated, foot's shm frame composited inside cage's output to virtio-gpu, epoch drained"
+                else
+                    bad "cage-real: evidence missing: $(grep -aE 'CAGEINIT|WLSRV|comp:|cage:|fail|FAIL|REFUSE|EXC' "$WORK/boot_cage.serial" | tail -12 | tr '\n' '|')"
+                fi
+            else
+                bad "cage-real: build failed (cage/cageinit/stage/native)"; tail -4 "$WORK/cage.build" "$WORK/cageinit.build" "$WORK/stagecage.log" "$WORK/boot_cage.build" 2>/dev/null
+            fi
         else
             bad "real-elf: gcc/zig/debugfs staging failed"; tail -4 "$WORK/pie.build" "$WORK/musl.build" "$WORK/fscat.build" 2>/dev/null
         fi

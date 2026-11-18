@@ -3,12 +3,14 @@
 # onto a boot ext2 image.
 #
 # Runs inside WSL (check-boot.sh invokes `wsl -e bash <this> ...`):
-#   stage-foot.sh <img> <stage> <elfdir> <shpty-bin>
+#   stage-foot.sh <img> <stage> <elfdir> <shpty-bin> [cagedir]
 #     <img>       ext2 image path (created)
 #     <stage>     dpkg-deb -x extraction root (etc/usr/var)
 #     <elfdir>    dir holding footinit.elf + wlserver.elf
 #     <shpty-bin> dir holding bin/busybox + lib/ld-musl-x86_64.so.1
 #                 (fetch-shpty.sh output)
+#     [cagedir]   optional dir holding cage.elf + cageinit.elf —
+#                 staged at / for the nested-compositor rung
 #
 # Why a staged tree walk instead of individual writes: the closure is
 # ~1100 files (fontconfig conf.d, terminfo, xkb, gconv). And why
@@ -22,6 +24,7 @@ IMG="${1:?usage: stage-foot.sh <img> <stage> <elfdir> <shpty-bin>}"
 STAGE="${2:?}"
 ELFDIR="${3:?}"
 SHPTY="${4:?}"
+CAGEDIR="${5:-}"
 
 /usr/sbin/mke2fs -q -F -t ext2 -b 1024 -I 128 -N 16384 -O none -L koru-foot "$IMG" 131072 >/dev/null
 
@@ -80,6 +83,11 @@ CMDS="$WORK/debugfs-foot.cmds"
     echo 'cd /'; echo "write $ELFDIR/footinit.elf footinit.elf"
     echo "write $ELFDIR/wlserver.elf wlserver.elf"
     echo "write $ELFDIR/shellproof.elf shellproof.elf"
+    if [ -n "$CAGEDIR" ]; then
+        # nested-compositor rung: upstream cage + its orchestrator
+        echo "write $CAGEDIR/cage.elf cage.elf"
+        echo "write $CAGEDIR/cageinit.elf cageinit.elf"
+    fi
     echo 'cd /bin'; echo "write $SHPTY/bin/busybox busybox"
     echo "write $SHPTY/bin/busybox sh"
     echo 'cd /lib'; echo "write $SHPTY/lib/ld-musl-x86_64.so.1 ld-musl-x86_64.so.1"
@@ -98,7 +106,8 @@ for p in /usr/bin/foot /lib64/ld-linux-x86-64.so.2 /bin/sh \
          /usr/share/X11/xkb/keycodes/evdev /etc/fonts/fonts.conf \
          /usr/lib/locale/en_US.utf8/LC_CTYPE \
          /etc/xdg/foot/foot.ini /etc/shells \
-         /footinit.elf /wlserver.elf /shellproof.elf; do
+         /footinit.elf /wlserver.elf /shellproof.elf \
+         ${CAGEDIR:+/cage.elf /cageinit.elf}; do
     /usr/sbin/debugfs -R "stat $p" "$IMG" 2>/dev/null | grep -q "Inode:" || {
         echo "stage-foot: $p missing after write" >&2; exit 1; }
 done

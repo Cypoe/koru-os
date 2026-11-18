@@ -580,13 +580,30 @@ export fn irq_exc_dispatch(f: *ExcFrame) callconv(.c) void {
         const tail: [*]const u64 = @ptrFromInt(@intFromPtr(&f.rflags));
         const usp = tail[1]; // hardware usp trails rip/cs/rflags in the frame
         var i: usize = 0;
-        while (i < 12) : (i += 1) {
+        while (i < 32) : (i += 1) {
             const va = usp + i * 8;
             const e = userEntry(&children[cur_child], va);
             if (e & 1 == 0) break;
             const p: *const u64 = @ptrFromInt((e & ~@as(u64, 0xFFF)) + (va & 0xFFF));
             puthex(p.*);
             say(" ");
+        }
+        // rbp walk — raw words cut off at frame boundaries; the chain
+        // names the actual caller sequence even through tail calls.
+        say("\nchain: ");
+        var rbp = f.rbp;
+        var d: usize = 0;
+        while (d < 8 and rbp != 0 and (rbp & 7) == 0) : (d += 1) {
+            const e0 = userEntry(&children[cur_child], rbp);
+            if (e0 & 1 == 0) break;
+            const fp: *const u64 = @ptrFromInt((e0 & ~@as(u64, 0xFFF)) + (rbp & 0xFFF));
+            const e1 = userEntry(&children[cur_child], rbp + 8);
+            if (e1 & 1 == 0) break;
+            const rp: *const u64 = @ptrFromInt((e1 & ~@as(u64, 0xFFF)) + ((rbp + 8) & 0xFFF));
+            puthex(rp.*);
+            say(" ");
+            if (fp.* <= rbp) break;
+            rbp = fp.*;
         }
     } else { // kernel fault — CPL0 pushes no rsp/ss, so the faulting
         // context's stack lives ABOVE the ExcFrame (older words), not
@@ -846,7 +863,7 @@ const UserFrame = extern struct {
 const ChildState = enum { empty, runnable, blocked, zombie, dead,
     gdead }; // leader out early — the group lives on, the slot is held
              // (not reapable, not reusable) until the last member exits
-const MAXCHILDREN: usize = 8; // threads consume slots of the same
+const MAXCHILDREN: usize = 16; // threads consume slots of the same
                                // roster — a tgid is a set, not a slot
 
 // The child's scoped fs view: the fs a child was spawned *from* hands
@@ -1219,20 +1236,31 @@ fn groupReap(leader: usize, status: i64, signo: u8) void {
             p.state = .runnable;
         }
     }
+    if (leader >= children.len) {
+        // DIAG: a dead group's leader must still hold a slot —
+        // tgid=0 (stale sh) wraps to a huge index and panics here.
+        // puthex only — inlined say() miscompiles in this context.
+        puthex(leader); puthex(nchildren); puthex(cur_child);
+        return;
+    }
     const db = children[leader].spawned_by;
-    if (db < nchildren and db != leader) {
+    // do_exit masks the code to its low byte — exit(-ENOSYS) reports
+    // 0xe600 from wait(), and si_status is the byte. Anything wider is
+    // never a wait word, so wider must not intCast-panic on reap.
+    const code: i64 = status & 0xff;
+    if (db < children.len and db != leader) {
         const p = &children[db];
         if (p.state == .runnable or p.state == .blocked or
             p.state == .zombie) {
             sigQueue(p, .{ .signo = SIGCHLD,
                 .code = if (signo != 0) CLD_KILLED else CLD_EXITED,
                 .pid = @intCast(leader + 1),
-                .status = if (signo != 0) signo else @intCast(status) });
+                .status = if (signo != 0) signo else @intCast(code) });
             wakeKind(.poll);
         }
     }
     const dead = &children[leader];
-    dead.exit_status = if (signo != 0) signo else status;
+    dead.exit_status = if (signo != 0) signo else code;
     dead.exit_signo = signo;
     dead.state = if (dead.waitable) .zombie else .dead;
     cttyHangup(leader);
@@ -1389,7 +1417,8 @@ fn childDie(raw_status: i64, signo: u8) noreturn {
         }
     }
     const dead = &children[cur_child];
-    dead.exit_status = if (signo != 0) signo else @bitCast(last_exit);
+    dead.exit_status = if (signo != 0) signo else
+        @as(i64, @bitCast(last_exit)) & 0xff; // do_exit's low-byte mask
     dead.exit_signo = signo;
     dead.state = if (dead.waitable) .zombie else .dead;
     const nf = freeChild(dead);
@@ -1658,7 +1687,7 @@ const Child = struct {
                                     // exit path, not at set time
 };
 
-var children: [MAXCHILDREN]Child = .{ .{}, .{}, .{}, .{}, .{}, .{}, .{}, .{} };
+var children: [MAXCHILDREN]Child = .{Child{}} ** MAXCHILDREN;
 var nchildren: usize = 0;
 var cur_child: usize = 0;
 // Exported: the spawn save-asm opens the epoch with `movb $1` only after
@@ -1978,7 +2007,11 @@ fn loadElf(c: *Child, b: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen: ?*usiz
     const phoff: usize = @intCast(u64le(b, 32));
     const phentsz: usize = u16le(b, 54);
     const phnum: usize = u16le(b, 56);
-    if (phnum == 0 or phentsz < PHDR or phoff + phnum * phentsz > b.len)
+    // Every header field is file-controlled — order the guards so no
+    // checked add/mul on them can wrap (a wrapping check would panic the
+    // kernel where the honest answer is a refusal).
+    const phtab = phnum * phentsz;
+    if (phnum == 0 or phentsz < PHDR or phoff > b.len or phtab > b.len - phoff)
         return null;
     var phdr_va: usize = 0;
     var max_va: usize = 0;
@@ -1991,8 +2024,8 @@ fn loadElf(c: *Child, b: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen: ?*usiz
             // INTERP_BASE as a second ET_DYN image.
             const off: usize = @intCast(u64le(b, ph + 8));
             const filesz: usize = @intCast(u64le(b, ph + 32));
-            if (ilen != null and ipath != null and off + filesz <= b.len and
-                filesz <= ipath.?.len) {
+            if (ilen != null and ipath != null and off <= b.len and
+                filesz <= b.len - off and filesz <= ipath.?.len) {
                 @memcpy(ipath.?.ptr, b[off .. off + filesz]);
                 ilen.?.* = filesz;
             }
@@ -2003,16 +2036,24 @@ fn loadElf(c: *Child, b: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen: ?*usiz
         const vaddr: usize = @intCast(u64le(b, ph + 16));
         const filesz: usize = @intCast(u64le(b, ph + 32));
         const memsz: usize = @intCast(u64le(b, ph + 40));
-        if (filesz > memsz or off + filesz > b.len) return null;
+        if (filesz > memsz or off > b.len or filesz > b.len - off) return null;
+        if (vaddr > std.math.maxInt(usize) - bias) {
+            say("ELF REFUSE: vaddr overruns the address space\n");
+            return null;
+        }
         const va = bias + vaddr;
-        const end_va = va + memsz;
-        if (end_va > max_va) max_va = end_va;
         if (va < USER_VA_BASE) {
             say("ELF REFUSE: vaddr below user window — link -pie or above 0x40000000\n");
             return null;
         }
+        if (va >= USER_VA_END or memsz > USER_VA_END - va) {
+            say("ELF REFUSE: segment overruns user window\n");
+            return null;
+        }
+        const end_va = va + memsz;
+        if (end_va > max_va) max_va = end_va;
         var p = va & ~@as(usize, 0xFFF);
-        while (p < va + memsz) : (p += 0x1000) {
+        while (p < end_va) : (p += 0x1000) {
             _ = mapUserPage(c, p) orelse return null;
         }
         // copy through the mapped pages via identity VA
@@ -2024,7 +2065,7 @@ fn loadElf(c: *Child, b: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen: ?*usiz
         }
         // phdrs are usually inside the first PT_LOAD; remember where they
         // landed so AT_PHDR can point at the in-memory copy.
-        if (phoff >= off and phoff + phnum * phentsz <= off + filesz)
+        if (phoff >= off and (phoff - off) + phtab <= filesz)
             phdr_va = va + (phoff - off);
     }
     if (phdr_va == 0) {
@@ -2035,6 +2076,10 @@ fn loadElf(c: *Child, b: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen: ?*usiz
         var n: usize = 0;
         while (n < phnum * phentsz) : (n += 1) dst[n] = b[phoff + n];
         phdr_va = USER_VA_BASE + 0x200000 - 0x1000;
+    }
+    if (entry > std.math.maxInt(usize) - bias) {
+        say("ELF REFUSE: entry overruns the address space\n");
+        return null;
     }
     return .{ .entry = @intCast(bias + entry), .phdr_va = phdr_va, .phent = phentsz, .phnum = phnum, .bias = bias, .brk_base = (max_va + 0xFFF) & ~@as(usize, 0xFFF) };
 }
@@ -2246,7 +2291,8 @@ fn loadElfViaFs(c: *Child, path: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen
     const phoff: usize = @intCast(u64le(b, 32));
     const phentsz: usize = u16le(b, 54);
     const phnum: usize = u16le(b, 56);
-    if (phnum == 0 or phentsz < PHDR or phoff + phnum * phentsz > b.len) {
+    const phtab = phnum * phentsz;
+    if (phnum == 0 or phentsz < PHDR or phoff > b.len or phtab > b.len - phoff) {
         ops.close(ops.ctx, fh);
         return null;
     }
@@ -2272,11 +2318,16 @@ fn loadElfViaFs(c: *Child, path: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen
         const filesz: usize = @intCast(u64le(b, ph + 32));
         const memsz: usize = @intCast(u64le(b, ph + 40));
         if (filesz > memsz) { ops.close(ops.ctx, fh); return null; }
+        if (vaddr > std.math.maxInt(usize) - bias) { ops.close(ops.ctx, fh); return null; }
         const va = bias + vaddr;
-        if (va + memsz > max_va) max_va = va + memsz;
-        if (va < USER_VA_BASE) { ops.close(ops.ctx, fh); return null; }
+        if (va < USER_VA_BASE or va >= USER_VA_END or memsz > USER_VA_END - va) {
+            ops.close(ops.ctx, fh);
+            return null;
+        }
+        const end_va = va + memsz;
+        if (end_va > max_va) max_va = end_va;
         var p = va & ~@as(usize, 0xFFF);
-        while (p < va + memsz) : (p += 0x1000) {
+        while (p < end_va) : (p += 0x1000) {
             _ = mapUserPage(c, p) orelse { ops.close(ops.ctx, fh); return null; };
         }
         var n: usize = 0;
@@ -2287,7 +2338,7 @@ fn loadElfViaFs(c: *Child, path: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen
             if (rn != @as(i64, @intCast(take))) { ops.close(ops.ctx, fh); return null; }
             n += take;
         }
-        if (phoff >= off and phoff + phnum * phentsz <= off + filesz)
+        if (phoff >= off and (phoff - off) + phtab <= filesz)
             phdr_va = va + (phoff - off);
     }
     if (phdr_va == 0 and phnum != 0) {
@@ -2301,6 +2352,7 @@ fn loadElfViaFs(c: *Child, path: []const u8, dyn_bias: usize, ipath: ?[]u8, ilen
         phdr_va = pv;
     }
     ops.close(ops.ctx, fh);
+    if (entry > std.math.maxInt(usize) - bias) return null;
     return .{ .entry = bias + entry, .phdr_va = phdr_va, .phent = phentsz, .phnum = phnum, .bias = bias, .brk_base = (max_va + 0xFFF) & ~@as(usize, 0xFFF) };
 }
 
@@ -3479,7 +3531,7 @@ fn coninRead(c: *Child, f: *TrapFrame) i64 {
 // block on full, exactly the conin shape. Last writer gone -> drain-then-
 // EOS; last reader gone -> writer wakes to -EPIPE. Wake is mark-only like
 // every other kind: the recheck loop is what actually sees EOS/EPIPE.
-const NPIPES = 8;
+const NPIPES = 16;
 const Pipe = struct {
     used: bool = false,
     head: usize = 0,
@@ -3595,7 +3647,7 @@ fn pipeWriteEnd(c: *Child, idx: usize, buva: u64, want: u64, nb: bool) i64 {
 // EOS is linux's answer: master gone -> slave ioctls/reads EIO; slave
 // gone -> master EIO. Signals queue as facts — no async delivery —
 // consumed through signalfd like everything else on this arm.
-const NPTYS = 4;
+const NPTYS = 8;
 const PTY_LINES = 32; // pending canonical line queue — a bounded queue
                     // like every other channel bound on this arm
 const Pty = struct {
@@ -4393,7 +4445,7 @@ const SOCKQ = 8; // queued fd refs per direction — a bound, like the ring
 // to 62: observing the roster is the proc class's read half, /proc's
 // own world-readable contract. Dup shares the cursor — one open file
 // description, linux's semantics for a minted fd.
-const NROST = 4;
+const NROST = 8;
 const ROST_CAP = 1024; // 4 slots * ~90B/line — bounded like every pool
 const Rost = struct {
     used: bool = false,
@@ -5389,7 +5441,7 @@ fn childEpollWait(c: *Child, epfdu: u64, evva: u64, maxev: u64, tmo: i64) i64 {
 // (or decrements under EFD_SEMAPHORE), write accumulates; readiness
 // is counter!=0. libwayland-server's wl_display_create mints one as
 // its terminate_efd — the loop's wakeup channel for wl_display_terminate.
-const NEFD = 8;
+const NEFD = 32;
 const EFD_MAX: u64 = 0xFFFFFFFFFFFFFFFE;
 const Efd = struct {
     refs: u32 = 0,
@@ -5476,7 +5528,7 @@ fn childEfdWrite(c: *Child, f: *TrapFrame) i64 {
 // blocked reader parks on .poll, which the tick already wakes.
 // Quantization is the PIT/LAPIC tick (~55ms) — the same granularity
 // every deadline in the seam states honestly.
-const NTFD = 8;
+const NTFD = 32;
 const TFD_TICK_NS: u64 = 55_000_000; // the tick's nominal wall time
 const Tfd = struct {
     refs: u32 = 0,
@@ -5629,7 +5681,7 @@ fn childTfdRead(c: *Child, f: *TrapFrame) i64 {
 // wl_event_loop_add_signal was always about. Readiness is
 // pending∩mask through fdPollRev; a blocked reader parks on .poll,
 // woken by the producer's wakeKind.
-const NSFD = 8;
+const NSFD = 16;
 const Sfd = struct {
     refs: u32 = 0,
     mask: u64 = 0,
@@ -6746,9 +6798,13 @@ fn childRecvmsg(c: *Child, fdu: u64, mhva: u64, flags: u64) i64 {
     if (ctlp != 0 and ctln >= 16 and d.qn > 0) {
         var fds: [SOCKQ]u32 = .{0} ** SOCKQ;
         var got: usize = 0;
-        while (d.qn > 0) {
-            d.qn -= 1;
-            const ref = d.q[d.qn];
+        // front-first: send order IS the order demarshal pops `h` args —
+        // a back-first drain swaps two same-batch fds onto each other's
+        // pools (measured: wlroots' frame+cursor pools arrive reversed,
+        // create_buffer bounds-checks the wrong size, EPROTO).
+        var qi: usize = 0;
+        while (qi < d.qn) : (qi += 1) {
+            const ref = d.q[qi];
             var slot: ?usize = null;
             for (0..c.fds.len) |si| {
                 if (c.fdkinds[si] == .none) { slot = si; break; }
@@ -6764,6 +6820,7 @@ fn childRecvmsg(c: *Child, fdu: u64, mhva: u64, flags: u64) i64 {
                 msgflags |= 8; // MSG_CTRUNC
             }
         }
+        d.qn = 0;
         var ch: [16]u8 = undefined;
         std.mem.writeInt(u64, ch[0..8], 16 + @as(u64, @intCast(got * 4)), .little);
         std.mem.writeInt(i32, ch[8..12], 1, .little); // SOL_SOCKET
@@ -7441,7 +7498,7 @@ fn childFork(c: *Child, f: *TrapFrame) i64 {
 // what a thread owns: frame, kctx/kstack, TLS base, wait records, the
 // pending-signal facts. clone(flags, stack, ptid, ctid, tls) on
 // x86_64 — rdi/rsi/rdx/r10/r8.
-fn childThread(c: *Child, f: *TrapFrame) i64 {
+fn childThread(c: *Child, f: *TrapFrame, flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64) i64 {
     var slot: ?usize = null;
     for (0..MAXCHILDREN) |i| {
         const s = children[i].state;
@@ -7461,9 +7518,9 @@ fn childThread(c: *Child, f: *TrapFrame) i64 {
     nc.grants = c.grants;
     nc.ngrants = c.ngrants;
     nc.waitable = false; // threads are never wait4 targets
-    nc.detached = (f.rdi & 0x400000) != 0; // CLONE_DETACHED
-    nc.clear_tid = f.r10; // CHILD_CLEARTID — pthread_join's futex
-    nc.fsbase = f.r8; // CLONE_SETTLS — the thread's own TLS base
+    nc.detached = (flags & 0x400000) != 0; // CLONE_DETACHED
+    nc.clear_tid = ctid; // CHILD_CLEARTID — pthread_join's futex
+    nc.fsbase = tls; // CLONE_SETTLS — the thread's own TLS base
     nc.sig_blocked = c.sig_blocked; // pthread_create inherits the
         // CALLING thread's mask; pending facts stay empty
     const fr: *const [15]u64 = @ptrCast(f);
@@ -7481,12 +7538,12 @@ fn childThread(c: *Child, f: *TrapFrame) i64 {
         nc.frame.rflags = hw[2];
         nc.frame.ss = hw[4];
     }
-    nc.frame.rsp = f.rsi; // the caller's stack arg — musl's own arena
+    nc.frame.rsp = stack; // the caller's stack arg — musl's own arena
     // CLONE_PARENT_SETTID: the caller's space learns the member's tid —
     // a failed write unwinds the whole clone, linux's own order
     var tb: [4]u8 = undefined;
     std.mem.writeInt(u32, &tb, @intCast(g + 1), .little);
-    if (copyToUser(c, @intCast(f.rdx), &tb) < 4) {
+    if (copyToUser(c, @intCast(ptid), &tb) < 4) {
         nc.sh.refs -= 1;
         bindShared(nc, &dead_proc);
         _ = freeChild(nc);
@@ -7502,19 +7559,19 @@ fn childThread(c: *Child, f: *TrapFrame) i64 {
 // pthread shape (0x7d0f00). Any other flag combination is a different
 // axis — CLONE_VFORK's park-until-exec, CLONE_PARENT's reparent,
 // namespaces — refused by name, never silently forked.
-fn childClone(c: *Child, f: *TrapFrame) i64 {
-    if (f.rdi == 0x11) return childFork(c, f);
+fn childCloneFrom(c: *Child, f: *TrapFrame, flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64) i64 {
+    if (flags == 0x11) return childFork(c, f);
     // CHILD_SETTID|CHILD_CLEARTID|SIGCHLD = 0x1200011 — glibc's fork:
     // fork semantics plus the child's tid written at ctid in the CHILD's
     // space (its getpid cache) and that word cleared on exit.
-    if (f.rdi == 0x1200011) {
+    if (flags == 0x1200011) {
         const pid = childFork(c, f);
         if (pid < 0) return pid;
         const nc = &children[@intCast(pid - 1)];
-        nc.clear_tid = f.r10;
+        nc.clear_tid = ctid;
         var tb: [4]u8 = undefined;
         std.mem.writeInt(u32, &tb, @intCast(pid), .little);
-        if (copyToUser(nc, @intCast(f.r10), &tb) < 4) {
+        if (copyToUser(nc, @intCast(ctid), &tb) < 4) {
             releaseFds(nc); // dead on arrival — linux unwinds the clone
             _ = freeChild(nc);
             nc.* = .{};
@@ -7522,11 +7579,76 @@ fn childClone(c: *Child, f: *TrapFrame) i64 {
         }
         return pid;
     }
-    if (f.rdi == 0x7d0f00 or f.rdi == 0x3d0f00) return childThread(c, f);
+    if (flags == 0x7d0f00 or flags == 0x3d0f00)
+        return childThread(c, f, flags, stack, ptid, ctid, tls);
     say("SEAM REFUSE clone flags=");
-    puthex(f.rdi);
+    puthex(flags);
     say(" (not a served shape)\n");
     return -38; // ENOSYS
+}
+
+fn childClone(c: *Child, f: *TrapFrame) i64 {
+    return childCloneFrom(c, f, f.rdi, f.rsi, f.rdx, f.r10, f.r8);
+}
+
+// nr 435 — clone3(clone_args*, size): the same verbs in a self-sizing
+// struct instead of a register convention. clone_args is 88 bytes at
+// VER2 {flags, pidfd, child_tid, parent_tid, exit_signal, stack,
+// stack_size, tls, set_tid, set_tid_size, cgroup}; linux accepts any
+// size >= VER0's 64 and zero-pads the tail. pidfd/set_tid/cgroup are
+// axes we do not serve — refused by name, like clone's own flag gate.
+// exit_signal folds into the low flags byte and stack+stack_size into
+// the caller's top-of-stack register; the rest is the same arms.
+fn childClone3(c: *Child, f: *TrapFrame) i64 {
+    var ca = [_]u64{0} ** 11;
+    if (f.rsi < 64 or f.rsi > 4096) return -22; // EINVAL — bad size
+    const want: usize = @intCast(@min(f.rsi, 88));
+    const cab: []u8 = std.mem.sliceAsBytes(&ca);
+    if (copyFromUser(c, @intCast(f.rdi), cab[0..want]) < want)
+        return -14; // EFAULT
+    // pidfd is consumed only under CLONE_PIDFD — linux ignores the field
+    // otherwise, and glibc threads hand it a scratch pointer
+    // unconditionally. The flag itself and the set_tid/cgroup axes we do
+    // not serve get a named refusal, like clone's own flag gate.
+    if ((ca[0] & 0x1000) != 0 or ca[8] != 0 or ca[9] != 0 or ca[10] != 0) {
+        say("SEAM REFUSE clone3 fields pidfd=");
+        puthex(ca[1]);
+        say(" set_tid=");
+        puthex(ca[8]);
+        say(" sz=");
+        puthex(ca[9]);
+        say(" cgroup=");
+        puthex(ca[10]);
+        say(" flags=");
+        puthex(ca[0]);
+        say("\n");
+        return -38; // ENOSYS
+    }
+    if (ca[4] & ~@as(u64, 0xff) != 0) {
+        say("SEAM REFUSE clone3 exit_signal=");
+        puthex(ca[4]);
+        say(" (not a signal number)\n");
+        return -22; // EINVAL
+    }
+    if ((ca[0] & 0x100) != 0 and
+        (ca[5] == 0 or ca[6] == 0 or ca[5] > std.math.maxInt(u64) - ca[6])) {
+        say("SEAM REFUSE clone3 CLONE_VM without stack\n");
+        return -22; // EINVAL
+    }
+    if ((ca[0] & 0x100) == 0 and (ca[5] != 0 or ca[6] != 0)) {
+        say("SEAM REFUSE clone3 stack without CLONE_VM\n");
+        return -22; // EINVAL
+    }
+    // The frame must NOT be rewritten to clone's register convention:
+    // glibc's __clone3 hands the thread its entry/arg through the
+    // PRESERVED user regs (rdx=func, r8=arg), and the member inherits
+    // every gpr the caller held. Struct fields reach the thread arm
+    // by name instead. clone3's stack is a BASE — the member's rsp is
+    // base+size (linux's own arithmetic), and stack+stack_size are
+    // required exactly when CLONE_VM is set.
+    const flags = ca[0] | ca[4];
+    const stack = if ((ca[0] & 0x100) != 0) ca[5] + ca[6] else f.rsi;
+    return childCloneFrom(c, f, flags, stack, ca[3], ca[2], ca[7]);
 }
 
 export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
@@ -8127,6 +8249,9 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
         },
         56 => { // clone(flags,...) — only the fork shape (SIGCHLD) this rung
             f.rax = @bitCast(childClone(c, f));
+        },
+        435 => { // clone3(clone_args*, size) — struct-argument clone
+            f.rax = @bitCast(childClone3(c, f));
         },
         57 => { // fork() — real POSIX: copy the caller's space, child gets 0
             f.rax = @bitCast(childFork(c, f));
