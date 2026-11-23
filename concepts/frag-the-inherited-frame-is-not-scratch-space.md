@@ -28,4 +28,10 @@ Held consequence — this generalizes: any syscall whose new context
 inherits the caller's registers (clone family, vfork, rt_sigreturn
 adjacent paths) treats the frame as *published state*. Validation and
 translation happen on copies or parameters, not on the frame the
-member will resume with.
+member will resume with. Linux's own rule, restated: clone3's struct
+is read kernel-side; the user's registers pass through untouched.
+
+Adjacent but distinct: `pidfd` in clone_args is flag-gated
+(`CLONE_PIDFD` only) — glibc hands the field a scratch pointer
+unconditionally and linux ignores it; a nonzero field without its
+flag is not a refusal.
