@@ -28,11 +28,21 @@
 // stacking is the real change: index order in the layer stack IS z.
 // Opaque pixels only — the seam carries no alpha channel today.
 
+const std = @import("std");
+
 extern fn koruos_fb_info(out: *Info) callconv(.c) u8;
 extern fn koruos_fb_px(x: u32, y: u32, color: u32) callconv(.c) u8;
 extern fn koruos_fb_present(x: u32, y: u32, w: u32, h: u32) callconv(.c) u8;
 extern fn koru_say(s: [*:0]const u8) void;
 extern fn koru_putdec(v: u64) void;
+
+// one logical line = one emit call: an IRQ-context say() between pieces
+// would splice the line and break gate evidence — buffer, then emit once.
+fn koru_sayf(comptime f: []const u8, a: anytype) void {
+    var b: [160]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, f, a) catch return;
+    koru_say(s.ptr);
+}
 
 const Info = extern struct {
     width: u32,
@@ -121,13 +131,7 @@ fn composite(x: u32, y: u32, w: u32, h: u32) u8 {
             _ = koruos_fb_px(xx, yy, c);
         }
     }
-    koru_say("comp: paint ");
-    koru_putdec(x1 - x);
-    koru_say("x");
-    koru_putdec(y1 - y);
-    koru_say(" nb=");
-    koru_putdec(nb);
-    koru_say("\n");
+    koru_sayf("comp: paint {d}x{d} nb={d}\n", .{ x1 - x, y1 - y, nb });
     return koruos_fb_present(x, y, x1 - x, y1 - y);
 }
 
@@ -147,17 +151,7 @@ pub fn attach(buf: [*]u32, w: u32, h: u32, sx: *u32, sy: *u32) i32 {
     layers[top] = .{ .live = true, .buf = buf, .x = ANCHOR, .y = ANCHOR, .w = w, .h = h };
     sx.* = ANCHOR;
     sy.* = ANCHOR;
-    koru_say("comp: attach ");
-    koru_putdec(w);
-    koru_say("x");
-    koru_putdec(h);
-    koru_say(" at ");
-    koru_putdec(ANCHOR);
-    koru_say(",");
-    koru_putdec(ANCHOR);
-    koru_say(" z=");
-    koru_putdec(top);
-    koru_say("\n");
+    koru_sayf("comp: attach {d}x{d} at {d},{d} z={d}\n", .{ w, h, ANCHOR, ANCHOR, top });
     const slot: i32 = @intCast(top);
     top += 1;
     _ = damage(ANCHOR, ANCHOR, w, h);
@@ -209,9 +203,7 @@ pub fn detach(slot: u32) void {
     while (i + 1 < top) : (i += 1) layers[i] = layers[i + 1];
     top -= 1;
     layers[top].live = false;
-    koru_say("comp: detach z=");
-    koru_putdec(slot);
-    koru_say("\n");
+    koru_sayf("comp: detach z={d}\n", .{slot});
     _ = damage(rx, ry, rw, rh);
 }
 
@@ -257,10 +249,6 @@ pub fn init() void {
     W = info.width;
     H = info.height;
     live = true;
-    koru_say("comp: compositor live ");
-    koru_putdec(W);
-    koru_say("x");
-    koru_putdec(H);
-    koru_say("\n");
+    koru_sayf("comp: compositor live {d}x{d}\n", .{ W, H });
     _ = damage(0, 0, W, H);
 }

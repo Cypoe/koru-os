@@ -53,6 +53,32 @@ pub export fn serPut(c: u8) callconv(.c) void {
     outb(COM1, c);
 }
 
+// Serial atomics: an IRQ-context say() must not splice into a normal-
+// context line mid-emit. pushfq/cli … popfq masks delivery across the
+// emit loop; popfq restores IF rather than force-enabling it, so the
+// same path is safe nested inside an IRQ handler (IF already clear).
+// The discipline this buys: one emit call = one atomic message —
+// callers composing a logical line must buffer it into a single call.
+inline fn serEnter() void {
+    asm volatile ("pushfq\n\tcli"
+        :
+        :
+        : .{ .memory = true });
+}
+inline fn serLeave() void {
+    asm volatile ("popfq"
+        :
+        :
+        : .{ .memory = true });
+}
+// the .c-callable surface for sibling TUs emitting byte-wise (conout)
+pub export fn koru_ser_enter() callconv(.c) void {
+    serEnter();
+}
+pub export fn koru_ser_leave() callconv(.c) void {
+    serLeave();
+}
+
 // ---- console contract -----------------------------------------------------
 
 // fd-like tokens so a future multi-sink provider can distinguish the streams.
@@ -62,11 +88,13 @@ pub export var stderr: ?*anyopaque = @ptrFromInt(2);
 pub export fn fputs(s: [*:0]const u8, stream: ?*anyopaque) callconv(.c) c_int {
     _ = stream;
     serInit();
+    serEnter();
     var n: usize = 0;
     while (s[n] != 0) : (n += 1) {
         if (s[n] == '\n') serPut('\r');
         serPut(s[n]);
     }
+    serLeave();
     return @intCast(n);
 }
 
@@ -74,11 +102,13 @@ pub export fn fputs(s: [*:0]const u8, stream: ?*anyopaque) callconv(.c) c_int {
 pub export fn write(fd: c_int, buf: [*]const u8, n: usize) callconv(.c) isize {
     _ = fd;
     serInit();
+    serEnter();
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (buf[i] == '\n') serPut('\r');
         serPut(buf[i]);
     }
+    serLeave();
     return @intCast(n);
 }
 
@@ -87,11 +117,13 @@ pub export fn write(fd: c_int, buf: [*]const u8, n: usize) callconv(.c) isize {
 pub export fn fwrite(ptr: [*]const u8, size: usize, nmemb: usize, stream: ?*anyopaque) callconv(.c) usize {
     _ = stream;
     serInit();
+    serEnter();
     const n = size * nmemb;
     for (0..n) |i| {
         if (ptr[i] == '\n') serPut('\r');
         serPut(ptr[i]);
     }
+    serLeave();
     return nmemb;
 }
 

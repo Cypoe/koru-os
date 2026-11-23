@@ -22,6 +22,14 @@ extern fn koru_say(s: [*:0]const u8) void;
 extern fn koru_putdec(v: u64) void;
 extern fn koru_dev_sleep(kind: u8) callconv(.c) c_int;
 
+// one logical line = one emit call — see comp.zig's note; an IRQ-context
+// say() between pieces would splice the line and break gate evidence.
+fn koru_sayf(comptime f: []const u8, a: anytype) void {
+    var b: [160]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, f, a) catch return;
+    koru_say(s.ptr);
+}
+
 const VENDOR: u16 = 0x1AF4;
 const DEV_GPU: u16 = 0x1050; // modern virtio-gpu (non-transitional)
 
@@ -175,11 +183,7 @@ fn getDisplayInfo() bool {
         w = 1024;
         h = 768;
     }
-    koru_say("vgpu: display info scanout0 ");
-    koru_putdec(w);
-    koru_say("x");
-    koru_putdec(h);
-    koru_say("\n");
+    koru_sayf("vgpu: display info scanout0 {d}x{d}\n", .{ w, h });
     return true;
 }
 
@@ -287,13 +291,9 @@ pub fn fbPresent(x: u32, y: u32, pw: u32, ph: u32) u8 {
 
 pub fn init() bool {
     const pdev = pci.find(VENDOR, DEV_GPU) orelse return false;
-    koru_say("vgpu: device ");
-    koru_putdec(pdev.slot);
-    koru_say(".0 in pci table\n");
+    koru_sayf("vgpu: device {d}.0 in pci table\n", .{pdev.slot});
     dev = vp.open(pdev) orelse return false;
-    koru_say("vgpu: windows common+notify+isr mapped, nqueues=");
-    koru_putdec(dev.nqueues);
-    koru_say("\n");
+    koru_sayf("vgpu: windows common+notify+isr mapped, nqueues={d}\n", .{dev.nqueues});
     vp.statusBegin(&dev);
     // VERSION_1 (bit 32 → hi dword bit 0) is mandatory for modern; the
     // 2D path needs no optional features.
@@ -341,26 +341,18 @@ pub fn init() bool {
     }
     gpu_msix_vec = MSIX_VEC;
     vp.driverOk(&dev);
-    koru_say("vgpu: msix vec=");
-    koru_putdec(MSIX_VEC);
-    koru_say(" armed — ctrlq live\n");
+    koru_sayf("vgpu: msix vec={d} armed — ctrlq live\n", .{MSIX_VEC});
 
     if (!getDisplayInfo()) return false;
     if (!createBacking()) return false;
     present_dev = true;
-    koru_say("vgpu: resource + scanout live — backing ");
-    koru_putdec(pages_n);
-    koru_say("x2M frames\n");
+    koru_sayf("vgpu: resource + scanout live — backing {d}x2M frames\n", .{pages_n});
     return true;
 }
 
 // final counters for the gate — read on serial at shutdown-ish
 pub fn stats() void {
-    koru_say("vgpu: cmds=");
-    koru_putdec(gpu_cmd_n);
-    koru_say(" msix=");
-    koru_putdec(gpu_msix_seen);
-    koru_say("\n");
+    koru_sayf("vgpu: cmds={d} msix={d}\n", .{ gpu_cmd_n, gpu_msix_seen });
 }
 
 const std = @import("std");

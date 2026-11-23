@@ -38,6 +38,8 @@ extern fn free(ptr: ?*anyopaque) void;
 const pmm = @import("pmm");
 const kbd = @import("kbd");
 extern fn serPut(c: u8) callconv(.c) void;
+extern fn koru_ser_enter() callconv(.c) void;
+extern fn koru_ser_leave() callconv(.c) void;
 extern fn ukplat_monotonic_clock() callconv(.c) u64;
 extern fn koruos_surface_open(w: u32, h: u32, title: [*:0]const u8) callconv(.c) ?*anyopaque;
 extern fn koruos_surface_blit(p: ?*anyopaque, dx: u32, dy: u32, w: u32, h: u32, src: [*]const u32, src_stride: u32) callconv(.c) u8;
@@ -81,6 +83,14 @@ const INTERP_BASE: usize = 0x7000_0000; // PT_INTERP loader's ET_DYN bias — cl
 
 fn say(s: [*:0]const u8) void {
     _ = fputs(s, stdout);
+}
+
+// one logical line = one emit call — an IRQ-context say() between pieces
+// would splice the line and break gate evidence; buffer, emit once.
+fn sayf(comptime fmt: []const u8, a: anytype) void {
+    var b: [256]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, fmt, a) catch return;
+    say(s.ptr);
 }
 
 fn sayU32Hex(v: u32) void {
@@ -7701,8 +7711,10 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
                                 return;
                             }
                             const buf: [*]const u8 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
+                            koru_ser_enter();
                             var i: usize = 0;
                             while (i < f.rdx) : (i += 1) serPut(buf[i]);
+                            koru_ser_leave();
                         }
                         f.rax = f.rdx;
                     },
@@ -7733,6 +7745,11 @@ export fn ring3_trap(f: *TrapFrame) callconv(.c) void {
             } else {
                 const fdi: usize = @intCast(f.rdi);
                 const iov: [*]const u64 = @ptrFromInt(@as(usize, @intCast(f.rsi)));
+                // conout writev is one logical message — hold the serial
+                // guard across every iov so an IRQ can't splice mid-line.
+                const is_conout = c.fdkinds[fdi] == .conout;
+                if (is_conout) koru_ser_enter();
+                defer if (is_conout) koru_ser_leave();
                 var total: i64 = 0;
                 var i: usize = 0;
                 var fail: i64 = 0;
@@ -9247,11 +9264,7 @@ fn schedLoop() noreturn {
                     exec_cpu = @intCast(me);
                     exec_hint = smp.nextOnlineAfter(@intCast(me));
                     if (me != 0) {
-                        say("sched: slot");
-                        koru_putdec(n);
-                        say(" claimed by cpu");
-                        koru_putdec(me);
-                        say("\n");
+                        sayf("sched: slot{d} claimed by cpu{d}\n", .{ n, me });
                     }
                     switchInto(n); // noreturn — user arm drops bkl itself
                 }
@@ -9667,25 +9680,11 @@ pub export fn koru_spawn_run(imgs: [*]const [*]const u8, sizes: [*]const usize, 
         \\ pop %rbx
         ::: .{ .memory = true });
     sched_active = false;
-    say("sched: switches=");
-    koru_putdec(sched_switches);
-    say(" kctx=");
-    koru_putdec(kctx_resumes);
-    say(" tick_kctx=");
-    koru_putdec(tick_kctx);
-    say(" pipe: rd=");
-    koru_putdec(pipe_reads);
-    say(" wr=");
-    koru_putdec(pipe_writes);
-    say(" rwaits=");
-    koru_putdec(pipe_rwaits);
-    say(" wwaits=");
-    koru_putdec(pipe_wwaits);
-    say(" forks=");
-    koru_putdec(forks);
-    say(" fpages=");
-    koru_putdec(fork_pages);
-    say("\n");
+    sayf("sched: switches={d} kctx={d} tick_kctx={d} pipe: rd={d} wr={d} rwaits={d} wwaits={d} forks={d} fpages={d}\n", .{
+        sched_switches, kctx_resumes, tick_kctx,
+        pipe_reads,     pipe_writes,  pipe_rwaits,
+        pipe_wwaits,    forks,        fork_pages,
+    });
     return @intCast(last_exit);
 }
 

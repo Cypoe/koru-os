@@ -19,8 +19,18 @@ const comp = @import("comp");
 const fb = @import("fb.zig");
 const pmm = @import("pmm");
 
+const std = @import("std");
+
 extern fn koru_say(s: [*:0]const u8) void;
 extern fn koru_putdec(v: u64) void;
+
+// one logical line = one emit call — see comp.zig's note; an IRQ-context
+// say() between pieces would splice the line and break gate evidence.
+fn koru_sayf(comptime f: []const u8, a: anytype) void {
+    var b: [160]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, f, a) catch return;
+    koru_say(s.ptr);
+}
 
 const MAX_SURF = 8;
 
@@ -86,15 +96,7 @@ pub export fn koruos_surface_open(w: u32, h: u32, title: [*:0]const u8) callconv
         .pages = pages,
     };
     opened += 1;
-    koru_say("surf: open ");
-    koru_putdec(w);
-    koru_say("x");
-    koru_putdec(h);
-    koru_say(" at ");
-    koru_putdec(slot_s.x);
-    koru_say(",");
-    koru_putdec(slot_s.y);
-    koru_say("\n");
+    koru_sayf("surf: open {d}x{d} at {d},{d}\n", .{ w, h, slot_s.x, slot_s.y });
     return slot_s;
 }
 
