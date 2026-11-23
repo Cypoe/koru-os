@@ -24,4 +24,7 @@ input, and every comparison gets the difference form.
 
 Held consequence — this is the refusal doctrine at the arithmetic
 layer: refuse by name at the point the contract fails, in a form the
-caller can observe, never as a trap in kernel bookkeeping.
+caller can observe, never as a trap in kernel bookkeeping. A panic is
+a claim that the input was trusted; an ext2 inode is not trusted.
+Same family as the USER_VA_END bump-mmap bounds: the kernel's own
+arithmetic is part of the attack surface the contract speaks to.
